@@ -1,0 +1,26 @@
+{
+  "name": "horse-code",
+  "version": "0.0.0",
+  "description": "Terminal coding agent",
+  "type": "module",
+  "bin": { "hcode": "./dist/cli.js" },
+  "engines": { "node": ">=20" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "picomatch": "^4.0.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/picomatch": "^3.0.1",
+    "tsup": "^8.2.4",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  }
+}
