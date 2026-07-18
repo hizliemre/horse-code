@@ -38,7 +38,8 @@ export class PermissionEngine {
     const isExec = req.level === "exec";
     const dangerous = isExec && isDangerous(req.allowKey);
 
-    if (!dangerous && matchesAllowlist(req.allowKey, this.allowlist)) {
+    const kind = req.level === "write" ? "glob" : "prefix";
+    if (!dangerous && matchesAllowlist(req.allowKey, this.allowlist, kind)) {
       return "allow";
     }
 

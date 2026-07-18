@@ -25,7 +25,6 @@ const fileSchema = z
     mode: z.enum(["ask", "acceptEdits", "auto"]).optional(),
     allowlist: z.array(z.string()).optional(),
   })
-  .strict()
   .partial();
 
 type FileConfig = z.infer<typeof fileSchema>;

@@ -15,15 +15,26 @@ export function isDangerous(command: string): boolean {
   return DANGEROUS_PATTERNS.some((re) => re.test(command));
 }
 
+// Shell zincirleme/injection metakarakterleri: bunları içeren bir komut
+// prefix-allowlist ile GÜVENLE eşleştirilemez (örn "npm test && rm -rf ~").
+const SHELL_METACHARACTERS = /[;&|`\n<>${}()]/;
+
 /**
  * allowKey bir kurala uyuyor mu?
- * - Glob görünümlü kurallar (`*`, `?`, `[`, `/` içeren) picomatch ile eşleştirilir (dosya yolları).
- * - Diğerleri prefix eşleşmesi (shell komutları: "npm test" → "npm test --watch").
+ * @param kind "glob" → dosya yolu eşleştirmesi (picomatch); "prefix" → shell komutu prefix eşleşmesi.
+ * Eşleşme türü çağıran (engine) tarafından `PermissionLevel`'e göre açıkça verilir — string
+ * şeklinden tahmin edilmez.
  */
-export function matchesAllowlist(allowKey: string, rules: string[]): boolean {
+export function matchesAllowlist(
+  allowKey: string,
+  rules: string[],
+  kind: "glob" | "prefix",
+): boolean {
+  // Prefix modunda metakarakter içeren komut hiçbir kurala güvenle eşleşemez.
+  if (kind === "prefix" && SHELL_METACHARACTERS.test(allowKey)) return false;
+
   for (const rule of rules) {
-    const looksGlob = /[*?\[\]]/.test(rule) || rule.includes("/");
-    if (looksGlob) {
+    if (kind === "glob") {
       if (picomatch(rule)(allowKey)) return true;
     } else {
       if (allowKey === rule || allowKey.startsWith(rule + " ")) return true;

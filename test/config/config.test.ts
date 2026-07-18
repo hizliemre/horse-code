@@ -58,4 +58,32 @@ describe("loadConfig", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
     expect(cfg.mode).toBe("ask"); // varsayılana düştü
   });
+
+  it("global yokken proje apiKey'i tamamen yok sayılır (sonuç undefined)", () => {
+    const readFile = (p: string) =>
+      p === "/proj/.horsecode/config.json"
+        ? JSON.stringify({ apiKey: "sk-LEAK", model: "proj-model" })
+        : undefined;
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.apiKey).toBeUndefined();
+    expect(cfg.model).toBe("proj-model");
+  });
+
+  it("global allowlist ayarlar, proje ayarlamazsa global kalır", () => {
+    const readFile = (p: string) =>
+      p === "/home/.horsecode/config.json"
+        ? JSON.stringify({ allowlist: ["git status"] })
+        : undefined;
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.allowlist).toEqual(["git status"]);
+  });
+
+  it("bilinmeyen key'li geçerli JSON'da o katmanın diğer alanları korunur", () => {
+    const readFile = (p: string) =>
+      p === "/proj/.horsecode/config.json"
+        ? JSON.stringify({ model: "proj-model", unknownKey: "x" })
+        : undefined;
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.model).toBe("proj-model"); // .strict() kaldırıldığı için typo tüm katmanı düşürmez
+  });
 });
