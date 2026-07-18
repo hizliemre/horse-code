@@ -54,6 +54,11 @@ describe("PermissionEngine", () => {
     expect(eng.check({ level: "exec", preview: "rm -rf /", allowKey: "rm -rf /" })).toBe("ask");
   });
 
+  it("auto modunda allowlist'te olsa bile tehlikeli komut sorar (dangerous wins)", () => {
+    const eng = new PermissionEngine({ mode: "auto", allowlist: ["rm -rf /"] });
+    expect(eng.check({ level: "exec", preview: "rm -rf /", allowKey: "rm -rf /" })).toBe("ask");
+  });
+
   it("allowlist eşleşmesi ask modunda bile izin verir", () => {
     const eng = new PermissionEngine({ mode: "ask", allowlist: ["git status"] });
     expect(eng.check({ level: "exec", preview: "git status", allowKey: "git status" })).toBe("allow");
