@@ -37,6 +37,7 @@ describe("core types", () => {
     expect(isTextDelta(delta)).toBe(true);
     expect(isTextDelta(call)).toBe(false);
     expect(isToolCallEvent(call)).toBe(true);
+    expect(isToolCallEvent(delta)).toBe(false);
   });
 
   it("AgentEvent union'ı permission.ask event'ini içerir", () => {
