@@ -150,11 +150,14 @@ interface Provider {
 Format farklı çıkarsa yalnızca bu dosya değişir; Core etkilenmez. İleride başka provider =
 yeni bir sınıf.
 
-> **Varsayım:** omniroute OpenAI-uyumlu `/chat/completions` sunar (tool calling + streaming).
-> Doğrulanınca kesinleşir; sapma olursa yalnızca `OmniRouteProvider` etkilenir.
+> **Doğrulandı (2026-07-19):** omniroute OpenAI-uyumlu `POST /api/v1/chat/completions`
+> sunuyor (tool calling + SSE streaming), auth `Authorization: Bearer <key>`, base
+> `http://localhost:20128`. Usage/maliyet `X-OmniRoute-*` response header'larından okunur.
+> Tam sözleşme: `docs/superpowers/reference/omniroute-api.md`. Sapma olursa yalnızca
+> `OmniRouteProvider` etkilenir.
 
 ### Yapılandırma katmanları (üst alttakini ezer)
-1. Yerleşik varsayılanlar
+1. Yerleşik varsayılanlar (`baseUrl = http://localhost:20128`, `mode = ask`)
 2. Global: `~/.horsecode/config.json` (API key, base URL, varsayılan model, mod)
 3. Proje: `.horsecode/config.json` (repo'ya özel model/allowlist — **key TUTMAZ**)
 4. Ortam değişkenleri (`OMNIROUTE_API_KEY`, `OMNIROUTE_BASE_URL`)
@@ -217,5 +220,19 @@ permission motoru saf birim testi. UI ayrıca event akışıyla test edilir. **T
 ---
 
 ## 7. Açık Sorular / Doğrulanacaklar
-- omniroute'un tam API sözleşmesi (endpoint, auth header, model listesi endpoint'i)
-  ilk entegrasyonda netleştirilecek — etkisi yalnızca `OmniRouteProvider` ile sınırlı.
+- ~~omniroute'un tam API sözleşmesi~~ → **Çözüldü (2026-07-19):** tam sözleşme
+  `docs/superpowers/reference/omniroute-api.md`'de. Endpoint `POST /api/v1/chat/completions`,
+  auth `Authorization: Bearer`, SSE streaming, `GET /api/v1/models` (capabilities.tool_calling
+  filtresi). Not: spec `tool_calls`/SSE delta yapılarını tiplemez → OpenAI konvansiyonuyla
+  defensive parse edilecek. Hata gövdesi tutarsız (401 string, diğerleri obje) → iki biçim de
+  ele alınacak.
+
+## 8. Uygulama Notları (Foundation diliminden)
+- **Allowlist güvenliği:** `matchesAllowlist` eşleşme türünü (`glob`/`prefix`) çağırandan
+  (engine, `PermissionLevel`'e göre) açıkça alır — string şeklinden tahmin etmez. Prefix
+  (shell) modunda shell metakarakteri (`; & | \` $ ( ) { } < >` / newline) içeren komutlar
+  hiçbir kurala eşleşmez; bu, `npm test && rm -rf ~` gibi zincirleme bypass'ını engeller.
+  Dilim 2'nin shell tool'u bu garantiye güvenir.
+- **Config dayanıklılığı:** dosya şeması `.strip()` kullanır (`.strict()` değil) — bir typo/
+  bilinmeyen key yalnızca o alanı düşürür, tüm katmanı değil. Bilinmeyen key'ler zaten merge'e
+  girmez (güvenlik `apiKey` ayıklamasıyla ayrıca sağlanır).
