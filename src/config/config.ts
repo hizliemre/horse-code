@@ -7,6 +7,12 @@ export interface RoleConfig {
   skills?: string[];
 }
 
+export interface CouncilorConfig {
+  name: string;
+  perspective: string;
+  models: string[];
+}
+
 export interface ResolvedConfig {
   apiKey?: string;
   baseUrl: string;
@@ -14,6 +20,7 @@ export interface ResolvedConfig {
   mode: PermissionMode;
   allowlist: string[];
   roles: Record<string, RoleConfig>;
+  council?: { councilors: CouncilorConfig[] };
 }
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
@@ -40,6 +47,13 @@ const fileSchema = z
           skills: z.array(z.string()).optional(),
         }),
       )
+      .optional(),
+    council: z
+      .object({
+        councilors: z.array(
+          z.object({ name: z.string(), perspective: z.string(), models: z.array(z.string()) }),
+        ),
+      })
       .optional(),
   })
   .partial();

@@ -118,4 +118,20 @@ describe("loadConfig", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
     expect(cfg.roles.coder).toEqual({ models: ["m"], skills: ["tdd", "cs"] });
   });
+
+  it("council.councilors parse edilir", () => {
+    const readFile = (p: string) =>
+      p === "/home/.horsecode/config.json"
+        ? JSON.stringify({ council: { councilors: [{ name: "sec", perspective: "güvenlik", models: ["m1"] }] } })
+        : undefined;
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.council?.councilors[0].name).toBe("sec");
+    expect(cfg.council?.councilors[0].perspective).toBe("güvenlik");
+    expect(cfg.council?.councilors[0].models).toEqual(["m1"]);
+  });
+
+  it("council yoksa undefined", () => {
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
+    expect(cfg.council).toBeUndefined();
+  });
 });
