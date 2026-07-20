@@ -8,6 +8,11 @@ describe("prompts", () => {
       expect(DEFAULT_PROMPTS[r].length).toBeGreaterThan(0);
     }
   });
+  it("principal-coder rolü tanımlı (G1)", () => {
+    expect(REQUIRED_ROLES).toContain("principal-coder");
+    expect(DEFAULT_PROMPTS["principal-coder"]).toBeDefined();
+    expect(DEFAULT_PROMPTS["principal-coder"].length).toBeGreaterThan(0);
+  });
   it("DEFAULT_COUNCILORS ≥1 üye; name+perspective dolu", () => {
     expect(DEFAULT_COUNCILORS.length).toBeGreaterThan(0);
     for (const c of DEFAULT_COUNCILORS) {
