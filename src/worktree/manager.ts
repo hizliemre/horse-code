@@ -84,6 +84,14 @@ export class WorktreeManager {
     await this.run(message ? ["commit", "-m", message] : ["commit", "--no-edit"], session.baseWorktree);
   }
 
+  /** Task worktree'sindeki tüm değişiklikleri task branch'ine commit'ler; değişiklik yoksa no-op. */
+  async commitTask(task: TaskWorktree, message: string): Promise<void> {
+    await this.run(["add", "-A"], task.worktree);
+    const staged = await this.git(["diff", "--cached", "--quiet"], task.worktree);
+    if (staged.code === 0) return; // fark yok → no-op
+    await this.run(["commit", "-m", message], task.worktree);
+  }
+
   async abortMerge(session: WorktreeSession): Promise<void> {
     await this.run(["merge", "--abort"], session.baseWorktree);
   }
