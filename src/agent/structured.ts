@@ -49,6 +49,7 @@ export async function runStructuredRole<T>(
 
   for await (const ev of runRoleAgent({ ...opts, tools: registry })) {
     if (ev.type === "error") throw new Error(ev.message);
+    if (ev.type === "abort") throw new Error("iptal edildi");
     if (handle.result() !== undefined) break; // geçerli submit yakalandı → erken çık
   }
 
