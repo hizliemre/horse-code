@@ -27,7 +27,7 @@ geçersiz kılınır.** Asıl ürün bu orkestrasyondur. Ancak o spec'in alt kat
 
 ## 2. Roller
 
-Sistem **13 adlandırılmış role + bir councilor havuzundan** oluşur. Her role omniroute'ta
+Sistem **14 adlandırılmış role + bir councilor havuzundan** oluşur. Her role omniroute'ta
 tanımlı **bir veya birden fazla** modele bağlanır (bkz. §4 round-robin) ve **zorunlu skill'ler**
 atanabilir (bkz. §4.4 Skills).
 
@@ -45,6 +45,7 @@ atanabilir (bkz. §4.4 Skills).
 | **designer** | **UI/UX task'larını** uygular (coder-benzeri uygulayıcı; board UI/UX işlerini coder yerine buna yönlendirir) |
 | **code-reviewer** | REVIEW'daki task'ı inceler (karar **nihai**) |
 | **senior-coder** | coder N tur takılınca devralır (daha güçlü model); revision'da ana worktree'de çalışır |
+| **senior-designer** | designer N tur takılınca devralır (daha güçlü model) |
 | **architect** | Task-escalation konseyi üyesi |
 | **principal-coder** | PR'ı review eder (1 tur); revision döngüsünün nihai karar mercii |
 
@@ -107,6 +108,7 @@ Foundation'daki katmanlı config'e (yerleşik → global → proje → env) role
     "designer":      { "models": ["cc/claude-opus-4-8"], "skills": ["frontend-design"] },
     "code-reviewer": { "models": ["cc/claude-opus-4-8"] },
     "senior-coder":  { "models": ["auto/best-coding"], "skills": ["tdd"] },
+    "senior-designer": { "models": ["auto/best-coding"], "skills": ["tdd"] },
     "architect":     { "models": ["auto/best-reasoning"] },
     "principal-coder": { "models": ["cc/claude-opus-4-8"] }
   },
@@ -226,13 +228,16 @@ code-reviewer'ın kararı **nihaidir**; reddedilen task doğrudan TODO'ya düşe
 Takılan task için merdiven:
 
 ```
-coder ──(N tur REVIEW→TODO)──►
-senior-coder (daha güçlü model) ──(N tur daha)──►
-ESCALATION KONSEYİ { architect + coder + senior-coder } → SON KARAR (kesinleşir)
+coder    ──(N tur)──► senior-coder     ──(N tur)──►┐
+designer ──(N tur)──► senior-designer  ──(N tur)──►┴► ESCALATION KONSEYİ
+   { architect (kök-neden + plan) + senior (implement) + code-reviewer (son review) }
+   → geçer: DONE (bağlayıcı) / kalır: insana sor (accept / retry / abandon)
 ```
 
-`N` config'lenebilir (varsayılan öneri: 3). Escalation konseyi council paternini kullanır ama
-üyeleri sabittir. Kararı bağlayıcıdır.
+İki simetrik aile (coder/senior-coder ve designer/senior-designer) kendi N-turluk merdivenlerini
+tüketince aynı escalation konseyinde birleşir. Konsey `askHuman` seam'iyle insana çıkar
+(task-seviyesinde insan-in-loop yalnızca konsey tükendiğinde devreye girer; normal review'da
+code-reviewer nihai). `N` = tier başına tur (config `escalation.rounds`, varsayılan 3).
 
 ### 5.5 coder — yeni vs dönen task ayrımı
 
@@ -382,8 +387,10 @@ kurulur; role-agent'lar (E3, F, G) zorunlu + keşfedilen skill'leri buradan tük
 
 - **`N` (escalation tur sayısı):** varsayılan öneri 3; config'lenebilir. Task-seviyesi
   (coder→senior-coder) ve revision (principal-coder) için ayrı ayrı mı, tek değer mi?
-- **Escalation konseyi çıktısı:** "kesin karar" tam olarak neyi üretir — kabul edilmiş
-  implementasyon mu, task'ı çözülmüş işaretleme mi? (Dilim E'de netleşecek.)
+  **Kararlaştırıldı (E3b):** tier başına `N` (config `escalation.rounds`, vars. 3); config
+  okuma E4'te wire edilir.
+- **Escalation konseyi çıktısı:** **Kararlaştırıldı (E3b):** architect diagnoz + senior
+  implement + son review; geçer→DONE, kalır→insana sor (accept/retry/abandon).
 - **MCP sağlayıcı seçimi (GitHub vs Azure):** PR/comment için hangi MCP'nin kullanılacağı
   repo/remote'tan mı tespit edilecek, config'ten mi? (Dilim G.)
 - **System prompt içerikleri:** her role için gömülü varsayılan prompt metinleri (Dilim E–G).
