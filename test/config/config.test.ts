@@ -86,4 +86,9 @@ describe("loadConfig", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
     expect(cfg.model).toBe("proj-model"); // .strict() kaldırıldığı için typo tüm katmanı düşürmez
   });
+
+  it("varsayılan baseUrl omniroute local-first adresidir", () => {
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
+    expect(cfg.baseUrl).toBe("http://localhost:20128");
+  });
 });

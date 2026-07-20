@@ -10,7 +10,7 @@ export interface ResolvedConfig {
 }
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
-  baseUrl: "https://api.omniroute.example/v1",
+  baseUrl: "http://localhost:20128",
   model: "default",
   mode: "ask",
   allowlist: [],
