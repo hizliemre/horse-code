@@ -65,4 +65,38 @@ export class Board {
   byColumn(column: Column): Card[] {
     return this.list().filter((c) => c.column === column);
   }
+
+  private require(id: string): Card {
+    const c = this.cards.get(id);
+    if (!c) throw new Error(`bilinmeyen kart: ${id}`);
+    return c;
+  }
+
+  move(id: string, column: Column, actor?: string): void {
+    const c = this.require(id);
+    c.column = column;
+    if (actor) c.stageHistory.push({ role: actor, action: `→${column}` });
+  }
+
+  appendStage(id: string, event: StageEvent): void {
+    this.require(id).stageHistory.push({ ...event });
+  }
+
+  addReviewNote(id: string, note: string): void {
+    this.require(id).reviewNotes.push(note);
+  }
+
+  clearReviewNotes(id: string): void {
+    this.require(id).reviewNotes = [];
+  }
+
+  incrementAttempts(id: string): number {
+    const c = this.require(id);
+    c.attempts += 1;
+    return c.attempts;
+  }
+
+  setWorktree(id: string, path: string): void {
+    this.require(id).worktree = path;
+  }
 }
