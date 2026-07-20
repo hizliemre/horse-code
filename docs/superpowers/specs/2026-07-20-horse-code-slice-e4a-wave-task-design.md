@@ -11,11 +11,19 @@
 
 Bir task'ı dalga içinde uçtan uca koşan birim `runWaveTask`: base'den izole task worktree'si
 **türet** (`deriveTask`) → task'ı escalation merdiveniyle worktree'de **koş**
-(`runTaskWithEscalation`, E3b) → task geçerse base'e **merge** (`mergeTask`, D). Sonuç bir
+(`runTaskWithEscalation`, E3b) → task geçerse worktree değişikliklerini task branch'ine
+**commit**le (`commitTask`, bu dilimde D'ye eklenir) → base'e **merge** (`mergeTask`, D). Sonuç bir
 union: `merged` / `conflict` / `task-failed`.
+
+> **Neden commit E4a'da:** E3 (escalation) worktree'ye yazar ama **commit etmez** (üst-tasarım
+> §5.4: "commit → E4"; reviewer commit'siz worktree'yi okur). `mergeTask = git merge task.branch`
+> yalnızca **commit'lenmiş** değişiklikleri taşır; commit olmadan merge no-op olur ve base boş kalır.
+> Bu yüzden E4a, escalation geçtikten sonra merge'den önce task worktree'sini commit'ler.
 
 **Tüketir (tamam):** D — `WorktreeManager` (`deriveTask`, `mergeTask`), `WorktreeSession`,
 `TaskWorktree`, `MergeResult`; E3b — `runTaskWithEscalation`, `EscalationDeps`; E1 — `Board`.
+**Ekler (bu dilim):** D `WorktreeManager`'a `commitTask(task, message)` (task worktree'sindeki tüm
+değişiklikleri task branch'ine commit'ler; değişiklik yoksa no-op).
 
 Konum: `src/engine/wave-task.ts` (E2/E3 ile aynı dizin).
 
@@ -35,8 +43,8 @@ Konum: `src/engine/wave-task.ts` (E2/E3 ile aynı dizin).
 import type { WorktreeManager, WorktreeSession, TaskWorktree } from "../worktree/manager.js";
 import type { EscalationDeps } from "./escalation.js";
 
-/** E4a yalnızca bu iki metodu kullanır (stub/mock enjeksiyonu için dar arayüz). */
-export type WaveTaskManager = Pick<WorktreeManager, "deriveTask" | "mergeTask">;
+/** E4a yalnızca bu üç metodu kullanır (stub/mock enjeksiyonu için dar arayüz). */
+export type WaveTaskManager = Pick<WorktreeManager, "deriveTask" | "commitTask" | "mergeTask">;
 
 export interface WaveTaskDeps extends EscalationDeps {
   manager: WaveTaskManager;
@@ -69,10 +77,12 @@ tw   = await ser(() => deps.manager.deriveTask(session, card.title))   // base'd
 rounds = Math.max(1, deps.rounds)                 // E3b M2: rounds<1 → 1 (cheap tier'ları atlama)
 v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree)
 
-if v.verdict === "fail":                          // abandon → merge YOK
+if v.verdict === "fail":                          // abandon → commit/merge YOK
    board.appendStage(taskId, { role: "team-lead", action: "task-failed" })
    return { status: "task-failed", task: tw }
 
+// pass → worktree değişikliklerini task branch'ine commit'le, sonra merge et
+await deps.manager.commitTask(tw, `hc: ${card.title}`)   // değişiklik yoksa no-op
 mr = await ser(() => deps.manager.mergeTask(session, tw))
 if mr.status === "merged":                         // temiz merge zaten commit'li → commitMerge YOK
    board.appendStage(taskId, { role: "team-lead", action: "merged" })
@@ -103,15 +113,19 @@ Gerçek tmp git repo (`test/worktree/helpers.js` → `initTmpRepo()`) + gerçek 
 `MockProvider` (escalation turn'leri) + gerçek `Board`. Roller: router, coder, senior-coder,
 architect, code-reviewer (E3b'deki gibi).
 
+- **`commitTask` (gerçek git):** `deriveTask` → task worktree'ye dosya yaz → `commitTask` →
+  task branch'inde yeni commit var (`git log`); değişiklik yokken `commitTask` no-op (hata yok).
 - **merged (gerçek git):** `initTmpRepo` → `openSession("main","job")` → board 1 task →
   MockProvider: router(coder) → implementer `write_file(out.txt)` → done → reviewer pass →
-  `runWaveTask` → `{status:"merged"}`; **base worktree'de `out.txt` var** (merge oldu); kart DONE.
+  `runWaveTask` → `{status:"merged"}`; **base worktree'de `out.txt` var** (commit + merge oldu);
+  kart DONE. (commit olmasa merge no-op olurdu → bu test commit adımını da doğrular.)
 - **task-failed (gerçek git):** `rounds=1`, escalation abandon'a kadar script'lenir
   (coder fail → senior-coder fail → konsey: architect submit + senior write + reviewer fail),
   `askHuman → abandon` → `runWaveTask` → `{status:"task-failed"}`; **base worktree'de değişiklik
   YOK** (merge olmadı); dönen `task` tanımlı.
 - **conflict relay (stub manager):** `deriveTask` gerçek yazılabilir tmp dizin döndüren,
-  `mergeTask` `{status:"conflict", files:["shared.txt"]}` döndüren stub `WaveTaskManager`.
+  `commitTask` no-op, `mergeTask` `{status:"conflict", files:["shared.txt"]}` döndüren stub
+  `WaveTaskManager`.
   Escalation başarıyla geçer (implementer stub worktree'ye yazar), merge conflict döner →
   `runWaveTask` `{status:"conflict", files:["shared.txt"]}` **relay** eder; stage `merge-conflict`.
   (Gerçek git conflict'i çok-task olgusudur → E4c/E4b'de doğal doğrulanır; E4a yalnızca relay'i test eder.)
