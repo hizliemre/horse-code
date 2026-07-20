@@ -58,6 +58,7 @@ describe("Board mutasyonları", () => {
     expect(() => b.move("yok", "DONE")).toThrow(/bilinmeyen kart/);
     expect(() => b.appendStage("yok", { role: "r", action: "a" })).toThrow(/bilinmeyen kart/);
     expect(() => b.addReviewNote("yok", "n")).toThrow(/bilinmeyen kart/);
+    expect(() => b.clearReviewNotes("yok")).toThrow(/bilinmeyen kart/);
     expect(() => b.incrementAttempts("yok")).toThrow(/bilinmeyen kart/);
     expect(() => b.setWorktree("yok", "/p")).toThrow(/bilinmeyen kart/);
   });
