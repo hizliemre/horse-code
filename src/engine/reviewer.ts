@@ -15,7 +15,7 @@ export const VerdictSchema = z.object({
 });
 
 /** Reviewer'ın salt-okunur toolset'i: read/grep/glob + skill (write/edit/shell YOK). */
-function readOnlyRegistry(deps: TaskCycleDeps): ToolRegistry {
+export function readOnlyRegistry(deps: TaskCycleDeps): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
   r.register(grepTool);
