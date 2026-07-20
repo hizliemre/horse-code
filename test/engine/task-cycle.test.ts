@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTaskCycle } from "../../src/engine/task-cycle.js";
+import { runTaskCycle, runCycleWithRole } from "../../src/engine/task-cycle.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 import { Board } from "../../src/board/board.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -33,6 +33,7 @@ function deps(provider: MockProvider): TaskCycleDeps {
   const roles = {
     router: { models: ["m"], systemPrompt: "route" },
     coder: { models: ["m"], systemPrompt: "coder" },
+    "senior-coder": { models: ["m"], systemPrompt: "senior-coder" },
     "code-reviewer": { models: ["m"], systemPrompt: "reviewer" },
   };
   return {
@@ -97,5 +98,16 @@ describe("runTaskCycle", () => {
     const v = await runTaskCycle(deps(p), board, "t1", dir);
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.reviewNotes).toEqual([]);
+  });
+
+  it("runCycleWithRole: açık senior-coder rolüyle koşar (routing yok), pass→DONE", async () => {
+    // routing turn'ü YOK; ilk turn doğrudan implementer
+    const p = new MockProvider([writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}')]);
+    const board = boardWithTask();
+    const v = await runCycleWithRole(deps(p), board, "t1", dir, "senior-coder");
+    expect(v.verdict).toBe("pass");
+    expect(board.get("t1")!.column).toBe("DONE");
+    // implementer senior-coder sistem prompt'uyla koştu
+    expect(p.requests[0].messages[0].content).toBe("senior-coder");
   });
 });

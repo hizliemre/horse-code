@@ -14,6 +14,8 @@ export interface TaskCycleDeps {
 
 export type ImplementerRole = "coder" | "designer";
 
+export type RunnableRole = ImplementerRole | "senior-coder" | "senior-designer";
+
 export interface Verdict {
   verdict: "pass" | "fail";
   notes: string[];

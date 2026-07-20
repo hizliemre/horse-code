@@ -2,26 +2,21 @@ import type { Board } from "../board/board.js";
 import { routeTask } from "./routing.js";
 import { runImplementer } from "./implementer.js";
 import { runReviewer } from "./reviewer.js";
-import type { TaskCycleDeps, Verdict } from "./task-types.js";
+import type { TaskCycleDeps, Verdict, RunnableRole } from "./task-types.js";
 
-/** Bir task'ın tek-tur yaşam döngüsü: route → implement → review → Board geçişleri. */
-export async function runTaskCycle(
+/** Verilen açık rol ile tek-tur çekirdek (routing YOK): implement → review → Board geçişleri. */
+export async function runCycleWithRole(
   deps: TaskCycleDeps,
   board: Board,
   taskId: string,
-  worktreePath: string,
+  cwd: string,
+  role: RunnableRole,
 ): Promise<Verdict> {
-  const task = board.get(taskId);
-  if (!task) throw new Error(`runTaskCycle: bilinmeyen task: ${taskId}`);
-
-  const role = await routeTask(deps, task);
-  board.setWorktree(taskId, worktreePath);
   board.move(taskId, "IN-PROGRESS", role);
-
-  await runImplementer(deps, role, board.get(taskId)!, worktreePath);
+  await runImplementer(deps, role, board.get(taskId)!, cwd);
   board.move(taskId, "REVIEW", role);
 
-  const v = await runReviewer(deps, board.get(taskId)!, worktreePath);
+  const v = await runReviewer(deps, board.get(taskId)!, cwd);
   if (v.verdict === "pass") {
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });
     board.clearReviewNotes(taskId);
@@ -38,4 +33,19 @@ export async function runTaskCycle(
     board.move(taskId, "TODO", "code-reviewer");
   }
   return v;
+}
+
+/** Bir task'ın tek-tur yaşam döngüsü: route → runCycleWithRole. */
+export async function runTaskCycle(
+  deps: TaskCycleDeps,
+  board: Board,
+  taskId: string,
+  worktreePath: string,
+): Promise<Verdict> {
+  const task = board.get(taskId);
+  if (!task) throw new Error(`runTaskCycle: bilinmeyen task: ${taskId}`);
+
+  const role = await routeTask(deps, task);
+  board.setWorktree(taskId, worktreePath);
+  return runCycleWithRole(deps, board, taskId, worktreePath, role);
 }
