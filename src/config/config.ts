@@ -1,12 +1,18 @@
 import { z } from "zod";
 import type { PermissionMode } from "../core/types.js";
 
+export interface RoleConfig {
+  models: string[];
+  systemPrompt?: string;
+}
+
 export interface ResolvedConfig {
   apiKey?: string;
   baseUrl: string;
   model: string;
   mode: PermissionMode;
   allowlist: string[];
+  roles: Record<string, RoleConfig>;
 }
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
@@ -14,6 +20,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   model: "default",
   mode: "ask",
   allowlist: [],
+  roles: {},
 };
 
 // Dosyalardan okunabilecek alanlar (hepsi opsiyonel).
@@ -24,6 +31,9 @@ const fileSchema = z
     model: z.string().optional(),
     mode: z.enum(["ask", "acceptEdits", "auto"]).optional(),
     allowlist: z.array(z.string()).optional(),
+    roles: z
+      .record(z.object({ models: z.array(z.string()), systemPrompt: z.string().optional() }))
+      .optional(),
   })
   .partial();
 
@@ -61,6 +71,9 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // allowlist için birleştirme yerine "en spesifik kazanır" (project varsa onu al).
   merged.allowlist = projectSafe.allowlist ?? global.allowlist ?? [];
+
+  // roles: global + proje shallow merge (aynı adlı role projede ezilir).
+  merged.roles = { ...(global.roles ?? {}), ...(projectSafe.roles ?? {}) };
 
   // env en yüksek öncelik.
   if (opts.env.OMNIROUTE_API_KEY) merged.apiKey = opts.env.OMNIROUTE_API_KEY;

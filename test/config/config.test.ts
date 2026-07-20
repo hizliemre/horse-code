@@ -91,4 +91,22 @@ describe("loadConfig", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
     expect(cfg.baseUrl).toBe("http://localhost:20128");
   });
+
+  it("roles yoksa boş nesne döner", () => {
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
+    expect(cfg.roles).toEqual({});
+  });
+
+  it("global ve proje roles'ü birleşir, aynı adlı role projede ezilir", () => {
+    const readFile = (p: string) => {
+      if (p === "/home/.horsecode/config.json")
+        return JSON.stringify({ roles: { coder: { models: ["g-model"] }, refiner: { models: ["r"] } } });
+      if (p === "/proj/.horsecode/config.json")
+        return JSON.stringify({ roles: { coder: { models: ["p-model"], systemPrompt: "proj" } } });
+      return undefined;
+    };
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.roles.coder).toEqual({ models: ["p-model"], systemPrompt: "proj" });
+    expect(cfg.roles.refiner).toEqual({ models: ["r"] });
+  });
 });
