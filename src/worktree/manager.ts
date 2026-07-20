@@ -65,4 +65,26 @@ export class WorktreeManager {
     await this.run(["worktree", "add", "-b", branch, worktree, session.baseBranch], this.repoRoot);
     return { taskSlug, worktree, branch };
   }
+
+  async mergeTask(session: WorktreeSession, task: TaskWorktree): Promise<MergeResult> {
+    const r = await this.git(["merge", task.branch], session.baseWorktree);
+    if (r.code === 0) return { status: "merged" };
+    const diff = await this.git(
+      ["diff", "--name-only", "--diff-filter=U"],
+      session.baseWorktree,
+    );
+    const files = diff.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+    if (files.length > 0) return { status: "conflict", files };
+    // Çakışma değil, başka bir merge hatası → yüzeye çıkar.
+    throw new Error(`git merge ${task.branch} başarısız (${r.code}): ${(r.stderr || r.stdout).trim()}`);
+  }
+
+  async commitMerge(session: WorktreeSession, message?: string): Promise<void> {
+    await this.run(["add", "-A"], session.baseWorktree);
+    await this.run(message ? ["commit", "-m", message] : ["commit", "--no-edit"], session.baseWorktree);
+  }
+
+  async abortMerge(session: WorktreeSession): Promise<void> {
+    await this.run(["merge", "--abort"], session.baseWorktree);
+  }
 }
