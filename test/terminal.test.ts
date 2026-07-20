@@ -19,7 +19,9 @@ describe("makeApprove", () => {
     expect(await makeApprove(async () => "e")(req)).toBe(true);
     expect(await makeApprove(async () => "evet")(req)).toBe(true);
     expect(await makeApprove(async () => "y")(req)).toBe(true);
+    expect(await makeApprove(async () => "YES")(req)).toBe(true); // trim+lowercase
     expect(await makeApprove(async () => "h")(req)).toBe(false);
+    expect(await makeApprove(async () => "yes please")(req)).toBe(false); // tam eşleşme, alt-dize değil
     expect(await makeApprove(async () => "")(req)).toBe(false);
   });
 });
@@ -28,6 +30,8 @@ describe("makeAskHuman", () => {
   it("accept / retry:<not> / abandon parse eder", async () => {
     expect(await makeAskHuman(async () => "accept")({ card, verdict })).toEqual({ action: "accept" });
     expect(await makeAskHuman(async () => "retry: düzelt")({ card, verdict })).toEqual({ action: "retry", notes: ["düzelt"] });
+    expect(await makeAskHuman(async () => "kabul")({ card, verdict })).toEqual({ action: "accept" });
+    expect(await makeAskHuman(async () => "retry")({ card, verdict })).toEqual({ action: "retry", notes: [] }); // colon yok → boş not
     expect(await makeAskHuman(async () => "xyz")({ card, verdict })).toEqual({ action: "abandon" });
   });
 });
