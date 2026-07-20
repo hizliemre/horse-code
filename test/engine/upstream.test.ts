@@ -18,7 +18,7 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 const ctx = (): ToolContext => ({ cwd: ".", signal: new AbortController().signal });
 
 // İçerik-tabanlı provider: systemPrompt (rol) + tool-mesajlarına göre yanıt; requests yakalar.
-export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string } = {}): Provider & { requests: ChatRequest[] } {
+export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
   return {
@@ -42,6 +42,7 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"X yap","intent":"${opts.intent ?? "feature"}"}`); return; }
       if (sys.includes("P-coach")) { yield* stop("coach cevabı"); return; }
       if (sys.includes("P-analyst")) {
+        if (opts.skipWrite) { yield* stop("yazmadım"); return; } // dosya üretmeyen analyst (guard testi)
         if (opts.analystAsk && toolMsgs.length === 0) { yield* call("ask_user", JSON.stringify({ question: opts.analystAsk })); return; }
         if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "spec.md", content: "# spec" })); return; }
         yield* stop("bitti"); return;
@@ -179,5 +180,10 @@ describe("runUpstream", () => {
     const ac = new AbortController(); ac.abort();
     const p = upstreamProvider({ intent: "feature" });
     await expect(runUpstream(udeps(p, ac.signal), dir, "X", async () => "x", 2)).rejects.toThrow();
+  });
+
+  it("analyst spec dosyası üretmezse (judge yine geçse bile) fırlatır", async () => {
+    const p = upstreamProvider({ intent: "feature", skipWrite: true, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    await expect(runUpstream(udeps(p), dir, "X", async () => "x", 1)).rejects.toThrow(/spec/);
   });
 });

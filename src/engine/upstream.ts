@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import { runToCompletion } from "../agent/loop.js";
@@ -122,6 +124,8 @@ export async function runUpstream(
     askUser, maxRounds,
   );
   if (!specOut.approved) return { intent: r.intent, kind: "rejected", stage: "spec" };
+  // Onaylı ama dosya yoksa (analyst yazmadı, judge yine de geçti): H'ye var-olmayan path verme.
+  if (!existsSync(join(workdir, specPath))) throw new Error(`analyst spec üretmedi: ${specPath}`);
 
   const planPath = "plan.md";
   await runPlanner(deps, workdir, planPath, specPath, undefined);
@@ -131,6 +135,7 @@ export async function runUpstream(
     askUser, maxRounds,
   );
   if (!planOut.approved) return { intent: r.intent, kind: "rejected", stage: "plan" };
+  if (!existsSync(join(workdir, planPath))) throw new Error(`planner plan üretmedi: ${planPath}`);
 
   return { intent: r.intent, kind: "approved", specPath, planPath };
 }
