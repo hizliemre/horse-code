@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileTool } from "../../src/tools/write.js";
@@ -36,5 +37,23 @@ describe("write_file", () => {
     const res2 = await writeFileTool.run({}, ctx());
     expect(res2.isError).toBe(true);
     expect(res2.content).toMatch(/geçersiz|invalid/i);
+  });
+
+  it("cwd dışına yazma reddedilir (workdir-guard)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-wg-"));
+    try {
+      const res = await writeFileTool.run({ path: "../escape.txt", content: "x" }, { cwd: dir, signal: new AbortController().signal });
+      expect(res.isError).toBe(true);
+      expect(existsSync(join(dir, "..", "escape.txt"))).toBe(false);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("cwd içine yazılır (guard engellemez)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-wg-"));
+    try {
+      const res = await writeFileTool.run({ path: "alt/ic.txt", content: "y" }, { cwd: dir, signal: new AbortController().signal });
+      expect(res.isError).toBe(false);
+      expect(existsSync(join(dir, "alt", "ic.txt"))).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

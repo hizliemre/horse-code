@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMutex, runWave, runWaveEngine } from "../../src/engine/wave-engine.js";
+import { createMutex, runWave, runWaveEngine, runWaves } from "../../src/engine/wave-engine.js";
 import type { WaveEngineDeps } from "../../src/engine/wave-engine.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import type { AskHuman } from "../../src/engine/escalation.js";
@@ -127,6 +127,29 @@ describe("runWave", () => {
       expect(o.merged).toEqual([]);
       expect(board.get("t3")!.stageHistory.some((s) => s.action === "skipped")).toBe(true);
     } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+describe("runWaves", () => {
+  it("enjekte session'la koşar (openSession açmaz), all-pass → completed + PR", async () => {
+    const repo = await initTmpRepo();
+    const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
+    try {
+      await defaultGitRunner(["init", "--bare", "-b", "main"], bare);
+      await defaultGitRunner(["remote", "add", "origin", bare], repo);
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "gorev-a" });
+      const adapter = fakeAdapter();
+      const res = await runWaves(edeps(mgr, adapter), session, board, { base: "main" });
+      expect(res.status).toBe("completed");
+      expect(adapter.calls).toBe(1);
+      expect(res.session).toBe(session); // aynı session kullanıldı
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(bare, { recursive: true, force: true });
+    }
   });
 });
 

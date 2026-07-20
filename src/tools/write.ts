@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
 
@@ -24,6 +24,10 @@ export const writeFileTool: Tool = {
     }
     const a = parsed.data;
     const target = resolve(ctx.cwd, a.path);
+    const cwdResolved = resolve(ctx.cwd);
+    if (target !== cwdResolved && !target.startsWith(cwdResolved + sep)) {
+      return { content: `write_file: yol cwd dışında: ${a.path}`, isError: true };
+    }
     try {
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, a.content, "utf8");
