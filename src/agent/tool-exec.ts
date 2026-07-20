@@ -1,4 +1,4 @@
-import type { AgentEvent, Tool, ToolCall, ToolResult } from "../core/types.js";
+import type { AgentEvent, PermissionDescriptor, Tool, ToolCall, ToolResult } from "../core/types.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
 
@@ -64,7 +64,7 @@ export async function* executeToolCalls(
       plans.push({ index: i, call, kind: "run", tool, args });
       continue;
     }
-    let desc: { allowKey: string; preview: string };
+    let desc: PermissionDescriptor;
     try {
       desc = tool.describe ? tool.describe(args) : { allowKey: call.name, preview: call.name };
     } catch (e) {

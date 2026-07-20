@@ -112,4 +112,11 @@ describe("executeToolCalls", () => {
     );
     expect(result.map((r) => r.result.content)).toEqual(["echo:a", "echo:b"]);
   });
+
+  it("bozuk JSON argüman → hata result (çalıştırılmaz)", async () => {
+    const badCall = { id: "1", name: "echo", arguments: "{not json" };
+    const { result } = await drainGen(executeToolCalls([badCall], deps({})));
+    expect(result[0].result.isError).toBe(true);
+    expect(result[0].result.content).toContain("geçersiz JSON");
+  });
 });
