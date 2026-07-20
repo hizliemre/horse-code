@@ -107,4 +107,22 @@ export class WorktreeManager {
       await this.git(["branch", "-D", b], this.repoRoot);
     }
   }
+
+  async push(session: WorktreeSession, remote = "origin"): Promise<void> {
+    await this.run(["push", remote, session.baseBranch], session.baseWorktree);
+  }
+
+  async openPR(
+    session: WorktreeSession,
+    adapter: PRAdapter,
+    input: PRInput,
+  ): Promise<{ url: string }> {
+    const res = await adapter.createPR({
+      branch: session.baseBranch,
+      base: input.base,
+      title: input.title,
+      body: input.body,
+    });
+    return { url: res.url };
+  }
 }
