@@ -26,4 +26,14 @@ describe("read_file", () => {
     expect(res.isError).toBe(true);
     expect(res.content).toContain("read_file");
   });
+
+  it("geçersiz args'ta throw etmez, isError:true döner", async () => {
+    const res1 = await readFileTool.run({}, ctx());
+    expect(res1.isError).toBe(true);
+    expect(res1.content).toMatch(/geçersiz|invalid/i);
+
+    const res2 = await readFileTool.run({ path: 123 }, ctx());
+    expect(res2.isError).toBe(true);
+    expect(res2.content).toMatch(/geçersiz|invalid/i);
+  });
 });

@@ -11,7 +11,14 @@ export const readFileTool: Tool = {
   permissionLevel: "safe",
   parameters: params,
   async run(rawArgs, ctx) {
-    const args = params.parse(rawArgs);
+    const parsed = params.safeParse(rawArgs);
+    if (!parsed.success) {
+      return {
+        content: `read_file: geçersiz args: ${parsed.error.message}`,
+        isError: true,
+      };
+    }
+    const args = parsed.data;
     try {
       const content = await readFile(resolve(ctx.cwd, args.path), "utf8");
       return { content, isError: false };
