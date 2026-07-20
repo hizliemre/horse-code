@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { defaultGitRunner, type GitRunner } from "./git.js";
@@ -86,5 +86,25 @@ export class WorktreeManager {
 
   async abortMerge(session: WorktreeSession): Promise<void> {
     await this.run(["merge", "--abort"], session.baseWorktree);
+  }
+
+  async removeTask(session: WorktreeSession, task: TaskWorktree): Promise<void> {
+    await this.git(["worktree", "remove", "--force", task.worktree], this.repoRoot);
+    await this.git(["branch", "-D", task.branch], this.repoRoot);
+  }
+
+  async closeSession(session: WorktreeSession): Promise<void> {
+    await rm(session.root, { recursive: true, force: true });
+    await this.git(["worktree", "prune"], this.repoRoot);
+    // Tüm branch'leri listele, prefix ile kod'da filtrele (git glob'unun / davranışına güvenme).
+    const prefix = `hc/${session.jobSlug}/`;
+    const list = await this.git(["branch", "--list"], this.repoRoot);
+    const branches = list.stdout
+      .split("\n")
+      .map((s) => s.replace(/^[*+ ]+/, "").trim())
+      .filter((b) => b.startsWith(prefix));
+    for (const b of branches) {
+      await this.git(["branch", "-D", b], this.repoRoot);
+    }
   }
 }
