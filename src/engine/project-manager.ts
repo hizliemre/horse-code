@@ -9,6 +9,8 @@ const taskSchema = z.object({
   deps: z.array(z.string()),
 });
 
+// Not: superRefine dep-BÜTÜNLÜĞÜNÜ doğrular (tekrarlı id, dangling dep); ASİKLİKLİK burada
+// zorlanmaz — bağımlılık döngüleri downstream'de computeWaves (team-lead) tarafından yakalanır.
 export const TasksSchema = z
   .object({ tasks: z.array(taskSchema) })
   .superRefine((val, ctx) => {

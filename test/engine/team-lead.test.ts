@@ -55,4 +55,11 @@ describe("runTeamLead", () => {
     const waves = await runTeamLead(opts(p), chainBoard());
     expect(waves).toEqual([["t1"], ["t2"]]);
   });
+
+  it("iptal edilmişse fallback etmez, hatayı fırlatır", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const p = new MockProvider([submitTurn('{"waves":[["t1"],["t2"]]}')]);
+    await expect(runTeamLead({ ...opts(p), signal: ac.signal }, chainBoard())).rejects.toThrow(/iptal/);
+  });
 });

@@ -32,8 +32,9 @@ export async function runTeamLead(opts: RoleAgentOptions, board: Board): Promise
       WavesSchema,
     );
     llmWaves = out.waves;
-  } catch {
-    return suggested; // LLM submit üretmedi / hata → deterministik
+  } catch (e) {
+    if (opts.signal.aborted) throw e; // iptal → sessizce fallback etme, yukarı fırlat
+    return suggested; // LLM submit üretmedi / diğer hata → deterministik taban
   }
 
   return validateWaves(llmWaves, board) ? llmWaves : suggested;
