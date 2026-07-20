@@ -12,9 +12,9 @@ function streamFrom(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
-async function collect(it: AsyncIterable<string>): Promise<string[]> {
+async function collect(iter: AsyncIterable<string>): Promise<string[]> {
   const out: string[] = [];
-  for await (const x of it) out.push(x);
+  for await (const x of iter) out.push(x);
   return out;
 }
 
@@ -36,5 +36,10 @@ describe("parseSSE", () => {
   it("data olmayan ve boş satırları atlar", async () => {
     const body = streamFrom([": keep-alive\n", "\n", 'data: {"x":true}\n', "data: [DONE]\n"]);
     expect(await collect(parseSSE(body))).toEqual(['{"x":true}']);
+  });
+
+  it("son satırda newline yoksa ve [DONE] gelmezse, buffer'daki payload'u yayar", async () => {
+    const body = streamFrom(['data: {"z":9}']);
+    expect(await collect(parseSSE(body))).toEqual(['{"z":9}']);
   });
 });
