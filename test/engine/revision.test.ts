@@ -118,6 +118,27 @@ describe("runRevision", () => {
     expect(asked).toBe("X mi Y mi?");
   });
 
+  it("prDiff verilince principal review isteği diff'i içerir", async () => {
+    // requests yakalayan basit provider
+    const requests: import("../../src/core/types.js").ChatRequest[] = [];
+    const p: import("../../src/core/types.js").Provider = {
+      async *chat(req) {
+        requests.push(req);
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        if (sys.includes("P-principal")) {
+          yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: '{"decision":"approve","comments":[]}' } };
+          yield { type: "done", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "text-delta", text: "ok" };
+        yield { type: "done", finishReason: "stop" };
+      },
+    };
+    await runRevision(rdeps(p, fakeManager()), session(dir), new Board(), async () => {}, async () => "x", 1, "DIFF-XYZ-123");
+    const principalReq = requests.find((r) => r.messages.some((m) => typeof m.content === "string" && m.content.includes("DIFF-XYZ-123")));
+    expect(principalReq).toBeDefined();
+  });
+
   it("iptal edilmişse fırlatır", async () => {
     const ac = new AbortController(); ac.abort();
     const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
