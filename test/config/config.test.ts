@@ -109,4 +109,13 @@ describe("loadConfig", () => {
     expect(cfg.roles.coder).toEqual({ models: ["p-model"], systemPrompt: "proj" });
     expect(cfg.roles.refiner).toEqual({ models: ["r"] });
   });
+
+  it("role skills alanı yüklenir", () => {
+    const readFile = (p: string) =>
+      p === "/proj/.horsecode/config.json"
+        ? JSON.stringify({ roles: { coder: { models: ["m"], skills: ["tdd", "cs"] } } })
+        : undefined;
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.roles.coder).toEqual({ models: ["m"], skills: ["tdd", "cs"] });
+  });
 });

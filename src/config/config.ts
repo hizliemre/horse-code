@@ -4,6 +4,7 @@ import type { PermissionMode } from "../core/types.js";
 export interface RoleConfig {
   models: string[];
   systemPrompt?: string;
+  skills?: string[];
 }
 
 export interface ResolvedConfig {
@@ -32,7 +33,13 @@ const fileSchema = z
     mode: z.enum(["ask", "acceptEdits", "auto"]).optional(),
     allowlist: z.array(z.string()).optional(),
     roles: z
-      .record(z.object({ models: z.array(z.string()), systemPrompt: z.string().optional() }))
+      .record(
+        z.object({
+          models: z.array(z.string()),
+          systemPrompt: z.string().optional(),
+          skills: z.array(z.string()).optional(),
+        }),
+      )
       .optional(),
   })
   .partial();
