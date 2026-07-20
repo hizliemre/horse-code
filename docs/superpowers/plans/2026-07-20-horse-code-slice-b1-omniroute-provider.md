@@ -403,7 +403,7 @@ git commit -m "feat: omniroute hata gövdesi okuma (string+obje biçimleri)"
 
 ---
 
-### Task 4: OmniRouteProvider — Metin Streaming (happy path)
+### Task 4: OmniRouteProvider — Metin Streaming + Hata Yolları
 
 **Files:**
 - Modify: `src/providers/omniroute.ts` (`FetchLike`, `OmniRouteOptions`, `OmniRouteProvider` sınıfı eklenir)
@@ -414,7 +414,7 @@ git commit -m "feat: omniroute hata gövdesi okuma (string+obje biçimleri)"
 - Produces:
   - `type FetchLike = (input: string, init?: RequestInit) => Promise<Response>`
   - `interface OmniRouteOptions { apiKey?: string; baseUrl: string; fetch?: FetchLike }`
-  - `class OmniRouteProvider implements Provider` — kurucu `(opts: OmniRouteOptions)`; `chat(req, signal)` async generator. Bu task: text-delta akışı + sondaki `done`. (tool-call ve usage sonraki task'larda.)
+  - `class OmniRouteProvider implements Provider` — kurucu `(opts: OmniRouteOptions)`; `chat(req, signal)` async generator. Bu task: text-delta akışı, `done`, ve tüm hata yolları (`!res.ok`, boş gövde, `fetch` reddi). **tool-call ve usage YOK — Task 5/6'da fail-first eklenir.**
 
 - [ ] **Step 1: Başarısız testi yaz**
 
@@ -443,7 +443,7 @@ async function drain(it: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
 
 const req: ChatRequest = { model: "cc/claude-opus-4-8", messages: [{ role: "user", content: "hi" }], tools: [] };
 
-describe("OmniRouteProvider — metin streaming", () => {
+describe("OmniRouteProvider — metin streaming + hata", () => {
   it("delta.content'leri text-delta olarak yayar ve done ile biter", async () => {
     const fetch: FetchLike = async () =>
       sseResponse([
@@ -476,6 +476,23 @@ describe("OmniRouteProvider — metin streaming", () => {
     expect(sent.model).toBe("cc/claude-opus-4-8");
     expect(sent.stream).toBe(true);
   });
+
+  it("!res.ok durumunda stream açmadan tek error event'i yayar", async () => {
+    const fetch: FetchLike = async () =>
+      new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+    const provider = new OmniRouteProvider({ apiKey: "bad", baseUrl: "http://localhost:20128", fetch });
+    const events = await drain(provider.chat(req, new AbortController().signal));
+    expect(events).toEqual([{ type: "error", message: "Unauthorized" }]);
+  });
+
+  it("fetch reddi (abort/ağ) tek error event'ine dönüşür", async () => {
+    const fetch: FetchLike = async () => {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    };
+    const provider = new OmniRouteProvider({ baseUrl: "http://localhost:20128", fetch });
+    const events = await drain(provider.chat(req, new AbortController().signal));
+    expect(events).toEqual([{ type: "error", message: "The operation was aborted." }]);
+  });
 });
 ```
 
@@ -489,7 +506,7 @@ Expected: FAIL — `OmniRouteProvider` export yok.
 Dosyanın başına import'ları, `readErrorMessage`'ın ÜSTÜNE tip/arayüzleri, ALTINA sınıfı ekle:
 
 ```typescript
-import type { ChatEvent, ChatRequest, Provider, ToolCall } from "../core/types.js";
+import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
 import { parseSSE } from "./sse.js";
 import { toOpenAIBody, mapFinishReason } from "./openai.js";
 
@@ -502,12 +519,6 @@ export interface OmniRouteOptions {
 }
 
 // (mevcut readErrorMessage burada kalır)
-
-interface ToolCallAccumulator {
-  id: string;
-  name: string;
-  arguments: string;
-}
 
 export class OmniRouteProvider implements Provider {
   private readonly apiKey?: string;
@@ -550,7 +561,6 @@ export class OmniRouteProvider implements Provider {
       return;
     }
 
-    const toolCalls = new Map<number, ToolCallAccumulator>();
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
 
     for await (const payload of parseSSE(stream)) {
@@ -570,36 +580,7 @@ export class OmniRouteProvider implements Provider {
         yield { type: "text-delta", text: delta.content };
       }
 
-      const deltaCalls = delta.tool_calls as
-        | { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
-        | undefined;
-      if (Array.isArray(deltaCalls)) {
-        for (const tc of deltaCalls) {
-          const idx = tc.index ?? 0;
-          const acc = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
-          if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.arguments += tc.function.arguments;
-          toolCalls.set(idx, acc);
-        }
-      }
-
       if (choice.finish_reason) finishReason = mapFinishReason(choice.finish_reason);
-    }
-
-    for (const acc of toolCalls.values()) {
-      const toolCall: ToolCall = { id: acc.id, name: acc.name, arguments: acc.arguments };
-      yield { type: "tool-call", toolCall };
-    }
-
-    const inHeader = res.headers.get("X-OmniRoute-Tokens-In");
-    const outHeader = res.headers.get("X-OmniRoute-Tokens-Out");
-    if (inHeader !== null || outHeader !== null) {
-      yield {
-        type: "usage",
-        promptTokens: Number(inHeader) || 0,
-        completionTokens: Number(outHeader) || 0,
-      };
     }
 
     yield { type: "done", finishReason };
@@ -607,12 +588,10 @@ export class OmniRouteProvider implements Provider {
 }
 ```
 
-> Not: Sınıf gövdesi tool-call birleştirmeyi ve usage'ı da içeriyor; Task 5 ve 6 bunları ayrı testlerle doğrular (kod tekrar yazılmaz, sadece test eklenir).
-
 - [ ] **Step 4: Testin geçtiğini doğrula**
 
 Run: `npx vitest run test/providers/omniroute.test.ts`
-Expected: PASS (2 test).
+Expected: PASS (4 test).
 
 - [ ] **Step 5: Typecheck**
 
@@ -623,7 +602,7 @@ Expected: hata yok.
 
 ```bash
 git add src/providers/omniroute.ts test/providers/omniroute.test.ts
-git commit -m "feat: OmniRouteProvider metin streaming (SSE → text-delta/done)"
+git commit -m "feat: OmniRouteProvider metin streaming + hata yolları (SSE → text-delta/done/error)"
 ```
 
 ---
@@ -631,12 +610,12 @@ git commit -m "feat: OmniRouteProvider metin streaming (SSE → text-delta/done)
 ### Task 5: OmniRouteProvider — Tool-Call Birleştirme
 
 **Files:**
-- Modify: (yok — kod Task 4'te yazıldı)
+- Modify: `src/providers/omniroute.ts` (chat generator'a tool-call birleştirme eklenir)
 - Test: `test/providers/omniroute-toolcall.test.ts`
 
 **Interfaces:**
-- Consumes: `OmniRouteProvider`, `FetchLike` (Task 4).
-- Produces: (yeni API yok — parça parça gelen `delta.tool_calls`'ın `index`'e göre birleştirilip tek `tool-call` event'i olarak yayıldığını doğrular.)
+- Consumes: `OmniRouteProvider`, `FetchLike` (Task 4); `ToolCall` (`src/core/types.js`).
+- Produces: parça parça gelen `delta.tool_calls`'ın `index`'e göre birleştirilip SSE bitince tek `tool-call` event'i olarak yayılması.
 
 - [ ] **Step 1: Başarısız testi yaz**
 
@@ -684,35 +663,82 @@ describe("OmniRouteProvider — tool-call birleştirme", () => {
 });
 ```
 
-- [ ] **Step 2: Testin geçtiğini doğrula**
+- [ ] **Step 2: Testin başarısız olduğunu doğrula**
 
 Run: `npx vitest run test/providers/omniroute-toolcall.test.ts`
-Expected: PASS (1 test) — kod Task 4'te yazıldığı için doğrudan geçmeli.
+Expected: FAIL — Task 4 tool-call yaymıyor; SSE'de yalnızca `done` gelir, beklenen `tool-call` event'i üretilmez.
 
-> Bu task davranış doğrulamasıdır: Task 4 kodu tool-call birleştirmeyi zaten içeriyor. Test önce yazılıp bu davranışı kilitler. Geçmezse Task 4 kodundaki birleştirme mantığını düzelt.
+- [ ] **Step 3: `chat()`'e tool-call birleştirmeyi ekle**
 
-- [ ] **Step 3: Commit**
+`src/providers/omniroute.ts` üzerinde:
+
+1. Tip import'una `ToolCall` ekle:
+   ```typescript
+   import type { ChatEvent, ChatRequest, Provider, ToolCall } from "../core/types.js";
+   ```
+2. Sınıfın ÜSTÜNE accumulator tipini ekle:
+   ```typescript
+   interface ToolCallAccumulator {
+     id: string;
+     name: string;
+     arguments: string;
+   }
+   ```
+3. `chat()` içinde `let finishReason ...` satırının ÜSTÜNE ekle:
+   ```typescript
+   const toolCalls = new Map<number, ToolCallAccumulator>();
+   ```
+4. SSE döngüsünde, content `yield`'inden SONRA, `finish_reason` satırından ÖNCE ekle:
+   ```typescript
+   const deltaCalls = delta.tool_calls as
+     | { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
+     | undefined;
+   if (Array.isArray(deltaCalls)) {
+     for (const tc of deltaCalls) {
+       const idx = tc.index ?? 0;
+       const acc = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
+       if (tc.id) acc.id = tc.id;
+       if (tc.function?.name) acc.name = tc.function.name;
+       if (tc.function?.arguments) acc.arguments += tc.function.arguments;
+       toolCalls.set(idx, acc);
+     }
+   }
+   ```
+5. Döngüden SONRA, `yield { type: "done", finishReason }`'dan ÖNCE ekle:
+   ```typescript
+   for (const acc of toolCalls.values()) {
+     const toolCall: ToolCall = { id: acc.id, name: acc.name, arguments: acc.arguments };
+     yield { type: "tool-call", toolCall };
+   }
+   ```
+
+- [ ] **Step 4: Testin geçtiğini doğrula + typecheck**
+
+Run: `npx vitest run test/providers/omniroute-toolcall.test.ts && npm run typecheck`
+Expected: PASS (1 test); typecheck hatasız.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add test/providers/omniroute-toolcall.test.ts
-git commit -m "test: OmniRouteProvider tool-call birleştirmeyi doğrula"
+git add src/providers/omniroute.ts test/providers/omniroute-toolcall.test.ts
+git commit -m "feat: OmniRouteProvider tool-call birleştirme (parça delta → tek event)"
 ```
 
 ---
 
-### Task 6: OmniRouteProvider — Usage, Hata ve Ağ Kesintisi
+### Task 6: OmniRouteProvider — Usage Header'ları
 
 **Files:**
-- Modify: (yok — kod Task 4'te yazıldı)
-- Test: `test/providers/omniroute-usage-error.test.ts`
+- Modify: `src/providers/omniroute.ts` (usage header okuma eklenir)
+- Test: `test/providers/omniroute-usage.test.ts`
 
 **Interfaces:**
 - Consumes: `OmniRouteProvider`, `FetchLike` (Task 4).
-- Produces: (yeni API yok — usage header'larından `usage` event'i; `!res.ok` → tek `error` event'i (stream yok); `fetch` reddi (ör. abort) → tek `error` event'i doğrulanır.)
+- Produces: `X-OmniRoute-Tokens-In/Out` header'larından `done`'dan ÖNCE bir `usage` event'i; header yoksa usage event'i çıkmaz.
 
 - [ ] **Step 1: Başarısız testi yaz**
 
-`test/providers/omniroute-usage-error.test.ts`:
+`test/providers/omniroute-usage.test.ts`:
 ```typescript
 import { describe, it, expect } from "vitest";
 import { OmniRouteProvider, type FetchLike } from "../../src/providers/omniroute.js";
@@ -737,7 +763,7 @@ async function drain(it: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
 
 const req: ChatRequest = { model: "m", messages: [{ role: "user", content: "x" }], tools: [] };
 
-describe("OmniRouteProvider — usage / hata / kesinti", () => {
+describe("OmniRouteProvider — usage header'ları", () => {
   it("usage header'larını done'dan önce usage event'i olarak yayar", async () => {
     const fetch: FetchLike = async () =>
       sseResponse(
@@ -752,36 +778,39 @@ describe("OmniRouteProvider — usage / hata / kesinti", () => {
       { type: "done", finishReason: "stop" },
     ]);
   });
-
-  it("!res.ok durumunda stream açmadan tek error event'i yayar", async () => {
-    const fetch: FetchLike = async () =>
-      new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
-    const provider = new OmniRouteProvider({ apiKey: "bad", baseUrl: "http://localhost:20128", fetch });
-    const events = await drain(provider.chat(req, new AbortController().signal));
-    expect(events).toEqual([{ type: "error", message: "Unauthorized" }]);
-  });
-
-  it("fetch reddi (abort/ağ) tek error event'ine dönüşür", async () => {
-    const fetch: FetchLike = async () => {
-      throw new DOMException("The operation was aborted.", "AbortError");
-    };
-    const provider = new OmniRouteProvider({ baseUrl: "http://localhost:20128", fetch });
-    const events = await drain(provider.chat(req, new AbortController().signal));
-    expect(events).toEqual([{ type: "error", message: "The operation was aborted." }]);
-  });
 });
 ```
 
-- [ ] **Step 2: Testin geçtiğini doğrula**
+- [ ] **Step 2: Testin başarısız olduğunu doğrula**
 
-Run: `npx vitest run test/providers/omniroute-usage-error.test.ts`
-Expected: PASS (3 test) — kod Task 4'te yazıldığı için doğrudan geçmeli.
+Run: `npx vitest run test/providers/omniroute-usage.test.ts`
+Expected: FAIL — Task 5 sonrası kod usage yaymıyor; `usage` event'i beklenirken yalnızca text-delta + done gelir.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: `chat()`'e usage header okumasını ekle**
+
+`chat()` içinde tool-call emit döngüsünden SONRA, `yield { type: "done", finishReason }`'dan ÖNCE ekle:
+```typescript
+const inHeader = res.headers.get("X-OmniRoute-Tokens-In");
+const outHeader = res.headers.get("X-OmniRoute-Tokens-Out");
+if (inHeader !== null || outHeader !== null) {
+  yield {
+    type: "usage",
+    promptTokens: Number(inHeader) || 0,
+    completionTokens: Number(outHeader) || 0,
+  };
+}
+```
+
+- [ ] **Step 4: Testin geçtiğini doğrula + tüm suite + typecheck**
+
+Run: `npx vitest run test/providers/omniroute-usage.test.ts && npm test && npm run typecheck`
+Expected: PASS; tüm suite yeşil; typecheck hatasız.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add test/providers/omniroute-usage-error.test.ts
-git commit -m "test: OmniRouteProvider usage/hata/kesinti davranışı"
+git add src/providers/omniroute.ts test/providers/omniroute-usage.test.ts
+git commit -m "feat: OmniRouteProvider usage header'ları (X-OmniRoute-Tokens → usage event)"
 ```
 
 ---
