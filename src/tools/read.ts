@@ -14,7 +14,7 @@ export const readFileTool: Tool = {
     const parsed = params.safeParse(rawArgs);
     if (!parsed.success) {
       return {
-        content: `read_file: geçersiz args: ${parsed.error.message}`,
+        content: `read_file: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
         isError: true,
       };
     }
