@@ -12,6 +12,12 @@ export interface WaveTaskDeps extends EscalationDeps {
   serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
+/**
+ * runWaveTask sonucu. Çağıran (E4b/E4c) için sözleşme notları:
+ * - `conflict`: base worktree merge ortasında bırakılır (`MERGE_HEAD` var) — bir sonraki
+ *   `mergeTask`'tan ÖNCE E4b resolve + `commitMerge` ya da `abortMerge` yapmalı.
+ * - Hiçbir dal task worktree'sini/branch'ini temizlemez (`removeTask`/`closeSession` → E4c).
+ */
 export type TaskResult =
   | { status: "merged"; task: TaskWorktree }
   | { status: "conflict"; files: string[]; task: TaskWorktree }
@@ -35,6 +41,7 @@ export async function runWaveTask(
 
   const rounds = Math.max(1, deps.rounds);
   const v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree);
+  deps.signal.throwIfAborted(); // escalation sırasında iptal geldiyse commit/merge'e geçme
 
   if (v.verdict === "fail") {
     board.appendStage(taskId, { role: "team-lead", action: "task-failed" });
