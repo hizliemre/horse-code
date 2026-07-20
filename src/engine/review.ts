@@ -72,3 +72,30 @@ export async function runJudge(
   };
   return runStructuredRole(opts, JudgeSchema);
 }
+
+/**
+ * §6 review döngüsü: council → judge; pass→onaylı, revize→revise(feedback)→tekrar,
+ * ask-human→askUser→feedback→revise→tekrar. maxRounds tükenince son insan kararı (onayla/durdur).
+ */
+export async function runReviewLoop(
+  deps: ReviewDeps,
+  workdir: string,
+  docPath: string,
+  revise: (feedback: string[]) => Promise<void>,
+  askUser: AskUser,
+  maxRounds: number,
+): Promise<ReviewOutcome> {
+  for (let round = 0; round < maxRounds; round++) {
+    const assessments = await runCouncil(deps, workdir, docPath);
+    const d = await runJudge(deps, workdir, docPath, assessments);
+    if (d.decision === "pass") return { approved: true };
+    let feedback = d.feedback;
+    if (d.decision === "ask-human") {
+      const answer = await askUser(d.question);
+      feedback = [...feedback, `İnsan cevabı: ${answer}`];
+    }
+    await revise(feedback);
+  }
+  const answer = await askUser(`${maxRounds} revize turunda onaylanmadı. Onayla / durdur?`);
+  return { approved: /onayla|approve|evet|yes/i.test(answer) };
+}

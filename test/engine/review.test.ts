@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildCouncilRegistry, runCouncil, runJudge,
+  buildCouncilRegistry, runCouncil, runJudge, runReviewLoop,
   type ReviewDeps,
 } from "../../src/engine/review.js";
 import type { CouncilorConfig } from "../../src/config/config.js";
@@ -114,5 +114,57 @@ describe("runJudge", () => {
     ]);
     expect(d.decision).toBe("revise");
     expect(d.feedback).toEqual(["testsiz"]);
+  });
+});
+
+describe("runReviewLoop", () => {
+  const noRevise = async () => {};
+
+  it("pass ilk turda → approved, revise çağrılmaz", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    let revised = 0;
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", async () => { revised++; }, async () => "x", 3);
+    expect(out.approved).toBe(true);
+    expect(revised).toBe(0);
+  });
+
+  it("revize → revise(feedback) → ikinci tur pass → approved", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["testsiz"],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const feedbacks: string[][] = [];
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async () => "x", 3);
+    expect(out.approved).toBe(true);
+    expect(feedbacks).toEqual([["testsiz"]]);
+  });
+
+  it("ask-human → askUser çağrılır, cevap sonraki revise feedback'inde → pass", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ judge: ['{"decision":"ask-human","feedback":["belirsiz"],"question":"X mi Y mi?"}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const feedbacks: string[][] = [];
+    let asked = "";
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async (q) => { asked = q; return "X"; }, 3);
+    expect(out.approved).toBe(true);
+    expect(asked).toBe("X mi Y mi?");
+    expect(feedbacks[0].some((s) => s.includes("X"))).toBe(true);
+  });
+
+  it("maxRounds tükendi → son askUser 'onayla' → approved; 'durdur' → değil", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p1 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const ok = await runReviewLoop(rdeps(p1), dir, "spec.md", noRevise, async () => "onayla", 2);
+    expect(ok.approved).toBe(true);
+    const p2 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const stop = await runReviewLoop(rdeps(p2), dir, "spec.md", noRevise, async () => "durdur", 2);
+    expect(stop.approved).toBe(false);
+  });
+
+  it("iptal edilmişse fırlatır", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const ac = new AbortController(); ac.abort();
+    const p = reviewProvider({});
+    await expect(
+      runReviewLoop(rdeps(p, ac.signal), dir, "spec.md", noRevise, async () => "x", 2),
+    ).rejects.toThrow();
   });
 });
