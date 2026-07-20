@@ -66,3 +66,25 @@ export async function runAnalyst(
   };
   await runToCompletion(opts);
 }
+
+/** Planner: spec'i okuyup plan dosyasını yazar (revize'de feedback ile). ask_user YOK — soru sormaz. */
+export async function runPlanner(
+  deps: ReviewDeps,
+  workdir: string,
+  planPath: string,
+  specPath: string,
+  feedback: string[] | undefined,
+): Promise<void> {
+  const { model, systemPrompt } = deps.roleRegistry.resolve("planner");
+  const tools = writerRegistry(deps);
+  const content =
+    feedback && feedback.length
+      ? `"${planPath}" plan'ını şu reviewer notlarıyla revize et:\n${feedback.map((f) => `- ${f}`).join("\n")}\n("${specPath}" spec'inden)`
+      : `"${specPath}" spec'ini oku ve plan'ı "${planPath}"'e write_file ile yaz.`;
+  const opts: RoleAgentOptions = {
+    provider: deps.provider, model, systemPrompt, tools,
+    messages: [{ role: "user", content }],
+    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+  };
+  await runToCompletion(opts);
+}

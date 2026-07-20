@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAskUserTool, runAnalyst } from "../../src/engine/upstream.js";
+import { buildAskUserTool, runAnalyst, runPlanner } from "../../src/engine/upstream.js";
 import type { ReviewDeps } from "../../src/engine/review.js";
 import { buildCouncilRegistry } from "../../src/engine/review.js";
 import type { CouncilorConfig, RoleConfig } from "../../src/config/config.js";
@@ -124,5 +124,25 @@ describe("runAnalyst", () => {
     await runAnalyst(udeps(p), dir, "spec.md", "X yap", undefined, async (q) => { asked = q; return "X"; });
     expect(asked).toBe("X mi Y mi?");
     expect(await readFile(join(dir, "spec.md"), "utf8")).toBe("# spec");
+  });
+});
+
+describe("runPlanner", () => {
+  it("plan dosyasını yazar; toolset write var, ask_user yok", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = upstreamProvider({});
+    await runPlanner(udeps(p), dir, "plan.md", "spec.md", undefined);
+    expect(await readFile(join(dir, "plan.md"), "utf8")).toBe("# plan");
+    const names = p.requests[0].tools.map((t) => t.name);
+    expect(names).toContain("write_file");
+    expect(names).not.toContain("ask_user");
+  });
+
+  it("feedback doluysa istekte notlar geçer", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = upstreamProvider({});
+    await runPlanner(udeps(p), dir, "plan.md", "spec.md", ["dalga eksik"]);
+    const userMsg = p.requests[0].messages.find((m) => m.role === "user")?.content ?? "";
+    expect(userMsg).toContain("dalga eksik");
   });
 });
