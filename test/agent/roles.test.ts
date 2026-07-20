@@ -5,6 +5,7 @@ import { MockProvider } from "../../src/providers/mock.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { AgentEvent } from "../../src/core/types.js";
+import { SkillRegistry } from "../../src/skills/registry.js";
 
 describe("RoleRegistry.resolve", () => {
   it("round-robin ile modeller arasında döner (role başına)", () => {
@@ -50,5 +51,26 @@ describe("runRole", () => {
     expect(out.at(-1)).toEqual({ type: "message.done", message: { role: "assistant", content: "ok" } });
     // resolve edilen model ilk istekte kullanıldı
     expect(provider.requests[0].model).toBe("m1");
+  });
+});
+
+describe("RoleRegistry + skills", () => {
+  it("skillRegistry varsa zorunlu skill + listing systemPrompt'a enjekte edilir", () => {
+    const skills = new SkillRegistry();
+    skills.register({ name: "tdd", description: "TDD akışı", content: "önce test yaz" });
+    const reg = new RoleRegistry(
+      { coder: { models: ["m"], systemPrompt: "BASE", skills: ["tdd"] } },
+      {},
+      skills,
+    );
+    const { systemPrompt } = reg.resolve("coder");
+    expect(systemPrompt).toContain("BASE");
+    expect(systemPrompt).toContain("önce test yaz");
+    expect(systemPrompt).toContain("- tdd: TDD akışı");
+  });
+
+  it("skillRegistry yoksa systemPrompt değişmez", () => {
+    const reg = new RoleRegistry({ coder: { models: ["m"], systemPrompt: "BASE", skills: ["tdd"] } });
+    expect(reg.resolve("coder").systemPrompt).toBe("BASE");
   });
 });

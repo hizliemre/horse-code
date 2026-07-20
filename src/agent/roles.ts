@@ -1,6 +1,8 @@
 import type { AgentEvent, Provider } from "../core/types.js";
 import type { RoleConfig } from "../config/config.js";
 import { runRoleAgent, type RoleAgentOptions } from "./loop.js";
+import { applySkills } from "../skills/apply.js";
+import type { SkillRegistry } from "../skills/registry.js";
 
 export class RoleRegistry {
   private index = new Map<string, number>();
@@ -8,6 +10,7 @@ export class RoleRegistry {
   constructor(
     private roles: Record<string, RoleConfig>,
     private defaultPrompts: Record<string, string> = {},
+    private skillRegistry?: SkillRegistry,
   ) {}
 
   resolve(roleName: string): { model: string; systemPrompt: string } {
@@ -19,8 +22,12 @@ export class RoleRegistry {
     const model = role.models[i % role.models.length];
     this.index.set(roleName, i + 1);
 
-    const systemPrompt = role.systemPrompt ?? this.defaultPrompts[roleName];
+    let systemPrompt = role.systemPrompt ?? this.defaultPrompts[roleName];
     if (systemPrompt === undefined) throw new Error(`role '${roleName}' için systemPrompt yok`);
+
+    if (this.skillRegistry) {
+      systemPrompt = applySkills(systemPrompt, role.skills ?? [], this.skillRegistry);
+    }
 
     return { model, systemPrompt };
   }
