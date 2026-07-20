@@ -26,7 +26,11 @@ export class RoleRegistry {
     if (systemPrompt === undefined) throw new Error(`role '${roleName}' için systemPrompt yok`);
 
     if (this.skillRegistry) {
-      systemPrompt = applySkills(systemPrompt, role.skills ?? [], this.skillRegistry);
+      try {
+        systemPrompt = applySkills(systemPrompt, role.skills ?? [], this.skillRegistry);
+      } catch (e) {
+        throw new Error(`role '${roleName}' skill hatası: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
     return { model, systemPrompt };

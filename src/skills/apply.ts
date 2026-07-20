@@ -15,7 +15,8 @@ export function applySkills(basePrompt: string, mandatory: string[], registry: S
     parts.push(`# Zorunlu Skill'ler\n${sections.join("\n\n")}`);
   }
 
-  const available = registry.list();
+  const mandatorySet = new Set(mandatory);
+  const available = registry.list().filter((s) => !mandatorySet.has(s.name));
   if (available.length) {
     const lines = available.map((s) => `- ${s.name}: ${s.description}`);
     parts.push(`# Keşfedilebilir Skill'ler (skill tool ile içeriğini çağır)\n${lines.join("\n")}`);

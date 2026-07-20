@@ -66,11 +66,23 @@ describe("RoleRegistry + skills", () => {
     const { systemPrompt } = reg.resolve("coder");
     expect(systemPrompt).toContain("BASE");
     expect(systemPrompt).toContain("önce test yaz");
-    expect(systemPrompt).toContain("- tdd: TDD akışı");
+    // tdd zorunlu skill olduğu için keşfedilebilir listing'de tekrar görünmemeli
+    expect(systemPrompt).not.toContain("- tdd: TDD akışı");
   });
 
   it("skillRegistry yoksa systemPrompt değişmez", () => {
     const reg = new RoleRegistry({ coder: { models: ["m"], systemPrompt: "BASE", skills: ["tdd"] } });
     expect(reg.resolve("coder").systemPrompt).toBe("BASE");
+  });
+
+  it("tanımsız zorunlu skill → hata mesajı role adını içerir", () => {
+    const skills = new SkillRegistry();
+    const reg = new RoleRegistry(
+      { coder: { models: ["m"], systemPrompt: "BASE", skills: ["yok"] } },
+      {},
+      skills,
+    );
+    expect(() => reg.resolve("coder")).toThrow(/coder/);
+    expect(() => reg.resolve("coder")).toThrow(/tanımsız skill/);
   });
 });

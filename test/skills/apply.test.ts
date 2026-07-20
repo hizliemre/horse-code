@@ -19,7 +19,7 @@ describe("applySkills", () => {
     expect(out).toContain("## tdd");
     expect(out).toContain("önce test yaz");
     expect(out).toContain("# Keşfedilebilir Skill'ler");
-    expect(out).toContain("- tdd: TDD akışı");
+    expect(out).not.toContain("- tdd: TDD akışı");
     expect(out).toContain("- cs: kod standartları");
   });
 
