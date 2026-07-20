@@ -120,6 +120,16 @@ export class OmniRouteProvider implements Provider {
       yield { type: "tool-call", toolCall };
     }
 
+    const inHeader = res.headers.get("X-OmniRoute-Tokens-In");
+    const outHeader = res.headers.get("X-OmniRoute-Tokens-Out");
+    if (inHeader !== null || outHeader !== null) {
+      yield {
+        type: "usage",
+        promptTokens: Number(inHeader) || 0,
+        completionTokens: Number(outHeader) || 0,
+      };
+    }
+
     yield { type: "done", finishReason };
   }
 }
