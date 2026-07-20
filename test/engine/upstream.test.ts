@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAskUserTool, runAnalyst, runPlanner } from "../../src/engine/upstream.js";
+import { buildAskUserTool, runAnalyst, runPlanner, runUpstream } from "../../src/engine/upstream.js";
 import type { ReviewDeps } from "../../src/engine/review.js";
 import { buildCouncilRegistry } from "../../src/engine/review.js";
 import type { CouncilorConfig, RoleConfig } from "../../src/config/config.js";
@@ -144,5 +144,40 @@ describe("runPlanner", () => {
     await runPlanner(udeps(p), dir, "plan.md", "spec.md", ["dalga eksik"]);
     const userMsg = p.requests[0].messages.find((m) => m.role === "user")?.content ?? "";
     expect(userMsg).toContain("dalga eksik");
+  });
+});
+
+describe("runUpstream", () => {
+  it("chat intent → coach cevabı", async () => {
+    const p = upstreamProvider({ intent: "chat" });
+    const res = await runUpstream(udeps(p), dir, "merhaba", async () => "x", 3);
+    expect(res.kind).toBe("chat");
+    if (res.kind === "chat") expect(res.response).toBe("coach cevabı");
+    expect(res.intent).toBe("chat");
+  });
+
+  it("feature → spec+plan onaylanır → approved, iki dosya yazılı", async () => {
+    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const res = await runUpstream(udeps(p), dir, "X ekle", async () => "x", 3);
+    expect(res.kind).toBe("approved");
+    if (res.kind === "approved") {
+      expect(res.specPath).toBe("spec.md");
+      expect(res.planPath).toBe("plan.md");
+    }
+    expect(await readFile(join(dir, "spec.md"), "utf8")).toBe("# spec");
+    expect(await readFile(join(dir, "plan.md"), "utf8")).toBe("# plan");
+  });
+
+  it("spec onaylanmazsa → rejected(spec)", async () => {
+    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const res = await runUpstream(udeps(p), dir, "X ekle", async () => "durdur", 1);
+    expect(res.kind).toBe("rejected");
+    if (res.kind === "rejected") expect(res.stage).toBe("spec");
+  });
+
+  it("iptal edilmişse fırlatır", async () => {
+    const ac = new AbortController(); ac.abort();
+    const p = upstreamProvider({ intent: "feature" });
+    await expect(runUpstream(udeps(p, ac.signal), dir, "X", async () => "x", 2)).rejects.toThrow();
   });
 });

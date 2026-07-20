@@ -10,6 +10,9 @@ import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
 import { buildSkillTool } from "../skills/apply.js";
 import type { ReviewDeps, AskUser } from "./review.js";
+import { runRefiner, routeIntent, type Intent } from "./refiner.js";
+import { runCoachChat } from "./coach.js";
+import { runReviewLoop } from "./review.js";
 
 const askUserParams = z.object({ question: z.string() });
 
@@ -87,4 +90,47 @@ export async function runPlanner(
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
   await runToCompletion(opts);
+}
+
+export type UpstreamResult =
+  | { intent: Intent; kind: "chat"; response: string }
+  | { intent: Intent; kind: "approved"; specPath: string; planPath: string }
+  | { intent: Intent; kind: "rejected"; stage: "spec" | "plan" };
+
+/**
+ * Upstream pipeline: refiner → route; chat→coach cevabı; pipeline→analyst spec (F2 review) →
+ * planner plan (F2 review) → onaylı {specPath, planPath}; reddedilirse {rejected, stage}.
+ */
+export async function runUpstream(
+  deps: ReviewDeps,
+  workdir: string,
+  prompt: string,
+  askUser: AskUser,
+  maxRounds: number,
+): Promise<UpstreamResult> {
+  const r = await runRefiner(deps, prompt);
+  if (routeIntent(r.intent) === "chat") {
+    const response = await runCoachChat(deps, r.refinedPrompt, workdir);
+    return { intent: r.intent, kind: "chat", response };
+  }
+
+  const specPath = "spec.md";
+  await runAnalyst(deps, workdir, specPath, r.refinedPrompt, undefined, askUser);
+  const specOut = await runReviewLoop(
+    deps, workdir, specPath,
+    (fb) => runAnalyst(deps, workdir, specPath, r.refinedPrompt, fb, askUser),
+    askUser, maxRounds,
+  );
+  if (!specOut.approved) return { intent: r.intent, kind: "rejected", stage: "spec" };
+
+  const planPath = "plan.md";
+  await runPlanner(deps, workdir, planPath, specPath, undefined);
+  const planOut = await runReviewLoop(
+    deps, workdir, planPath,
+    (fb) => runPlanner(deps, workdir, planPath, specPath, fb),
+    askUser, maxRounds,
+  );
+  if (!planOut.approved) return { intent: r.intent, kind: "rejected", stage: "plan" };
+
+  return { intent: r.intent, kind: "approved", specPath, planPath };
 }
