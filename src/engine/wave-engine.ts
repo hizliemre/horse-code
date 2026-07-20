@@ -54,6 +54,8 @@ export async function runWave(
           const r = await runConflictCouncil(deps, session, board, t, tw);
           return r.status === "resolved" ? { status: "merged" } : { status: "conflict", files };
         } catch (e) {
+          // iptal → fırlat (base mid-merge kalabilir; temizlik session teardown'a — G/H).
+          // Kuyruğa girmiş bir sibling merge dirty ağaca çarpsa git reddeder (merged dönmez) → false PR yok.
           if (deps.signal.aborted) throw e;
           try { await deps.manager.abortMerge(session); } catch { /* zaten temiz olabilir */ }
           return { status: "conflict", files };

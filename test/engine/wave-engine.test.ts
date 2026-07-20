@@ -171,6 +171,25 @@ describe("runWaveEngine", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
+  it("partial: transitive skip (t1 fail → t2 skip → t3 skip)", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const board = new Board();
+      board.addCard({ id: "t1", title: "gorev-a" });
+      board.addCard({ id: "t2", title: "gorev-b", deps: ["t1"] });
+      board.addCard({ id: "t3", title: "gorev-c", deps: ["t2"] });
+      const adapter = fakeAdapter();
+      const res = await runWaveEngine(edeps(mgr, adapter, { failTasks: ["gorev-a"] }), board, { fromBranch: "main", jobName: "job" });
+      expect(res.status).toBe("partial");
+      expect(adapter.calls).toBe(0);
+      if (res.status === "partial") {
+        expect(res.failed).toEqual(["t1"]);
+        expect(res.skipped.sort()).toEqual(["t2", "t3"]);
+      }
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
   it("abort: pre-aborted signal → fırlatır", async () => {
     const repo = await initTmpRepo();
     try {
