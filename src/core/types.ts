@@ -31,12 +31,19 @@ export interface ToolContext {
   signal: AbortSignal;
 }
 
+export interface PermissionDescriptor {
+  allowKey: string; // shell: komut · dosya: hedef yol
+  preview: string; // kullanıcıya gösterilecek özet (komut, diff başlığı, vb.)
+}
+
 export interface Tool {
   name: string;
   description: string;
   permissionLevel: PermissionLevel;
   parameters: z.ZodType;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
+  // write/exec tool'ları onay isteği üretir; safe tool'larda gerekmez.
+  describe?(args: Record<string, unknown>): PermissionDescriptor;
 }
 
 // --- Provider (LLM gateway) ---

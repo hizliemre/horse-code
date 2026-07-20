@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "picomatch": "^4.0.2",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
