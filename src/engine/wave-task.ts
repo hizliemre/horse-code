@@ -1,5 +1,5 @@
 import type { Board } from "../board/board.js";
-import type { WorktreeManager, WorktreeSession, TaskWorktree } from "../worktree/manager.js";
+import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult } from "../worktree/manager.js";
 import { runTaskWithEscalation, type EscalationDeps } from "./escalation.js";
 
 /** E4a yalnızca bu üç metodu kullanır (stub/mock enjeksiyonu için dar arayüz). */
@@ -10,6 +10,8 @@ export interface WaveTaskDeps extends EscalationDeps {
   /** Git-mutating adımları (derive, merge) serileştiren mutex; paralel dalgada E4c sağlar.
    *  Varsayılan: kimlik. */
   serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
+  /** Conflict'i serileştirilmiş merge bloğu içinde çözer (E4c wiring: runConflictCouncil). */
+  resolveConflict?: (task: TaskWorktree, files: string[]) => Promise<MergeResult>;
 }
 
 /**
@@ -50,7 +52,11 @@ export async function runWaveTask(
 
   // pass → worktree değişikliklerini task branch'ine commit'le, sonra base'e merge et
   await deps.manager.commitTask(tw, `hc: ${card.title}`);
-  const mr = await ser(() => deps.manager.mergeTask(session, tw));
+  const mr = await ser(async () => {
+    const r = await deps.manager.mergeTask(session, tw);
+    if (r.status === "conflict" && deps.resolveConflict) return deps.resolveConflict(tw, r.files);
+    return r;
+  });
   if (mr.status === "merged") {
     board.appendStage(taskId, { role: "team-lead", action: "merged" });
     return { status: "merged", task: tw };

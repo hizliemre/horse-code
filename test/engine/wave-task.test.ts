@@ -31,7 +31,7 @@ function writeTurn(path: string, content: string): ChatEvent[] {
 }
 const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "bitti" }, { type: "done", finishReason: "stop" }];
 
-interface WOpts { rounds?: number; askHuman?: AskHuman; serialize?: <T>(fn: () => Promise<T>) => Promise<T>; signal?: AbortSignal }
+interface WOpts { rounds?: number; askHuman?: AskHuman; serialize?: <T>(fn: () => Promise<T>) => Promise<T>; signal?: AbortSignal; resolveConflict?: WaveTaskDeps["resolveConflict"] }
 function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {}): WaveTaskDeps {
   const roles: Record<string, RoleConfig> = {
     router: { models: ["m"], systemPrompt: "P-router" },
@@ -51,6 +51,7 @@ function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {
     askHuman: opts.askHuman ?? (async () => ({ action: "abandon" })),
     manager,
     serialize: opts.serialize,
+    resolveConflict: opts.resolveConflict,
   };
 }
 function board1(): Board {
@@ -125,6 +126,34 @@ describe("runWaveTask", () => {
     } finally {
       await rm(wt, { recursive: true, force: true });
     }
+  });
+
+  it("resolveConflict {merged} → runWaveTask merged döner", async () => {
+    const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
+    try {
+      let called = 0;
+      const stub = stubManager(wt, async () => ({ status: "conflict", files: ["shared.txt"] }));
+      const resolveConflict = async () => { called++; return { status: "merged" as const }; };
+      const p = new MockProvider([
+        submit('{"role":"coder"}'), writeTurn("out.txt", "kod"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
+      ]);
+      const res = await runWaveTask(wdeps(p, stub, { resolveConflict }), {} as WorktreeSession, board1(), "t1");
+      expect(called).toBe(1);
+      expect(res.status).toBe("merged");
+    } finally { await rm(wt, { recursive: true, force: true }); }
+  });
+
+  it("resolveConflict {conflict} → runWaveTask conflict döner", async () => {
+    const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
+    try {
+      const stub = stubManager(wt, async () => ({ status: "conflict", files: ["shared.txt"] }));
+      const resolveConflict = async () => ({ status: "conflict" as const, files: ["shared.txt"] });
+      const p = new MockProvider([
+        submit('{"role":"coder"}'), writeTurn("out.txt", "kod"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
+      ]);
+      const res = await runWaveTask(wdeps(p, stub, { resolveConflict }), {} as WorktreeSession, board1(), "t1");
+      expect(res.status).toBe("conflict");
+    } finally { await rm(wt, { recursive: true, force: true }); }
   });
 
   it("rounds clamp: rounds=0 → tier0 coder koşar (konseye düşmez)", async () => {
