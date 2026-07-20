@@ -94,7 +94,7 @@ export function makeApprove(read: LineReader): (req: PermissionRequest) => Promi
   // req.preview yazdır, "y/e/evet/yes" → true, diğer → false
 export function makeAskHuman(read: LineReader): AskHuman;
   // ctx özeti yazdır; satır parse: "accept/kabul"→accept, "retry: <not>"→retry(notes), diğer→abandon
-export function nodeLineReader(): LineReader;                // node:readline/promises tabanlı üretim okuyucusu
+export function nodeLineReader(): { read: LineReader; close: () => void }; // üretim okuyucusu; close() stdin'i kapatır (CLI iş bitince çağırır, yoksa süreç asılı kalır)
 ```
 
 ---
