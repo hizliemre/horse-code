@@ -99,6 +99,8 @@ export async function runConflictCouncil(
 
       // 3. verify: deterministik marker taraması + code-reviewer
       if (await hasConflictMarkers(base, conflicted)) {
+        // reviewNotes = son turun başarısızlık nedeni (reviewer-fail dalıyla simetrik: clear+set)
+        board.clearReviewNotes(taskId);
         board.addReviewNote(taskId, `çakışma marker'ları hâlâ var: ${conflicted.join(", ")}`);
         continue;
       }
