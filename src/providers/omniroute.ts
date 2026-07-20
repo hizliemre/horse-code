@@ -1,4 +1,4 @@
-import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
+import type { ChatEvent, ChatRequest, Provider, ToolCall } from "../core/types.js";
 import { parseSSE } from "./sse.js";
 import { toOpenAIBody, mapFinishReason } from "./openai.js";
 
@@ -8,6 +8,12 @@ export interface OmniRouteOptions {
   apiKey?: string;
   baseUrl: string;
   fetch?: FetchLike;
+}
+
+interface ToolCallAccumulator {
+  id: string;
+  name: string;
+  arguments: string;
 }
 
 /**
@@ -72,6 +78,7 @@ export class OmniRouteProvider implements Provider {
       return;
     }
 
+    const toolCalls = new Map<number, ToolCallAccumulator>();
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
 
     for await (const payload of parseSSE(stream)) {
@@ -91,7 +98,26 @@ export class OmniRouteProvider implements Provider {
         yield { type: "text-delta", text: delta.content };
       }
 
+      const deltaCalls = delta.tool_calls as
+        | { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
+        | undefined;
+      if (Array.isArray(deltaCalls)) {
+        for (const tc of deltaCalls) {
+          const idx = tc.index ?? 0;
+          const acc = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
+          if (tc.id) acc.id = tc.id;
+          if (tc.function?.name) acc.name = tc.function.name;
+          if (tc.function?.arguments) acc.arguments += tc.function.arguments;
+          toolCalls.set(idx, acc);
+        }
+      }
+
       if (choice.finish_reason) finishReason = mapFinishReason(choice.finish_reason);
+    }
+
+    for (const acc of toolCalls.values()) {
+      const toolCall: ToolCall = { id: acc.id, name: acc.name, arguments: acc.arguments };
+      yield { type: "tool-call", toolCall };
     }
 
     yield { type: "done", finishReason };
