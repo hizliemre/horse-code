@@ -79,6 +79,26 @@ describe("runRoleAgent", () => {
     const events = await drain(runRoleAgent(opts(p)));
     expect(events).toEqual([{ type: "error", message: "patladı" }]);
   });
+
+  it("maxTurns aşılırsa error event yayar ve durur", async () => {
+    const toolCallTurn: ChatEvent[] = [
+      { type: "tool-call", toolCall: { id: "c1", name: "echo", arguments: '{"t":"x"}' } },
+      { type: "done", finishReason: "tool_calls" },
+    ];
+    const p = new MockProvider([toolCallTurn, toolCallTurn, toolCallTurn, toolCallTurn, toolCallTurn]);
+    const events = await drain(runRoleAgent(opts(p, { maxTurns: 3 })));
+    expect(events.some((e) => e.type === "error" && e.message.includes("maksimum turn"))).toBe(true);
+    expect(p.requests.length).toBe(3);
+  });
+
+  it("önceden abort edilmiş signal: abort event yayar, provider hiç çağrılmaz", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const p = new MockProvider([[{ type: "done", finishReason: "stop" }]]);
+    const events = await drain(runRoleAgent(opts(p, { signal: ac.signal })));
+    expect(events).toEqual([{ type: "abort" }]);
+    expect(p.requests.length).toBe(0);
+  });
 });
 
 describe("runToCompletion", () => {
@@ -91,5 +111,12 @@ describe("runToCompletion", () => {
   it("error'da fırlatır", async () => {
     const p = new MockProvider([[{ type: "error", message: "boom" }]]);
     await expect(runToCompletion(opts(p))).rejects.toThrow("boom");
+  });
+
+  it("önceden abort edilmiş signal'da fırlatır", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const p = new MockProvider([[{ type: "done", finishReason: "stop" }]]);
+    await expect(runToCompletion(opts(p, { signal: ac.signal }))).rejects.toThrow(/iptal/);
   });
 });

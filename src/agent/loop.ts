@@ -15,13 +15,26 @@ export interface RoleAgentOptions {
   approve: (req: PermissionRequest) => Promise<boolean>;
   cwd: string;
   signal: AbortSignal;
+  maxTurns?: number;
 }
 
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
   const working: Message[] = [{ role: "system", content: opts.systemPrompt }, ...opts.messages];
   const schemas = opts.tools.schemas();
+  const maxTurns = opts.maxTurns ?? 50;
+  let turn = 0;
 
   while (true) {
+    if (opts.signal.aborted) {
+      yield { type: "abort" };
+      return;
+    }
+    if (turn >= maxTurns) {
+      yield { type: "error", message: `maksimum turn sayısı aşıldı (${maxTurns})` };
+      return;
+    }
+    turn++;
+
     let assistantText = "";
     const toolCalls: ToolCall[] = [];
     let errored = false;
@@ -74,6 +87,7 @@ export async function runToCompletion(opts: RoleAgentOptions): Promise<Message> 
   for await (const ev of runRoleAgent(opts)) {
     if (ev.type === "message.done") last = ev.message;
     else if (ev.type === "error") throw new Error(ev.message);
+    else if (ev.type === "abort") throw new Error("iptal edildi");
   }
   if (!last) throw new Error("runToCompletion: mesaj üretilmedi");
   return last;
