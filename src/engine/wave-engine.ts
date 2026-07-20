@@ -3,6 +3,10 @@ import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult, PRAda
 import type { EscalationDeps } from "./escalation.js";
 import { runWaveTask } from "./wave-task.js";
 import { runConflictCouncil } from "./conflict.js";
+import type { RoleAgentOptions } from "../agent/loop.js";
+import { runTeamLead } from "./team-lead.js";
+import { ToolRegistry } from "../tools/registry.js";
+import { buildSkillTool } from "../skills/apply.js";
 
 export interface WaveEngineDeps extends EscalationDeps {
   manager: WorktreeManager;
@@ -65,4 +69,54 @@ export async function runWave(
     failed: results.filter((r) => r.status !== "merged").map((r) => r.t),
     skipped,
   };
+}
+
+export type WaveEngineResult =
+  | { status: "completed"; session: WorktreeSession; pr: { url: string }; waves: string[][] }
+  | { status: "partial"; session: WorktreeSession; failed: string[]; skipped: string[]; waves: string[][] };
+
+function teamLeadOpts(deps: WaveEngineDeps, session: WorktreeSession): RoleAgentOptions {
+  const tl = deps.roleRegistry.resolve("team-lead");
+  const tools = new ToolRegistry();
+  tools.register(buildSkillTool(deps.skillRegistry));
+  return {
+    provider: deps.provider, model: tl.model, systemPrompt: tl.systemPrompt,
+    tools, messages: [], permission: deps.permission, approve: deps.approve,
+    cwd: session.baseWorktree, signal: deps.signal,
+  };
+}
+
+/**
+ * Deterministik dış döngü: openSession → team-lead dalgaları → her dalga paralel runWave
+ * (başarısızın bağımlıları atlanır) → tüm task'lar başarılıysa push+openPR, değilse {partial}.
+ */
+export async function runWaveEngine(
+  deps: WaveEngineDeps,
+  board: Board,
+  opts: { fromBranch: string; jobName: string; prTitle?: string },
+): Promise<WaveEngineResult> {
+  const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
+  const waves = await runTeamLead(teamLeadOpts(deps, session), board);
+
+  const blocked = new Set<string>();
+  const failed: string[] = [];
+  const skipped: string[] = [];
+  for (const wave of waves) {
+    const o = await runWave(deps, session, board, wave, blocked);
+    for (const t of o.failed) { blocked.add(t); failed.push(t); }
+    for (const t of o.skipped) { blocked.add(t); skipped.push(t); }
+    // başarılı merge'ler base'e commit'lendi → sonraki dalga güncellenmiş base'den türer (D otomatik)
+  }
+
+  if (failed.length === 0 && skipped.length === 0) {
+    await deps.manager.push(session);
+    const body = "Tamamlanan task'lar:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
+    const pr = await deps.manager.openPR(session, deps.prAdapter, {
+      base: opts.fromBranch,
+      title: opts.prTitle ?? `hc: ${opts.jobName}`,
+      body,
+    });
+    return { status: "completed", session, pr, waves };
+  }
+  return { status: "partial", session, failed, skipped, waves };
 }

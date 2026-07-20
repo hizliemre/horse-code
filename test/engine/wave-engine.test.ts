@@ -2,8 +2,9 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMutex, runWave } from "../../src/engine/wave-engine.js";
+import { createMutex, runWave, runWaveEngine } from "../../src/engine/wave-engine.js";
 import type { WaveEngineDeps } from "../../src/engine/wave-engine.js";
+import { defaultGitRunner } from "../../src/worktree/git.js";
 import type { AskHuman } from "../../src/engine/escalation.js";
 import { WorktreeManager } from "../../src/worktree/manager.js";
 import type { WorktreeSession, PRAdapter } from "../../src/worktree/manager.js";
@@ -125,6 +126,62 @@ describe("runWave", () => {
       expect(o.skipped).toEqual(["t3"]);
       expect(o.merged).toEqual([]);
       expect(board.get("t3")!.stageHistory.some((s) => s.action === "skipped")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+describe("runWaveEngine", () => {
+  it("completed: hepsi pass → push + openPR", async () => {
+    const repo = await initTmpRepo();
+    const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
+    try {
+      await defaultGitRunner(["init", "--bare", "-b", "main"], bare);
+      await defaultGitRunner(["remote", "add", "origin", bare], repo);
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const board = new Board();
+      board.addCard({ id: "t1", title: "gorev-a" });
+      board.addCard({ id: "t2", title: "gorev-b", deps: ["t1"] });
+      const adapter = fakeAdapter();
+      const res = await runWaveEngine(edeps(mgr, adapter), board, { fromBranch: "main", jobName: "job" });
+      expect(res.status).toBe("completed");
+      expect(adapter.calls).toBe(1);
+      if (res.status === "completed") expect(res.pr.url).toBe("http://pr/1");
+      expect(res.waves).toEqual([["t1"], ["t2"]]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("partial: t1 fail → t2(dep t1) skip → PR açılmaz", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const board = new Board();
+      board.addCard({ id: "t1", title: "gorev-a" });
+      board.addCard({ id: "t2", title: "gorev-b", deps: ["t1"] });
+      const adapter = fakeAdapter();
+      const res = await runWaveEngine(edeps(mgr, adapter, { failTasks: ["gorev-a"] }), board, { fromBranch: "main", jobName: "job" });
+      expect(res.status).toBe("partial");
+      expect(adapter.calls).toBe(0);
+      if (res.status === "partial") {
+        expect(res.failed).toEqual(["t1"]);
+        expect(res.skipped).toEqual(["t2"]);
+      }
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("abort: pre-aborted signal → fırlatır", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const ac = new AbortController();
+      ac.abort();
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const board = new Board();
+      board.addCard({ id: "t1", title: "gorev-a" });
+      await expect(
+        runWaveEngine(edeps(mgr, fakeAdapter(), { signal: ac.signal }), board, { fromBranch: "main", jobName: "job" }),
+      ).rejects.toThrow();
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
