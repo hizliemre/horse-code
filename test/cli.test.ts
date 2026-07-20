@@ -8,6 +8,9 @@ describe("parseArgs", () => {
   it("çok kelimeli prompt birleşir; kısa flag'ler", () => {
     expect(parseArgs(["merhaba", "dünya", "-b", "main", "-j", "isim"])).toEqual({ prompt: "merhaba dünya", fromBranch: "main", jobName: "isim" });
   });
+  it("parseArgs --revision-rounds", () => {
+    expect(parseArgs(["X", "--revision-rounds", "2"])).toEqual({ prompt: "X", revisionRounds: 2 });
+  });
 });
 
 describe("renderResult", () => {
@@ -25,5 +28,14 @@ describe("renderResult", () => {
     });
     expect(out).toContain("rapor");
     expect(out).toContain("http://pr");
+  });
+  it("renderResult done: revision durumunu yazar", () => {
+    const out = renderResult({
+      kind: "done", report: "rapor",
+      wave: { status: "completed", session: {} as never, pr: { url: "http://pr" }, waves: [] },
+      revision: { status: "approved", rounds: 0 },
+      session: {} as never,
+    });
+    expect(out).toContain("revision");
   });
 });
