@@ -2,12 +2,12 @@ import type { Card } from "../board/board.js";
 import { runToCompletion, type RoleAgentOptions } from "../agent/loop.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
-import type { TaskCycleDeps, ImplementerRole } from "./task-types.js";
+import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 
 /** Implementer role'ünü worktree-scope'lu tool'lar + yeni-vs-dönen mesajıyla çalıştırır. */
 export async function runImplementer(
   deps: TaskCycleDeps,
-  role: ImplementerRole,
+  role: RunnableRole,
   task: Card,
   cwd: string,
 ): Promise<void> {
