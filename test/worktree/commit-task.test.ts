@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { WorktreeManager } from "../../src/worktree/manager.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
