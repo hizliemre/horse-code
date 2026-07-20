@@ -88,16 +88,13 @@ function teamLeadOpts(deps: WaveEngineDeps, session: WorktreeSession): RoleAgent
   };
 }
 
-/**
- * Deterministik dış döngü: openSession → team-lead dalgaları → her dalga paralel runWave
- * (başarısızın bağımlıları atlanır) → tüm task'lar başarılıysa push+openPR, değilse {partial}.
- */
-export async function runWaveEngine(
+/** Bir session'da dalgaları yürütür (openSession YOK): team-lead → dalgalar → push+openPR / {partial}. */
+export async function runWaves(
   deps: WaveEngineDeps,
+  session: WorktreeSession,
   board: Board,
-  opts: { fromBranch: string; jobName: string; prTitle?: string },
+  opts: { base: string; prTitle?: string },
 ): Promise<WaveEngineResult> {
-  const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
   const waves = await runTeamLead(teamLeadOpts(deps, session), board);
 
   const blocked = new Set<string>();
@@ -107,18 +104,27 @@ export async function runWaveEngine(
     const o = await runWave(deps, session, board, wave, blocked);
     for (const t of o.failed) { blocked.add(t); failed.push(t); }
     for (const t of o.skipped) { blocked.add(t); skipped.push(t); }
-    // başarılı merge'ler base'e commit'lendi → sonraki dalga güncellenmiş base'den türer (D otomatik)
   }
 
   if (failed.length === 0 && skipped.length === 0) {
     await deps.manager.push(session);
     const body = "Tamamlanan task'lar:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
     const pr = await deps.manager.openPR(session, deps.prAdapter, {
-      base: opts.fromBranch,
-      title: opts.prTitle ?? `hc: ${opts.jobName}`,
+      base: opts.base,
+      title: opts.prTitle ?? `hc: ${session.jobSlug}`,
       body,
     });
     return { status: "completed", session, pr, waves };
   }
   return { status: "partial", session, failed, skipped, waves };
+}
+
+/** Deterministik dış döngü: openSession → runWaves (geriye dönük uyumlu sarmalayıcı). */
+export async function runWaveEngine(
+  deps: WaveEngineDeps,
+  board: Board,
+  opts: { fromBranch: string; jobName: string; prTitle?: string },
+): Promise<WaveEngineResult> {
+  const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
+  return runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle });
 }
