@@ -97,5 +97,6 @@ export async function runReviewLoop(
     await revise(feedback);
   }
   const answer = await askUser(`${maxRounds} revize turunda onaylanmadı. Onayla / durdur?`);
-  return { approved: /onayla|approve|evet|yes/i.test(answer) };
+  // Kelime-sınırlı tam eşleşme: "onaylamıyorum" gibi olumsuzlukları yanlışlıkla onay sayma.
+  return { approved: /^\s*(onayla|approve|evet|yes)\s*$/i.test(answer) };
 }

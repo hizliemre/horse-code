@@ -157,6 +157,10 @@ describe("runReviewLoop", () => {
     const p2 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
     const stop = await runReviewLoop(rdeps(p2), dir, "spec.md", noRevise, async () => "durdur", 2);
     expect(stop.approved).toBe(false);
+    // olumsuzluk "onaylamıyorum" (içinde "onayla" geçer) yanlışlıkla onay SAYILMAZ
+    const p3 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const neg = await runReviewLoop(rdeps(p3), dir, "spec.md", noRevise, async () => "onaylamıyorum", 2);
+    expect(neg.approved).toBe(false);
   });
 
   it("iptal edilmişse fırlatır", async () => {
