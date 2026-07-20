@@ -19,20 +19,27 @@ PR açar. Saf git mekaniği; role-agent/council/pipeline orkestrasyonu YOK (o Di
 **İki katmanlı worktree hiyerarşisi (design doc §5.3):**
 ```
 kullanıcının seçtiği branch
-   └─► SESSION ANA WORKTREE (openSession, temiz)   base: hc/<job-slug>
-          ├─► task worktree (deriveTask)   branch: hc/<job-slug>/<task-slug>
+   └─► SESSION ANA WORKTREE (openSession, temiz)   base branch: hc/<job-slug>/base
+          ├─► task worktree (deriveTask)   branch: hc/<job-slug>/t/<task-slug>
           ├─► task worktree ...
           └─ dalga sonu → task branch'leri base'e merge (mergeTask)
 ```
+
+> **Git ref D/F kısıtı:** `hc/<job-slug>` (base) + `hc/<job-slug>/<task-slug>` (task) git'te
+> AYNI ANDA var olamaz (`refs/heads/hc/<slug>` dosya, `.../<slug>/<task>` dizin gerektirir → çakışır).
+> Bu yüzden base branch `hc/<job-slug>/base`, task branch'leri `hc/<job-slug>/t/<task-slug>` —
+> hepsi `hc/<job-slug>/` namespace'i altında, D/F çakışması yok (`base` dosyası ile `t` dizini kardeş).
 
 ---
 
 ## 2. Konum ve İsimlendirme
 
 ```
-<repoRoot>/.horsecode/worktrees/<job-slug>/base            (branch: hc/<job-slug>)
-<repoRoot>/.horsecode/worktrees/<job-slug>/tasks/<task-slug>   (branch: hc/<job-slug>/<task-slug>)
+<repoRoot>/.horsecode/worktrees/<job-slug>/base            (branch: hc/<job-slug>/base)
+<repoRoot>/.horsecode/worktrees/<job-slug>/tasks/<task-slug>   (branch: hc/<job-slug>/t/<task-slug>)
 ```
+> Klasör adları D/F kısıtından etkilenmez (yalnızca branch ref'leri); branch'ler `hc/<job-slug>/base`
+> ve `hc/<job-slug>/t/<task-slug>` namespace'iyle çakışmayı önler (bkz. §1).
 
 - **Slug:** çağıran (coach/project-manager) kısa açıklayıcı bir ad verir; `WorktreeManager` onu
   **kebab-case + filesystem-güvenli** slug'a çevirir (küçük harf, `[a-z0-9]` dışı → `-`, tekrar/
@@ -55,13 +62,13 @@ export interface WorktreeSession {
   jobSlug: string;
   root: string;         // <repoRoot>/.horsecode/worktrees/<jobSlug>
   baseWorktree: string; // <root>/base
-  baseBranch: string;   // hc/<jobSlug>
+  baseBranch: string;   // hc/<jobSlug>/base
 }
 
 export interface TaskWorktree {
   taskSlug: string;
   worktree: string;     // <root>/tasks/<taskSlug>
-  branch: string;       // hc/<jobSlug>/<taskSlug>
+  branch: string;       // hc/<jobSlug>/t/<taskSlug>
 }
 
 export type MergeResult = { status: "merged" } | { status: "conflict"; files: string[] };
@@ -96,13 +103,13 @@ desenine benzer, `{stdout, stderr, code}` toplar). Enjekte edilebilir → testle
 
 | Metot | Yaptığı |
 |-------|---------|
-| **openSession(fromBranch, jobName)** | `jobName`→`jobSlug` (sanitize+dedupe); `mkdir -p root/tasks`; `.horsecode/worktrees/.gitignore` yaz; `git worktree add -b hc/<jobSlug> <baseWorktree> <fromBranch>`. `WorktreeSession` döner. |
-| **deriveTask(session, taskName)** | `taskName`→`taskSlug` (session içinde dedupe); `git worktree add -b hc/<jobSlug>/<taskSlug> <taskWorktree> <baseBranch>` — base branch'in **güncel HEAD'inden** dallanır. `TaskWorktree` döner. |
+| **openSession(fromBranch, jobName)** | `jobName`→`jobSlug` (sanitize+dedupe); `mkdir -p root/tasks`; `.horsecode/worktrees/.gitignore` yaz; `git worktree add -b hc/<jobSlug>/base <baseWorktree> <fromBranch>`. `WorktreeSession` döner. |
+| **deriveTask(session, taskName)** | `taskName`→`taskSlug` (session içinde dedupe); `git worktree add -b hc/<jobSlug>/t/<taskSlug> <taskWorktree> <baseBranch>` — base branch'in **güncel HEAD'inden** dallanır. `TaskWorktree` döner. |
 | **mergeTask(session, task)** | `baseWorktree`'de `git merge <task.branch>`. Başarı (ff veya temiz merge) → `{status:"merged"}`. Çakışma (nonzero exit) → **merge'i olduğu gibi bırak** (conflict marker'lar dosyada), `git diff --name-only --diff-filter=U` ile çakışan dosyaları topla → `{status:"conflict", files}`. |
 | **commitMerge(session, message?)** | `baseWorktree`'de `git add -A` + `git commit --no-edit` (veya `-m message`). Konsül çözdükten sonra E çağırır. |
 | **abortMerge(session)** | `baseWorktree`'de `git merge --abort`. Çözülemezse E çağırır → base temiz döner. |
 | **removeTask(session, task)** | `git worktree remove --force <taskWorktree>`; `git branch -D <task.branch>`. |
-| **push(session, remote="origin")** | `baseWorktree`'de `git push <remote> hc/<jobSlug>`. |
+| **push(session, remote="origin")** | `baseWorktree`'de `git push <remote> hc/<jobSlug>/base`. |
 | **openPR(session, adapter, input)** | `adapter.createPR({ branch: session.baseBranch, base: input.base, title, body })` → `{url}`. |
 | **closeSession(session)** | tüm task worktree'leri + base worktree'yi `git worktree remove --force`; `git worktree prune`; `git branch -D` (session branch'leri); `root` dizinini sil. |
 
