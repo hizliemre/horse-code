@@ -51,4 +51,21 @@ describe("routeTask", () => {
     const p = new MockProvider([submitTurn('{"role":"coder"}')]);
     await expect(routeTask(deps(p, true, ac.signal), card("x"))).rejects.toThrow();
   });
+
+  it("skill listing prompt'a eklendiyse, skill tool da toolset'te olmalı (E-skills coupling)", async () => {
+    const skillRegistry = new SkillRegistry();
+    skillRegistry.register({ name: "tdd", description: "TDD", content: "TDD içeriği" });
+    const roles: Record<string, RoleConfig> = { router: { models: ["m"], systemPrompt: "route et" } };
+    const p = new MockProvider([submitTurn('{"role":"coder"}')]);
+    const d: TaskCycleDeps = {
+      provider: p,
+      roleRegistry: new RoleRegistry(roles, {}, skillRegistry),
+      skillRegistry,
+      permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
+      approve: async () => true,
+      signal: new AbortController().signal,
+    };
+    await routeTask(d, card("x"));
+    expect(p.requests[0].tools.map((t) => t.name)).toContain("skill");
+  });
 });

@@ -79,4 +79,23 @@ describe("runTaskCycle", () => {
     const p = new MockProvider([]);
     await expect(runTaskCycle(deps(p), boardWithTask(), "yok", dir)).rejects.toThrow(/bilinmeyen task/);
   });
+
+  it("fail: notes boşsa bile dönüş sinyali korunur (varsayılan not eklenir)", async () => {
+    const p = new MockProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":[]}')]);
+    const board = boardWithTask();
+    const v = await runTaskCycle(deps(p), board, "t1", dir);
+    expect(v.verdict).toBe("fail");
+    const c = board.get("t1")!;
+    expect(c.column).toBe("TODO");
+    expect(c.reviewNotes.length).toBeGreaterThan(0);
+  });
+
+  it("pass: önceki fail'den kalan reviewNotes DONE'da temizlenir", async () => {
+    const p = new MockProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}')]);
+    const board = boardWithTask();
+    board.addReviewNote("t1", "eski");
+    const v = await runTaskCycle(deps(p), board, "t1", dir);
+    expect(v.verdict).toBe("pass");
+    expect(board.get("t1")!.reviewNotes).toEqual([]);
+  });
 });

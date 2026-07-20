@@ -24,15 +24,17 @@ export async function runTaskCycle(
   const v = await runReviewer(deps, board.get(taskId)!, worktreePath);
   if (v.verdict === "pass") {
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });
+    board.clearReviewNotes(taskId);
     board.move(taskId, "DONE", "code-reviewer");
   } else {
+    const notes = v.notes.length > 0 ? v.notes : ["review başarısız (not verilmedi)"];
     board.appendStage(taskId, {
       role: "code-reviewer",
       action: "reviewed:fail",
-      note: v.notes.join("; "),
+      note: notes.join("; "),
     });
     board.clearReviewNotes(taskId);
-    for (const n of v.notes) board.addReviewNote(taskId, n);
+    for (const n of notes) board.addReviewNote(taskId, n);
     board.move(taskId, "TODO", "code-reviewer");
   }
   return v;
