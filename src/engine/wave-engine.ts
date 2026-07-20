@@ -104,6 +104,7 @@ export async function runWaves(
     const o = await runWave(deps, session, board, wave, blocked);
     for (const t of o.failed) { blocked.add(t); failed.push(t); }
     for (const t of o.skipped) { blocked.add(t); skipped.push(t); }
+    // başarılı merge'ler base'e commit'lendi → sonraki dalga güncellenmiş base'den türer (D otomatik)
   }
 
   if (failed.length === 0 && skipped.length === 0) {
