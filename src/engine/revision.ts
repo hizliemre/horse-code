@@ -24,6 +24,11 @@ export const PrincipalFinalSchema = z.object({
   question: z.string(),
 });
 
+/**
+ * Revision sonucu. `rounds` semantiği varyanta göre değişir:
+ * - `approved`: onaydan ÖNCE yapılan revizyon turu sayısı (ilk turda onay → 0).
+ * - `accepted`/`human`: ulaşılan tur sayısı (= clamp'lenmiş maxRounds, principal review sayısı).
+ */
 export type RevisionResult =
   | { status: "approved"; rounds: number }
   | { status: "accepted"; rounds: number }
