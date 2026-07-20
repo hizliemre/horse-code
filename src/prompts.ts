@@ -3,6 +3,7 @@ import type { CouncilorConfig } from "./config/config.js";
 export const REQUIRED_ROLES = [
   "refiner", "coach", "analyst", "planner", "judge", "project-manager", "team-lead",
   "router", "coder", "designer", "senior-coder", "senior-designer", "architect", "code-reviewer",
+  "principal-coder",
 ] as const;
 
 export const DEFAULT_PROMPTS: Record<string, string> = {
@@ -34,6 +35,8 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "Tekrar tekrar başarısız olan bir task'ın veya bir merge çakışmasının kök-nedenini analiz et ve somut bir çözüm planı üret. submit ile {rootCause, plan} döndür.",
   "code-reviewer":
     "REVIEW'daki task'ın worktree değişikliklerini incele (doğruluk, test, kalite). submit ile {verdict: pass|fail, notes} döndür — kararın nihaidir.",
+  "principal-coder":
+    "PR'daki tüm değişiklikleri (base worktree) bütünsel review et. Yeterliyse approve; değilse request-changes ve somut comment'ler ver. Son karar turunda accept (kabul) veya ask-human (kullanıcıya sorulacak soru) ver.",
 };
 
 export const DEFAULT_COUNCILORS: CouncilorConfig[] = [
