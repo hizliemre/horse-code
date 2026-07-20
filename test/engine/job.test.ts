@@ -7,7 +7,7 @@ import { runJob } from "../../src/engine/job.js";
 import type { JobDeps } from "../../src/engine/job.js";
 import { buildCouncilRegistry } from "../../src/engine/review.js";
 import { WorktreeManager } from "../../src/worktree/manager.js";
-import type { PRAdapter } from "../../src/worktree/manager.js";
+import type { RevisionPRAdapter } from "../../src/adapters/pr.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 import type { CouncilorConfig, RoleConfig } from "../../src/config/config.js";
@@ -17,14 +17,16 @@ import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider, ChatRequest } from "../../src/core/types.js";
 
 // Tüm rolleri systemPrompt'a göre yanıtlayan uçtan-uca provider.
-function jobProvider(opts: { intent?: string; judge?: string[] } = {}): Provider & { requests: ChatRequest[] } {
+function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[] } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
+  let principalCall = 0;
   return {
     requests,
     async *chat(req) {
       requests.push(req);
       const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+      const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
       const toolMsgs = req.messages.filter((m) => m.role === "tool");
       const submit = function* (a: string) {
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
@@ -58,17 +60,33 @@ function jobProvider(opts: { intent?: string; judge?: string[] } = {}): Provider
         judgeCall++;
         return;
       }
-      yield* stop("ok"); // coder / senior-coder / architect / team-lead → no-op
+      if (sys.includes("P-principal")) {
+        if (convo.includes("SON KARAR")) { yield* submit('{"decision":"accept","question":""}'); return; }
+        const arr = opts.principal ?? ['{"decision":"approve","comments":[]}'];
+        yield* submit(arr[principalCall] ?? arr[arr.length - 1]);
+        principalCall++;
+        return;
+      }
+      if (sys.includes("P-senior-coder")) {
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "fix.txt", content: "düzeltme" })); return; }
+        yield* stop("bitti"); return;
+      }
+      yield* stop("ok"); // coder / architect / team-lead → no-op
     },
   };
 }
 
-function fakeAdapter(): PRAdapter & { calls: number } {
-  const a = { calls: 0, async createPR() { a.calls++; return { url: "http://pr/1", number: 1 }; } };
+function fakeAdapter(): RevisionPRAdapter & { calls: number; comments: string[][] } {
+  const a = {
+    calls: 0,
+    comments: [] as string[][],
+    async createPR() { a.calls++; return { url: "http://pr/1", number: 1 }; },
+    async postComments(c: string[]) { a.comments.push(c); },
+  };
   return a;
 }
 
-function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: PRAdapter, signal?: AbortSignal): JobDeps {
+function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: RevisionPRAdapter, signal?: AbortSignal): JobDeps {
   const roles: Record<string, RoleConfig> = {
     refiner: { models: ["m"], systemPrompt: "P-refiner" },
     coach: { models: ["m"], systemPrompt: "P-coach" },
@@ -79,6 +97,7 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: PRAdapte
     router: { models: ["m"], systemPrompt: "P-router" },
     coder: { models: ["m"], systemPrompt: "P-coder" },
     "senior-coder": { models: ["m"], systemPrompt: "P-senior-coder" },
+    "principal-coder": { models: ["m"], systemPrompt: "P-principal" },
     architect: { models: ["m"], systemPrompt: "P-architect" },
     "code-reviewer": { models: ["m"], systemPrompt: "P-reviewer" },
     "team-lead": { models: ["m"], systemPrompt: "P-teamlead" },
@@ -139,8 +158,29 @@ describe("runJob", () => {
         expect(res.report).toBe("coach raporu");
         expect(existsSync(join(res.session.baseWorktree, "spec.md"))).toBe(true);
         expect(existsSync(join(res.session.baseWorktree, "plan.md"))).toBe(true);
+        expect(res.revision?.status).toBe("approved"); // principal ilk turda onayladı
       }
       expect(adapter.calls).toBe(1);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("done: principal değişiklik ister → revision (senior düzeltir, postComments)", async () => {
+    const repo = await initTmpRepo();
+    const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
+    try {
+      await defaultGitRunner(["init", "--bare", "-b", "main"], bare);
+      await defaultGitRunner(["remote", "add", "origin", bare], repo);
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const adapter = fakeAdapter();
+      // principal: round1 request-changes, round2 approve
+      const p = jobProvider({ intent: "feature", principal: ['{"decision":"request-changes","comments":["testsiz"]}', '{"decision":"approve","comments":[]}'] });
+      const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, revisionRounds: 3 });
+      expect(res.kind).toBe("done");
+      if (res.kind === "done") expect(res.revision?.status).toBe("approved");
+      expect(adapter.comments).toEqual([["testsiz"]]);
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(bare, { recursive: true, force: true });
