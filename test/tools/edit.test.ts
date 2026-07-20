@@ -51,4 +51,12 @@ describe("edit_file", () => {
     expect(res.isError).toBe(true);
     expect(res.content).toMatch(/geçersiz|invalid/i);
   });
+
+  it("cwd dışına edit reddedilir (workdir-guard)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-eg-"));
+    try {
+      const res = await editFileTool.run({ path: "../escape.txt", oldString: "a", newString: "b" }, { cwd: dir, signal: new AbortController().signal });
+      expect(res.isError).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
 });
