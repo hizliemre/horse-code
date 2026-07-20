@@ -27,8 +27,9 @@ geçersiz kılınır.** Asıl ürün bu orkestrasyondur. Ancak o spec'in alt kat
 
 ## 2. Roller
 
-Sistem **12 adlandırılmış role + bir councilor havuzundan** oluşur. Her role omniroute'ta
-tanımlı **bir veya birden fazla** modele bağlanır (bkz. §4 round-robin).
+Sistem **13 adlandırılmış role + bir councilor havuzundan** oluşur. Her role omniroute'ta
+tanımlı **bir veya birden fazla** modele bağlanır (bkz. §4 round-robin) ve **zorunlu skill'ler**
+atanabilir (bkz. §4.4 Skills).
 
 | Role | Sorumluluk |
 |------|-----------|
@@ -41,6 +42,7 @@ tanımlı **bir veya birden fazla** modele bağlanır (bkz. §4 round-robin).
 | **project-manager** | Planı gerçek task'lara böler, session board'unu yaratır |
 | **team-lead** | Bağımlılık grafiği + dalgaları çıkarır, dispatch eder |
 | **coder** | Task'ı kendi izole worktree'sinde uygular |
+| **designer** | **UI/UX task'larını** uygular (coder-benzeri uygulayıcı; board UI/UX işlerini coder yerine buna yönlendirir) |
 | **code-reviewer** | REVIEW'daki task'ı inceler (karar **nihai**) |
 | **senior-coder** | coder N tur takılınca devralır (daha güçlü model); revision'da ana worktree'de çalışır |
 | **architect** | Task-escalation konseyi üyesi |
@@ -101,9 +103,10 @@ Foundation'daki katmanlı config'e (yerleşik → global → proje → env) role
     "judge":         { "models": ["cc/claude-opus-4-8"] },
     "project-manager": { "models": ["cc/claude-sonnet-5"] },
     "team-lead":     { "models": ["cc/claude-sonnet-5"] },
-    "coder":         { "models": ["cc/claude-sonnet-5", "cc/claude-opus-4-8"] },
+    "coder":         { "models": ["cc/claude-sonnet-5", "cc/claude-opus-4-8"], "skills": ["tdd", "coding-standards"] },
+    "designer":      { "models": ["cc/claude-opus-4-8"], "skills": ["frontend-design"] },
     "code-reviewer": { "models": ["cc/claude-opus-4-8"] },
-    "senior-coder":  { "models": ["auto/best-coding"] },
+    "senior-coder":  { "models": ["auto/best-coding"], "skills": ["tdd"] },
     "architect":     { "models": ["auto/best-reasoning"] },
     "principal-coder": { "models": ["cc/claude-opus-4-8"] }
   },
@@ -135,6 +138,30 @@ transport olarak kalır; model seçim politikası engine'dedir. Bir role'ün lis
 Her role'ün bir system prompt'u vardır. Pakette **gömülü varsayılanlar** bulunur; config'ten
 role başına override edilebilir (dosya yolu veya inline string). Tüm akış için bu prompt'ların
 yazılması ayrı bir iştir (dilim E–G kapsamında).
+
+### 4.4 Skills
+
+Her role, çalışırken **skill**'lerden yararlanır. Skill = adlandırılmış bir talimat/yetkinlik
+birimi: `{ name, description, content }` (markdown talimat). MVP'de ad+açıklama+markdown; ileride
+Claude Code tarzı dizin (SKILL.md + script/resource) olarak genişleyebilir.
+
+**Kaynak (SkillRegistry ikisini de yükler):**
+- Pakette **gömülü varsayılan skill'ler** (horse-code ile gelir).
+- Kullanıcı tanımlı **`.horsecode/skills/<name>/SKILL.md`**.
+
+**İki kullanım biçimi:**
+- **Zorunlu (atanmış) skill'ler** — role config `roles.<name>.skills: string[]`. Bu skill'lerin
+  **içeriği role'ün system prompt'una enjekte edilir** (her zaman aktif). Örn. `coder → ["tdd",
+  "coding-standards"]`, `designer → ["frontend-design"]`. "Bizim tanımladığımız skill'ler."
+- **Keşfedilen skill'ler** — role-agent'a bir **`skill` tool**'u verilir (adıyla skill çağır →
+  içeriği tool-result olarak döner) ve registry'nin **`{name, description}` listesi** role'ün
+  prompt'una konur ki neyin mevcut olduğunu bilsin. Ne zaman çağıracağına **rol kendisi** karar
+  verir. "Rolün kendi keşfetmesi."
+
+**Katmanlama:** Zorunlu skill çözümü RoleRegistry'de (resolve → mandatory skill içeriklerini
+systemPrompt'a önekle); `skill` tool + listing role-agent'ın toolset'inde. `SkillRegistry` ayrı
+bir birim (gömülü + kullanıcı skill'lerini yükler, `get(name)`/`list()` verir). Bu, role-agent'ların
+çalışması için bir **ön-koşul alt-dilim**dir (bkz. §11 roadmap: **E-skills**).
 
 ---
 
@@ -328,19 +355,26 @@ verince akış **kaldığı yere döner** (judge → analyst/planner; principal-
 Bu tasarım tek bir implementation plan'a sığmaz; sırayla dilimlenir. Foundation
 (tipler + config + permission) tamamlandı. Sonraki dilimler:
 
-| Dilim | İçerik | Bağımlılık |
-|-------|--------|-----------|
-| **B — Provider + Tools** | omniroute client + `read/grep/glob/write/edit/shell/web` | Foundation |
-| **C — Role-agent iç döngüsü** | role registry + round-robin + system-prompt yükleme + tool-calling loop | B |
-| **D — Worktree manager** | ana worktree aç, task worktree türet, dalga merge, PR aç (MCP) | C |
-| **E — Board engine + coding mechanism** ★ | board SoT + project-manager/team-lead/coder/code-reviewer + escalation merdiveni | C, D |
-| **F — Upstream pipeline** | refiner-routing + coach + analyst + planner + council + judge | C, E |
-| **G — Revision pipeline** | principal-coder + PR-review + revision döngüsü + MCP comment | D, E |
-| **H — TUI / CLI** | Ink UI, terminal soru-cevap (human-in-loop), final rapor render | tümü |
+| Dilim | İçerik | Bağımlılık | Durum |
+|-------|--------|-----------|-------|
+| **B — Provider + Tools** | omniroute client + `read/grep/glob/write/edit/shell/web` | Foundation | ✅ |
+| **C — Role-agent iç döngüsü** | role registry + round-robin + system-prompt yükleme + tool-calling loop | B | ✅ |
+| **D — Worktree manager** | ana worktree aç, task worktree türet, dalga merge, PR aç (MCP) | C | ✅ |
+| **E0 — Structured role output** | role-agent loop'a şema-doğrulamalı çıktı (C uzantısı) | C | |
+| **E-skills — SkillRegistry** | gömülü + `.horsecode/skills/` yükleme; zorunlu skill → systemPrompt enjeksiyonu; keşif için `skill` tool + listing | C | |
+| **E1 — Board (SoT)** | Card/kolon/mutasyon/audit + `board.json` kalıcılığı | — | ✅ |
+| **E2 — project-manager + team-lead** | plan→kart, deps→dalgalar (structured output'la) | E0, E1 | |
+| **E3 — Task yürütme + escalation** | coder/**designer**/code-reviewer + coder→senior-coder→konsey; yeni-vs-dönen | E0, E-skills, E1, C, D | |
+| **E4 — Dalga motoru + entegrasyon** ★ | deterministik dış döngü: dalgalar → paralel task → dalga-merge → conflict-council → PR | E1, E2, E3, D | |
+| **F — Upstream pipeline** | refiner-routing + coach + analyst + planner + council + judge | C, E0 | |
+| **G — Revision pipeline** | principal-coder + PR-review + revision döngüsü + MCP comment | D, E4 | |
+| **H — TUI / CLI** | Ink UI, terminal soru-cevap (human-in-loop), final rapor render | tümü | |
 
-★ = kullanıcının önceliği. "Öncelik" = spec ve yakın planları **E'ye en hızlı ulaşacak**
-şekilde yönlendirmek; F/G/H cilası sonra. E, B→C→D'ye bağlı olduğundan build sırası bottom-up
-ilerler.
+★ = kullanıcının önceliği (asıl kodlama mekanizması). E, alt-dilimlere bölündü (E0/E-skills/
+E1/E2/E3/E4); build sırası bottom-up. **designer** rolü E3'te uygulayıcı olarak devreye girer
+(board UI/UX task'larını coder yerine designer'a yönlendirir — routing E2/team-lead'de); role
+system prompt içerikleri (designer dahil) F/G'de yazılır. **Skill** mekanizması (§4.4) E-skills'te
+kurulur; role-agent'lar (E3, F, G) zorunlu + keşfedilen skill'leri buradan tüketir.
 
 ---
 
