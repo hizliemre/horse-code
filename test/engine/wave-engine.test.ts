@@ -1,0 +1,130 @@
+import { describe, it, expect } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMutex, runWave } from "../../src/engine/wave-engine.js";
+import type { WaveEngineDeps } from "../../src/engine/wave-engine.js";
+import type { AskHuman } from "../../src/engine/escalation.js";
+import { WorktreeManager } from "../../src/worktree/manager.js";
+import type { WorktreeSession, PRAdapter } from "../../src/worktree/manager.js";
+import { initTmpRepo } from "../worktree/helpers.js";
+import type { RoleConfig } from "../../src/config/config.js";
+import { Board } from "../../src/board/board.js";
+import { RoleRegistry } from "../../src/agent/roles.js";
+import { SkillRegistry } from "../../src/skills/registry.js";
+import { PermissionEngine } from "../../src/permission/engine.js";
+import type { Provider } from "../../src/core/types.js";
+
+// İçerik-tabanlı deterministik provider: system prompt (rol) + mesajdaki task başlığına göre yanıt.
+function engineProvider(failTasks: string[] = []): Provider {
+  return {
+    async *chat(req) {
+      const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+      const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+      const emitSubmit = function* (args: string) {
+        yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: args } } as const;
+        yield { type: "done", finishReason: "tool_calls" } as const;
+      };
+      if (sys.includes("P-router")) { yield* emitSubmit('{"role":"coder"}'); return; }
+      if (sys.includes("P-architect")) { yield* emitSubmit('{"rootCause":"x","plan":["y"]}'); return; }
+      if (sys.includes("P-reviewer")) {
+        const fail = failTasks.some((t) => convo.includes(t));
+        yield* emitSubmit(fail ? '{"verdict":"fail","notes":["nope"]}' : '{"verdict":"pass","notes":[]}');
+        return;
+      }
+      // coder / senior / team-lead / diğer → no-op (submit yok)
+      yield { type: "text-delta", text: "ok" };
+      yield { type: "done", finishReason: "stop" };
+    },
+  };
+}
+
+function fakeAdapter(): PRAdapter & { calls: number } {
+  const a = { calls: 0, async createPR() { a.calls++; return { url: "http://pr/1", number: 1 }; } };
+  return a;
+}
+
+interface EOpts { failTasks?: string[]; askHuman?: AskHuman; signal?: AbortSignal; rounds?: number }
+function edeps(mgr: WorktreeManager, prAdapter: PRAdapter, opts: EOpts = {}): WaveEngineDeps {
+  const roles: Record<string, RoleConfig> = {
+    router: { models: ["m"], systemPrompt: "P-router" },
+    coder: { models: ["m"], systemPrompt: "P-coder" },
+    "senior-coder": { models: ["m"], systemPrompt: "P-senior-coder" },
+    architect: { models: ["m"], systemPrompt: "P-architect" },
+    "code-reviewer": { models: ["m"], systemPrompt: "P-reviewer" },
+    "team-lead": { models: ["m"], systemPrompt: "P-teamlead" },
+  };
+  return {
+    provider: engineProvider(opts.failTasks),
+    roleRegistry: new RoleRegistry(roles, {}, new SkillRegistry()),
+    skillRegistry: new SkillRegistry(),
+    permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
+    approve: async () => true,
+    signal: opts.signal ?? new AbortController().signal,
+    rounds: opts.rounds ?? 1,
+    askHuman: opts.askHuman ?? (async () => ({ action: "abandon" })),
+    manager: mgr,
+    prAdapter,
+  };
+}
+
+describe("createMutex", () => {
+  it("eşzamanlı çağrılar sıralı koşar (örtüşme yok)", async () => {
+    const ser = createMutex();
+    const order: string[] = [];
+    const mk = (id: string, ms: number) => ser(async () => {
+      order.push(`${id}-start`);
+      await new Promise((r) => setTimeout(r, ms));
+      order.push(`${id}-end`);
+      return id;
+    });
+    const [a, b] = await Promise.all([mk("a", 20), mk("b", 5)]);
+    expect([a, b]).toEqual(["a", "b"]);
+    expect(order).toEqual(["a-start", "a-end", "b-start", "b-end"]);
+  });
+});
+
+describe("runWave", () => {
+  it("all-pass (paralel): iki task da merged", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "gorev-a" });
+      board.addCard({ id: "t2", title: "gorev-b" });
+      const o = await runWave(edeps(mgr, fakeAdapter()), session, board, ["t1", "t2"], new Set());
+      expect(o.merged.sort()).toEqual(["t1", "t2"]);
+      expect(o.failed).toEqual([]);
+      expect(o.skipped).toEqual([]);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("one-fail: başarısız task failed, diğeri merged", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "gorev-a" });
+      board.addCard({ id: "t2", title: "gorev-b" });
+      const o = await runWave(edeps(mgr, fakeAdapter(), { failTasks: ["gorev-a"] }), session, board, ["t1", "t2"], new Set());
+      expect(o.failed).toEqual(["t1"]);
+      expect(o.merged).toEqual(["t2"]);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("skip: blocked bağımlılık → task atlanır (koşmaz)", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t3", title: "gorev-c", deps: ["t1"] });
+      const o = await runWave(edeps(mgr, fakeAdapter()), session, board, ["t3"], new Set(["t1"]));
+      expect(o.skipped).toEqual(["t3"]);
+      expect(o.merged).toEqual([]);
+      expect(board.get("t3")!.stageHistory.some((s) => s.action === "skipped")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
