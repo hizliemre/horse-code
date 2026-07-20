@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE";
 
 export interface StageEvent {
@@ -21,6 +23,23 @@ export interface BoardData {
   version: 1;
   cards: Card[];
 }
+
+const stageEventSchema = z.object({
+  role: z.string(),
+  action: z.string(),
+  note: z.string().optional(),
+});
+const cardSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE"]),
+  worktree: z.string().optional(),
+  deps: z.array(z.string()),
+  reviewNotes: z.array(z.string()),
+  attempts: z.number(),
+  stageHistory: z.array(stageEventSchema),
+});
+const boardDataSchema = z.object({ version: z.literal(1), cards: z.array(cardSchema) });
 
 function cloneCard(c: Card): Card {
   return {
@@ -98,5 +117,14 @@ export class Board {
 
   setWorktree(id: string, path: string): void {
     this.require(id).worktree = path;
+  }
+
+  toJSON(): BoardData {
+    return { version: 1, cards: this.list() };
+  }
+
+  static fromJSON(data: unknown): Board {
+    const parsed = boardDataSchema.parse(data);
+    return new Board(parsed.cards);
   }
 }
