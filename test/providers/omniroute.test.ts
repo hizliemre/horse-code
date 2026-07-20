@@ -71,4 +71,31 @@ describe("OmniRouteProvider — metin streaming + hata", () => {
     const events = await drain(provider.chat(req, new AbortController().signal));
     expect(events).toEqual([{ type: "error", message: "The operation was aborted." }]);
   });
+
+  it("stream ortasında hata (abort/ağ kopması) throw etmez, error event'ine döner", async () => {
+    const fetch: FetchLike = async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n',
+            ),
+          );
+          // Reader'ın kuyruktaki chunk'ı önce tüketip yield etmesi için bir makro-görev
+          // (setTimeout) bekle; chat() içinde `await this.fetchFn(...)` gibi ek mikro-görev
+          // turları olduğundan, sadece bir mikro-görev bekletmek chunk enqueue edilir
+          // edilmez controller.error()'ın kuyruğu (ResetQueue) temizlemesine yol açıp
+          // "hi" chunk'ını kaybettirebiliyor (bkz. Node/undici stream davranışı).
+          setTimeout(() => c.error(new Error("stream boom")), 0);
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+    const provider = new OmniRouteProvider({ baseUrl: "http://localhost:20128", fetch });
+    const events = await drain(provider.chat(req, new AbortController().signal));
+    expect(events).toEqual([
+      { type: "text-delta", text: "hi" },
+      { type: "error", message: "stream boom" },
+    ]);
+  });
 });

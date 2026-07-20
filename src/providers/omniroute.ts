@@ -81,38 +81,43 @@ export class OmniRouteProvider implements Provider {
     const toolCalls = new Map<number, ToolCallAccumulator>();
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
 
-    for await (const payload of parseSSE(stream)) {
-      let chunk: unknown;
-      try {
-        chunk = JSON.parse(payload);
-      } catch {
-        continue; // bozuk chunk → atla
-      }
-      const choice = (chunk as { choices?: unknown[] })?.choices?.[0] as
-        | { delta?: Record<string, unknown>; finish_reason?: string | null }
-        | undefined;
-      if (!choice) continue;
-      const delta = choice.delta ?? {};
-
-      if (typeof delta.content === "string" && delta.content.length) {
-        yield { type: "text-delta", text: delta.content };
-      }
-
-      const deltaCalls = delta.tool_calls as
-        | { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
-        | undefined;
-      if (Array.isArray(deltaCalls)) {
-        for (const tc of deltaCalls) {
-          const idx = tc.index ?? 0;
-          const acc = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
-          if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.arguments += tc.function.arguments;
-          toolCalls.set(idx, acc);
+    try {
+      for await (const payload of parseSSE(stream)) {
+        let chunk: unknown;
+        try {
+          chunk = JSON.parse(payload);
+        } catch {
+          continue; // bozuk chunk → atla
         }
-      }
+        const choice = (chunk as { choices?: unknown[] })?.choices?.[0] as
+          | { delta?: Record<string, unknown>; finish_reason?: string | null }
+          | undefined;
+        if (!choice) continue;
+        const delta = choice.delta ?? {};
 
-      if (choice.finish_reason) finishReason = mapFinishReason(choice.finish_reason);
+        if (typeof delta.content === "string" && delta.content.length) {
+          yield { type: "text-delta", text: delta.content };
+        }
+
+        const deltaCalls = delta.tool_calls as
+          | { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
+          | undefined;
+        if (Array.isArray(deltaCalls)) {
+          for (const tc of deltaCalls) {
+            const idx = tc.index ?? 0;
+            const acc = toolCalls.get(idx) ?? { id: "", name: "", arguments: "" };
+            if (tc.id) acc.id = tc.id;
+            if (tc.function?.name) acc.name = tc.function.name;
+            if (tc.function?.arguments) acc.arguments += tc.function.arguments;
+            toolCalls.set(idx, acc);
+          }
+        }
+
+        if (choice.finish_reason) finishReason = mapFinishReason(choice.finish_reason);
+      }
+    } catch (e) {
+      yield { type: "error", message: e instanceof Error ? e.message : String(e) };
+      return;
     }
 
     for (const acc of toolCalls.values()) {
