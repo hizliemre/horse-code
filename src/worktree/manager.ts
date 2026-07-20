@@ -79,6 +79,12 @@ export class WorktreeManager {
     throw new Error(`git merge ${task.branch} başarısız (${r.code}): ${(r.stderr || r.stdout).trim()}`);
   }
 
+  /** Base worktree'de git'in unmerged (çakışık) işaretlediği dosyalar. */
+  async unmergedFiles(session: WorktreeSession): Promise<string[]> {
+    const r = await this.git(["diff", "--name-only", "--diff-filter=U"], session.baseWorktree);
+    return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+  }
+
   async commitMerge(session: WorktreeSession, message?: string): Promise<void> {
     await this.run(["add", "-A"], session.baseWorktree);
     await this.run(message ? ["commit", "-m", message] : ["commit", "--no-edit"], session.baseWorktree);
