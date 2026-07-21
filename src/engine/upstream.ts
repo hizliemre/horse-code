@@ -1,54 +1,16 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { z } from "zod";
-import type { Tool, Message } from "../core/types.js";
+import type { Message } from "../core/types.js";
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
-import { ToolRegistry } from "../tools/registry.js";
-import { readFileTool } from "../tools/read.js";
-import { writeFileTool } from "../tools/write.js";
-import { editFileTool } from "../tools/edit.js";
-import { grepTool } from "../tools/grep.js";
-import { globTool } from "../tools/glob.js";
-import { buildSkillTool } from "../skills/apply.js";
+import { buildAskUserTool, writerRegistry } from "./writer-registry.js";
 import type { ReviewDeps, AskUser } from "./review.js";
 import { runRefiner, routeIntent, type Intent } from "./refiner.js";
 import { runCoachChat } from "./coach.js";
 import { runReviewLoop } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
 
-const askUserParams = z.object({ question: z.string() });
-
-/** Tool for the analyst to ask the user a question (buildSkillTool pattern); returns the answer in content. */
-export function buildAskUserTool(askUser: AskUser): Tool {
-  return {
-    name: "ask_user",
-    description: "Ask the user a question and get their answer.",
-    permissionLevel: "safe",
-    parameters: askUserParams,
-    run: async (rawArgs) => {
-      const parsed = askUserParams.safeParse(rawArgs);
-      if (!parsed.success) {
-        return { content: `ask_user: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
-      }
-      const answer = await askUser(parsed.data.question);
-      return { content: answer, isError: false };
-    },
-  };
-}
-
-/** Toolset for file-writing roles: read/write/edit/grep/glob + skill (+ extra); NO shell/web. */
-function writerRegistry(deps: ReviewDeps, extra: Tool[] = []): ToolRegistry {
-  const r = new ToolRegistry();
-  r.register(readFileTool);
-  r.register(writeFileTool);
-  r.register(editFileTool);
-  r.register(grepTool);
-  r.register(globTool);
-  r.register(buildSkillTool(deps.skillRegistry));
-  for (const t of extra) r.register(t);
-  return r;
-}
+export { buildAskUserTool } from "./writer-registry.js";
 
 /** Analyst: asks questions via ask_user and writes the spec file (with feedback on revision). */
 export async function runAnalyst(
@@ -60,7 +22,7 @@ export async function runAnalyst(
   askUser: AskUser,
 ): Promise<void> {
   const { model, systemPrompt } = deps.roleRegistry.resolve("analyst");
-  const tools = writerRegistry(deps, [buildAskUserTool(askUser)]);
+  const tools = writerRegistry(deps.skillRegistry, [buildAskUserTool(askUser)]);
   const content =
     feedback && feedback.length
       ? `Revise the "${specPath}" spec with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\nOriginal request: ${prompt}`
@@ -82,7 +44,7 @@ export async function runPlanner(
   feedback: string[] | undefined,
 ): Promise<void> {
   const { model, systemPrompt } = deps.roleRegistry.resolve("planner");
-  const tools = writerRegistry(deps);
+  const tools = writerRegistry(deps.skillRegistry);
   const content =
     feedback && feedback.length
       ? `Revise the "${planPath}" plan with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\n(from the "${specPath}" spec)`
