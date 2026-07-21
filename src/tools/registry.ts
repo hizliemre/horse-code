@@ -1,4 +1,4 @@
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 import type { ChatRequest, Tool } from "../core/types.js";
 
 export class ToolRegistry {
@@ -16,12 +16,12 @@ export class ToolRegistry {
     return [...this.tools.values()];
   }
 
-  /** Tool schemas to send to the LLM: zod parameters → JSON Schema. */
+  /** Tool schemas to send to the LLM: zod parameters → JSON Schema (zod 4 native). */
   schemas(): ChatRequest["tools"] {
     return this.list().map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: zodToJsonSchema(t.parameters, { target: "openApi3" }),
+      parameters: z.toJSONSchema(t.parameters, { target: "draft-7" }),
     }));
   }
 }

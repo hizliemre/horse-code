@@ -41,6 +41,7 @@ const fileSchema = z
     allowlist: z.array(z.string()).optional(),
     roles: z
       .record(
+        z.string(),
         z.object({
           models: z.array(z.string()),
           systemPrompt: z.string().optional(),
