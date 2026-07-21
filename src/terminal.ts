@@ -52,8 +52,10 @@ export function nodeLineReader(
     while (waiters.length) waiters.shift()!(""); // kalan bekleyenlere boş cevap
   });
   // Satırlar kuyruklanır → ardışık read'ler race'siz (readline/promises question race'i giderilir).
+  // Prompt gösterimi readline'ın kendi mekanizmasıyla (setPrompt+prompt) → TTY'de de düzgün görünür.
   const read: LineReader = (prompt) => {
-    output.write(prompt + "\n> ");
+    rl.setPrompt(prompt + "\n> ");
+    rl.prompt();
     if (buffered.length) return Promise.resolve(buffered.shift()!);
     if (closed) return Promise.resolve("");
     return new Promise<string>((resolve) => { waiters.push(resolve); });
