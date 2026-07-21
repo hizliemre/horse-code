@@ -94,21 +94,25 @@ describe("Ink components", () => {
         listModels={async () => ["a/one", "b/two"]}
         setModel={(m) => setCalls.push(m)} />,
     );
-    // Poll instead of a fixed sleep: React 19's concurrent rendering can leave a transient blank frame,
-    // so wait until the picker has actually painted before asserting.
-    const waitForFrame = async (text: string): Promise<void> => {
-      for (let i = 0; i < 40 && !clean(lastFrame()).includes(text); i++) await sleep(15);
+    // React 19's concurrent rendering + parallel test load make raw sleeps flaky: the controlled input
+    // only reflects a keystroke after a re-render, and the picker paints a frame after that. So wait for
+    // each render to settle (poll the frame / controller state) before the next keystroke.
+    const waitFrame = async (text: string): Promise<void> => {
+      for (let i = 0; i < 200 && !clean(lastFrame()).includes(text); i++) await sleep(15);
     };
-    await sleep(30);
+    const waitState = async (cond: () => boolean): Promise<void> => {
+      for (let i = 0; i < 200 && !cond(); i++) await sleep(15);
+    };
+    await waitFrame("> "); // input painted
     stdin.write("/model");
-    await sleep(20);
+    await waitFrame("/model"); // input re-rendered with the typed text (so onSubmit sees "/model")
     stdin.write("\r"); // submit → opens picker
-    await waitForFrame("a/one"); // wait until the fetched models are painted (not just the loading header)
-    const f = clean(lastFrame());
-    expect(f).toContain("Select model");
-    expect(f).toContain("a/one");
+    await waitState(() => c.getState().mode === "picker" && !c.getState().picker?.loading && (c.getState().picker?.models.length ?? 0) > 0);
+    await waitFrame("a/one"); // models painted
+    expect(clean(lastFrame())).toContain("Select model");
+    expect(clean(lastFrame())).toContain("a/one");
     stdin.write("\r"); // pick the first model
-    for (let i = 0; i < 40 && c.getState().mode !== "input"; i++) await sleep(15);
+    await waitState(() => c.getState().mode === "input");
     expect(setCalls).toEqual(["a/one"]);
     expect(c.getState().mode).toBe("input");
     expect(c.getState().currentModel).toBe("a/one");
