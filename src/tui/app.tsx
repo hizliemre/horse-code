@@ -41,10 +41,13 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const controller = new TuiController();
   const read: LineReader = (q) => controller.ask(q);
   const deps = opts.buildDeps(read);
+  // awaitTask'i render'dan ÖNCE çağır → ilk render input-mode (Prompt + useInput aktif) →
+  // Ink stdin'i tutar (aksi halde useInput'suz running-mode render boşta çıkardı).
+  let taskPromise = controller.awaitTask();
   const instance = render(<App controller={controller} />);
   try {
     for (;;) {
-      const task = await controller.awaitTask();
+      const task = await taskPromise;
       controller.beginRun();
       try {
         const res = await runJob(deps, {
@@ -58,6 +61,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       } catch (e) {
         controller.endRun(`hata: ${e instanceof Error ? e.message : String(e)}`);
       }
+      taskPromise = controller.awaitTask(); // sonraki görev için input-mode
     }
   } finally {
     instance.unmount();
