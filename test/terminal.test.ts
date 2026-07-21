@@ -35,3 +35,16 @@ describe("makeAskHuman", () => {
     expect(await makeAskHuman(async () => "xyz")({ card, verdict })).toEqual({ action: "abandon" });
   });
 });
+
+describe("seam caret sunumu (TUI çift-'>' önlenir)", () => {
+  it("seam prompt'ları caret ile bitmez (caret reader'a taşındı)", async () => {
+    let captured = "";
+    const cap = async (p: string) => { captured = p; return "x"; };
+    await makeAskUser(cap)("Soru?");
+    expect(captured.trimEnd().endsWith(">")).toBe(false);
+    await makeApprove(cap)(req);
+    expect(captured.trimEnd().endsWith(">")).toBe(false);
+    await makeAskHuman(cap)({ card, verdict });
+    expect(captured.trimEnd().endsWith(">")).toBe(false);
+  });
+});

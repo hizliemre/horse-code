@@ -29,6 +29,8 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
       const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
       const toolMsgs = req.messages.filter((m) => m.role === "tool");
+      const userContent = req.messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+      const writeTarget = (userContent.match(/"([^"]+\.md)"'e write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
       const submit = function* (a: string) {
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;
@@ -44,11 +46,11 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"X yap","intent":"${opts.intent ?? "feature"}"}`); return; }
       if (sys.includes("P-coach")) { yield* stop("coach raporu"); return; }
       if (sys.includes("P-analyst")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "spec.md", content: "# spec" })); return; }
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# spec" })); return; }
         yield* stop("bitti"); return;
       }
       if (sys.includes("P-planner")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "plan.md", content: "# plan" })); return; }
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# plan" })); return; }
         yield* stop("bitti"); return;
       }
       if (sys.includes("P-pm")) { yield* submit('{"tasks":[{"id":"t1","title":"gorev-a","deps":[]}]}'); return; }
@@ -157,8 +159,8 @@ describe("runJob", () => {
       if (res.kind === "done") {
         expect(res.wave.status).toBe("completed");
         expect(res.report).toBe("coach raporu");
-        expect(existsSync(join(res.session.baseWorktree, "spec.md"))).toBe(true);
-        expect(existsSync(join(res.session.baseWorktree, "plan.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, ".hc/spec.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, ".hc/plan.md"))).toBe(true);
         expect(res.revision?.status).toBe("approved"); // principal ilk turda onayladı
       }
       expect(adapter.calls).toBe(1);
@@ -240,5 +242,27 @@ describe("runJob", () => {
       const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "x", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: () => { throw new Error("render patladı"); } });
       expect(res.kind).toBe("chat");
     } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("beklenmedik throw'da session temizlenir (orphan worktree yok)", async () => {
+    const repo = await initTmpRepo();
+    const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
+    try {
+      await defaultGitRunner(["init", "--bare", "-b", "main"], bare);
+      await defaultGitRunner(["remote", "add", "origin", bare], repo);
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      let closed = false;
+      const origClose = mgr.closeSession.bind(mgr);
+      mgr.closeSession = async (s) => { closed = true; return origClose(s); };
+      mgr.commitMerge = async () => { throw new Error("patla"); }; // approved sonrası erken throw
+      const p = jobProvider({ intent: "feature" });
+      await expect(
+        runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 }),
+      ).rejects.toThrow("patla");
+      expect(closed).toBe(true); // catch closeSession'ı çağırdı
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(bare, { recursive: true, force: true });
+    }
   });
 });

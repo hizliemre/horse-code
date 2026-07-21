@@ -116,7 +116,7 @@ export async function runUpstream(
     return { intent: r.intent, kind: "chat", response };
   }
 
-  const specPath = "spec.md";
+  const specPath = ".hc/spec.md";
   await runAnalyst(deps, workdir, specPath, r.refinedPrompt, undefined, askUser);
   const specOut = await runReviewLoop(
     deps, workdir, specPath,
@@ -127,7 +127,7 @@ export async function runUpstream(
   // Onaylı ama dosya yoksa (analyst yazmadı, judge yine de geçti): H'ye var-olmayan path verme.
   if (!existsSync(join(workdir, specPath))) throw new Error(`analyst spec üretmedi: ${specPath}`);
 
-  const planPath = "plan.md";
+  const planPath = ".hc/plan.md";
   await runPlanner(deps, workdir, planPath, specPath, undefined);
   const planOut = await runReviewLoop(
     deps, workdir, planPath,
