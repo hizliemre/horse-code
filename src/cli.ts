@@ -4,6 +4,7 @@ import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
 import { OmniRouteProvider } from "./providers/omniroute.js";
+import { listOmniRouteModels } from "./providers/models.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
@@ -121,11 +122,13 @@ export async function main(argv: string[]): Promise<void> {
   if (!args.prompt) {
     if (useTui) {
       const { runTuiRepl } = await import("./tui/app.js");
+      const listModels = () => listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey });
       await runTuiRepl({
         buildDeps,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
         formatResult: renderResult,
         model: config.model,
+        listModels,
       });
       return;
     }

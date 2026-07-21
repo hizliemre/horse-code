@@ -36,6 +36,7 @@ export interface RunTuiReplOpts {
   jobBase: { fromBranch: string; maxRounds: number; revisionRounds?: number };
   formatResult: (res: JobResult) => string;
   model?: string; // configured default model → shown in the metrics line when a call reports no model
+  listModels: () => Promise<string[]>; // omniroute model list for the /model picker
 }
 
 /** TUI REPL: task input → live job → report → loop. Ctrl+C exits; job errors are isolated. */
@@ -45,6 +46,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const deps0 = opts.buildDeps(read);
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   const deps: JobDeps = { ...deps0, provider: meterProvider(deps0.provider, controller.onUsage) };
+  // /model picker → live-swap every role's model on the running session (no config write).
+  const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
   // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
@@ -83,7 +86,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   process.stdin.on("data", onCtrlC);
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
-  const instance = render(<App controller={controller} fullscreen model={opts.model} />);
+  const instance = render(
+    <App controller={controller} fullscreen model={opts.model} listModels={opts.listModels} setModel={setModel} />,
+  );
   try {
     for (;;) {
       const task = await taskPromise;
