@@ -51,6 +51,7 @@ function cloneCard(c: Card): Card {
 }
 
 export class Board {
+  onChange?: () => void; // her mutasyon sonrası çağrılır (varsa; H3a ilerleme event'leri)
   private cards = new Map<string, Card>();
 
   constructor(cards: Card[] = []) {
@@ -69,6 +70,7 @@ export class Board {
       stageHistory: [],
     };
     this.cards.set(card.id, card);
+    this.onChange?.();
     return cloneCard(card);
   }
 
@@ -95,28 +97,34 @@ export class Board {
     const c = this.require(id);
     c.column = column;
     if (actor) c.stageHistory.push({ role: actor, action: `→${column}` });
+    this.onChange?.();
   }
 
   appendStage(id: string, event: StageEvent): void {
     this.require(id).stageHistory.push({ ...event });
+    this.onChange?.();
   }
 
   addReviewNote(id: string, note: string): void {
     this.require(id).reviewNotes.push(note);
+    this.onChange?.();
   }
 
   clearReviewNotes(id: string): void {
     this.require(id).reviewNotes = [];
+    this.onChange?.();
   }
 
   incrementAttempts(id: string): number {
     const c = this.require(id);
     c.attempts += 1;
+    this.onChange?.();
     return c.attempts;
   }
 
   setWorktree(id: string, path: string): void {
     this.require(id).worktree = path;
+    this.onChange?.();
   }
 
   toJSON(): BoardData {
