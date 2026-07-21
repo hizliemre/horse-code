@@ -24,4 +24,13 @@ describe("markdown", () => {
     expect(f).toContain("madde bir");
     expect(f).toContain("•");
   });
+
+  it("Markdown kod-bloğunu dil-etiketi + satır-numarası ile render eder", () => {
+    const f = render(<Markdown text={"```csharp\nvar x = 1;\nreturn x;\n```"} />).lastFrame() ?? "";
+    expect(f).toContain("csharp");      // dil algılandı
+    expect(f).toContain("1 │");         // satır numarası + ayraç
+    expect(f).toContain("2 │");
+    expect(f).toContain("return");      // kod içeriği (tek-token; renklendirme aralara ANSI koyar)
+    expect(f).not.toContain("```");     // fence gizli
+  });
 });

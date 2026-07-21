@@ -116,7 +116,7 @@ const WM_ROWS: { text: string; color?: string }[][] = WORDMARK.map((line, y) => 
 export const Splash = memo(function Splash({ cols, rows }: { cols: number; rows: number }): React.ReactElement {
   const topMargin = 2; // logonun üstünde boşluk
   const bottomMargin = 1; // logonun altında boşluk
-  const inputArea = 6; // ipucu + kenarlıklı kutu + margin
+  const inputArea = 5; // ipucu + kenarlıklı kutu + margin
   const showWordmark = cols >= WM_WIDTH + 2 && rows >= 20;
   const wordmarkH = showWordmark ? 4 : 0;
   const budget = rows - inputArea - wordmarkH - topMargin - bottomMargin; // logo için kalan satır
@@ -194,11 +194,8 @@ export function App({ controller }: { controller: TuiController }): React.ReactE
         <Message key={i} role={m.role} text={m.text} cols={size.cols} />
       ))}
       {mode === "input" ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>Type your task — Enter to send · Ctrl+C to quit</Text>
-          <Box borderStyle="round" borderColor="gray" paddingX={1}>
-            <InputLine onSubmit={(t) => controller.submitTask(t)} />
-          </Box>
+        <Box marginTop={1} borderStyle="round" borderColor="gray" paddingX={1}>
+          <InputLine onSubmit={(t) => controller.submitTask(t)} />
         </Box>
       ) : (
         <Box flexDirection="column">

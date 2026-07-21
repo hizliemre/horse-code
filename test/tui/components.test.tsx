@@ -72,7 +72,7 @@ describe("Ink bileşenleri", () => {
   it("App input mode: görev-input hint + kutu render eder", () => {
     const c = new TuiController();
     void c.awaitTask();
-    expect(render(<App controller={c} />).lastFrame() ?? "").toContain("Type your task");
+    expect(render(<App controller={c} />).lastFrame() ?? "").toContain(">");
   });
 
   it("App mode undefined → running (tek-shot korunur, board render)", () => {
