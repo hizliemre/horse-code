@@ -71,7 +71,10 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // sequence (\x1b[13;2u) (plain Enter is still \r, arrows are still legacy → Ink scroll isn't broken).
   // Terminals that don't support it ignore \x1b[>1u (harmless; those terminals need Alt+Enter or
   // key-mapping instead).
-  origWrite("\x1b[?1049h\x1b[H\x1b[>1u");
+  // \x1b> = DECKPNM (numeric keypad): force the numpad to send characters, not application-mode SS3
+  // sequences — otherwise numpad digits and `/` can't be typed. (InputLine also maps the SS3 forms as a
+  // fallback for terminals that ignore this.)
+  origWrite("\x1b[?1049h\x1b[H\x1b[>1u\x1b>");
   process.stdout.write = patched;
   process.once("exit", restore);
   // Under the kitty protocol, Ctrl+C no longer arrives as \x03 but as \x1b[99;5u → Ink's exitOnCtrlC can't see it.

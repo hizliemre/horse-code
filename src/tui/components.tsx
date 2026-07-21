@@ -67,6 +67,14 @@ const RIGHT = new Set(["\x1b[C", "\x1bOC"]);
 const HOME = new Set(["\x1b[H", "\x1b[1~", "\x1bOH"]);
 const END = new Set(["\x1b[F", "\x1b[4~", "\x1bOF"]);
 
+// Numpad in application-keypad mode sends SS3 sequences instead of characters (some terminals put the
+// numpad in this mode under the alt-screen). Map them back so digits, `.` and `/` can be typed at all.
+const NUMPAD: Record<string, string> = {
+  "\x1bOp": "0", "\x1bOq": "1", "\x1bOr": "2", "\x1bOs": "3", "\x1bOt": "4",
+  "\x1bOu": "5", "\x1bOv": "6", "\x1bOw": "7", "\x1bOx": "8", "\x1bOy": "9",
+  "\x1bOn": ".", "\x1bOo": "/", "\x1bOj": "*", "\x1bOk": "+", "\x1bOm": "-",
+};
+
 export function InputLine({ value, cursor, onChange, onSubmit, width }: {
   value: string;
   cursor: number;
@@ -97,7 +105,10 @@ export function InputLine({ value, cursor, onChange, onSubmit, width }: {
       if (RIGHT.has(s)) { change(v, Math.min(v.length, c + 1)); return; }
       if (HOME.has(s)) { change(v, 0); return; }
       if (END.has(s)) { change(v, v.length); return; }
-      if (s.startsWith("\x1b")) return; // up/down/PgUp/PgDn → App useInput (scroll)
+      if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit
+      const np = NUMPAD[s];
+      if (np) { change(v.slice(0, c) + np + v.slice(c), c + np.length); return; } // numpad char (app-keypad SS3)
+      if (s.startsWith("\x1b")) return; // up/down/PgUp/PgDn → App scroll handler
       if ([...s].every((ch) => ch >= " ")) change(v.slice(0, c) + s + v.slice(c), c + s.length); // insert printable
     };
     stdin.on("data", onData);

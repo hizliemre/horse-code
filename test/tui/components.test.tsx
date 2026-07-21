@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 describe("Ink components", () => {
@@ -123,6 +123,21 @@ describe("Ink components", () => {
     stdin.write("\x1b[5~"); // PageUp → scroll up → the "N more" hint appears
     await sleep(20);
     expect(clean(lastFrame())).toContain("more");
+    unmount();
+  });
+
+  it("InputLine: numpad app-keypad SS3 sequences type chars (incl '/') and numpad Enter submits", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let val = ""; let cur = 0; let submitted: string | undefined;
+    const onChange = (v: string, c: number) => { val = v; cur = c; };
+    const onSubmit = (t: string) => { submitted = t; };
+    const { stdin, rerender, unmount } = render(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={onSubmit} />);
+    await sleep(15);
+    stdin.write("\x1bOo"); await sleep(10); rerender(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={onSubmit} />); // numpad '/'
+    stdin.write("\x1bOr"); await sleep(10); rerender(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={onSubmit} />); // numpad '2'
+    expect(val).toBe("/2");
+    stdin.write("\x1bOM"); await sleep(10); // numpad Enter
+    expect(submitted).toBe("/2");
     unmount();
   });
 });
