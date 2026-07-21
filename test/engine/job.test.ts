@@ -15,6 +15,7 @@ import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider, ChatRequest } from "../../src/core/types.js";
+import type { ProgressEvent } from "../../src/engine/progress.js";
 
 // Tüm rolleri systemPrompt'a göre yanıtlayan uçtan-uca provider.
 function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[] } = {}): Provider & { requests: ChatRequest[] } {
@@ -196,6 +197,38 @@ describe("runJob", () => {
       await expect(
         runJob(jdeps(p, mgr, fakeAdapter(), ac.signal), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 }),
       ).rejects.toThrow();
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("done: onEvent faz sırası + board event'leri", async () => {
+    const repo = await initTmpRepo();
+    const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
+    try {
+      await defaultGitRunner(["init", "--bare", "-b", "main"], bare);
+      await defaultGitRunner(["remote", "add", "origin", bare], repo);
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const adapter = fakeAdapter();
+      const p = jobProvider({ intent: "feature" });
+      const events: ProgressEvent[] = [];
+      const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
+      expect(res.kind).toBe("done");
+      const phases = events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase);
+      expect(phases).toEqual(["upstream", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
+      expect(events.some((e) => e.kind === "board")).toBe(true);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
+
+  it("chat: onEvent [upstream, chat]", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const p = jobProvider({ intent: "chat" });
+      const events: ProgressEvent[] = [];
+      await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "merhaba", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
+      expect(events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase)).toEqual(["upstream", "chat"]);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

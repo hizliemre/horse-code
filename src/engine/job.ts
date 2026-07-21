@@ -11,6 +11,7 @@ import { runProjectManager } from "./project-manager.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
 import { runRevision, type RevisionResult } from "./revision.js";
+import { snapshotBoard, type ProgressEvent } from "./progress.js";
 
 export interface JobDeps extends ReviewDeps {
   manager: WorktreeManager;
@@ -56,33 +57,52 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
  */
 export async function runJob(
   deps: JobDeps,
-  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number },
+  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void },
 ): Promise<JobResult> {
+  const emit = opts.onEvent ?? (() => {});
   const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
   const workdir = session.baseWorktree;
+  emit({ kind: "phase", phase: "upstream" });
   const up = await runUpstream(deps, workdir, opts.prompt, opts.askUser, opts.maxRounds);
 
   if (up.kind === "chat") {
+    emit({ kind: "phase", phase: "chat" });
     await deps.manager.closeSession(session);
     return { kind: "chat", response: up.response };
   }
   if (up.kind === "rejected") {
+    emit({ kind: "phase", phase: "rejected", detail: up.stage });
     await deps.manager.closeSession(session);
     return { kind: "rejected", stage: up.stage };
   }
 
+  emit({ kind: "phase", phase: "approved" });
   await deps.manager.commitMerge(session, "hc: spec + plan"); // spec/plan → baseBranch (PR'a girer)
+
+  emit({ kind: "phase", phase: "board" });
   const board = await runProjectManager(pmOpts(deps, workdir, up.planPath));
+  emit({ kind: "board", cards: snapshotBoard(board) });
+  board.onChange = () => emit({ kind: "board", cards: snapshotBoard(board) });
+
+  emit({ kind: "phase", phase: "waves" });
   const wave = await runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle });
+  emit({ kind: "phase", phase: "waves-done", detail: wave.status });
+
   let revision: RevisionResult | undefined;
   if (wave.status === "completed") {
+    emit({ kind: "phase", phase: "pr", detail: wave.pr.url });
     const prDiff = await deps.manager.diff(session, opts.fromBranch);
+    emit({ kind: "phase", phase: "revision" });
     revision = await runRevision(
       deps, session, board,
       (c) => deps.prAdapter.postComments(c),
       opts.askUser, opts.revisionRounds ?? 3, prDiff,
     );
+    emit({ kind: "phase", phase: "revision-done", detail: revision.status });
   }
+
+  emit({ kind: "phase", phase: "report" });
   const report = await runCoachReport(deps, session, board);
+  emit({ kind: "phase", phase: "done" });
   return { kind: "done", wave, revision, report, session };
 }
