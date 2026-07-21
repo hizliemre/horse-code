@@ -20,7 +20,7 @@ export async function routeTask(deps: TaskCycleDeps, task: Card): Promise<Implem
       systemPrompt,
       tools,
       messages: [
-        { role: "user", content: `Task: "${task.title}". UI/UX işi mi (designer) yoksa kod işi mi (coder)?` },
+        { role: "user", content: `Task: "${task.title}". Is this UI/UX work (designer) or code work (coder)?` },
       ],
       permission: deps.permission,
       approve: deps.approve,

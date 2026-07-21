@@ -31,7 +31,7 @@ const skillParams = z.object({ name: z.string() });
 export function buildSkillTool(registry: SkillRegistry): Tool {
   return {
     name: "skill",
-    description: "Bir skill'in tam içeriğini adıyla getir.",
+    description: "Fetch the full content of a skill by its name.",
     permissionLevel: "safe",
     parameters: skillParams,
     run: async (rawArgs) => {

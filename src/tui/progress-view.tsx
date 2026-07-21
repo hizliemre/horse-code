@@ -2,39 +2,40 @@ import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import { phaseLabel } from "./labels.js";
 
-// Küçük pixel-art at, yerinde gallop: gövde/baş sabit, bacaklar kare-kare değişir.
-const HORSE_FRAMES: [string, string][] = [
-  ["▟▀▜▙▖", "▘  ▝ "],
-  ["▟▀▜▙▖", "▖  ▗ "],
-  ["▟▀▜▙▖", "▝  ▘ "],
-  ["▟▀▜▙▖", "▗  ▖ "],
-];
+// Özgün spinner: 4'lük track içinde bir "0" (top) sağa-sola gidip gelir (ping-pong): oo0o → ooo0 → …
+// Track küçük "o"lar (sönük), top "0" parlak marka mavisi.
+const TRACK = 4;
+const FRAMES: number[] = [0, 1, 2, 3, 2, 1]; // topun pozisyonu (ping-pong)
+const BALL = "#1a9fd8";
+const DIM = "#3a5a68";
 
-/** Job işlenirken küçük pixel-art at yerinde koşar (timer ile kare döner). */
+/** Job işlenirken sola-dayalı ping-pong spinner (0 top track'te gidip gelir). */
 export function RunningHorse(): React.ReactElement {
-  const [frame, setFrame] = useState(0);
+  const [i, setI] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setFrame((f) => (f + 1) % HORSE_FRAMES.length), 140);
+    const id = setInterval(() => setI((n) => (n + 1) % FRAMES.length), 110);
     return () => clearInterval(id);
   }, []);
-  const [body, legs] = HORSE_FRAMES[frame];
+  const pos = FRAMES[i];
   return (
-    <Box flexDirection="column">
-      <Text color="#1a9fd8">{body}</Text>
-      <Text color="#1a9fd8">{legs}</Text>
-    </Box>
+    <Text>
+      {Array.from({ length: TRACK }, (_, x) =>
+        x === pos ? (
+          <Text key={x} color={BALL} bold>0</Text>
+        ) : (
+          <Text key={x} color={DIM}>o</Text>
+        ),
+      )}
+    </Text>
   );
 }
 
-/** Koşan at + dostça faz etiketi (yan yana, etiket at hizasında). */
-export function ProgressView({ phase, detail }: { phase: string; detail?: string }): React.ReactElement {
+/** Sola-dayalı: spinner + faz etiketi yan yana. */
+export function ProgressView({ phase, detail }: { phase: string; detail?: string; cols?: number }): React.ReactElement {
   return (
     <Box>
       <RunningHorse />
-      <Box marginLeft={1} flexDirection="column">
-        <Text> </Text>
-        <Text bold>{phaseLabel(phase)}{detail ? ` — ${detail}` : ""}</Text>
-      </Box>
+      <Text bold>{" "}{phaseLabel(phase)}{detail ? ` — ${detail}` : ""}</Text>
     </Box>
   );
 }

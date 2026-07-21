@@ -16,19 +16,19 @@ export function buildSubmitTool<T>(schema: z.ZodType<T>): SubmitToolHandle<T> {
   let box: { value: T } | undefined;
   const tool: Tool = {
     name: "submit",
-    description: "İşin bittiğinde sonucunu bu araçla yapılandırılmış olarak gönder.",
+    description: "When you are done, submit your result in structured form with this tool.",
     permissionLevel: "safe",
     parameters: schema,
     run: async (rawArgs) => {
       const parsed = schema.safeParse(rawArgs);
       if (!parsed.success) {
         return {
-          content: `submit: geçersiz çıktı: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+          content: `submit: invalid output: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
           isError: true,
         };
       }
       box = { value: parsed.data };
-      return { content: "alındı", isError: false };
+      return { content: "received", isError: false };
     },
   };
   return { tool, result: () => box };

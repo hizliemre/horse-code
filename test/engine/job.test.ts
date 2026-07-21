@@ -30,7 +30,7 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
       const toolMsgs = req.messages.filter((m) => m.role === "tool");
       const userContent = req.messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
-      const writeTarget = (userContent.match(/"([^"]+\.md)"'e write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
+      const writeTarget = (userContent.match(/"([^"]+\.md)" with write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
       const submit = function* (a: string) {
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;
@@ -64,7 +64,7 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
         return;
       }
       if (sys.includes("P-principal")) {
-        if (convo.includes("SON KARAR")) { yield* submit('{"decision":"accept","question":""}'); return; }
+        if (convo.includes("FINAL DECISION")) { yield* submit('{"decision":"accept","question":""}'); return; }
         const arr = opts.principal ?? ['{"decision":"approve","comments":[]}'];
         yield* submit(arr[principalCall] ?? arr[arr.length - 1]);
         principalCall++;

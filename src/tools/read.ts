@@ -7,7 +7,7 @@ const params = z.object({ path: z.string() });
 
 export const readFileTool: Tool = {
   name: "read_file",
-  description: "Bir dosyanın içeriğini okur (cwd'ye göreli veya mutlak yol).",
+  description: "Reads the contents of a file (path relative to cwd or absolute).",
   permissionLevel: "safe",
   parameters: params,
   async run(rawArgs, ctx) {

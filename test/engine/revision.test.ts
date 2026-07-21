@@ -37,7 +37,7 @@ function revisionProvider(opts: { reviews: string[]; final?: string }): Provider
         yield { type: "done", finishReason: "stop" } as const;
       };
       if (sys.includes("P-principal")) {
-        if (convo.includes("SON KARAR")) { yield* submit(opts.final ?? '{"decision":"accept","question":""}'); return; }
+        if (convo.includes("FINAL DECISION")) { yield* submit(opts.final ?? '{"decision":"accept","question":""}'); return; }
         yield* submit(opts.reviews[reviewCall] ?? opts.reviews[opts.reviews.length - 1]);
         reviewCall++;
         return;

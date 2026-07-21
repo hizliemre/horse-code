@@ -49,7 +49,7 @@ export async function runCouncil(deps: ReviewDeps, workdir: string, docPath: str
       const opts: RoleAgentOptions = {
         provider: deps.provider, model, systemPrompt,
         tools: readOnlyRegistry(deps),
-        messages: [{ role: "user", content: `"${docPath}" dokümanını incele ve bu perspektiften değerlendir.` }],
+        messages: [{ role: "user", content: `Review the "${docPath}" document and evaluate it from this perspective.` }],
         permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
       };
       const r = await runStructuredRole(opts, AssessmentSchema);
@@ -67,7 +67,7 @@ export async function runJudge(
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content: `"${docPath}" dokümanı ve council değerlendirmeleri:\n${summary}\nSentezle ve karar ver.` }],
+    messages: [{ role: "user", content: `The "${docPath}" document and council evaluations:\n${summary}\nSynthesize and decide.` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
   return runStructuredRole(opts, JudgeSchema);

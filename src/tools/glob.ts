@@ -9,7 +9,7 @@ const MAX_RESULTS = 500;
 
 export const globTool: Tool = {
   name: "glob",
-  description: "cwd altında glob desenine uyan dosya yollarını bulur.",
+  description: "Finds file paths under cwd matching a glob pattern.",
   permissionLevel: "safe",
   parameters: params,
   async run(rawArgs, ctx) {

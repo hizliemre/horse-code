@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import type { Tool } from "../core/types.js";
+import type { Tool, Message } from "../core/types.js";
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { ToolRegistry } from "../tools/registry.js";
@@ -22,13 +22,13 @@ const askUserParams = z.object({ question: z.string() });
 export function buildAskUserTool(askUser: AskUser): Tool {
   return {
     name: "ask_user",
-    description: "Kullanıcıya bir soru sor ve cevabını al.",
+    description: "Ask the user a question and get their answer.",
     permissionLevel: "safe",
     parameters: askUserParams,
     run: async (rawArgs) => {
       const parsed = askUserParams.safeParse(rawArgs);
       if (!parsed.success) {
-        return { content: `ask_user: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
+        return { content: `ask_user: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       }
       const answer = await askUser(parsed.data.question);
       return { content: answer, isError: false };
@@ -62,8 +62,8 @@ export async function runAnalyst(
   const tools = writerRegistry(deps, [buildAskUserTool(askUser)]);
   const content =
     feedback && feedback.length
-      ? `"${specPath}" spec'ini şu reviewer notlarıyla revize et:\n${feedback.map((f) => `- ${f}`).join("\n")}\nOrijinal istek: ${prompt}`
-      : `İstek: "${prompt}". Gerekirse ask_user ile kullanıcıya sor; spec dosyasını "${specPath}"'e write_file ile yaz.`;
+      ? `Revise the "${specPath}" spec with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\nOriginal request: ${prompt}`
+      : `Request: "${prompt}". If needed, ask the user via ask_user; write the spec file to "${specPath}" with write_file.`;
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt, tools,
     messages: [{ role: "user", content }],
@@ -84,8 +84,8 @@ export async function runPlanner(
   const tools = writerRegistry(deps);
   const content =
     feedback && feedback.length
-      ? `"${planPath}" plan'ını şu reviewer notlarıyla revize et:\n${feedback.map((f) => `- ${f}`).join("\n")}\n("${specPath}" spec'inden)`
-      : `"${specPath}" spec'ini oku ve plan'ı "${planPath}"'e write_file ile yaz.`;
+      ? `Revise the "${planPath}" plan with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\n(from the "${specPath}" spec)`
+      : `Read the "${specPath}" spec and write the plan to "${planPath}" with write_file.`;
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt, tools,
     messages: [{ role: "user", content }],
@@ -95,9 +95,9 @@ export async function runPlanner(
 }
 
 export type UpstreamResult =
-  | { intent: Intent; kind: "chat"; response: string }
-  | { intent: Intent; kind: "approved"; specPath: string; planPath: string }
-  | { intent: Intent; kind: "rejected"; stage: "spec" | "plan" };
+  | { intent: Intent; refinedPrompt: string; kind: "chat"; response: string }
+  | { intent: Intent; refinedPrompt: string; kind: "approved"; specPath: string; planPath: string }
+  | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" };
 
 /**
  * Upstream pipeline: refiner → route; chat→coach cevabı; pipeline→analyst spec (F2 review) →
@@ -109,11 +109,14 @@ export async function runUpstream(
   prompt: string,
   askUser: AskUser,
   maxRounds: number,
+  history: Message[] = [],
 ): Promise<UpstreamResult> {
-  const r = await runRefiner(deps, prompt);
+  // Refiner geçmişi görür → follow-up'lar bağlamda refine edilir (horse-code'un feature'ı her yerde geçerli).
+  const r = await runRefiner(deps, prompt, history);
   if (routeIntent(r.intent) === "chat") {
-    const response = await runCoachChat(deps, r.refinedPrompt, workdir);
-    return { intent: r.intent, kind: "chat", response };
+    // Chat: refine edilmiş prompt + konuşma geçmişi → bağlamsal, tutarlı çok-turlu cevap.
+    const response = await runCoachChat(deps, r.refinedPrompt, workdir, history);
+    return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response };
   }
 
   const specPath = ".hc/spec.md";
@@ -123,7 +126,7 @@ export async function runUpstream(
     (fb) => runAnalyst(deps, workdir, specPath, r.refinedPrompt, fb, askUser),
     askUser, maxRounds,
   );
-  if (!specOut.approved) return { intent: r.intent, kind: "rejected", stage: "spec" };
+  if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
   // Onaylı ama dosya yoksa (analyst yazmadı, judge yine de geçti): H'ye var-olmayan path verme.
   if (!existsSync(join(workdir, specPath))) throw new Error(`analyst spec üretmedi: ${specPath}`);
 
@@ -134,8 +137,8 @@ export async function runUpstream(
     (fb) => runPlanner(deps, workdir, planPath, specPath, fb),
     askUser, maxRounds,
   );
-  if (!planOut.approved) return { intent: r.intent, kind: "rejected", stage: "plan" };
+  if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
   if (!existsSync(join(workdir, planPath))) throw new Error(`planner plan üretmedi: ${planPath}`);
 
-  return { intent: r.intent, kind: "approved", specPath, planPath };
+  return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "approved", specPath, planPath };
 }

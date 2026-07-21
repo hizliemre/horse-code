@@ -33,7 +33,7 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
     systemPrompt,
     tools: readOnlyRegistry(deps),
     messages: [
-      { role: "user", content: `Task "${task.title}" için worktree'deki değişiklikleri incele; verdikt ver (pass/fail + notlar).` },
+      { role: "user", content: `Review the worktree changes for task "${task.title}"; give a verdict (pass/fail + notes).` },
     ],
     permission: deps.permission,
     approve: deps.approve,

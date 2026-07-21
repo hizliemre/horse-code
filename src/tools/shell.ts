@@ -6,7 +6,7 @@ const params = z.object({ command: z.string() });
 
 export const shellTool: Tool = {
   name: "shell",
-  description: "Bir shell komutu çalıştırır (cwd bağlamında). stdout+stderr ve çıkış kodunu döner.",
+  description: "Runs a shell command (in the cwd context). Returns stdout+stderr and the exit code.",
   permissionLevel: "exec",
   parameters: params,
   describe(rawArgs) {

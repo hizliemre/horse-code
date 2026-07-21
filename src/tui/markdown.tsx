@@ -88,15 +88,15 @@ function highlightCode(line: string): React.ReactElement {
   );
 }
 
-/** Code block: language label + line numbers + light syntax coloring, in a bordered box. */
+/** Code block: language label + line-number gutter + light syntax coloring (editor style, borderless). */
 function CodeBlock({ lang, lines }: { lang: string; lines: string[] }): React.ReactElement {
   const gutter = String(Math.max(1, lines.length)).length;
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="gray" paddingX={1} marginTop={1}>
-      {lang ? <Text color="magenta">{lang}</Text> : null}
+    <Box flexDirection="column" marginTop={1}>
+      {lang ? <Text color="magenta" dimColor>{`╭─ ${lang}`}</Text> : null}
       {lines.map((l, i) => (
         <Box key={i}>
-          <Text dimColor>{String(i + 1).padStart(gutter, " ")} │ </Text>
+          <Text dimColor>{`${String(i + 1).padStart(gutter, " ")} │ `}</Text>
           {highlightCode(l)}
         </Box>
       ))}

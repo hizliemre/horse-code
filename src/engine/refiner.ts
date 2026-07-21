@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { runStructuredRole } from "../agent/structured.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
+import type { Message } from "../core/types.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 import type { TaskCycleDeps } from "./task-types.js";
@@ -15,8 +16,12 @@ export const RefinerSchema = z.object({
   intent: z.enum(["chat", "feature", "bugfix"]),
 });
 
-/** Kullanıcı prompt'unu refine eder + intent sınıflandırır (structured, repo tool'u yok). */
-export async function runRefiner(deps: TaskCycleDeps, prompt: string): Promise<RefinerOutput> {
+/**
+ * Kullanıcı prompt'unu refine eder + intent sınıflandırır (structured, repo tool'u yok).
+ * `history` önceki turnler → follow-up'lar bağlamda refine edilir (ör. "ne zaman geliştirildin?" önceki
+ * "sen Claude'sun" turnüyle projeye değil Claude'a yönelik refine olur).
+ */
+export async function runRefiner(deps: TaskCycleDeps, prompt: string, history: Message[] = []): Promise<RefinerOutput> {
   const { model, systemPrompt } = deps.roleRegistry.resolve("refiner");
   const tools = new ToolRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
@@ -25,7 +30,7 @@ export async function runRefiner(deps: TaskCycleDeps, prompt: string): Promise<R
     model,
     systemPrompt,
     tools,
-    messages: [{ role: "user", content: prompt }],
+    messages: [...history, { role: "user", content: prompt }],
     permission: deps.permission,
     approve: deps.approve,
     cwd: ".",

@@ -7,7 +7,7 @@ const params = z.object({ path: z.string(), content: z.string() });
 
 export const writeFileTool: Tool = {
   name: "write_file",
-  description: "Bir dosyaya içerik yazar (üzerine yazar, üst dizinleri oluşturur).",
+  description: "Writes content to a file (overwrites, creates parent directories).",
   permissionLevel: "write",
   parameters: params,
   describe(rawArgs) {

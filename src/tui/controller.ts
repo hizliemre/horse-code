@@ -74,8 +74,15 @@ export class TuiController {
     this.notify();
   }
 
-  endRun(report: string): void {
-    this.state = { ...this.state, mode: "input", transcript: [...this.state.transcript, { role: "assistant", text: report }] };
+  endRun(report: string, refinedPrompt?: string): void {
+    // Son user girdisini (ham) refine edilmişle değiştir → transcript'te hep REFINE saklanır; sonraki
+    // turda geçmiş bundan kurulur → coach'a asla ham prompt gitmez. Sonra assistant cevabını ekle.
+    const t = [...this.state.transcript];
+    if (refinedPrompt && t.length && t[t.length - 1].role === "user") {
+      t[t.length - 1] = { role: "user", text: refinedPrompt };
+    }
+    t.push({ role: "assistant", text: report });
+    this.state = { ...this.state, mode: "input", transcript: t };
     this.notify();
   }
 }

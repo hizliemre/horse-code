@@ -9,7 +9,7 @@ const MAX_MATCHES = 200;
 
 export const grepTool: Tool = {
   name: "grep",
-  description: "cwd altındaki dosyalarda satır bazlı regex araması yapar.",
+  description: "Performs a line-based regex search in files under cwd.",
   permissionLevel: "safe",
   parameters: params,
   async run(rawArgs, ctx) {

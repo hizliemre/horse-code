@@ -17,7 +17,7 @@ describe("buildSubmitTool", () => {
     const h = buildSubmitTool(schema);
     const res = await h.tool.run({ decision: "bogus" }, ctx());
     expect(res.isError).toBe(true);
-    expect(res.content).toContain("geçersiz");
+    expect(res.content).toContain("invalid");
     expect(h.result()).toBeUndefined();
   });
 

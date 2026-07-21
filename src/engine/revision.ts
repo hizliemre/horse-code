@@ -53,7 +53,7 @@ async function principalFinal(deps: RevisionDeps, base: string) {
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content: "SON KARAR: Revizyon turları bitti, hâlâ bulgu var. accept (kabul) veya ask-human (kullanıcıya sorulacak soru) ver." }],
+    messages: [{ role: "user", content: "FINAL DECISION: Revision rounds are over and findings still remain. Give accept or ask-human (a question to ask the user)." }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };
   return runStructuredRole(opts, PrincipalFinalSchema);
@@ -65,7 +65,7 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
   tools.register(buildSkillTool(deps.skillRegistry));
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt, tools,
-    messages: [{ role: "user", content: `PR revizyonu: şu yorumları gider (fix et veya "by design" gerekçele), ana worktree'de çalış:\n${comments.map((c) => `- ${c}`).join("\n")}` }],
+    messages: [{ role: "user", content: `PR revision: address the following comments (fix them or justify as "by design"), work in the main worktree:\n${comments.map((c) => `- ${c}`).join("\n")}` }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };
   await runToCompletion(opts);

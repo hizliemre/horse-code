@@ -12,7 +12,7 @@ const params = z.object({
 
 export const editFileTool: Tool = {
   name: "edit_file",
-  description: "Bir dosyada birebir string değişimi yapar. oldString benzersiz olmalı (yoksa replaceAll gerekir).",
+  description: "Performs an exact string replacement in a file. oldString must be unique (otherwise replaceAll is required).",
   permissionLevel: "write",
   parameters: params,
   describe(rawArgs) {

@@ -28,7 +28,7 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
       const toolMsgs = req.messages.filter((m) => m.role === "tool");
       const userContent = req.messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
-      const writeTarget = (userContent.match(/"([^"]+\.md)"'e write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
+      const writeTarget = (userContent.match(/"([^"]+\.md)" with write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
       const submit = function* (a: string) {
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;

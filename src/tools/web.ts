@@ -9,7 +9,7 @@ const MAX_CHARS = 100_000;
 export function createWebFetchTool(fetchFn: FetchLike = globalThis.fetch as FetchLike): Tool {
   return {
     name: "web_fetch",
-    description: "Bir URL'nin içeriğini (metin) çeker.",
+    description: "Fetches the content (text) of a URL.",
     permissionLevel: "safe",
     parameters: params,
     async run(rawArgs, ctx) {

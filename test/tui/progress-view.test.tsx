@@ -11,10 +11,11 @@ describe("faz etiketleri + koşan at", () => {
     expect(phaseLabel("bilinmeyen-faz")).toBe("bilinmeyen-faz");
   });
 
-  it("RunningHorse pixel-art at render eder (emoji değil)", () => {
+  it("RunningHorse spinner render eder (0 top + o track, emoji değil)", () => {
     const r = render(<RunningHorse />);
     const f = r.lastFrame() ?? "";
-    expect(f).toContain("▙"); // gövde block karakteri
+    expect(f).toContain("0"); // hareketli top
+    expect(f).toContain("o"); // track
     expect(f).not.toContain("🐎");
     r.unmount();
   });
@@ -23,7 +24,7 @@ describe("faz etiketleri + koşan at", () => {
     const r = render(<ProgressView phase="waves" />);
     const f = r.lastFrame() ?? "";
     expect(f).toContain("Coding");
-    expect(f).toContain("▙");
+    expect(f).toContain("0");
     r.unmount();
   });
 });

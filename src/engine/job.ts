@@ -1,5 +1,6 @@
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
+import type { Message } from "../core/types.js";
 import type { Board } from "../board/board.js";
 import type { WorktreeManager, WorktreeSession } from "../worktree/manager.js";
 import type { RevisionPRAdapter } from "../adapters/pr.js";
@@ -21,16 +22,16 @@ export interface JobDeps extends ReviewDeps {
 }
 
 export type JobResult =
-  | { kind: "chat"; response: string }
-  | { kind: "rejected"; stage: "spec" | "plan" }
-  | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession };
+  | { kind: "chat"; response: string; refinedPrompt?: string }
+  | { kind: "rejected"; stage: "spec" | "plan"; refinedPrompt?: string }
+  | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession; refinedPrompt?: string };
 
 function pmOpts(deps: JobDeps, workdir: string, planPath: string): RoleAgentOptions {
   const { model, systemPrompt } = deps.roleRegistry.resolve("project-manager");
   return {
     provider: deps.provider, model, systemPrompt,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content: `"${planPath}" plan'ını oku ve gerçek task'lara böl (id, title, deps).` }],
+    messages: [{ role: "user", content: `Read the "${planPath}" plan and break it into real tasks (id, title, deps).` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
 }
@@ -44,7 +45,7 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content: `İş tamamlandı. Board durumu:\n${summary}\nKullanıcıya kısa bir final raporu ver (hangi task'ta ne oldu).` }],
+    messages: [{ role: "user", content: `Work complete. Board state:\n${summary}\nGive the user a short final report (what happened in each task).` }],
     permission: deps.permission, approve: deps.approve, cwd: session.baseWorktree, signal: deps.signal,
   };
   const msg = await runToCompletion(opts);
@@ -57,7 +58,7 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
  */
 export async function runJob(
   deps: JobDeps,
-  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void },
+  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void; history?: Message[] },
 ): Promise<JobResult> {
   // onEvent hatası engine'i düşürmesin: gözlemci senkron çağrılır (board mutation'larında derinden).
   const onEvent = opts.onEvent;
@@ -66,17 +67,17 @@ export async function runJob(
   try {
     const workdir = session.baseWorktree;
     emit({ kind: "phase", phase: "upstream" });
-    const up = await runUpstream(deps, workdir, opts.prompt, opts.askUser, opts.maxRounds);
+    const up = await runUpstream(deps, workdir, opts.prompt, opts.askUser, opts.maxRounds, opts.history);
 
     if (up.kind === "chat") {
       emit({ kind: "phase", phase: "chat" });
       await deps.manager.closeSession(session);
-      return { kind: "chat", response: up.response };
+      return { kind: "chat", response: up.response, refinedPrompt: up.refinedPrompt };
     }
     if (up.kind === "rejected") {
       emit({ kind: "phase", phase: "rejected", detail: up.stage });
       await deps.manager.closeSession(session);
-      return { kind: "rejected", stage: up.stage };
+      return { kind: "rejected", stage: up.stage, refinedPrompt: up.refinedPrompt };
     }
 
     emit({ kind: "phase", phase: "approved" });
@@ -107,7 +108,7 @@ export async function runJob(
     emit({ kind: "phase", phase: "report" });
     const report = await runCoachReport(deps, session, board);
     emit({ kind: "phase", phase: "done" });
-    return { kind: "done", wave, revision, report, session };
+    return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {
     await deps.manager.closeSession(session).catch(() => {}); // orphan worktree temizle; cleanup hatası orijinali gölgelemesin
     throw e;
