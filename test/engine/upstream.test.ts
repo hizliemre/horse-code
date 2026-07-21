@@ -27,6 +27,8 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       requests.push(req);
       const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
       const toolMsgs = req.messages.filter((m) => m.role === "tool");
+      const userContent = req.messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+      const writeTarget = (userContent.match(/"([^"]+\.md)"'e write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
       const submit = function* (a: string) {
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;
@@ -44,11 +46,11 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       if (sys.includes("P-analyst")) {
         if (opts.skipWrite) { yield* stop("yazmadım"); return; } // dosya üretmeyen analyst (guard testi)
         if (opts.analystAsk && toolMsgs.length === 0) { yield* call("ask_user", JSON.stringify({ question: opts.analystAsk })); return; }
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "spec.md", content: "# spec" })); return; }
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# spec" })); return; }
         yield* stop("bitti"); return;
       }
       if (sys.includes("P-planner")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "plan.md", content: "# plan" })); return; }
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# plan" })); return; }
         yield* stop("bitti"); return;
       }
       if (sys.includes("Perspektif")) { yield* submit('{"concerns":[],"recommendation":"approve"}'); return; }
@@ -162,11 +164,11 @@ describe("runUpstream", () => {
     const res = await runUpstream(udeps(p), dir, "X ekle", async () => "x", 3);
     expect(res.kind).toBe("approved");
     if (res.kind === "approved") {
-      expect(res.specPath).toBe("spec.md");
-      expect(res.planPath).toBe("plan.md");
+      expect(res.specPath).toBe(".hc/spec.md");
+      expect(res.planPath).toBe(".hc/plan.md");
     }
-    expect(await readFile(join(dir, "spec.md"), "utf8")).toBe("# spec");
-    expect(await readFile(join(dir, "plan.md"), "utf8")).toBe("# plan");
+    expect(await readFile(join(dir, ".hc/spec.md"), "utf8")).toBe("# spec");
+    expect(await readFile(join(dir, ".hc/plan.md"), "utf8")).toBe("# plan");
   });
 
   it("spec onaylanmazsa → rejected(spec)", async () => {
