@@ -374,6 +374,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
+    else if (
+      c.name === "/constitution" ||
+      c.name === "/specify" ||
+      c.name === "/clarify" ||
+      c.name === "/plan" ||
+      c.name === "/tasks"
+    ) controller.submitTask(c.name);
   };
   const tlen = state.transcript.length;
   useEffect(() => { setScroll(0); }, [tlen]);

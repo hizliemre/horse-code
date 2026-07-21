@@ -10,6 +10,11 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },
+  { name: "/constitution", desc: "Create or update the project constitution" },
+  { name: "/specify", desc: "Write the spec for the current feature" },
+  { name: "/clarify", desc: "Clarify the spec via Q&A" },
+  { name: "/plan", desc: "Write the implementation plan" },
+  { name: "/tasks", desc: "Break the plan into tasks" },
 ];
 
 /** Commands whose name starts with the (trimmed, lowercased) draft — empty unless the draft starts with "/". */

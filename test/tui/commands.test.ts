@@ -13,7 +13,7 @@ describe("slash commands", () => {
   });
 
   it("filters by prefix (case-insensitive) and trims", () => {
-    expect(matchCommands("/cl").map((c) => c.name)).toEqual(["/clear"]);
+    expect(matchCommands("/clea").map((c) => c.name)).toEqual(["/clear"]);
     expect(matchCommands("  /MO  ").map((c) => c.name)).toEqual(["/model"]);
     expect(matchCommands("/xyz")).toEqual([]);
   });
@@ -23,5 +23,22 @@ describe("slash commands", () => {
     expect(lines).toHaveLength(COMMANDS.length);
     expect(lines[0]).toContain("/model");
     expect(helpText()).toContain("/exit");
+  });
+
+  it("registers the spec-kit phase commands in the palette", () => {
+    const names = COMMANDS.map((c) => c.name);
+    expect(names).toEqual(
+      expect.arrayContaining(["/constitution", "/specify", "/clarify", "/plan", "/tasks"]),
+    );
+  });
+
+  it("matchCommands('/cl') includes /clarify", () => {
+    expect(matchCommands("/cl").map((c) => c.name)).toContain("/clarify");
+  });
+
+  it("helpText includes the spec-kit phase commands", () => {
+    const text = helpText();
+    expect(text).toContain("/constitution");
+    expect(text).toContain("/tasks");
   });
 });
