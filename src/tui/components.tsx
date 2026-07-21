@@ -406,8 +406,9 @@ export function App({ controller, fullscreen = false, model, listModels, setMode
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     const inputBoxH = 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
+    const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
     const queuedH = state.queued > 0 ? 1 : 0;
-    const bottomH = statusH + inputBoxH + metricsH + queuedH;
+    const bottomH = statusH + inputBoxH + metricsH + queuedH + metricsGapH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -443,6 +444,7 @@ export function App({ controller, fullscreen = false, model, listModels, setMode
         </Box>
         {state.meta ? <MetricsLine meta={state.meta} fallbackModel={state.currentModel || model} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
+        {state.meta ? <Text> </Text> : null}
       </Box>
     );
   }
