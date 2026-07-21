@@ -5,6 +5,7 @@ import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { HORSE_VARIANTS } from "./horse-art.js";
 import { ProgressView } from "./progress-view.js";
+import { Markdown } from "./markdown.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -51,26 +52,34 @@ export function Prompt({ question, onSubmit }: { question: string; onSubmit: (s:
   );
 }
 
-export const Message = memo(function Message({ role, text }: { role: "user" | "assistant"; text: string }): React.ReactElement {
+export const Message = memo(function Message({ role, text, cols }: { role: "user" | "assistant"; text: string; cols: number }): React.ReactElement {
+  // Hanging-indent + AÇIK genişlik (cols - bullet) → Ink kelime-bazında sarar (char değil), satırlar metinle hizalanır.
+  const w = Math.max(20, cols - 3);
   return role === "user" ? (
-    <Text color="gray">{"› "}{text}</Text>
+    <Box marginTop={1}>
+      <Text color="gray">{"› "}</Text>
+      <Box width={w}><Text color="gray">{text}</Text></Box>
+    </Box>
   ) : (
-    <Text><Text color="green">{"● "}</Text>{text}</Text>
+    <Box marginTop={1}>
+      <Text color="green">{"● "}</Text>
+      <Box width={w} flexDirection="column"><Markdown text={text} /></Box>
+    </Box>
   );
 });
 
-// Kompakt block-font (4-geniş harf) → daha küçük wordmark.
+// Kompakt 3-satır block-font (≈%40 küçük wordmark).
 const GLYPHS: Record<string, string[]> = {
-  H: ["█  █", "█  █", "████", "█  █", "█  █"],
-  O: ["████", "█  █", "█  █", "█  █", "████"],
-  R: ["███ ", "█  █", "███ ", "█ █ ", "█  █"],
-  S: ["████", "█   ", "████", "   █", "████"],
-  E: ["████", "█   ", "███ ", "█   ", "████"],
-  C: ["████", "█   ", "█   ", "█   ", "████"],
-  D: ["███ ", "█  █", "█  █", "█  █", "███ "],
-  " ": ["  ", "  ", "  ", "  ", "  "],
+  H: ["█  █", "████", "█  █"],
+  O: ["████", "█  █", "████"],
+  R: ["███ ", "██▄▀", "█  █"],
+  S: ["▄███", "▀▀▀▄", "███▀"],
+  E: ["████", "███ ", "████"],
+  C: ["████", "█   ", "████"],
+  D: ["███ ", "█  █", "███ "],
+  " ": ["  ", "  ", "  "],
 };
-const WORDMARK: string[] = [0, 1, 2, 3, 4].map((r) =>
+const WORDMARK: string[] = [0, 1, 2].map((r) =>
   "HORSE CODE".split("").map((ch) => GLYPHS[ch][r]).join(" "),
 );
 
@@ -108,8 +117,8 @@ export const Splash = memo(function Splash({ cols, rows }: { cols: number; rows:
   const topMargin = 2; // logonun üstünde boşluk
   const bottomMargin = 1; // logonun altında boşluk
   const inputArea = 6; // ipucu + kenarlıklı kutu + margin
-  const showWordmark = cols >= WM_WIDTH + 2 && rows >= 24;
-  const wordmarkH = showWordmark ? 6 : 0;
+  const showWordmark = cols >= WM_WIDTH + 2 && rows >= 20;
+  const wordmarkH = showWordmark ? 4 : 0;
   const budget = rows - inputArea - wordmarkH - topMargin - bottomMargin; // logo için kalan satır
   // Bütçeye + genişliğe sığan EN BÜYÜK varyant; hiçbiri sığmazsa logo gizle (taşma/iz olmasın).
   let variant: (typeof HORSE_VARIANTS)[number] | undefined;
@@ -182,11 +191,11 @@ export function App({ controller }: { controller: TuiController }): React.ReactE
     <Box flexDirection="column">
       <Splash cols={size.cols} rows={size.rows} />
       {state.transcript.map((m, i) => (
-        <Message key={i} role={m.role} text={m.text} />
+        <Message key={i} role={m.role} text={m.text} cols={size.cols} />
       ))}
       {mode === "input" ? (
         <Box flexDirection="column" marginTop={1}>
-          <Text dimColor>Görevini yaz — Enter gönder · Ctrl+C çıkış</Text>
+          <Text dimColor>Type your task — Enter to send · Ctrl+C to quit</Text>
           <Box borderStyle="round" borderColor="gray" paddingX={1}>
             <InputLine onSubmit={(t) => controller.submitTask(t)} />
           </Box>

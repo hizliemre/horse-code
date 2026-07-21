@@ -6,22 +6,24 @@ import { RunningHorse, ProgressView } from "../../src/tui/progress-view.js";
 
 describe("faz etiketleri + koşan at", () => {
   it("phaseLabel bilinen fazı çevirir, bilinmeyeni aynen döner", () => {
-    expect(phaseLabel("waves")).toBe("Kodlanıyor…");
-    expect(phaseLabel("upstream")).toContain("rafine");
+    expect(phaseLabel("waves")).toBe("Coding…");
+    expect(phaseLabel("upstream")).toContain("Refining");
     expect(phaseLabel("bilinmeyen-faz")).toBe("bilinmeyen-faz");
   });
 
-  it("RunningHorse 🐎 render eder", () => {
+  it("RunningHorse pixel-art at render eder (emoji değil)", () => {
     const r = render(<RunningHorse />);
-    expect(r.lastFrame() ?? "").toContain("🐎");
+    const f = r.lastFrame() ?? "";
+    expect(f).toContain("▙"); // gövde block karakteri
+    expect(f).not.toContain("🐎");
     r.unmount();
   });
 
   it("ProgressView faz-etiketi + at gösterir", () => {
     const r = render(<ProgressView phase="waves" />);
     const f = r.lastFrame() ?? "";
-    expect(f).toContain("Kodlanıyor");
-    expect(f).toContain("🐎");
+    expect(f).toContain("Coding");
+    expect(f).toContain("▙");
     r.unmount();
   });
 });

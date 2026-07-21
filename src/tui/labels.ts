@@ -1,17 +1,17 @@
-// İçsel faz adı → Türkçe dostça etiket.
+// Internal phase name → human-friendly (English) label. UI is English-only (i18n-ready).
 export const PHASE_LABELS: Record<string, string> = {
-  upstream: "İsteğin anlaşılıyor / rafine ediliyor…",
-  chat: "Yanıtlanıyor…",
-  rejected: "Onaylanmadı",
-  approved: "Spec + plan onaylandı",
-  board: "Görevler çıkarılıyor…",
-  waves: "Kodlanıyor…",
-  "waves-done": "Kodlama tamamlandı",
-  pr: "PR hazırlanıyor…",
-  revision: "Gözden geçiriliyor…",
-  "revision-done": "Revizyon tamamlandı",
-  report: "Rapor hazırlanıyor…",
-  done: "Tamamlandı ✓",
+  upstream: "Refining…",
+  chat: "Answering…",
+  rejected: "Rejected",
+  approved: "Spec + plan approved",
+  board: "Building tasks…",
+  waves: "Coding…",
+  "waves-done": "Coding done",
+  pr: "Preparing PR…",
+  revision: "Reviewing…",
+  "revision-done": "Revision done",
+  report: "Writing report…",
+  done: "Done ✓",
 };
 
 export function phaseLabel(phase: string): string {

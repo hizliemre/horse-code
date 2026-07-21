@@ -39,7 +39,7 @@ describe("Ink bileşenleri", () => {
     c.onEvent({ kind: "board", cards: [{ id: "1", title: "Alfa-gorev", column: "IN-PROGRESS" }] });
     const { lastFrame, unmount } = render(<App controller={c} />);
     const f = lastFrame() ?? "";
-    expect(f).toContain("Kodlanıyor"); // dostça faz etiketi (waves)
+    expect(f).toContain("Coding"); // dostça faz etiketi (waves)
     expect(f).toContain("Alfa-gorev");
     unmount();
   });
@@ -52,14 +52,14 @@ describe("Ink bileşenleri", () => {
   });
 
   it("Message user → '›' + metin (label yok)", () => {
-    const f = render(<Message role="user" text="selam dünya" />).lastFrame() ?? "";
+    const f = render(<Message role="user" text="selam dünya" cols={80} />).lastFrame() ?? "";
     expect(f).toContain("›");
     expect(f).toContain("selam dünya");
     expect(f).not.toContain("sen");
   });
 
   it("Message assistant → '●' circle + metin (label yok)", () => {
-    const f = render(<Message role="assistant" text="merhaba" />).lastFrame() ?? "";
+    const f = render(<Message role="assistant" text="merhaba" cols={80} />).lastFrame() ?? "";
     expect(f).toContain("●");
     expect(f).toContain("merhaba");
     expect(f).not.toContain("hcode");
@@ -72,7 +72,7 @@ describe("Ink bileşenleri", () => {
   it("App input mode: görev-input hint + kutu render eder", () => {
     const c = new TuiController();
     void c.awaitTask();
-    expect(render(<App controller={c} />).lastFrame() ?? "").toContain("Görevini yaz");
+    expect(render(<App controller={c} />).lastFrame() ?? "").toContain("Type your task");
   });
 
   it("App mode undefined → running (tek-shot korunur, board render)", () => {
@@ -80,6 +80,6 @@ describe("Ink bileşenleri", () => {
     c.onEvent({ kind: "board", cards: [{ id: "1", title: "Görev", column: "TODO" }] });
     const f = render(<App controller={c} />).lastFrame() ?? "";
     expect(f).toContain("Görev");
-    expect(f).not.toContain("Görevini yaz");
+    expect(f).not.toContain("Type your task");
   });
 });
