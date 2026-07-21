@@ -44,6 +44,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const controller = new TuiController();
   const read: LineReader = (q) => controller.ask(q);
   const deps0 = opts.buildDeps(read);
+  // Coach model → always shown under the input; refiner model → shown only in the "refining… (model)" line.
+  const coachModel = deps0.roleRegistry.peekModel("coach") || opts.model;
+  const refinerModel = deps0.roleRegistry.peekModel("refiner") || opts.model;
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   const deps: JobDeps = { ...deps0, provider: meterProvider(deps0.provider, controller.onUsage) };
   // /model picker → live-swap every role's model on the running session (no config write).
@@ -90,7 +93,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} listModels={opts.listModels} setModel={setModel} />,
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} />,
   );
   try {
     for (;;) {

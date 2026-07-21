@@ -38,7 +38,8 @@ describe("Ink components", () => {
     c.onEvent({ kind: "phase", phase: "waves" });
     c.onEvent({ kind: "board", cards: [{ id: "1", title: "Alpha-task", column: "IN-PROGRESS" }] });
     const { lastFrame, unmount } = render(<App controller={c} />);
-    const f = lastFrame() ?? "";
+    // The shimmer status line tints each character separately → strip ANSI to read the label back.
+    const f = (lastFrame() ?? "").replace(/\x1b\[[0-9;]*m/g, "");
     expect(f).toContain("Coding"); // friendly phase label (waves)
     expect(f).toContain("Alpha-task");
     unmount();

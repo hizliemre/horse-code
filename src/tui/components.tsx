@@ -41,21 +41,23 @@ function fmtTokens(n: number): string {
  * once done, the frozen model + duration + tokens for the last turn. `wrap="truncate-end"` keeps it 1 row
  * (the fullscreen height math reserves exactly one line for it).
  */
-export function MetricsLine({ meta, fallbackModel }: { meta: TurnMeta; fallbackModel?: string }): React.ReactElement {
+export function MetricsLine({ meta, model }: { meta: TurnMeta; model?: string }): React.ReactElement {
   const [, tick] = useState(0);
   useEffect(() => {
     if (!meta.running) return;
     const id = setInterval(() => tick((n) => n + 1), 250);
     return () => clearInterval(id);
   }, [meta.running]);
-  const model = meta.model || fallbackModel || "—";
+  // Always the coach model (passed in) — never the last call's model, so it doesn't flip to the
+  // refiner's model mid-refine. The refiner model is surfaced only in the "refining… (model)" line.
+  const shown = model || meta.model || "—";
   const tok = meta.promptTokens + meta.completionTokens;
   const secs = meta.running
     ? (meta.startedAt !== undefined ? (Date.now() - meta.startedAt) / 1000 : 0)
     : (meta.durationMs ?? 0) / 1000;
   // No stage label here — while running it's already shown in the spinner line above; keep this compact.
   return (
-    <Text dimColor wrap="truncate-end">{`  ${model} · ${secs.toFixed(1)}s · ${fmtTokens(tok)} tok`}</Text>
+    <Text dimColor wrap="truncate-end">{`  ${shown} · ${secs.toFixed(1)}s · ${fmtTokens(tok)} tok`}</Text>
   );
 }
 
@@ -266,10 +268,12 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, listModels, setModel }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
+  coachModel?: string; // the coach's model — always shown in the metrics line under the input
+  refinerModel?: string; // the refiner's model — shown only in the "refining… (model)" status line
   listModels?: () => Promise<string[]>;
   setModel?: (m: string) => void;
 }): React.ReactElement {
@@ -390,7 +394,7 @@ export function App({ controller, fullscreen = false, model, listModels, setMode
       </Box>
     ) : (
       <Box flexDirection="column">
-        <ProgressView phase={state.phase} detail={state.detail} cols={size.cols} />
+        <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} cols={size.cols} />
         <Board cards={state.cards} />
         {state.pending ? <Prompt question={state.pending.question} onSubmit={(s) => controller.answer(s)} /> : null}
       </Box>
@@ -458,7 +462,7 @@ export function App({ controller, fullscreen = false, model, listModels, setMode
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
         {showStatus ? (
           <Box flexDirection="column">
-            {running ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} cols={size.cols} /></Box> : null}
+            {running ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} cols={size.cols} /></Box> : null}
             {boardLines ? <Board cards={state.cards} /> : null}
             {state.pending ? <Box width={cw}><Text color="yellow">{state.pending.question}</Text></Box> : null}
           </Box>
@@ -479,7 +483,7 @@ export function App({ controller, fullscreen = false, model, listModels, setMode
             }}
           />
         </Box>
-        {state.meta ? <MetricsLine meta={state.meta} fallbackModel={state.currentModel || model} /> : null}
+        {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}
       </Box>

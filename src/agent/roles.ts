@@ -19,6 +19,16 @@ export class RoleRegistry {
     this.modelOverride = model && model.length > 0 ? model : undefined;
   }
 
+  /** The model a role would use next, WITHOUT advancing the round-robin index (for UI display only). */
+  peekModel(roleName: string): string {
+    const role = this.roles[roleName];
+    if (!role || !role.models.length) return "";
+    const i = this.index.get(roleName) ?? 0;
+    return this.modelOverride && roleName !== "refiner"
+      ? this.modelOverride
+      : role.models[i % role.models.length];
+  }
+
   resolve(roleName: string): { model: string; systemPrompt: string } {
     const role = this.roles[roleName];
     if (!role) throw new Error(`undefined role: ${roleName}`);
