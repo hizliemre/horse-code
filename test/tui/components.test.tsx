@@ -49,4 +49,27 @@ describe("Ink bileşenleri", () => {
     const { lastFrame } = render(<App controller={c} />);
     expect(lastFrame() ?? "").toContain("Onaylıyor musun?");
   });
+
+  it("App input mode: görev-input + son rapor gösterir", () => {
+    const c = new TuiController();
+    c.endRun("İş bitti: (yerel: hc/x/base)");
+    const { lastFrame } = render(<App controller={c} />);
+    const f = lastFrame() ?? "";
+    expect(f).toContain("Görevini yaz");
+    expect(f).toContain("İş bitti");
+  });
+
+  it("App input mode (rapor yok): sadece görev-input", () => {
+    const c = new TuiController();
+    void c.awaitTask();
+    expect(render(<App controller={c} />).lastFrame() ?? "").toContain("Görevini yaz");
+  });
+
+  it("App mode undefined → running (tek-shot korunur, board render)", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "board", cards: [{ id: "1", title: "Görev", column: "TODO" }] });
+    const f = render(<App controller={c} />).lastFrame() ?? "";
+    expect(f).toContain("Görev");
+    expect(f).not.toContain("Görevini yaz");
+  });
 });
