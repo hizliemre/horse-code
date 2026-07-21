@@ -53,16 +53,16 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
 }
 
 /**
- * Üst-katman iş: openSession → runUpstream → (chat/rejected: kapat) → commit spec/plan →
- * project-manager board → runWaves → coach raporu. done'da session açık bırakılır (G revision).
+ * Top-level job: openSession → runUpstream → (chat/rejected: close) → commit spec/plan →
+ * project-manager board → runWaves → coach report. On done, the session is left open (G revision).
  */
 export async function runJob(
   deps: JobDeps,
   opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void; history?: Message[] },
 ): Promise<JobResult> {
-  // onEvent hatası engine'i düşürmesin: gözlemci senkron çağrılır (board mutation'larında derinden).
+  // don't let onEvent errors crash the engine: the observer is called synchronously (deep inside board mutations).
   const onEvent = opts.onEvent;
-  const emit = onEvent ? (ev: ProgressEvent) => { try { onEvent(ev); } catch { /* observer hatası izole */ } } : () => {};
+  const emit = onEvent ? (ev: ProgressEvent) => { try { onEvent(ev); } catch { /* observer error isolated */ } } : () => {};
   const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
   try {
     const workdir = session.baseWorktree;
@@ -81,7 +81,7 @@ export async function runJob(
     }
 
     emit({ kind: "phase", phase: "approved" });
-    await deps.manager.commitMerge(session, "hc: spec + plan"); // spec/plan → baseBranch (PR'a girer)
+    await deps.manager.commitMerge(session, "hc: spec + plan"); // spec/plan → baseBranch (goes into the PR)
 
     emit({ kind: "phase", phase: "board" });
     const board = await runProjectManager(pmOpts(deps, workdir, up.planPath));
@@ -110,7 +110,7 @@ export async function runJob(
     emit({ kind: "phase", phase: "done" });
     return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {
-    await deps.manager.closeSession(session).catch(() => {}); // orphan worktree temizle; cleanup hatası orijinali gölgelemesin
+    await deps.manager.closeSession(session).catch(() => {}); // clean up orphan worktree; don't let cleanup errors shadow the original
     throw e;
   }
 }

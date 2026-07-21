@@ -18,7 +18,7 @@ export const writeFileTool: Tool = {
     const parsed = params.safeParse(rawArgs);
     if (!parsed.success) {
       return {
-        content: `write_file: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        content: `write_file: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
         isError: true,
       };
     }
@@ -26,15 +26,15 @@ export const writeFileTool: Tool = {
     const target = resolve(ctx.cwd, a.path);
     const cwdResolved = resolve(ctx.cwd);
     if (target !== cwdResolved && !target.startsWith(cwdResolved + sep)) {
-      return { content: `write_file: yol cwd dışında: ${a.path}`, isError: true };
+      return { content: `write_file: path is outside cwd: ${a.path}`, isError: true };
     }
     try {
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, a.content, "utf8");
-      return { content: `Yazıldı: ${a.path}`, isError: false };
+      return { content: `Written: ${a.path}`, isError: false };
     } catch (e) {
       return {
-        content: `write_file hatası: ${e instanceof Error ? e.message : String(e)}`,
+        content: `write_file error: ${e instanceof Error ? e.message : String(e)}`,
         isError: true,
       };
     }

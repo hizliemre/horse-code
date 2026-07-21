@@ -4,7 +4,7 @@ import { loadConfig, DEFAULT_CONFIG } from "../../src/config/config.js";
 const noFiles = () => undefined;
 
 describe("loadConfig", () => {
-  it("hiçbir kaynak yoksa varsayılanları döner", () => {
+  it("returns defaults when no source is present", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: noFiles });
     expect(cfg.baseUrl).toBe(DEFAULT_CONFIG.baseUrl);
     expect(cfg.mode).toBe("ask");
@@ -12,7 +12,7 @@ describe("loadConfig", () => {
     expect(cfg.allowlist).toEqual([]);
   });
 
-  it("global config değerleri varsayılanı ezer", () => {
+  it("global config values override the defaults", () => {
     const readFile = (p: string) =>
       p === "/home/.horsecode/config.json"
         ? JSON.stringify({ model: "gpt-x", apiKey: "sk-global", mode: "acceptEdits" })
@@ -23,7 +23,7 @@ describe("loadConfig", () => {
     expect(cfg.mode).toBe("acceptEdits");
   });
 
-  it("proje config global'i ezer ama apiKey'i yok sayar", () => {
+  it("project config overrides global but ignores apiKey", () => {
     const readFile = (p: string) => {
       if (p === "/home/.horsecode/config.json")
         return JSON.stringify({ model: "global-model", apiKey: "sk-global" });
@@ -33,11 +33,11 @@ describe("loadConfig", () => {
     };
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
     expect(cfg.model).toBe("proj-model");
-    expect(cfg.apiKey).toBe("sk-global"); // proje apiKey'i yok sayıldı
+    expect(cfg.apiKey).toBe("sk-global"); // project apiKey was ignored
     expect(cfg.allowlist).toEqual(["npm test"]);
   });
 
-  it("env değişkenleri en yüksek önceliğe sahiptir", () => {
+  it("env variables have the highest priority", () => {
     const readFile = (p: string) =>
       p === "/home/.horsecode/config.json"
         ? JSON.stringify({ apiKey: "sk-global", baseUrl: "https://global" })
@@ -52,14 +52,14 @@ describe("loadConfig", () => {
     expect(cfg.baseUrl).toBe("https://env");
   });
 
-  it("bozuk JSON'da o katmanı yok sayar, çökmeden devam eder", () => {
+  it("ignores that layer on malformed JSON, continues without crashing", () => {
     const readFile = (p: string) =>
-      p === "/proj/.horsecode/config.json" ? "{ bozuk json" : undefined;
+      p === "/proj/.horsecode/config.json" ? "{ malformed json" : undefined;
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
-    expect(cfg.mode).toBe("ask"); // varsayılana düştü
+    expect(cfg.mode).toBe("ask"); // fell back to default
   });
 
-  it("global yokken proje apiKey'i tamamen yok sayılır (sonuç undefined)", () => {
+  it("project apiKey is fully ignored when global is absent (result undefined)", () => {
     const readFile = (p: string) =>
       p === "/proj/.horsecode/config.json"
         ? JSON.stringify({ apiKey: "sk-LEAK", model: "proj-model" })
@@ -69,7 +69,7 @@ describe("loadConfig", () => {
     expect(cfg.model).toBe("proj-model");
   });
 
-  it("global allowlist ayarlar, proje ayarlamazsa global kalır", () => {
+  it("global sets allowlist, stays global if project doesn't set one", () => {
     const readFile = (p: string) =>
       p === "/home/.horsecode/config.json"
         ? JSON.stringify({ allowlist: ["git status"] })
@@ -78,26 +78,26 @@ describe("loadConfig", () => {
     expect(cfg.allowlist).toEqual(["git status"]);
   });
 
-  it("bilinmeyen key'li geçerli JSON'da o katmanın diğer alanları korunur", () => {
+  it("preserves other fields of that layer in valid JSON with an unknown key", () => {
     const readFile = (p: string) =>
       p === "/proj/.horsecode/config.json"
         ? JSON.stringify({ model: "proj-model", unknownKey: "x" })
         : undefined;
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
-    expect(cfg.model).toBe("proj-model"); // .strict() kaldırıldığı için typo tüm katmanı düşürmez
+    expect(cfg.model).toBe("proj-model"); // since .strict() was removed, a typo doesn't drop the whole layer
   });
 
-  it("varsayılan baseUrl omniroute local-first adresidir", () => {
+  it("default baseUrl is omniroute's local-first address", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
     expect(cfg.baseUrl).toBe("http://localhost:20128");
   });
 
-  it("roles yoksa boş nesne döner", () => {
+  it("returns an empty object when there are no roles", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
     expect(cfg.roles).toEqual({});
   });
 
-  it("global ve proje roles'ü birleşir, aynı adlı role projede ezilir", () => {
+  it("merges global and project roles, same-named role is overridden by project", () => {
     const readFile = (p: string) => {
       if (p === "/home/.horsecode/config.json")
         return JSON.stringify({ roles: { coder: { models: ["g-model"] }, refiner: { models: ["r"] } } });
@@ -110,7 +110,7 @@ describe("loadConfig", () => {
     expect(cfg.roles.refiner).toEqual({ models: ["r"] });
   });
 
-  it("role skills alanı yüklenir", () => {
+  it("loads the role skills field", () => {
     const readFile = (p: string) =>
       p === "/proj/.horsecode/config.json"
         ? JSON.stringify({ roles: { coder: { models: ["m"], skills: ["tdd", "cs"] } } })
@@ -119,18 +119,18 @@ describe("loadConfig", () => {
     expect(cfg.roles.coder).toEqual({ models: ["m"], skills: ["tdd", "cs"] });
   });
 
-  it("council.councilors parse edilir", () => {
+  it("parses council.councilors", () => {
     const readFile = (p: string) =>
       p === "/home/.horsecode/config.json"
-        ? JSON.stringify({ council: { councilors: [{ name: "sec", perspective: "güvenlik", models: ["m1"] }] } })
+        ? JSON.stringify({ council: { councilors: [{ name: "sec", perspective: "security", models: ["m1"] }] } })
         : undefined;
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
     expect(cfg.council?.councilors[0].name).toBe("sec");
-    expect(cfg.council?.councilors[0].perspective).toBe("güvenlik");
+    expect(cfg.council?.councilors[0].perspective).toBe("security");
     expect(cfg.council?.councilors[0].models).toEqual(["m1"]);
   });
 
-  it("council yoksa undefined", () => {
+  it("is undefined when there is no council", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
     expect(cfg.council).toBeUndefined();
   });

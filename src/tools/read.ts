@@ -14,7 +14,7 @@ export const readFileTool: Tool = {
     const parsed = params.safeParse(rawArgs);
     if (!parsed.success) {
       return {
-        content: `read_file: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        content: `read_file: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
         isError: true,
       };
     }
@@ -24,7 +24,7 @@ export const readFileTool: Tool = {
       return { content, isError: false };
     } catch (e) {
       return {
-        content: `read_file hatası: ${e instanceof Error ? e.message : String(e)}`,
+        content: `read_file error: ${e instanceof Error ? e.message : String(e)}`,
         isError: true,
       };
     }

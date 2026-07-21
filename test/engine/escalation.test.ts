@@ -24,12 +24,12 @@ function submit(argsJson: string): ChatEvent[] {
 }
 function writeTurn(): ChatEvent[] {
   return [
-    { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: '{"path":"out.txt","content":"kod"}' } },
+    { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: '{"path":"out.txt","content":"code"}' } },
     { type: "done", finishReason: "tool_calls" },
   ];
 }
-const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "bitti" }, { type: "done", finishReason: "stop" }];
-// Tek-turlu implementer (write yok — reviewer'a hızlı geçiş)
+const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }];
+// Single-turn implementer (no write — quick pass-through to the reviewer)
 const noopImpl: ChatEvent[] = [{ type: "text-delta", text: "ok" }, { type: "done", finishReason: "stop" }];
 
 interface EOpts { rounds?: number; askHuman?: AskHuman; signal?: AbortSignal }
@@ -56,7 +56,7 @@ function edeps(provider: MockProvider, opts: EOpts = {}): EscalationDeps {
 }
 function boardWithTask(): Board {
   const b = new Board();
-  b.addCard({ id: "t1", title: "X yap" });
+  b.addCard({ id: "t1", title: "Do X" });
   return b;
 }
 const contents = (p: MockProvider): string[] =>
@@ -76,28 +76,28 @@ describe("tierOf", () => {
 });
 
 describe("runTaskWithEscalation", () => {
-  it("tier ilerlemesi (N=1): coder fail → senior-coder fail → konsey pass → DONE", async () => {
+  it("tier progression (N=1): coder fail → senior-coder fail → council pass → DONE", async () => {
     const p = new MockProvider([
-      submit('{"role":"coder"}'),                    // route → coder ailesi
+      submit('{"role":"coder"}'),                    // route → coder family
       noopImpl, submit('{"verdict":"fail","notes":["a"]}'),   // tier0 coder fail
       noopImpl, submit('{"verdict":"fail","notes":["b"]}'),   // tier1 senior-coder fail
-      submit('{"rootCause":"x","plan":["p"]}'),      // konsey: architect
-      writeTurn(), doneTurn,                         // konsey: senior-coder implement
-      submit('{"verdict":"pass","notes":[]}'),       // konsey: reviewer pass
+      submit('{"rootCause":"x","plan":["p"]}'),      // council: architect
+      writeTurn(), doneTurn,                         // council: senior-coder implement
+      submit('{"verdict":"pass","notes":[]}'),       // council: reviewer pass
     ]);
     const board = boardWithTask();
     const v = await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.column).toBe("DONE");
     expect(board.get("t1")!.attempts).toBe(2);
-    // her tier doğru rolü kullandı
+    // each tier used the right role
     const sys = p.requests.map((r) => r.messages[0].content);
     expect(sys).toContain("P-coder");
     expect(sys).toContain("P-senior-coder");
     expect(sys).toContain("P-architect");
   });
 
-  it("designer ailesi (N=1): designer fail → senior-designer devralır", async () => {
+  it("designer family (N=1): designer fail → senior-designer takes over", async () => {
     const p = new MockProvider([
       submit('{"role":"designer"}'),
       noopImpl, submit('{"verdict":"fail","notes":["a"]}'),   // tier0 designer fail
@@ -112,7 +112,7 @@ describe("runTaskWithEscalation", () => {
     expect(sys).toContain("P-senior-designer");
   });
 
-  it("konsey fail → askHuman accept → DONE (human:accept), verdict pass", async () => {
+  it("council fail → askHuman accept → DONE (human:accept), verdict pass", async () => {
     let asked = 0;
     const askHuman: AskHuman = async () => { asked++; return { action: "accept" }; };
     const p = new MockProvider([
@@ -129,26 +129,26 @@ describe("runTaskWithEscalation", () => {
     expect(board.get("t1")!.stageHistory.map((s) => s.action)).toContain("human:accept");
   });
 
-  it("konsey fail → askHuman retry → konsey tekrar; ikinci architect ipucunu görür", async () => {
+  it("council fail → askHuman retry → council retries; second architect round sees the hint", async () => {
     let asked = 0;
-    const askHuman: AskHuman = async () => { asked++; return { action: "retry", notes: ["ipucu-XYZ"] }; };
+    const askHuman: AskHuman = async () => { asked++; return { action: "retry", notes: ["hint-XYZ"] }; };
     const p = new MockProvider([
       submit('{"role":"coder"}'),
       noopImpl, submit('{"verdict":"fail","notes":["a"]}'),
       noopImpl, submit('{"verdict":"fail","notes":["b"]}'),
-      submit('{"rootCause":"x","plan":["p"]}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":["c"]}'), // konsey1 fail
-      submit('{"rootCause":"y","plan":["q"]}'), writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}'),   // konsey2 pass
+      submit('{"rootCause":"x","plan":["p"]}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":["c"]}'), // council round 1 fail
+      submit('{"rootCause":"y","plan":["q"]}'), writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}'),   // council round 2 pass
     ]);
     const board = boardWithTask();
     const v = await runTaskWithEscalation(edeps(p, { rounds: 1, askHuman }), board, "t1", dir);
     expect(asked).toBe(1);
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.column).toBe("DONE");
-    // retry sonrası ikinci konsey turunun architect mesajı ipucunu (reviewNotes) içerir
-    expect(contents(p).some((c) => c.includes("ipucu-XYZ"))).toBe(true);
+    // after the retry, the second council round's architect message contains the hint (reviewNotes)
+    expect(contents(p).some((c) => c.includes("hint-XYZ"))).toBe(true);
   });
 
-  it("konsey fail → askHuman abandon → verdict fail, DONE'a taşınmaz (human:abandon)", async () => {
+  it("council fail → askHuman abandon → verdict fail, not moved to DONE (human:abandon)", async () => {
     const askHuman: AskHuman = async () => ({ action: "abandon" });
     const p = new MockProvider([
       submit('{"role":"coder"}'),
@@ -163,12 +163,12 @@ describe("runTaskWithEscalation", () => {
     expect(board.get("t1")!.stageHistory.map((s) => s.action)).toContain("human:abandon");
   });
 
-  it("bilinmeyen task → hata", async () => {
+  it("unknown task → error", async () => {
     const p = new MockProvider([]);
-    await expect(runTaskWithEscalation(edeps(p), boardWithTask(), "yok", dir)).rejects.toThrow(/bilinmeyen task/);
+    await expect(runTaskWithEscalation(edeps(p), boardWithTask(), "missing", dir)).rejects.toThrow(/unknown task/);
   });
 
-  it("iptal edilmişse fırlatır (abort yutulmaz)", async () => {
+  it("throws if cancelled (abort is not swallowed)", async () => {
     const ac = new AbortController();
     ac.abort();
     const p = new MockProvider([submit('{"role":"coder"}')]);

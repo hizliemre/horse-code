@@ -31,8 +31,8 @@ function errResult(name: string, msg: string): ToolResult {
 }
 
 /**
- * Tool-call'ları permission ile süzüp çalıştırır. allow'lar paralel, ask'ler sıralı.
- * AgentEvent yayar; sonuçları ÇAĞRI SIRASINDA döner (her call için bir result).
+ * Filters and runs tool-calls through permission checks. Allows run in parallel, asks run sequentially.
+ * Emits AgentEvent; returns results IN CALL ORDER (one result per call).
  */
 export async function* executeToolCalls(
   calls: ToolCall[],
@@ -41,23 +41,23 @@ export async function* executeToolCalls(
   const results: ToolExecResult[] = new Array(calls.length);
   const plans: Plan[] = [];
 
-  // 1) Sınıflandır
+  // 1) Classify
   for (let i = 0; i < calls.length; i++) {
     const call = calls[i];
     if (!call.id) {
-      plans.push({ index: i, call, kind: "error", errorContent: "geçersiz tool-call id" });
+      plans.push({ index: i, call, kind: "error", errorContent: "invalid tool-call id" });
       continue;
     }
     const tool = deps.tools.get(call.name);
     if (!tool) {
-      plans.push({ index: i, call, kind: "error", errorContent: `bilinmeyen tool: ${call.name}` });
+      plans.push({ index: i, call, kind: "error", errorContent: `unknown tool: ${call.name}` });
       continue;
     }
     let args: Record<string, unknown>;
     try {
       args = call.arguments ? JSON.parse(call.arguments) : {};
     } catch {
-      plans.push({ index: i, call, kind: "error", errorContent: "argümanlar geçersiz JSON" });
+      plans.push({ index: i, call, kind: "error", errorContent: "arguments are invalid JSON" });
       continue;
     }
     if (tool.permissionLevel === "safe") {
@@ -70,7 +70,7 @@ export async function* executeToolCalls(
     } catch (e) {
       plans.push({
         index: i, call, kind: "error",
-        errorContent: `describe hatası: ${e instanceof Error ? e.message : String(e)}`,
+        errorContent: `describe error: ${e instanceof Error ? e.message : String(e)}`,
       });
       continue;
     }
@@ -79,19 +79,19 @@ export async function* executeToolCalls(
     plans.push({ index: i, call, kind: decision === "allow" ? "run" : decision === "ask" ? "ask" : "deny", tool, args, req });
   }
 
-  // 2) error / deny → anında result
+  // 2) error / deny → immediate result
   for (const p of plans) {
     if (p.kind === "error" || p.kind === "deny") {
       const result = p.kind === "error"
         ? errResult(p.call.name, p.errorContent!)
-        : errResult(p.call.name, "kullanıcı reddetti");
+        : errResult(p.call.name, "user denied");
       yield { type: "tool.request", toolCall: p.call };
       results[p.index] = { id: p.call.id, name: p.call.name, result };
       yield { type: "tool.result", toolCallId: p.call.id, result };
     }
   }
 
-  // 3) auto (allow) → paralel
+  // 3) auto (allow) → parallel
   const autoPlans = plans.filter((p) => p.kind === "run");
   for (const p of autoPlans) yield { type: "tool.request", toolCall: p.call };
   const autoResults = await Promise.all(
@@ -103,7 +103,7 @@ export async function* executeToolCalls(
     yield { type: "tool.result", toolCallId: p.call.id, result: autoResults[k] };
   }
 
-  // 4) gated (ask) → sıralı
+  // 4) gated (ask) → sequential
   for (const p of plans.filter((pp) => pp.kind === "ask")) {
     yield { type: "tool.request", toolCall: p.call };
     yield {
@@ -116,7 +116,7 @@ export async function* executeToolCalls(
     const ok = await deps.approve(p.req!);
     const result = ok
       ? await p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal })
-      : errResult(p.call.name, "kullanıcı reddetti");
+      : errResult(p.call.name, "user denied");
     results[p.index] = { id: p.call.id, name: p.call.name, result };
     yield { type: "tool.result", toolCallId: p.call.id, result };
   }

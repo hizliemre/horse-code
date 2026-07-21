@@ -9,7 +9,7 @@ export interface TuiState {
   transcript: { role: "user" | "assistant"; text: string }[];
 }
 
-/** runJob'un async seam'lerini (onEvent + ask) React state'ine köprüler. Saf state-machine. */
+/** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
   private state: TuiState = { phase: "", cards: [], transcript: [] };
   private pendingResolve?: (s: string) => void;
@@ -29,14 +29,14 @@ export class TuiController {
     for (const fn of this.listeners) fn();
   }
 
-  // arrow-bound: runJob'a onEvent olarak geçilir (this korunur)
+  // arrow-bound: passed to runJob as onEvent (preserves this)
   onEvent = (ev: ProgressEvent): void => {
     if (ev.kind === "phase") this.state = { ...this.state, phase: ev.phase, detail: ev.detail };
     else this.state = { ...this.state, cards: ev.cards };
     this.notify();
   };
 
-  // arrow-bound: LineReader olarak geçilir → makeAskUser/makeApprove/makeAskHuman ile reuse
+  // arrow-bound: passed as LineReader → reused with makeAskUser/makeApprove/makeAskHuman
   ask = (question: string): Promise<string> =>
     new Promise<string>((resolve) => {
       this.pendingResolve = resolve;
@@ -52,7 +52,7 @@ export class TuiController {
     resolve?.(text);
   }
 
-  // REPL: görev-input beklet (mode=input); submitTask çözer.
+  // REPL: wait for task input (mode=input); submitTask resolves it.
   awaitTask(): Promise<string> {
     return new Promise<string>((resolve) => {
       this.taskResolve = resolve;
@@ -75,8 +75,8 @@ export class TuiController {
   }
 
   endRun(report: string, refinedPrompt?: string): void {
-    // Son user girdisini (ham) refine edilmişle değiştir → transcript'te hep REFINE saklanır; sonraki
-    // turda geçmiş bundan kurulur → coach'a asla ham prompt gitmez. Sonra assistant cevabını ekle.
+    // Replace the last (raw) user input with the refined version → the transcript always stores the
+    // REFINE; the next turn's history is built from this → the coach never sees the raw prompt. Then append the assistant reply.
     const t = [...this.state.transcript];
     if (refinedPrompt && t.length && t[t.length - 1].role === "user") {
       t[t.length - 1] = { role: "user", text: refinedPrompt };

@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 describe("walkFiles", () => {
-  it("dosyaları döner, node_modules/.git'i atlar", async () => {
+  it("returns files, skipping node_modules/.git", async () => {
     await mkdir(join(dir, "src"), { recursive: true });
     await mkdir(join(dir, "node_modules/pkg"), { recursive: true });
     await mkdir(join(dir, ".git"), { recursive: true });

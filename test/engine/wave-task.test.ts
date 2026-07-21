@@ -29,7 +29,7 @@ function writeTurn(path: string, content: string): ChatEvent[] {
     { type: "done", finishReason: "tool_calls" },
   ];
 }
-const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "bitti" }, { type: "done", finishReason: "stop" }];
+const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }];
 
 interface WOpts { rounds?: number; askHuman?: AskHuman; serialize?: <T>(fn: () => Promise<T>) => Promise<T>; signal?: AbortSignal; resolveConflict?: WaveTaskDeps["resolveConflict"] }
 function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {}): WaveTaskDeps {
@@ -56,10 +56,10 @@ function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {
 }
 function board1(): Board {
   const b = new Board();
-  b.addCard({ id: "t1", title: "X yap" });
+  b.addCard({ id: "t1", title: "do X" });
   return b;
 }
-// Stub manager: gerçek yazılabilir worktree + no-op commit + verilen merge sonucu
+// Stub manager: a real writable worktree + no-op commit + a given merge result
 function stubManager(worktree: string, merge: () => Promise<{ status: "merged" } | { status: "conflict"; files: string[] }>): WaveTaskManager {
   return {
     deriveTask: async () => ({ taskSlug: "t", worktree, branch: "b" }),
@@ -69,36 +69,36 @@ function stubManager(worktree: string, merge: () => Promise<{ status: "merged" }
 }
 
 describe("runWaveTask", () => {
-  it("merged: derive → escalate(pass) → commit → merge; base worktree dosyayı alır, kart DONE", async () => {
+  it("merged: derive → escalate(pass) → commit → merge; base worktree gets the file, card DONE", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const p = new MockProvider([
         submit('{"role":"coder"}'),
-        writeTurn("out.txt", "kod"), doneTurn,
+        writeTurn("out.txt", "code"), doneTurn,
         submit('{"verdict":"pass","notes":[]}'),
       ]);
       const board = board1();
       const res = await runWaveTask(wdeps(p, mgr), session, board, "t1");
       expect(res.status).toBe("merged");
       expect(board.get("t1")!.column).toBe("DONE");
-      expect(await readFile(join(session.baseWorktree, "out.txt"), "utf8")).toBe("kod");
+      expect(await readFile(join(session.baseWorktree, "out.txt"), "utf8")).toBe("code");
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
   });
 
-  it("task-failed: escalation abandon → merge YOK, base değişmez", async () => {
+  it("task-failed: escalation abandon → NO merge, base unchanged", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const p = new MockProvider([
         submit('{"role":"coder"}'),
-        writeTurn("out.txt", "yarim"), doneTurn, submit('{"verdict":"fail","notes":["a"]}'),
-        writeTurn("out.txt", "yarim2"), doneTurn, submit('{"verdict":"fail","notes":["b"]}'),
-        submit('{"rootCause":"x","plan":["p"]}'), writeTurn("out.txt", "yarim3"), doneTurn, submit('{"verdict":"fail","notes":["c"]}'),
+        writeTurn("out.txt", "half"), doneTurn, submit('{"verdict":"fail","notes":["a"]}'),
+        writeTurn("out.txt", "half2"), doneTurn, submit('{"verdict":"fail","notes":["b"]}'),
+        submit('{"rootCause":"x","plan":["p"]}'), writeTurn("out.txt", "half3"), doneTurn, submit('{"verdict":"fail","notes":["c"]}'),
       ]);
       const board = board1();
       const res = await runWaveTask(wdeps(p, mgr, { rounds: 1 }), session, board, "t1"); // askHuman default abandon
@@ -109,13 +109,13 @@ describe("runWaveTask", () => {
     }
   });
 
-  it("conflict: mergeTask conflict → {status:'conflict', files} relay + merge-conflict stage'i", async () => {
+  it("conflict: mergeTask conflict → {status:'conflict', files} relayed + merge-conflict stage", async () => {
     const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
     try {
       const stub = stubManager(wt, async () => ({ status: "conflict", files: ["shared.txt"] }));
       const p = new MockProvider([
         submit('{"role":"coder"}'),
-        writeTurn("out.txt", "kod"), doneTurn,
+        writeTurn("out.txt", "code"), doneTurn,
         submit('{"verdict":"pass","notes":[]}'),
       ]);
       const board = board1();
@@ -128,14 +128,14 @@ describe("runWaveTask", () => {
     }
   });
 
-  it("resolveConflict {merged} → runWaveTask merged döner", async () => {
+  it("resolveConflict {merged} → runWaveTask returns merged", async () => {
     const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
     try {
       let called = 0;
       const stub = stubManager(wt, async () => ({ status: "conflict", files: ["shared.txt"] }));
       const resolveConflict = async () => { called++; return { status: "merged" as const }; };
       const p = new MockProvider([
-        submit('{"role":"coder"}'), writeTurn("out.txt", "kod"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
+        submit('{"role":"coder"}'), writeTurn("out.txt", "code"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
       ]);
       const res = await runWaveTask(wdeps(p, stub, { resolveConflict }), {} as WorktreeSession, board1(), "t1");
       expect(called).toBe(1);
@@ -143,26 +143,26 @@ describe("runWaveTask", () => {
     } finally { await rm(wt, { recursive: true, force: true }); }
   });
 
-  it("resolveConflict {conflict} → runWaveTask conflict döner", async () => {
+  it("resolveConflict {conflict} → runWaveTask returns conflict", async () => {
     const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
     try {
       const stub = stubManager(wt, async () => ({ status: "conflict", files: ["shared.txt"] }));
       const resolveConflict = async () => ({ status: "conflict" as const, files: ["shared.txt"] });
       const p = new MockProvider([
-        submit('{"role":"coder"}'), writeTurn("out.txt", "kod"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
+        submit('{"role":"coder"}'), writeTurn("out.txt", "code"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
       ]);
       const res = await runWaveTask(wdeps(p, stub, { resolveConflict }), {} as WorktreeSession, board1(), "t1");
       expect(res.status).toBe("conflict");
     } finally { await rm(wt, { recursive: true, force: true }); }
   });
 
-  it("rounds clamp: rounds=0 → tier0 coder koşar (konseye düşmez)", async () => {
+  it("rounds clamp: rounds=0 → tier0 coder runs (doesn't escalate to council)", async () => {
     const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
     try {
       const stub = stubManager(wt, async () => ({ status: "merged" }));
       const p = new MockProvider([
         submit('{"role":"coder"}'),
-        writeTurn("out.txt", "kod"), doneTurn,
+        writeTurn("out.txt", "code"), doneTurn,
         submit('{"verdict":"pass","notes":[]}'),
       ]);
       const board = board1();
@@ -176,7 +176,7 @@ describe("runWaveTask", () => {
     }
   });
 
-  it("abort: pre-aborted signal → rejects (yutulmaz)", async () => {
+  it("abort: pre-aborted signal → rejects (not swallowed)", async () => {
     const ac = new AbortController();
     ac.abort();
     const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
@@ -191,10 +191,10 @@ describe("runWaveTask", () => {
     }
   });
 
-  it("bilinmeyen task → hata", async () => {
+  it("unknown task → error", async () => {
     const stub = stubManager("/x", async () => ({ status: "merged" }));
     await expect(
-      runWaveTask(wdeps(new MockProvider([]), stub), {} as WorktreeSession, new Board(), "yok"),
-    ).rejects.toThrow(/bilinmeyen task/);
+      runWaveTask(wdeps(new MockProvider([]), stub), {} as WorktreeSession, new Board(), "missing"),
+    ).rejects.toThrow(/unknown task/);
   });
 });

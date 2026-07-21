@@ -8,14 +8,14 @@ import type { AgentEvent } from "../../src/core/types.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 describe("RoleRegistry.resolve", () => {
-  it("round-robin ile modeller arasında döner (role başına)", () => {
+  it("round-robins across models (per role)", () => {
     const reg = new RoleRegistry({ coder: { models: ["a", "b"], systemPrompt: "p" } });
     expect(reg.resolve("coder").model).toBe("a");
     expect(reg.resolve("coder").model).toBe("b");
     expect(reg.resolve("coder").model).toBe("a");
   });
 
-  it("prompt önceliği: config > default", () => {
+  it("prompt priority: config > default", () => {
     const reg = new RoleRegistry(
       { coder: { models: ["a"], systemPrompt: "cfg" }, analyst: { models: ["a"] } },
       { coder: "def", analyst: "def-analyst" },
@@ -24,16 +24,16 @@ describe("RoleRegistry.resolve", () => {
     expect(reg.resolve("analyst").systemPrompt).toBe("def-analyst");
   });
 
-  it("tanımsız role / boş models / prompt yok → hata", () => {
+  it("undefined role / empty models / missing prompt → error", () => {
     const reg = new RoleRegistry({ x: { models: [] }, y: { models: ["a"] } });
-    expect(() => reg.resolve("yok")).toThrow(/tanımsız role/);
+    expect(() => reg.resolve("missing")).toThrow(/undefined role/);
     expect(() => reg.resolve("x")).toThrow(/model/);
     expect(() => reg.resolve("y")).toThrow(/systemPrompt/);
   });
 });
 
 describe("runRole", () => {
-  it("resolve edip runRoleAgent'ı çalıştırır (round-robin tüketir)", async () => {
+  it("resolves and runs runRoleAgent (consumes round-robin)", async () => {
     const reg = new RoleRegistry({ coder: { models: ["m1", "m2"], systemPrompt: "sp" } });
     const provider = new MockProvider([
       [{ type: "text-delta", text: "ok" }, { type: "done", finishReason: "stop" }],
@@ -49,15 +49,15 @@ describe("runRole", () => {
     const out: AgentEvent[] = [];
     for await (const ev of runRole(reg, provider, "coder", input)) out.push(ev);
     expect(out.at(-1)).toEqual({ type: "message.done", message: { role: "assistant", content: "ok" } });
-    // resolve edilen model ilk istekte kullanıldı
+    // the resolved model was used in the first request
     expect(provider.requests[0].model).toBe("m1");
   });
 });
 
 describe("RoleRegistry + skills", () => {
-  it("skillRegistry varsa zorunlu skill + listing systemPrompt'a enjekte edilir", () => {
+  it("when skillRegistry exists, mandatory skill + listing are injected into systemPrompt", () => {
     const skills = new SkillRegistry();
-    skills.register({ name: "tdd", description: "TDD akışı", content: "önce test yaz" });
+    skills.register({ name: "tdd", description: "TDD flow", content: "write tests first" });
     const reg = new RoleRegistry(
       { coder: { models: ["m"], systemPrompt: "BASE", skills: ["tdd"] } },
       {},
@@ -65,24 +65,24 @@ describe("RoleRegistry + skills", () => {
     );
     const { systemPrompt } = reg.resolve("coder");
     expect(systemPrompt).toContain("BASE");
-    expect(systemPrompt).toContain("önce test yaz");
-    // tdd zorunlu skill olduğu için keşfedilebilir listing'de tekrar görünmemeli
-    expect(systemPrompt).not.toContain("- tdd: TDD akışı");
+    expect(systemPrompt).toContain("write tests first");
+    // tdd is a mandatory skill, so it should not appear again in the discoverable listing
+    expect(systemPrompt).not.toContain("- tdd: TDD flow");
   });
 
-  it("skillRegistry yoksa systemPrompt değişmez", () => {
+  it("when there is no skillRegistry, systemPrompt is unchanged", () => {
     const reg = new RoleRegistry({ coder: { models: ["m"], systemPrompt: "BASE", skills: ["tdd"] } });
     expect(reg.resolve("coder").systemPrompt).toBe("BASE");
   });
 
-  it("tanımsız zorunlu skill → hata mesajı role adını içerir", () => {
+  it("undefined mandatory skill → error message contains the role name", () => {
     const skills = new SkillRegistry();
     const reg = new RoleRegistry(
-      { coder: { models: ["m"], systemPrompt: "BASE", skills: ["yok"] } },
+      { coder: { models: ["m"], systemPrompt: "BASE", skills: ["missing"] } },
       {},
       skills,
     );
     expect(() => reg.resolve("coder")).toThrow(/coder/);
-    expect(() => reg.resolve("coder")).toThrow(/tanımsız skill/);
+    expect(() => reg.resolve("coder")).toThrow(/undefined skill/);
   });
 });

@@ -3,7 +3,7 @@ import type { PRAdapter } from "../worktree/manager.js";
 
 export type CmdRunner = (cmd: string, args: string[], cwd: string) => Promise<{ stdout: string; stderr: string; code: number }>;
 
-/** Komutu child_process ile çalıştırır; asla throw etmez (GitRunner gibi). */
+/** Runs the command via child_process; never throws (like GitRunner). */
 export const defaultCmdRunner: CmdRunner = (cmd, args, cwd) =>
   new Promise((resolve) => {
     let stdout = "";
@@ -30,13 +30,13 @@ function joinComments(comments: string[]): string {
   return comments.map((c, i) => `${i + 1}. ${c}`).join("\n");
 }
 
-/** GitHub: gh pr create / gh pr comment. Stateful (PR number'ı saklar). */
+/** GitHub: gh pr create / gh pr comment. Stateful (stores the PR number). */
 export function ghAdapter(run: CmdRunner, cwd: string): RevisionPRAdapter {
   let prNumber: number | undefined;
   return {
     async createPR(input) {
       const r = await run("gh", ["pr", "create", "--base", input.base, "--head", input.branch, "--title", input.title, "--body", input.body], cwd);
-      if (r.code !== 0) throw new Error(`gh pr create başarısız (${r.code}): ${r.stderr.trim()}`);
+      if (r.code !== 0) throw new Error(`gh pr create failed (${r.code}): ${r.stderr.trim()}`);
       const url = r.stdout.trim();
       prNumber = parsePRNumber(url);
       return { url, number: prNumber };
@@ -44,18 +44,18 @@ export function ghAdapter(run: CmdRunner, cwd: string): RevisionPRAdapter {
     async postComments(comments) {
       if (prNumber === undefined || comments.length === 0) return;
       const r = await run("gh", ["pr", "comment", String(prNumber), "--body", joinComments(comments)], cwd);
-      if (r.code !== 0) throw new Error(`gh pr comment başarısız (${r.code}): ${r.stderr.trim()}`);
+      if (r.code !== 0) throw new Error(`gh pr comment failed (${r.code}): ${r.stderr.trim()}`);
     },
   };
 }
 
-/** Azure: az repos pr create (JSON). Yorumlar best-effort log (thread REST ileride). */
+/** Azure: az repos pr create (JSON). Comments are best-effort log (thread REST later). */
 export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void): RevisionPRAdapter {
   let prNumber: number | undefined;
   return {
     async createPR(input) {
       const r = await run("az", ["repos", "pr", "create", "--source-branch", input.branch, "--target-branch", input.base, "--title", input.title, "--description", input.body, "-o", "json"], cwd);
-      if (r.code !== 0) throw new Error(`az repos pr create başarısız (${r.code}): ${r.stderr.trim()}`);
+      if (r.code !== 0) throw new Error(`az repos pr create failed (${r.code}): ${r.stderr.trim()}`);
       let url = "";
       try {
         const j = JSON.parse(r.stdout) as { pullRequestId?: number; url?: string };
@@ -66,7 +66,7 @@ export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void)
     },
     async postComments(comments) {
       if (comments.length === 0) return;
-      log(`Azure PR #${prNumber ?? "?"} yorumları (thread API ileride):\n${joinComments(comments)}`);
+      log(`Azure PR #${prNumber ?? "?"} comments (thread API later):\n${joinComments(comments)}`);
     },
   };
 }
@@ -77,17 +77,17 @@ export function detectPlatform(remoteUrl: string): "github" | "azure" | "unknown
   return "unknown";
 }
 
-/** Platforma göre adapter; unknown → log-stub (PR açılmaz). */
+/** Adapter by platform; unknown → log-stub (no PR is opened). */
 export function makePRAdapter(opts: { platform: "github" | "azure" | "unknown"; run: CmdRunner; cwd: string; log: (s: string) => void }): RevisionPRAdapter {
   if (opts.platform === "github") return ghAdapter(opts.run, opts.cwd);
   if (opts.platform === "azure") return azAdapter(opts.run, opts.cwd, opts.log);
   return {
     async createPR(input) {
-      opts.log(`PR (yerel — remote/platform yok): ${input.branch} → ${input.base} — "${input.title}"`);
-      return { url: `(yerel: ${input.branch})` };
+      opts.log(`PR (local — no remote/platform): ${input.branch} → ${input.base} — "${input.title}"`);
+      return { url: `(local: ${input.branch})` };
     },
     async postComments(comments) {
-      if (comments.length) opts.log(`PR yorumları: ${comments.join("; ")}`);
+      if (comments.length) opts.log(`PR comments: ${comments.join("; ")}`);
     },
   };
 }

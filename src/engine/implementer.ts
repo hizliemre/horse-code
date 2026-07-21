@@ -4,7 +4,7 @@ import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 
-/** Implementer role'ünü worktree-scope'lu tool'lar + yeni-vs-dönen mesajıyla çalıştırır. */
+/** Runs the implementer role with worktree-scoped tools + a new-vs-returning message. */
 export async function runImplementer(
   deps: TaskCycleDeps,
   role: RunnableRole,
@@ -17,8 +17,8 @@ export async function runImplementer(
 
   const returning = task.reviewNotes.length > 0;
   const content = returning
-    ? `Bu bir DÖNEN task: "${task.title}". Reviewer notlarını gider:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
-    : `Bu YENİ bir task: "${task.title}". Uygula.`;
+    ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
+    : `This is a NEW task: "${task.title}". Implement it.`;
 
   const opts: RoleAgentOptions = {
     provider: deps.provider,

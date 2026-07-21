@@ -18,7 +18,7 @@ const card = (): Card => ({ id: "t1", title: "X", column: "REVIEW", deps: [], re
 function deps(provider: MockProvider): TaskCycleDeps {
   return {
     provider,
-    roleRegistry: new RoleRegistry({ "code-reviewer": { models: ["m"], systemPrompt: "sen reviewer'sın" } }, {}, new SkillRegistry()),
+    roleRegistry: new RoleRegistry({ "code-reviewer": { models: ["m"], systemPrompt: "you are the reviewer" } }, {}, new SkillRegistry()),
     skillRegistry: new SkillRegistry(),
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
@@ -27,12 +27,12 @@ function deps(provider: MockProvider): TaskCycleDeps {
 }
 
 describe("runReviewer", () => {
-  it("structured verdikt döner", async () => {
-    const p = new MockProvider([submitTurn('{"verdict":"fail","notes":["hata var"]}')]);
-    expect(await runReviewer(deps(p), card(), "/tmp")).toEqual({ verdict: "fail", notes: ["hata var"] });
+  it("returns a structured verdict", async () => {
+    const p = new MockProvider([submitTurn('{"verdict":"fail","notes":["there is an error"]}')]);
+    expect(await runReviewer(deps(p), card(), "/tmp")).toEqual({ verdict: "fail", notes: ["there is an error"] });
   });
 
-  it("toolset salt-okunur (write/edit/shell içermez)", async () => {
+  it("toolset is read-only (no write/edit/shell)", async () => {
     const p = new MockProvider([submitTurn('{"verdict":"pass","notes":[]}')]);
     await runReviewer(deps(p), card(), "/tmp");
     const toolNames = p.requests[0].tools.map((t) => t.name);

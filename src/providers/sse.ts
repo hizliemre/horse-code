@@ -1,7 +1,7 @@
 /**
- * Tek bir SSE satırını işler. "data:" ile başlamayan satırlar atlanır.
- * Payload "[DONE]" ise stream'in bittiğini bildirmek için `done: true` döner;
- * aksi halde (varsa) payload'u yield eder.
+ * Processes a single SSE line. Lines that don't start with "data:" are skipped.
+ * If the payload is "[DONE]", returns `done: true` to signal the stream has ended;
+ * otherwise yields the payload (if present).
  */
 function* handleLine(line: string): Generator<string, boolean> {
   const trimmed = line.trim();
@@ -13,11 +13,12 @@ function* handleLine(line: string): Generator<string, boolean> {
 }
 
 /**
- * SSE gövdesini (text/event-stream) ayrıştırır. Her "data: <payload>" satırının
- * payload'unu yield eder; "[DONE]" görülünce durur. Chunk sınırlarında bölünen
- * satırlar buffer'da birleştirilir. "data:" ile başlamayan satırlar atlanır.
- * Stream, sondaki satırda newline olmadan kapanırsa (defansif ayrıştırma —
- * SSE spesifikasyonu bunu garanti etmez), buffer'da kalan son satır da işlenir.
+ * Parses an SSE (text/event-stream) body. Yields the payload of each
+ * "data: <payload>" line; stops once "[DONE]" is seen. Lines split across
+ * chunk boundaries are joined in the buffer. Lines that don't start with
+ * "data:" are skipped. If the stream closes without a trailing newline on
+ * the last line (defensive parsing — the SSE spec doesn't guarantee this),
+ * the remaining line left in the buffer is processed too.
  */
 export async function* parseSSE(
   body: ReadableStream<Uint8Array>,

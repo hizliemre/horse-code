@@ -17,9 +17,9 @@ export const RefinerSchema = z.object({
 });
 
 /**
- * Kullanıcı prompt'unu refine eder + intent sınıflandırır (structured, repo tool'u yok).
- * `history` önceki turnler → follow-up'lar bağlamda refine edilir (ör. "ne zaman geliştirildin?" önceki
- * "sen Claude'sun" turnüyle projeye değil Claude'a yönelik refine olur).
+ * Refines the user prompt + classifies intent (structured, no repo tools).
+ * `history` is the previous turns → follow-ups are refined in context (e.g. "when were you developed?" after a
+ * previous "you're Claude" turn gets refined toward Claude, not the project).
  */
 export async function runRefiner(deps: TaskCycleDeps, prompt: string, history: Message[] = []): Promise<RefinerOutput> {
   const { model, systemPrompt } = deps.roleRegistry.resolve("refiner");
@@ -39,7 +39,7 @@ export async function runRefiner(deps: TaskCycleDeps, prompt: string, history: M
   return runStructuredRole(opts, RefinerSchema);
 }
 
-/** Deterministik intent route: chat → coach; feature/bugfix → upstream pipeline. */
+/** Deterministic intent routing: chat → coach; feature/bugfix → upstream pipeline. */
 export function routeIntent(intent: Intent): "chat" | "pipeline" {
   return intent === "chat" ? "chat" : "pipeline";
 }

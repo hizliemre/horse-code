@@ -18,7 +18,7 @@ async function branchExists(repoDir: string, branch: string): Promise<boolean> {
 }
 
 describe("WorktreeManager.openSession", () => {
-  it("base worktree + hc/<slug>/base branch oluşturur, .gitignore yazar", async () => {
+  it("creates the base worktree + hc/<slug>/base branch, writes .gitignore", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "Add Auth");
@@ -29,7 +29,7 @@ describe("WorktreeManager.openSession", () => {
     expect(existsSync(join(repo, ".horsecode/worktrees/.gitignore"))).toBe(true);
   });
 
-  it("aynı jobName ikinci kez → slug -2 ile dedupe", async () => {
+  it("same jobName a second time → deduped with slug -2", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const a = await wm.openSession("main", "job");
@@ -40,7 +40,7 @@ describe("WorktreeManager.openSession", () => {
 });
 
 describe("WorktreeManager.deriveTask", () => {
-  it("base'den türev worktree + hc/<slug>/t/<task> branch oluşturur", async () => {
+  it("creates a worktree derived from base + hc/<slug>/t/<task> branch", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");

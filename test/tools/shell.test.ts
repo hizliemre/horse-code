@@ -8,32 +8,32 @@ const ctx = (signal?: AbortSignal) => ({
 });
 
 describe("shell", () => {
-  it("başarılı komutun çıktısını döner (exit 0)", async () => {
-    const res = await shellTool.run({ command: "echo merhaba" }, ctx());
+  it("returns the output of a successful command (exit 0)", async () => {
+    const res = await shellTool.run({ command: "echo hello" }, ctx());
     expect(res.isError).toBe(false);
-    expect(res.content).toContain("merhaba");
+    expect(res.content).toContain("hello");
   });
 
-  it("başarısız komutta isError:true döner", async () => {
+  it("returns isError:true for a failing command", async () => {
     const res = await shellTool.run({ command: "exit 3" }, ctx());
     expect(res.isError).toBe(true);
     expect(res.content).toContain("3");
   });
 
-  it("describe komutu allowKey + preview yapar", () => {
+  it("describe produces allowKey + preview", () => {
     const d = shellTool.describe!({ command: "npm test" });
     expect(d.allowKey).toBe("npm test");
     expect(d.preview).toBe("npm test");
   });
 
-  it("önceden iptal edilmiş signal'de isError döner", async () => {
+  it("returns isError for an already-aborted signal", async () => {
     const ac = new AbortController();
     ac.abort();
     const res = await shellTool.run({ command: "echo x" }, ctx(ac.signal));
     expect(res.isError).toBe(true);
   });
 
-  it("geçersiz args'ta (command eksik) hata fırlatmadan isError:true döner", async () => {
+  it("returns isError:true without throwing for invalid args (missing command)", async () => {
     const res = await shellTool.run({}, ctx());
     expect(res.isError).toBe(true);
   });

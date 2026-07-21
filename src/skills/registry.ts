@@ -28,7 +28,7 @@ export class SkillRegistry {
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
-      return; // dir yok → skills opsiyonel, sessiz dön
+      return; // dir doesn't exist → skills are optional, return silently
     }
     for (const e of entries) {
       if (!e.isDirectory()) continue;
@@ -36,11 +36,11 @@ export class SkillRegistry {
       try {
         raw = await readFile(join(dir, e.name, "SKILL.md"), "utf8");
       } catch {
-        continue; // SKILL.md yok → skill dizini değil, atla
+        continue; // no SKILL.md → not a skill directory, skip
       }
       const { name, description, body } = parseFrontmatter(raw);
       if (!name || !description) {
-        throw new Error(`skill ${e.name}: frontmatter eksik (name/description)`);
+        throw new Error(`skill ${e.name}: missing frontmatter (name/description)`);
       }
       this.register({ name, description, content: body });
     }

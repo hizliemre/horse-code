@@ -16,7 +16,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider } from "../../src/core/types.js";
 
-// İçerik-tabanlı deterministik provider: system prompt (rol) + mesajdaki task başlığına göre yanıt.
+// Content-based deterministic provider: responds based on the system prompt (role) + the task title in the message.
 function engineProvider(failTasks: string[] = []): Provider {
   return {
     async *chat(req) {
@@ -33,7 +33,7 @@ function engineProvider(failTasks: string[] = []): Provider {
         yield* emitSubmit(fail ? '{"verdict":"fail","notes":["nope"]}' : '{"verdict":"pass","notes":[]}');
         return;
       }
-      // coder / senior / team-lead / diğer → no-op (submit yok)
+      // coder / senior / team-lead / other → no-op (no submit)
       yield { type: "text-delta", text: "ok" };
       yield { type: "done", finishReason: "stop" };
     },
@@ -70,7 +70,7 @@ function edeps(mgr: WorktreeManager, prAdapter: PRAdapter, opts: EOpts = {}): Wa
 }
 
 describe("createMutex", () => {
-  it("eşzamanlı çağrılar sıralı koşar (örtüşme yok)", async () => {
+  it("concurrent calls run sequentially (no overlap)", async () => {
     const ser = createMutex();
     const order: string[] = [];
     const mk = (id: string, ms: number) => ser(async () => {
@@ -86,14 +86,14 @@ describe("createMutex", () => {
 });
 
 describe("runWave", () => {
-  it("all-pass (paralel): iki task da merged", async () => {
+  it("all-pass (parallel): both tasks merged", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const board = new Board();
-      board.addCard({ id: "t1", title: "gorev-a" });
-      board.addCard({ id: "t2", title: "gorev-b" });
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b" });
       const o = await runWave(edeps(mgr, fakeAdapter()), session, board, ["t1", "t2"], new Set());
       expect(o.merged.sort()).toEqual(["t1", "t2"]);
       expect(o.failed).toEqual([]);
@@ -101,27 +101,27 @@ describe("runWave", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("one-fail: başarısız task failed, diğeri merged", async () => {
+  it("one-fail: failing task is failed, the other is merged", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const board = new Board();
-      board.addCard({ id: "t1", title: "gorev-a" });
-      board.addCard({ id: "t2", title: "gorev-b" });
-      const o = await runWave(edeps(mgr, fakeAdapter(), { failTasks: ["gorev-a"] }), session, board, ["t1", "t2"], new Set());
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b" });
+      const o = await runWave(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board, ["t1", "t2"], new Set());
       expect(o.failed).toEqual(["t1"]);
       expect(o.merged).toEqual(["t2"]);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("skip: blocked bağımlılık → task atlanır (koşmaz)", async () => {
+  it("skip: blocked dependency → task is skipped (doesn't run)", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const board = new Board();
-      board.addCard({ id: "t3", title: "gorev-c", deps: ["t1"] });
+      board.addCard({ id: "t3", title: "task-c", deps: ["t1"] });
       const o = await runWave(edeps(mgr, fakeAdapter()), session, board, ["t3"], new Set(["t1"]));
       expect(o.skipped).toEqual(["t3"]);
       expect(o.merged).toEqual([]);
@@ -131,7 +131,7 @@ describe("runWave", () => {
 });
 
 describe("runWaves", () => {
-  it("enjekte session'la koşar (openSession açmaz), all-pass → completed + PR", async () => {
+  it("runs with an injected session (doesn't call openSession), all-pass → completed + PR", async () => {
     const repo = await initTmpRepo();
     const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     try {
@@ -140,12 +140,12 @@ describe("runWaves", () => {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const board = new Board();
-      board.addCard({ id: "t1", title: "gorev-a" });
+      board.addCard({ id: "t1", title: "task-a" });
       const adapter = fakeAdapter();
       const res = await runWaves(edeps(mgr, adapter), session, board, { base: "main" });
       expect(res.status).toBe("completed");
       expect(adapter.calls).toBe(1);
-      expect(res.session).toBe(session); // aynı session kullanıldı
+      expect(res.session).toBe(session); // the same session was used
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(bare, { recursive: true, force: true });
@@ -154,7 +154,7 @@ describe("runWaves", () => {
 });
 
 describe("runWaveEngine", () => {
-  it("completed: hepsi pass → push + openPR", async () => {
+  it("completed: all pass → push + openPR", async () => {
     const repo = await initTmpRepo();
     const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     try {
@@ -162,8 +162,8 @@ describe("runWaveEngine", () => {
       await defaultGitRunner(["remote", "add", "origin", bare], repo);
       const mgr = new WorktreeManager({ repoRoot: repo });
       const board = new Board();
-      board.addCard({ id: "t1", title: "gorev-a" });
-      board.addCard({ id: "t2", title: "gorev-b", deps: ["t1"] });
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
       const adapter = fakeAdapter();
       const res = await runWaveEngine(edeps(mgr, adapter), board, { fromBranch: "main", jobName: "job" });
       expect(res.status).toBe("completed");
@@ -176,15 +176,15 @@ describe("runWaveEngine", () => {
     }
   });
 
-  it("partial: t1 fail → t2(dep t1) skip → PR açılmaz", async () => {
+  it("partial: t1 fails → t2(dep t1) skipped → no PR opened", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const board = new Board();
-      board.addCard({ id: "t1", title: "gorev-a" });
-      board.addCard({ id: "t2", title: "gorev-b", deps: ["t1"] });
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
       const adapter = fakeAdapter();
-      const res = await runWaveEngine(edeps(mgr, adapter, { failTasks: ["gorev-a"] }), board, { fromBranch: "main", jobName: "job" });
+      const res = await runWaveEngine(edeps(mgr, adapter, { failTasks: ["task-a"] }), board, { fromBranch: "main", jobName: "job" });
       expect(res.status).toBe("partial");
       expect(adapter.calls).toBe(0);
       if (res.status === "partial") {
@@ -199,11 +199,11 @@ describe("runWaveEngine", () => {
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const board = new Board();
-      board.addCard({ id: "t1", title: "gorev-a" });
-      board.addCard({ id: "t2", title: "gorev-b", deps: ["t1"] });
-      board.addCard({ id: "t3", title: "gorev-c", deps: ["t2"] });
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
+      board.addCard({ id: "t3", title: "task-c", deps: ["t2"] });
       const adapter = fakeAdapter();
-      const res = await runWaveEngine(edeps(mgr, adapter, { failTasks: ["gorev-a"] }), board, { fromBranch: "main", jobName: "job" });
+      const res = await runWaveEngine(edeps(mgr, adapter, { failTasks: ["task-a"] }), board, { fromBranch: "main", jobName: "job" });
       expect(res.status).toBe("partial");
       expect(adapter.calls).toBe(0);
       if (res.status === "partial") {
@@ -213,14 +213,14 @@ describe("runWaveEngine", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("abort: pre-aborted signal → fırlatır", async () => {
+  it("abort: pre-aborted signal → rethrows", async () => {
     const repo = await initTmpRepo();
     try {
       const ac = new AbortController();
       ac.abort();
       const mgr = new WorktreeManager({ repoRoot: repo });
       const board = new Board();
-      board.addCard({ id: "t1", title: "gorev-a" });
+      board.addCard({ id: "t1", title: "task-a" });
       await expect(
         runWaveEngine(edeps(mgr, fakeAdapter(), { signal: ac.signal }), board, { fromBranch: "main", jobName: "job" }),
       ).rejects.toThrow();

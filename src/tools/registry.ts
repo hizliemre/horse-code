@@ -16,7 +16,7 @@ export class ToolRegistry {
     return [...this.tools.values()];
   }
 
-  /** LLM'e gönderilecek tool şemaları: zod parameters → JSON Schema. */
+  /** Tool schemas to send to the LLM: zod parameters → JSON Schema. */
   schemas(): ChatRequest["tools"] {
     return this.list().map((t) => ({
       name: t.name,

@@ -11,15 +11,15 @@ afterEach(async () => {
   repo = undefined;
 });
 
-// Task worktree'sinde README'yi değiştirip commit'ler.
+// Edits README in the task worktree and commits it.
 async function editAndCommit(worktree: string, content: string): Promise<void> {
   await writeFile(join(worktree, "README.md"), content, "utf8");
   await defaultGitRunner(["add", "-A"], worktree);
-  await defaultGitRunner(["commit", "-m", "değişiklik"], worktree);
+  await defaultGitRunner(["commit", "-m", "change"], worktree);
 }
 
-describe("WorktreeManager merge yaşam döngüsü", () => {
-  it("çakışmasız task base'e merge olur (merged)", async () => {
+describe("WorktreeManager merge lifecycle", () => {
+  it("conflict-free task merges into base (merged)", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
@@ -30,7 +30,7 @@ describe("WorktreeManager merge yaşam döngüsü", () => {
     expect(await readFile(join(s.baseWorktree, "README.md"), "utf8")).toBe("A\n");
   });
 
-  it("aynı dosyayı değiştiren iki task ikinci merge'de çakışır", async () => {
+  it("two tasks editing the same file conflict on the second merge", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
@@ -43,7 +43,7 @@ describe("WorktreeManager merge yaşam döngüsü", () => {
     expect(res).toEqual({ status: "conflict", files: ["README.md"] });
   });
 
-  it("commitMerge çözülen çakışmayı tamamlar", async () => {
+  it("commitMerge completes a resolved conflict", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
@@ -53,14 +53,14 @@ describe("WorktreeManager merge yaşam döngüsü", () => {
     await editAndCommit(tb.worktree, "B\n");
     await wm.mergeTask(s, ta);
     await wm.mergeTask(s, tb); // conflict
-    await writeFile(join(s.baseWorktree, "README.md"), "ÇÖZÜLDÜ\n", "utf8"); // council çözümü simülasyonu
+    await writeFile(join(s.baseWorktree, "README.md"), "RESOLVED\n", "utf8"); // simulating council resolution
     await wm.commitMerge(s);
-    expect(await readFile(join(s.baseWorktree, "README.md"), "utf8")).toBe("ÇÖZÜLDÜ\n");
+    expect(await readFile(join(s.baseWorktree, "README.md"), "utf8")).toBe("RESOLVED\n");
     const status = await defaultGitRunner(["status", "--porcelain"], s.baseWorktree);
-    expect(status.stdout.trim()).toBe(""); // temiz, merge tamam
+    expect(status.stdout.trim()).toBe(""); // clean, merge complete
   });
 
-  it("abortMerge çakışmayı geri alır (base temiz)", async () => {
+  it("abortMerge reverts the conflict (base is clean)", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
@@ -71,18 +71,18 @@ describe("WorktreeManager merge yaşam döngüsü", () => {
     await wm.mergeTask(s, ta);
     await wm.mergeTask(s, tb); // conflict
     await wm.abortMerge(s);
-    expect(await readFile(join(s.baseWorktree, "README.md"), "utf8")).toBe("A\n"); // ta durumu
+    expect(await readFile(join(s.baseWorktree, "README.md"), "utf8")).toBe("A\n"); // ta's state
     const status = await defaultGitRunner(["status", "--porcelain"], s.baseWorktree);
     expect(status.stdout.trim()).toBe("");
   });
 
-  it("commitMerge sahnede değişiklik yoksa no-op (throw etmez, yeni commit yok)", async () => {
+  it("commitMerge is a no-op when nothing is staged (does not throw, no new commit)", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
     const before = (await defaultGitRunner(["rev-parse", "HEAD"], s.baseWorktree)).stdout.trim();
-    await expect(wm.commitMerge(s, "boş")).resolves.toBeUndefined();
+    await expect(wm.commitMerge(s, "empty")).resolves.toBeUndefined();
     const after = (await defaultGitRunner(["rev-parse", "HEAD"], s.baseWorktree)).stdout.trim();
-    expect(after).toBe(before); // yeni commit oluşmadı
+    expect(after).toBe(before); // no new commit was created
   });
 });

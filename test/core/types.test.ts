@@ -4,22 +4,22 @@ import type { Tool, Message, ChatEvent, AgentEvent } from "../../src/core/types.
 import { isTextDelta, isToolCallEvent } from "../../src/core/types.js";
 
 describe("core types", () => {
-  it("Tool arayüzü zod parameters ile uyumlu bir nesneyi kabul eder", async () => {
+  it("Tool interface accepts an object compatible with zod parameters", async () => {
     const tool: Tool = {
       name: "echo",
-      description: "girdiyi döner",
+      description: "returns the input",
       permissionLevel: "safe",
       parameters: z.object({ text: z.string() }),
       run: async (args) => ({ content: String(args.text), isError: false }),
     };
-    const result = await tool.run({ text: "merhaba" }, {
+    const result = await tool.run({ text: "hello" }, {
       cwd: "/tmp",
       signal: new AbortController().signal,
     });
-    expect(result).toEqual({ content: "merhaba", isError: false });
+    expect(result).toEqual({ content: "hello", isError: false });
   });
 
-  it("Message tipi tool çağrılarını taşıyabilir", () => {
+  it("Message type can carry tool calls", () => {
     const msg: Message = {
       role: "assistant",
       content: "",
@@ -28,7 +28,7 @@ describe("core types", () => {
     expect(msg.toolCalls?.[0].name).toBe("echo");
   });
 
-  it("ChatEvent tip guard'ları doğru ayrım yapar", () => {
+  it("ChatEvent type guards discriminate correctly", () => {
     const delta: ChatEvent = { type: "text-delta", text: "x" };
     const call: ChatEvent = {
       type: "tool-call",
@@ -40,7 +40,7 @@ describe("core types", () => {
     expect(isToolCallEvent(delta)).toBe(false);
   });
 
-  it("AgentEvent union'ı permission.ask event'ini içerir", () => {
+  it("AgentEvent union includes the permission.ask event", () => {
     const ev: AgentEvent = {
       type: "permission.ask",
       requestId: "r1",

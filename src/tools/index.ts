@@ -9,7 +9,7 @@ import { createWebFetchTool } from "./web.js";
 
 export { ToolRegistry } from "./registry.js";
 
-/** MVP'nin 7 tool'unu kayıtlı bir ToolRegistry döner. */
+/** Returns a ToolRegistry with the MVP's 7 tools registered. */
 export function createDefaultRegistry(): ToolRegistry {
   const reg = new ToolRegistry();
   reg.register(readFileTool);

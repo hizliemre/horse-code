@@ -12,9 +12,9 @@ export const ArchitectPlanSchema = z.object({
 });
 
 /**
- * Escalation konseyi (merdivenin tepesi): architect kök-neden + plan üretir →
- * ailenin senior'ı planı worktree'de uygular → code-reviewer son review.
- * Konsey turunun Verdict'ini döner; DONE/insan kararı çağıran katmanda (runTaskWithEscalation).
+ * Escalation council (top of the ladder): architect produces root cause + plan →
+ * the family's senior applies the plan in the worktree → code-reviewer does a final review.
+ * Returns the council round's Verdict; DONE/human decision lives in the calling layer (runTaskWithEscalation).
  */
 export async function runEscalationCouncil(
   deps: TaskCycleDeps,
@@ -25,7 +25,7 @@ export async function runEscalationCouncil(
 ): Promise<Verdict> {
   const task = board.get(taskId)!;
 
-  // 1. architect diagnoz (salt-okunur, structured)
+  // 1. architect diagnosis (read-only, structured)
   const { model, systemPrompt } = deps.roleRegistry.resolve("architect");
   const history = task.stageHistory.map((s) => s.action).join(", ");
   const diagnoseOpts: RoleAgentOptions = {
@@ -37,9 +37,9 @@ export async function runEscalationCouncil(
       {
         role: "user",
         content:
-          `Task "${task.title}" tekrar tekrar review'dan döndü.\n` +
-          `Reviewer notları:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}\n` +
-          `Geçmiş: ${history}\nKök-nedeni belirle ve somut bir plan üret.`,
+          `Task "${task.title}" keeps bouncing back from review.\n` +
+          `Reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}\n` +
+          `History: ${history}\nIdentify the root cause and produce a concrete plan.`,
       },
     ],
     permission: deps.permission,
@@ -50,7 +50,7 @@ export async function runEscalationCouncil(
   const plan = await runStructuredRole(diagnoseOpts, ArchitectPlanSchema);
   board.appendStage(taskId, { role: "architect", action: "council:diagnosed", note: plan.rootCause });
 
-  // 2. senior implement — plan reviewNotes'a yazılır (E3a "dönen task" yolu)
+  // 2. senior implement — the plan is written to reviewNotes (E3a "returning task" path)
   const senior = family === "designer" ? "senior-designer" : "senior-coder";
   board.clearReviewNotes(taskId);
   board.addReviewNote(taskId, plan.rootCause);
@@ -60,7 +60,7 @@ export async function runEscalationCouncil(
   board.appendStage(taskId, { role: senior, action: "council:implemented" });
   board.move(taskId, "REVIEW", senior);
 
-  // 3. son review
+  // 3. final review
   const v = await runReviewer(deps, board.get(taskId)!, cwd);
   if (v.verdict === "pass") {
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });

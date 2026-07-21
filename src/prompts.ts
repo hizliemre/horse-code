@@ -40,7 +40,7 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
 };
 
 export const DEFAULT_COUNCILORS: CouncilorConfig[] = [
-  { name: "security", perspective: "güvenlik açıkları, secret sızıntısı, girdi doğrulama", models: [] },
-  { name: "architecture", perspective: "katman ihlali, bağımlılık yönü, tutarlılık", models: [] },
-  { name: "testability", perspective: "test edilebilirlik, izolasyon, kenar durumlar", models: [] },
+  { name: "security", perspective: "security vulnerabilities, secret leakage, input validation", models: [] },
+  { name: "architecture", perspective: "layer violations, dependency direction, consistency", models: [] },
+  { name: "testability", perspective: "testability, isolation, edge cases", models: [] },
 ];

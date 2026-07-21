@@ -17,7 +17,7 @@ export const shellTool: Tool = {
     const parsed = params.safeParse(rawArgs);
     if (!parsed.success) {
       return Promise.resolve({
-        content: `shell: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        content: `shell: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
         isError: true,
       });
     }
@@ -28,7 +28,7 @@ export const shellTool: Tool = {
         child = spawn(a.command, { cwd: ctx.cwd, shell: true, signal: ctx.signal });
       } catch (e) {
         resolvePromise({
-          content: `shell hatası: ${e instanceof Error ? e.message : String(e)}`,
+          content: `shell error: ${e instanceof Error ? e.message : String(e)}`,
           isError: true,
         });
         return;
@@ -38,7 +38,7 @@ export const shellTool: Tool = {
       child.stdout?.on("data", (d) => (out += d.toString()));
       child.stderr?.on("data", (d) => (err += d.toString()));
       child.on("error", (e) => {
-        resolvePromise({ content: `shell hatası: ${e.message}`, isError: true });
+        resolvePromise({ content: `shell error: ${e.message}`, isError: true });
       });
       child.on("close", (code) => {
         const body = [out, err].filter((s) => s.length).join("\n").trimEnd();

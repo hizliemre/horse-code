@@ -26,11 +26,11 @@ export function Board({ cards }: { cards: BoardCardView[] }): React.ReactElement
 }
 
 export function PhaseBar({ phase, detail }: { phase: string; detail?: string }): React.ReactElement {
-  return <Text>Faz: {phase}{detail ? ` — ${detail}` : ""}</Text>;
+  return <Text>Phase: {phase}{detail ? ` — ${detail}` : ""}</Text>;
 }
 
-// Yeni-satır (submit ETMEZ) sayılan diziler: düz LF, Alt+Enter (ESC+CR/LF) ve terminallerin
-// Shift+Enter için yolladığı bilinen escape'ler (kitty CSI-u, xterm modifyOtherKeys).
+// Sequences counted as newline (do NOT submit): plain LF, Alt+Enter (ESC+CR/LF), and the known
+// escapes terminals send for Shift+Enter (kitty CSI-u, xterm modifyOtherKeys).
 const NEWLINE_SEQS = new Set(["\n", "\x1b\r", "\x1b\n", "\x1b[13;2u", "\x1b[27;2;13~"]);
 
 const LEFT = new Set(["\x1b[D", "\x1bOD"]);
@@ -44,14 +44,14 @@ export function InputLine({ value, cursor, onChange, onSubmit }: {
   onChange: (value: string, cursor: number) => void;
   onSubmit: (value: string) => void;
 }): React.ReactElement {
-  // Kontrollü: state App'te (draft+cursor) → yükseklik senkron hesaplanır (newline'da flick yok).
+  // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
   const curRef = useRef(cursor); curRef.current = cursor;
   const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
   const onSubmitRef = useRef(onSubmit); onSubmitRef.current = onSubmit;
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
-  // Ham stdin: Enter(CR) submit; LF/kitty-CSI-u yeni satır; sol/sağ ok imleç; ortadan ekleme/silme;
-  // Ctrl+C doluysa temizle boşsa çık. Yukarı/aşağı/PgUp App useInput'a (scroll).
+  // Raw stdin: Enter(CR) submits; LF/kitty-CSI-u newline; left/right arrow moves the cursor; insert/delete
+  // in the middle; Ctrl+C clears if non-empty, exits if empty. Up/down/PgUp go to App's useInput (scroll).
   useEffect(() => {
     if (!stdin) return;
     if (isRawModeSupported && setRawMode) setRawMode(true);
@@ -67,14 +67,14 @@ export function InputLine({ value, cursor, onChange, onSubmit }: {
       if (RIGHT.has(s)) { change(v, Math.min(v.length, c + 1)); return; }
       if (HOME.has(s)) { change(v, 0); return; }
       if (END.has(s)) { change(v, v.length); return; }
-      if (s.startsWith("\x1b")) return; // yukarı/aşağı/PgUp/PgDn → App useInput (scroll)
-      if ([...s].every((ch) => ch >= " ")) change(v.slice(0, c) + s + v.slice(c), c + s.length); // yazdırılabilir ekle
+      if (s.startsWith("\x1b")) return; // up/down/PgUp/PgDn → App useInput (scroll)
+      if ([...s].every((ch) => ch >= " ")) change(v.slice(0, c) + s + v.slice(c), c + s.length); // insert printable
     };
     stdin.on("data", onData);
     return () => { stdin.off("data", onData); };
   }, [stdin, setRawMode, isRawModeSupported]);
 
-  // İmlecin satır/sütununu hesapla → o hücreyi ters-video blok olarak çiz (cursor). `>` hep üst satırda.
+  // Compute the cursor's line/column → render that cell as a reverse-video block (cursor). `>` is always on the first line.
   let cLine = 0, cCol = 0;
   for (let i = 0; i < cursor; i++) { if (value[i] === "\n") { cLine++; cCol = 0; } else cCol++; }
   const lines = value.split("\n");
@@ -83,7 +83,7 @@ export function InputLine({ value, cursor, onChange, onSubmit }: {
       {lines.map((line, i) => {
         const prefix = i === 0 ? "> " : "  ";
         if (i !== cLine) return <Text key={i}><Text color="cyan">{prefix}</Text>{line}</Text>;
-        const atChar = line[cCol] ?? " "; // imleç altındaki karakter (satır sonunda boşluk)
+        const atChar = line[cCol] ?? " "; // character under the cursor (space at end of line)
         return (
           <Text key={i}>
             <Text color="cyan">{prefix}</Text>
@@ -109,7 +109,7 @@ export function Prompt({ question, onSubmit }: { question: string; onSubmit: (s:
 }
 
 export const Message = memo(function Message({ role, text, cols }: { role: "user" | "assistant"; text: string; cols: number }): React.ReactElement {
-  // Hanging-indent + AÇIK genişlik (cols - bullet) → Ink kelime-bazında sarar (char değil), satırlar metinle hizalanır.
+  // Hanging-indent + EXPLICIT width (cols - bullet) → Ink wraps word-by-word (not char), lines align with the text.
   const w = Math.max(20, cols - 3);
   return role === "user" ? (
     <Box marginTop={1}>
@@ -124,7 +124,7 @@ export const Message = memo(function Message({ role, text, cols }: { role: "user
   );
 });
 
-// Kompakt 3-satır block-font (≈%40 küçük wordmark).
+// Compact 3-line block-font (≈40% smaller wordmark).
 const GLYPHS: Record<string, string[]> = {
   H: ["█  █", "████", "█  █"],
   O: ["████", "█  █", "████"],
@@ -139,7 +139,7 @@ const WORDMARK: string[] = [0, 1, 2].map((r) =>
   "HORSE CODE".split("").map((ch) => GLYPHS[ch][r]).join(" "),
 );
 
-// Renk-geçişli + gölgeli wordmark: yatay turuncu→altın gradyan, satır aşağı indikçe koyulaşır.
+// Color-transitioning + shaded wordmark: horizontal orange→gold gradient, darkens further down the lines.
 const WM_WIDTH = Math.max(...WORDMARK.map((r) => r.length));
 const hx = (a: number[]): string =>
   "#" + a.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
@@ -170,8 +170,8 @@ const WM_ROWS: { text: string; color?: string }[][] = WORDMARK.map((line, y) => 
 });
 
 export const Splash = memo(function Splash({ cols }: { cols: number; rows: number }): React.ReactElement | null {
-  const topMargin = 2; // yazının üstünde boşluk
-  const bottomMargin = 1; // yazının altında boşluk
+  const topMargin = 2; // space above the wordmark
+  const bottomMargin = 1; // space below the wordmark
   const showWordmark = cols >= WM_WIDTH + 2;
   if (!showWordmark) return null;
   return (
@@ -189,8 +189,8 @@ export const Splash = memo(function Splash({ cols }: { cols: number; rows: numbe
   );
 });
 
-// Sabit-yükseklikli satır penceresi: Ink'in overflow'una GÜVENMEZ; tam sığan satırları
-// manuel render eder (garbling yok). İçerik dibe hizalı olsun diye üste boş satır doldurulur.
+// Fixed-height line window: does NOT RELY on Ink's overflow; manually renders exactly the lines
+// that fit (no garbling). Empty lines are padded at the top so content stays bottom-aligned.
 function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number }): React.ReactElement {
   const pad = Math.max(0, height - lines.length);
   return (
@@ -224,7 +224,7 @@ export function App({ controller, fullscreen = false }: { controller: TuiControl
     rows: stdout && stdout.rows ? stdout.rows : 24,
   });
   const [resizing, setResizing] = useState(false);
-  // Resize debounce: sürükleme boyunca dinamik input'u boşalt (flicker yok), durunca boyutu güncelle.
+  // Resize debounce: clear the dynamic input while dragging (no flicker), update the size once it settles.
   useEffect(() => {
     if (!stdout || typeof stdout.on !== "function") return;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -243,37 +243,37 @@ export function App({ controller, fullscreen = false }: { controller: TuiControl
     };
   }, [stdout]);
 
-  // Fullscreen: iç-scroll offset (dipten kaç satır yukarı). Yeni mesaj/faz gelince en alta dön.
+  // Fullscreen: inner-scroll offset (how many lines up from the bottom). Jumps back to the bottom on a new message/phase.
   const [scroll, setScroll] = useState(0);
-  const [draft, setDraft] = useState(""); // ana input buffer'ı (App'te → yükseklik senkron hesaplanır)
+  const [draft, setDraft] = useState(""); // main input buffer (in App → height computed synchronously)
   const [draftCursor, setDraftCursor] = useState(0);
-  const maxScrollRef = useRef(0); // render'da güncellenir → handler clamp için kullanır
-  // Komut geçmişi (shell gibi): ↑ önceki prompt, ↓ göndermeden yazılan taslağa döner.
+  const maxScrollRef = useRef(0); // updated during render → used by the handler for clamping
+  // Command history (like a shell): ↑ previous prompt, ↓ returns to the unsent draft.
   const draftRef = useRef("");
   draftRef.current = draft;
-  const historyRef = useRef<string[]>([]); // gönderilen prompt'lar (eskiden yeniye)
-  const histIdxRef = useRef(-1);            // -1 = taslak (gezinmiyor); değilse history indeksi
-  const stashRef = useRef("");              // ↑'a basılınca saklanan taslak → ↓ ile geri gelir
+  const historyRef = useRef<string[]>([]); // submitted prompts (oldest to newest)
+  const histIdxRef = useRef(-1);            // -1 = draft (not navigating); otherwise the history index
+  const stashRef = useRef("");              // draft stashed when ↑ is pressed → restored with ↓
   const setInput = (v: string): void => { setDraft(v); setDraftCursor(v.length); };
   const historyPrev = (): void => {
     const h = historyRef.current;
     if (h.length === 0) return;
     if (histIdxRef.current === -1) { stashRef.current = draftRef.current; histIdxRef.current = h.length - 1; }
     else if (histIdxRef.current > 0) { histIdxRef.current -= 1; }
-    else return; // en eskideyiz
+    else return; // already at the oldest
     setInput(h[histIdxRef.current]);
   };
   const historyNext = (): void => {
-    if (histIdxRef.current === -1) return; // gezinmiyoruz
+    if (histIdxRef.current === -1) return; // not navigating
     const h = historyRef.current;
     if (histIdxRef.current < h.length - 1) { histIdxRef.current += 1; setInput(h[histIdxRef.current]); }
-    else { histIdxRef.current = -1; setInput(stashRef.current); } // taslağa (boşsa boşa) dön
+    else { histIdxRef.current = -1; setInput(stashRef.current); } // return to draft (empty if it was empty)
   };
   const tlen = state.transcript.length;
   useEffect(() => { setScroll(0); }, [tlen]);
   useInput((_input, key) => {
     const isInput = (state.mode ?? "running") === "input";
-    // Input mode'da ↑/↓ komut geçmişi; transcript scroll'u PgUp/PgDn ile. Job modunda ↑/↓ scroll.
+    // In input mode ↑/↓ is command history; transcript scrolls via PgUp/PgDn. In job mode ↑/↓ scrolls.
     if (isInput && key.upArrow) { historyPrev(); return; }
     if (isInput && key.downArrow) { historyNext(); return; }
     const page = Math.max(1, size.rows - 8);
@@ -307,18 +307,18 @@ export function App({ controller, fullscreen = false }: { controller: TuiControl
       </Box>
     );
 
-  // Fullscreen (Claude Code modeli): içeriği düz styled-satırlara flatten et → tam sığan pencereyi
-  // manuel render et (Ink overflow bug'ı yok). Input dibe SABİT; ↑/↓/PgUp/PgDn ile geçmişe scroll.
+  // Fullscreen (Claude Code model): flatten content into plain styled lines → manually render the
+  // exactly-fitting window (no Ink overflow bug). Input is FIXED at the bottom; ↑/↓/PgUp/PgDn scrolls through history.
   if (fullscreen) {
     const allLines: StyledLine[] = [
       ...flattenSplash(size.cols, size.rows),
       ...state.transcript.flatMap((m) => flattenMessage(m.role, m.text, size.cols)),
     ];
-    // input kutusu: kenarlık(2) + marginTop(1) + görsel satır (mantıksal + wrap, draft'tan senkron).
+    // input box: border(2) + marginTop(1) + visual lines (logical + wrap, synced from draft).
     const cw = Math.max(1, size.cols - 4);
     const inputH = draft.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil((l.length + 3) / cw)), 0);
     const bottomH = mode === "input" ? 3 + inputH : 8;
-    const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll ipucu satırı
+    const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
     const clamped = Math.min(scroll, maxScroll);
@@ -333,7 +333,7 @@ export function App({ controller, fullscreen = false }: { controller: TuiControl
     );
   }
 
-  // Tek-shot (hcode "<prompt>"): <Static> layout — normal terminal, scrollback.
+  // One-shot (hcode "<prompt>"): <Static> layout — normal terminal, scrollback.
   type Item =
     | { kind: "splash"; cols: number; rows: number }
     | { kind: "msg"; role: "user" | "assistant"; text: string; cols: number };

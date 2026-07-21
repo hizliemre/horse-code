@@ -18,29 +18,29 @@ async function writeSkill(name: string, content: string): Promise<void> {
 }
 
 describe("SkillRegistry.loadFromDir", () => {
-  it("SKILL.md'li dizinleri yükler", async () => {
-    await writeSkill("tdd", "---\nname: tdd\ndescription: TDD\n---\ntdd gövde");
+  it("loads directories containing SKILL.md", async () => {
+    await writeSkill("tdd", "---\nname: tdd\ndescription: TDD\n---\ntdd body");
     const r = new SkillRegistry();
     await r.loadFromDir(dir);
-    expect(r.get("tdd")).toEqual({ name: "tdd", description: "TDD", content: "tdd gövde" });
+    expect(r.get("tdd")).toEqual({ name: "tdd", description: "TDD", content: "tdd body" });
   });
 
-  it("SKILL.md'siz dizini atlar", async () => {
-    await mkdir(join(dir, "boş"), { recursive: true });
+  it("skips a directory without SKILL.md", async () => {
+    await mkdir(join(dir, "empty"), { recursive: true });
     const r = new SkillRegistry();
     await r.loadFromDir(dir);
     expect(r.list()).toEqual([]);
   });
 
-  it("frontmatter eksikse hata verir", async () => {
-    await writeSkill("bad", "frontmatter yok, sadece metin");
+  it("throws an error when frontmatter is missing", async () => {
+    await writeSkill("bad", "no frontmatter, just text");
     const r = new SkillRegistry();
-    await expect(r.loadFromDir(dir)).rejects.toThrow(/frontmatter eksik/);
+    await expect(r.loadFromDir(dir)).rejects.toThrow(/missing frontmatter/);
   });
 
-  it("var olmayan dizinde sessizce döner", async () => {
+  it("returns silently for a non-existent directory", async () => {
     const r = new SkillRegistry();
-    await expect(r.loadFromDir(join(dir, "yok"))).resolves.toBeUndefined();
+    await expect(r.loadFromDir(join(dir, "missing"))).resolves.toBeUndefined();
     expect(r.list()).toEqual([]);
   });
 });

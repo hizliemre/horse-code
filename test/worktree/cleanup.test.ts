@@ -17,7 +17,7 @@ async function branchExists(repoDir: string, branch: string): Promise<boolean> {
 }
 
 describe("WorktreeManager cleanup", () => {
-  it("removeTask task worktree'sini ve branch'ini kaldırır", async () => {
+  it("removeTask removes the task worktree and its branch", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
@@ -27,11 +27,11 @@ describe("WorktreeManager cleanup", () => {
     expect(await branchExists(repo, t.branch)).toBe(false);
   });
 
-  it("closeSession tüm worktree'leri ve session branch'lerini temizler", async () => {
+  it("closeSession cleans up all worktrees and session branches", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
-    await wm.deriveTask(s, "a"); // temizlenmeden bırakılan task
+    await wm.deriveTask(s, "a"); // task left uncleaned
     await wm.closeSession(s);
     expect(existsSync(s.root)).toBe(false);
     expect(await branchExists(repo, s.baseBranch)).toBe(false);

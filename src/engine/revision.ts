@@ -25,9 +25,9 @@ export const PrincipalFinalSchema = z.object({
 });
 
 /**
- * Revision sonucu. `rounds` semantiği varyanta göre değişir:
- * - `approved`: onaydan ÖNCE yapılan revizyon turu sayısı (ilk turda onay → 0).
- * - `accepted`/`human`: ulaşılan tur sayısı (= clamp'lenmiş maxRounds, principal review sayısı).
+ * Revision result. `rounds` semantics vary by variant:
+ * - `approved`: number of revision rounds done BEFORE approval (approval on round 1 → 0).
+ * - `accepted`/`human`: number of rounds reached (= clamped maxRounds, number of principal reviews).
  */
 export type RevisionResult =
   | { status: "approved"; rounds: number }
@@ -37,8 +37,8 @@ export type RevisionResult =
 async function principalReview(deps: RevisionDeps, base: string, prDiff?: string) {
   const { model, systemPrompt } = deps.roleRegistry.resolve("principal-coder");
   const content = prDiff
-    ? `PR review: şu diff'i incele:\n${prDiff}\n(gerekirse read-tool'larla worktree'yi de incele.) approve veya request-changes + somut comment'ler ver.`
-    : "PR review: base worktree'deki tüm değişiklikleri bütünsel incele. approve veya request-changes + somut comment'ler ver.";
+    ? `PR review: review the following diff:\n${prDiff}\n(use the read tools to inspect the worktree if needed.) Give approve or request-changes + concrete comments.`
+    : "PR review: review all changes in the base worktree holistically. Give approve or request-changes + concrete comments.";
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt,
     tools: readOnlyRegistry(deps),
@@ -72,8 +72,8 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
 }
 
 /**
- * Revision döngüsü: principal review → approve:biter / request-changes: postComments + senior
- * düzeltir + commit/push → re-review. ≤maxRounds; son turda hâlâ bulgu → principal son karar.
+ * Revision loop: principal review → approve: done / request-changes: postComments + senior
+ * fixes it + commit/push → re-review. ≤maxRounds; if findings remain on the last round → principal makes the final call.
  */
 export async function runRevision(
   deps: RevisionDeps,
@@ -113,6 +113,6 @@ export async function runRevision(
     await deps.manager.commitMerge(session, `hc: revision ${round}`);
     await deps.manager.push(session);
   }
-  // erişilmez (rounds ≥ 1 → son iterasyon her zaman döner); tip güvenliği:
+  // unreachable (rounds ≥ 1 → the last iteration always returns); for type safety:
   return { status: "accepted", rounds };
 }

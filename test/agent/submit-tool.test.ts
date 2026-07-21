@@ -6,14 +6,14 @@ const ctx = () => ({ cwd: "/tmp", signal: new AbortController().signal });
 const schema = z.object({ decision: z.enum(["pass", "fail"]) });
 
 describe("buildSubmitTool", () => {
-  it("geçerli args'ı yakalar (isError:false)", async () => {
+  it("captures valid args (isError:false)", async () => {
     const h = buildSubmitTool(schema);
     const res = await h.tool.run({ decision: "pass" }, ctx());
     expect(res.isError).toBe(false);
     expect(h.result()).toEqual({ value: { decision: "pass" } });
   });
 
-  it("geçersiz args'ı yakalamaz (isError:true, kutu boş)", async () => {
+  it("does not capture invalid args (isError:true, box empty)", async () => {
     const h = buildSubmitTool(schema);
     const res = await h.tool.run({ decision: "bogus" }, ctx());
     expect(res.isError).toBe(true);
@@ -21,7 +21,7 @@ describe("buildSubmitTool", () => {
     expect(h.result()).toBeUndefined();
   });
 
-  it("tool metadata doğru (name/safe/parameters)", () => {
+  it("tool metadata is correct (name/safe/parameters)", () => {
     const h = buildSubmitTool(schema);
     expect(h.tool.name).toBe("submit");
     expect(h.tool.permissionLevel).toBe("safe");

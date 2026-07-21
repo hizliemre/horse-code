@@ -18,7 +18,7 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 function deps(provider: MockProvider): TaskCycleDeps {
   return {
     provider,
-    roleRegistry: new RoleRegistry({ coder: { models: ["m"], systemPrompt: "sen coder'sın" } }, {}, new SkillRegistry()),
+    roleRegistry: new RoleRegistry({ coder: { models: ["m"], systemPrompt: "you are the coder" } }, {}, new SkillRegistry()),
     skillRegistry: new SkillRegistry(),
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
@@ -26,30 +26,30 @@ function deps(provider: MockProvider): TaskCycleDeps {
   };
 }
 const card = (over: Partial<Card> = {}): Card => ({
-  id: "t1", title: "dosya yaz", column: "IN-PROGRESS", deps: [], reviewNotes: [], attempts: 0, stageHistory: [], ...over,
+  id: "t1", title: "write file", column: "IN-PROGRESS", deps: [], reviewNotes: [], attempts: 0, stageHistory: [], ...over,
 });
 function writeThenDone(): ChatEvent[][] {
   return [
     [
-      { type: "tool-call", toolCall: { id: "w1", name: "write_file", arguments: '{"path":"out.txt","content":"merhaba"}' } },
+      { type: "tool-call", toolCall: { id: "w1", name: "write_file", arguments: '{"path":"out.txt","content":"hello"}' } },
       { type: "done", finishReason: "tool_calls" },
     ],
-    [{ type: "text-delta", text: "bitti" }, { type: "done", finishReason: "stop" }],
+    [{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }],
   ];
 }
 
 describe("runImplementer", () => {
-  it("implementer worktree'ye dosya yazar (cwd = worktree)", async () => {
+  it("implementer writes a file to the worktree (cwd = worktree)", async () => {
     const p = new MockProvider(writeThenDone());
     await runImplementer(deps(p), "coder", card(), dir);
-    expect(await readFile(join(dir, "out.txt"), "utf8")).toBe("merhaba");
+    expect(await readFile(join(dir, "out.txt"), "utf8")).toBe("hello");
   });
 
-  it("dönen task'ta mesaj reviewNotes'u içerir", async () => {
+  it("returning task's message includes reviewNotes", async () => {
     const p = new MockProvider([[{ type: "text-delta", text: "ok" }, { type: "done", finishReason: "stop" }]]);
-    await runImplementer(deps(p), "coder", card({ reviewNotes: ["testi düzelt"] }), dir);
+    await runImplementer(deps(p), "coder", card({ reviewNotes: ["fix the test"] }), dir);
     const msg = p.requests[0].messages.map((m) => m.content).join("\n");
-    expect(msg).toContain("DÖNEN");
-    expect(msg).toContain("testi düzelt");
+    expect(msg).toContain("RETURNING");
+    expect(msg).toContain("fix the test");
   });
 });

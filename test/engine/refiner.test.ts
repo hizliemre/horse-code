@@ -15,7 +15,7 @@ function submit(argsJson: string): ChatEvent[] {
   ];
 }
 function deps(provider: MockProvider, skillRegistry = new SkillRegistry(), signal?: AbortSignal): TaskCycleDeps {
-  const roles: Record<string, RoleConfig> = { refiner: { models: ["m"], systemPrompt: "refine et" } };
+  const roles: Record<string, RoleConfig> = { refiner: { models: ["m"], systemPrompt: "refine it" } };
   return {
     provider,
     roleRegistry: new RoleRegistry(roles, {}, skillRegistry),
@@ -35,22 +35,22 @@ describe("routeIntent", () => {
 });
 
 describe("runRefiner", () => {
-  it("prompt'u refine eder + intent üretir", async () => {
-    const p = new MockProvider([submit('{"refinedPrompt":"X yap","intent":"feature"}')]);
-    const out = await runRefiner(deps(p), "x yapabilir misin");
+  it("refines the prompt + produces intent", async () => {
+    const p = new MockProvider([submit('{"refinedPrompt":"Do X","intent":"feature"}')]);
+    const out = await runRefiner(deps(p), "can you do x");
     expect(out.intent).toBe("feature");
-    expect(out.refinedPrompt).toBe("X yap");
+    expect(out.refinedPrompt).toBe("Do X");
   });
 
-  it("skill listing eklendiyse skill tool toolset'te (E-skills coupling)", async () => {
+  it("if skill listing is added, the skill tool is in the toolset (E-skills coupling)", async () => {
     const sr = new SkillRegistry();
-    sr.register({ name: "tdd", description: "TDD", content: "TDD içeriği" });
+    sr.register({ name: "tdd", description: "TDD", content: "TDD content" });
     const p = new MockProvider([submit('{"refinedPrompt":"x","intent":"chat"}')]);
     await runRefiner(deps(p, sr), "x");
     expect(p.requests[0].tools.map((t) => t.name)).toContain("skill");
   });
 
-  it("iptal edilmişse fırlatır", async () => {
+  it("throws if cancelled", async () => {
     const ac = new AbortController();
     ac.abort();
     const p = new MockProvider([submit('{"refinedPrompt":"x","intent":"chat"}')]);

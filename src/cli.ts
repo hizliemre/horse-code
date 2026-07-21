@@ -53,17 +53,17 @@ export function parseArgs(argv: string[]): CliArgs {
 
 export function renderResult(res: JobResult): string {
   if (res.kind === "chat") return res.response;
-  if (res.kind === "rejected") return `Onaylanmadı (${res.stage} aşamasında durduruldu).`;
+  if (res.kind === "rejected") return `Not approved (stopped at the ${res.stage} stage).`;
   const pr =
     res.wave.status === "completed"
       ? `PR: ${res.wave.pr.url}`
-      : `Kısmi: ${res.wave.failed.length} başarısız, ${res.wave.skipped.length} atlandı`;
+      : `Partial: ${res.wave.failed.length} failed, ${res.wave.skipped.length} skipped`;
   const rev = res.revision ? `\nrevision: ${res.revision.status}` : "";
-  return `${res.report}\n\nDurum: ${res.wave.status} — ${pr}${rev}`;
+  return `${res.report}\n\nStatus: ${res.wave.status} — ${pr}${rev}`;
 }
 
-// TUI hem stdin hem stdout TTY iken açılır: stdin pipe olursa (echo x | hcode)
-// Ink Q&A anında non-TTY stdin'de setRawMode ile çöker → o durumda düz moda düş.
+// TUI opens only when both stdin and stdout are a TTY: if stdin is piped (echo x | hcode)
+// Ink's Q&A crashes on setRawMode with a non-TTY stdin → fall back to plain mode in that case.
 export function shouldUseTui(stdinTTY: boolean, stdoutTTY: boolean, noTui: boolean): boolean {
   return stdinTTY && stdoutTTY && !noTui;
 }
@@ -117,7 +117,7 @@ export async function main(argv: string[]): Promise<void> {
     });
   const useTui = shouldUseTui(!!process.stdin.isTTY, !!process.stdout.isTTY, !!args.noTui);
 
-  // Argümansız + interaktif TTY → TUI REPL (görev-input döngüsü).
+  // No arguments + interactive TTY → TUI REPL (task-input loop).
   if (!args.prompt) {
     if (useTui) {
       const { runTuiRepl } = await import("./tui/app.js");
@@ -128,7 +128,7 @@ export async function main(argv: string[]): Promise<void> {
       });
       return;
     }
-    console.error('kullanım: hcode "<prompt>" [--branch b] [--job j] [--rounds n] [--revision-rounds n] [--no-tui]  |  hcode (interaktif TUI REPL)  |  hcode init');
+    console.error('usage: hcode "<prompt>" [--branch b] [--job j] [--rounds n] [--revision-rounds n] [--no-tui]  |  hcode (interactive TUI REPL)  |  hcode init');
     process.exitCode = 1;
     return;
   }
@@ -141,7 +141,7 @@ export async function main(argv: string[]): Promise<void> {
   };
 
   if (useTui) {
-    const { runTui } = await import("./tui/app.js"); // ink'i yalnız TUI dalında yükle
+    const { runTui } = await import("./tui/app.js"); // load ink only on the TUI branch
     const res = await runTui({ buildDeps, job });
     console.log(renderResult(res));
     return;
@@ -153,13 +153,13 @@ export async function main(argv: string[]): Promise<void> {
     const res = await runJob(deps, { ...job, askUser: makeAskUser(read) });
     console.log(renderResult(res));
   } finally {
-    close(); // stdin'i kapat → süreç asılı kalmasın
+    close(); // close stdin → don't leave the process hanging
   }
 }
 
-// Yalnızca doğrudan çalıştırıldığında (bin) main'i koş; import (test) sırasında koşma.
-// realpathSync: global bin symlink (npm link/-g) ile argv[1]=symlink yolu iken import.meta.url
-// çözülmüş gerçek yol → eşleşmezdi ve main hiç koşmazdı. Symlink'i çözerek eşitle.
+// Only run main when executed directly (bin); don't run it on import (test).
+// realpathSync: with a global bin symlink (npm link/-g), argv[1]=symlink path while import.meta.url
+// resolves to the real path → they wouldn't match and main would never run. Resolve the symlink to align them.
 function isMainModule(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
@@ -171,7 +171,7 @@ function isMainModule(): boolean {
 }
 if (isMainModule()) {
   main(process.argv.slice(2)).catch((e) => {
-    console.error("hata:", e instanceof Error ? e.message : e);
+    console.error("error:", e instanceof Error ? e.message : e);
     process.exitCode = 1;
   });
 }

@@ -5,8 +5,8 @@ import { readOnlyRegistry } from "./reviewer.js";
 import type { TaskCycleDeps } from "./task-types.js";
 
 /**
- * Coach chat: salt-okunur repo tool'larıyla (read/grep/glob + skill) prompt'u yanıtlar; final metni döner.
- * `history` önceki konuşma turnleri (user/assistant) → çok-turlu session tutarlılığı (conversation ilerler).
+ * Coach chat: answers the prompt using read-only repo tools (read/grep/glob + skill); returns the final text.
+ * `history` is the previous conversation turns (user/assistant) → multi-turn session consistency (the conversation progresses).
  */
 export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: string, history: Message[] = []): Promise<string> {
   const { model, systemPrompt } = deps.roleRegistry.resolve("coach");

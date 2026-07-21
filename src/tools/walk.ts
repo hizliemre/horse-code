@@ -3,13 +3,13 @@ import { join } from "node:path";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".horsecode"]);
 
-/** root altındaki dosyaların mutlak yollarını yield eder; SKIP_DIRS atlanır. */
+/** Yields absolute paths of files under root; SKIP_DIRS entries are skipped. */
 export async function* walkFiles(root: string): AsyncIterable<string> {
   let entries;
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch {
-    return; // okunamayan dizin → sessizce atla
+    return; // unreadable directory → skip silently
   }
   for (const e of entries) {
     if (e.isDirectory()) {

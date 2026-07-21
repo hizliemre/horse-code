@@ -21,12 +21,12 @@ function parseExisting(raw: string | undefined): Record<string, unknown> {
   }
 }
 
-/** İnteraktif kurulum: baseUrl + apiKey sorar, global config'e merge-koru yazar. */
+/** Interactive setup: asks for baseUrl + apiKey, writes a merge-preserving update to the global config. */
 export async function runInit(io: InitIO): Promise<void> {
   const path = `${io.home}/.horsecode/config.json`;
   const existing = parseExisting(io.readFile(path));
   const baseUrl = (await io.read(`omniroute baseUrl [${DEFAULT_BASE_URL}]: `)).trim() || DEFAULT_BASE_URL;
-  const apiKey = (await io.read("omniroute apiKey (boş=yok): ")).trim();
+  const apiKey = (await io.read("omniroute apiKey (empty=none): ")).trim();
   const config: Record<string, unknown> = {
     ...existing,
     baseUrl,
@@ -35,5 +35,5 @@ export async function runInit(io: InitIO): Promise<void> {
   if (apiKey) config.apiKey = apiKey;
   else delete config.apiKey;
   io.writeFile(path, JSON.stringify(config, null, 2) + "\n");
-  io.log(`config yazıldı: ${path} (apiKey: ${apiKey ? "set" : "yok"})`);
+  io.log(`config written: ${path} (apiKey: ${apiKey ? "set" : "none"})`);
 }

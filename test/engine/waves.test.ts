@@ -9,14 +9,14 @@ function board(cards: { id: string; deps?: string[] }[]): Board {
 }
 
 describe("computeWaves", () => {
-  it("bağımsız kartlar aynı dalgada", () => {
+  it("independent cards in the same wave", () => {
     expect(computeWaves(board([{ id: "a" }, { id: "b" }]))).toEqual([["a", "b"]]);
   });
-  it("zincir sıralı dalgalar", () => {
+  it("chain → sequential waves", () => {
     const b = board([{ id: "a" }, { id: "b", deps: ["a"] }, { id: "c", deps: ["b"] }]);
     expect(computeWaves(b)).toEqual([["a"], ["b"], ["c"]]);
   });
-  it("elmas: a → {b,c} → d", () => {
+  it("diamond: a → {b,c} → d", () => {
     const b = board([
       { id: "a" },
       { id: "b", deps: ["a"] },
@@ -25,25 +25,25 @@ describe("computeWaves", () => {
     ]);
     expect(computeWaves(b)).toEqual([["a"], ["b", "c"], ["d"]]);
   });
-  it("döngü → hata", () => {
+  it("cycle → error", () => {
     const b = board([{ id: "a", deps: ["b"] }, { id: "b", deps: ["a"] }]);
-    expect(() => computeWaves(b)).toThrow(/döngü|çözülemeyen/);
+    expect(() => computeWaves(b)).toThrow(/cycle|unresolved/);
   });
-  it("boş board → boş dalgalar", () => {
+  it("empty board → empty waves", () => {
     expect(computeWaves(new Board())).toEqual([]);
   });
 });
 
 describe("validateWaves", () => {
   const chain = () => board([{ id: "a" }, { id: "b", deps: ["a"] }]);
-  it("geçerli dalgalar → true", () => {
+  it("valid waves → true", () => {
     expect(validateWaves([["a"], ["b"]], chain())).toBe(true);
   });
-  it("dep aynı dalgada → false", () => {
+  it("dep in the same wave → false", () => {
     expect(validateWaves([["a", "b"]], chain())).toBe(false);
   });
-  it("eksik/tekrar kart → false", () => {
-    expect(validateWaves([["a"]], chain())).toBe(false); // b eksik
-    expect(validateWaves([["a"], ["b"], ["a"]], chain())).toBe(false); // a tekrar
+  it("missing/duplicate card → false", () => {
+    expect(validateWaves([["a"]], chain())).toBe(false); // b missing
+    expect(validateWaves([["a"], ["b"], ["a"]], chain())).toBe(false); // a duplicated
   });
 });

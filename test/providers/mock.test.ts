@@ -11,7 +11,7 @@ async function drain(it: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
 const req = (model: string): ChatRequest => ({ model, messages: [], tools: [] });
 
 describe("MockProvider", () => {
-  it("her chat çağrısında sıradaki turn'ü yayar ve istekleri kaydeder", async () => {
+  it("emits the next turn on each chat call and records requests", async () => {
     const p = new MockProvider([
       [{ type: "text-delta", text: "a" }, { type: "done", finishReason: "stop" }],
       [{ type: "text-delta", text: "b" }, { type: "done", finishReason: "stop" }],
@@ -27,7 +27,7 @@ describe("MockProvider", () => {
     expect(p.requests.map((r) => r.model)).toEqual(["m1", "m2"]);
   });
 
-  it("turn'ler bitince varsayılan done yayar", async () => {
+  it("emits a default done once turns are exhausted", async () => {
     const p = new MockProvider([]);
     expect(await drain(p.chat(req("m"), new AbortController().signal))).toEqual([
       { type: "done", finishReason: "stop" },

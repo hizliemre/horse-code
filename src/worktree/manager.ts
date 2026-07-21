@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
 
-/** PR diff'i revision prompt'unu şişirmesin: bu char sınırının üstü kesilir. */
+/** Don't let the PR diff bloat the revision prompt: anything above this char limit is truncated. */
 const MAX_DIFF_CHARS = 60_000;
 
 export interface WorktreeSession {
@@ -37,11 +37,11 @@ export class WorktreeManager {
     this.git = deps.runGit ?? defaultGitRunner;
   }
 
-  /** git çalıştırır; nonzero exit → net hata fırlatır. Çıktı (stdout) döner. */
+  /** Runs git; nonzero exit → throws a clear error. Returns output (stdout). */
   private async run(args: string[], cwd: string): Promise<string> {
     const r = await this.git(args, cwd);
     if (r.code !== 0) {
-      throw new Error(`git ${args.join(" ")} başarısız (${r.code}): ${(r.stderr || r.stdout).trim()}`);
+      throw new Error(`git ${args.join(" ")} failed (${r.code}): ${(r.stderr || r.stdout).trim()}`);
     }
     return r.stdout;
   }
@@ -78,36 +78,36 @@ export class WorktreeManager {
     );
     const files = diff.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
     if (files.length > 0) return { status: "conflict", files };
-    // Çakışma değil, başka bir merge hatası → yüzeye çıkar.
-    throw new Error(`git merge ${task.branch} başarısız (${r.code}): ${(r.stderr || r.stdout).trim()}`);
+    // Not a conflict, some other merge error → surface it.
+    throw new Error(`git merge ${task.branch} failed (${r.code}): ${(r.stderr || r.stdout).trim()}`);
   }
 
-  /** Base worktree'de git'in unmerged (çakışık) işaretlediği dosyalar. */
+  /** Files git marks as unmerged (conflicted) in the base worktree. */
   async unmergedFiles(session: WorktreeSession): Promise<string[]> {
     const r = await this.git(["diff", "--name-only", "--diff-filter=U"], session.baseWorktree);
     return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
   }
 
-  /** base branch'e karşı base worktree'deki değişikliklerin unified diff'i (PR diff'i). */
+  /** Unified diff of changes in the base worktree against the base branch (the PR diff). */
   async diff(session: WorktreeSession, base: string): Promise<string> {
     const r = await this.git(["diff", `${base}...${session.baseBranch}`], session.baseWorktree);
     const out = r.stdout;
     if (out.length <= MAX_DIFF_CHARS) return out;
-    return out.slice(0, MAX_DIFF_CHARS) + `\n… (diff kısaltıldı: ${out.length - MAX_DIFF_CHARS} karakter atlandı)`;
+    return out.slice(0, MAX_DIFF_CHARS) + `\n… (diff truncated: ${out.length - MAX_DIFF_CHARS} characters omitted)`;
   }
 
   async commitMerge(session: WorktreeSession, message?: string): Promise<void> {
     await this.run(["add", "-A"], session.baseWorktree);
     const staged = await this.git(["diff", "--cached", "--quiet"], session.baseWorktree);
-    if (staged.code === 0) return; // sahnede değişiklik yok → commit'i atla (nothing-to-commit throw'unu önle)
+    if (staged.code === 0) return; // nothing staged → skip commit (avoid nothing-to-commit throw)
     await this.run(message ? ["commit", "-m", message] : ["commit", "--no-edit"], session.baseWorktree);
   }
 
-  /** Task worktree'sindeki tüm değişiklikleri task branch'ine commit'ler; değişiklik yoksa no-op. */
+  /** Commits all changes in the task worktree to the task branch; no-op if there are no changes. */
   async commitTask(task: TaskWorktree, message: string): Promise<void> {
     await this.run(["add", "-A"], task.worktree);
     const staged = await this.git(["diff", "--cached", "--quiet"], task.worktree);
-    if (staged.code === 0) return; // fark yok → no-op
+    if (staged.code === 0) return; // no diff → no-op
     await this.run(["commit", "-m", message], task.worktree);
   }
 
@@ -123,7 +123,7 @@ export class WorktreeManager {
   async closeSession(session: WorktreeSession): Promise<void> {
     await rm(session.root, { recursive: true, force: true });
     await this.git(["worktree", "prune"], this.repoRoot);
-    // Tüm branch'leri listele, prefix ile kod'da filtrele (git glob'unun / davranışına güvenme).
+    // List all branches, filter by prefix in code (don't rely on git glob's / behavior).
     const prefix = `hc/${session.jobSlug}/`;
     const list = await this.git(["branch", "--list"], this.repoRoot);
     const branches = list.stdout
@@ -137,7 +137,7 @@ export class WorktreeManager {
 
   async push(session: WorktreeSession, remote = "origin"): Promise<void> {
     const check = await this.git(["remote", "get-url", remote], session.baseWorktree);
-    if (check.code !== 0) return; // remote yok → local-only, push atla
+    if (check.code !== 0) return; // no remote → local-only, skip push
     await this.run(["push", remote, session.baseBranch], session.baseWorktree);
   }
 

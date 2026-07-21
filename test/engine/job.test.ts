@@ -17,7 +17,7 @@ import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider, ChatRequest } from "../../src/core/types.js";
 import type { ProgressEvent } from "../../src/engine/progress.js";
 
-// Tüm rolleri systemPrompt'a göre yanıtlayan uçtan-uca provider.
+// End-to-end provider that responds to all roles based on systemPrompt.
 function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[] } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
@@ -43,20 +43,20 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
         yield { type: "text-delta", text: t } as const;
         yield { type: "done", finishReason: "stop" } as const;
       };
-      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"X yap","intent":"${opts.intent ?? "feature"}"}`); return; }
-      if (sys.includes("P-coach")) { yield* stop("coach raporu"); return; }
+      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"do X","intent":"${opts.intent ?? "feature"}"}`); return; }
+      if (sys.includes("P-coach")) { yield* stop("coach report"); return; }
       if (sys.includes("P-analyst")) {
         if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# spec" })); return; }
-        yield* stop("bitti"); return;
+        yield* stop("done"); return;
       }
       if (sys.includes("P-planner")) {
         if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# plan" })); return; }
-        yield* stop("bitti"); return;
+        yield* stop("done"); return;
       }
-      if (sys.includes("P-pm")) { yield* submit('{"tasks":[{"id":"t1","title":"gorev-a","deps":[]}]}'); return; }
+      if (sys.includes("P-pm")) { yield* submit('{"tasks":[{"id":"t1","title":"task-a","deps":[]}]}'); return; }
       if (sys.includes("P-router")) { yield* submit('{"role":"coder"}'); return; }
       if (sys.includes("P-reviewer")) { yield* submit('{"verdict":"pass","notes":[]}'); return; }
-      if (sys.includes("Perspektif")) { yield* submit('{"concerns":[],"recommendation":"approve"}'); return; }
+      if (sys.includes("perspective")) { yield* submit('{"concerns":[],"recommendation":"approve"}'); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
         yield* submit(arr[judgeCall] ?? arr[arr.length - 1]);
@@ -71,8 +71,8 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
         return;
       }
       if (sys.includes("P-senior-coder")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "fix.txt", content: "düzeltme" })); return; }
-        yield* stop("bitti"); return;
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "fix.txt", content: "fix" })); return; }
+        yield* stop("done"); return;
       }
       yield* stop("ok"); // coder / architect / team-lead → no-op
     },
@@ -105,7 +105,7 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
     "code-reviewer": { models: ["m"], systemPrompt: "P-reviewer" },
     "team-lead": { models: ["m"], systemPrompt: "P-teamlead" },
   };
-  const councilors: CouncilorConfig[] = [{ name: "sec", perspective: "güvenlik", models: ["m"] }];
+  const councilors: CouncilorConfig[] = [{ name: "sec", perspective: "security", models: ["m"] }];
   return {
     provider,
     roleRegistry: new RoleRegistry(roles, {}, new SkillRegistry()),
@@ -123,29 +123,29 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
 }
 
 describe("runJob", () => {
-  it("chat: intent chat → coach cevabı", async () => {
+  it("chat: intent chat → coach response", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const p = jobProvider({ intent: "chat" });
-      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "merhaba", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 });
+      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "hello", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 });
       expect(res.kind).toBe("chat");
-      if (res.kind === "chat") expect(res.response).toBe("coach raporu");
+      if (res.kind === "chat") expect(res.response).toBe("coach report");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("rejected: spec onaylanmaz → rejected(spec)", async () => {
+  it("rejected: spec not approved → rejected(spec)", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const p = jobProvider({ intent: "feature", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "durdur", maxRounds: 1 });
+      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "stop", maxRounds: 1 });
       expect(res.kind).toBe("rejected");
       if (res.kind === "rejected") expect(res.stage).toBe("spec");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("done: uçtan uca feature → spec/plan → board → waves → PR → rapor", async () => {
+  it("done: end-to-end feature → spec/plan → board → waves → PR → report", async () => {
     const repo = await initTmpRepo();
     const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     try {
@@ -154,14 +154,14 @@ describe("runJob", () => {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const adapter = fakeAdapter();
       const p = jobProvider({ intent: "feature" });
-      const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X ekle", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 });
+      const res = await runJob(jdeps(p, mgr, adapter), { prompt: "add X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 });
       expect(res.kind).toBe("done");
       if (res.kind === "done") {
         expect(res.wave.status).toBe("completed");
-        expect(res.report).toBe("coach raporu");
+        expect(res.report).toBe("coach report");
         expect(existsSync(join(res.session.baseWorktree, ".hc/spec.md"))).toBe(true);
         expect(existsSync(join(res.session.baseWorktree, ".hc/plan.md"))).toBe(true);
-        expect(res.revision?.status).toBe("approved"); // principal ilk turda onayladı
+        expect(res.revision?.status).toBe("approved"); // principal approved on the first round
       }
       expect(adapter.calls).toBe(1);
     } finally {
@@ -170,7 +170,7 @@ describe("runJob", () => {
     }
   });
 
-  it("done: principal değişiklik ister → revision (senior düzeltir, postComments)", async () => {
+  it("done: principal requests changes → revision (senior fixes it, postComments)", async () => {
     const repo = await initTmpRepo();
     const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     try {
@@ -179,18 +179,18 @@ describe("runJob", () => {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const adapter = fakeAdapter();
       // principal: round1 request-changes, round2 approve
-      const p = jobProvider({ intent: "feature", principal: ['{"decision":"request-changes","comments":["testsiz"]}', '{"decision":"approve","comments":[]}'] });
+      const p = jobProvider({ intent: "feature", principal: ['{"decision":"request-changes","comments":["no tests"]}', '{"decision":"approve","comments":[]}'] });
       const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, revisionRounds: 3 });
       expect(res.kind).toBe("done");
       if (res.kind === "done") expect(res.revision?.status).toBe("approved");
-      expect(adapter.comments).toEqual([["testsiz"]]);
+      expect(adapter.comments).toEqual([["no tests"]]);
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(bare, { recursive: true, force: true });
     }
   });
 
-  it("abort: pre-aborted → fırlatır", async () => {
+  it("abort: pre-aborted → rethrows", async () => {
     const repo = await initTmpRepo();
     try {
       const ac = new AbortController(); ac.abort();
@@ -202,7 +202,7 @@ describe("runJob", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("done: onEvent faz sırası + board event'leri", async () => {
+  it("done: onEvent phase order + board events", async () => {
     const repo = await initTmpRepo();
     const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     try {
@@ -229,22 +229,22 @@ describe("runJob", () => {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const p = jobProvider({ intent: "chat" });
       const events: ProgressEvent[] = [];
-      await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "merhaba", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
+      await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "hello", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
       expect(events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase)).toEqual(["upstream", "chat"]);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("onEvent throw ederse job düşmez (gözlemci izole)", async () => {
+  it("job doesn't crash if onEvent throws (observer isolated)", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const p = jobProvider({ intent: "chat" });
-      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "x", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: () => { throw new Error("render patladı"); } });
+      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "x", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: () => { throw new Error("render exploded"); } });
       expect(res.kind).toBe("chat");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("beklenmedik throw'da session temizlenir (orphan worktree yok)", async () => {
+  it("on an unexpected throw, session is cleaned up (no orphan worktree)", async () => {
     const repo = await initTmpRepo();
     const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     try {
@@ -254,12 +254,12 @@ describe("runJob", () => {
       let closed = false;
       const origClose = mgr.closeSession.bind(mgr);
       mgr.closeSession = async (s) => { closed = true; return origClose(s); };
-      mgr.commitMerge = async () => { throw new Error("patla"); }; // approved sonrası erken throw
+      mgr.commitMerge = async () => { throw new Error("boom"); }; // early throw after approval
       const p = jobProvider({ intent: "feature" });
       await expect(
         runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 }),
-      ).rejects.toThrow("patla");
-      expect(closed).toBe(true); // catch closeSession'ı çağırdı
+      ).rejects.toThrow("boom");
+      expect(closed).toBe(true); // catch called closeSession
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(bare, { recursive: true, force: true });

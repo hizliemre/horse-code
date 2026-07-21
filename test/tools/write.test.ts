@@ -16,30 +16,30 @@ afterEach(async () => {
 });
 
 describe("write_file", () => {
-  it("üst dizinleri oluşturarak dosya yazar", async () => {
-    const res = await writeFileTool.run({ path: "src/yeni.ts", content: "export const x = 1;" }, ctx());
+  it("writes a file, creating parent directories", async () => {
+    const res = await writeFileTool.run({ path: "src/new.ts", content: "export const x = 1;" }, ctx());
     expect(res.isError).toBe(false);
-    expect(await readFile(join(dir, "src/yeni.ts"), "utf8")).toBe("export const x = 1;");
+    expect(await readFile(join(dir, "src/new.ts"), "utf8")).toBe("export const x = 1;");
   });
 
-  it("describe onay için allowKey + preview üretir", () => {
+  it("describe produces allowKey + preview for approval", () => {
     const d = writeFileTool.describe!({ path: "src/a.ts", content: "abc" });
     expect(d.allowKey).toBe("src/a.ts");
     expect(d.preview).toContain("src/a.ts");
-    expect(d.preview).toContain("3"); // byte sayısı
+    expect(d.preview).toContain("3"); // byte count
   });
 
-  it("geçersiz args'ta throw etmez, isError:true döner", async () => {
+  it("does not throw on invalid args, returns isError:true", async () => {
     const res1 = await writeFileTool.run({ path: "a.ts" }, ctx());
     expect(res1.isError).toBe(true);
-    expect(res1.content).toMatch(/geçersiz|invalid/i);
+    expect(res1.content).toMatch(/invalid/i);
 
     const res2 = await writeFileTool.run({}, ctx());
     expect(res2.isError).toBe(true);
-    expect(res2.content).toMatch(/geçersiz|invalid/i);
+    expect(res2.content).toMatch(/invalid/i);
   });
 
-  it("cwd dışına yazma reddedilir (workdir-guard)", async () => {
+  it("rejects writing outside cwd (workdir-guard)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "hc-wg-"));
     try {
       const res = await writeFileTool.run({ path: "../escape.txt", content: "x" }, { cwd: dir, signal: new AbortController().signal });
@@ -48,7 +48,7 @@ describe("write_file", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
-  it("cwd içine yazılır (guard engellemez)", async () => {
+  it("writes inside cwd (guard does not block it)", async () => {
     const dir = await mkdtemp(join(tmpdir(), "hc-wg-"));
     try {
       const res = await writeFileTool.run({ path: "alt/ic.txt", content: "y" }, { cwd: dir, signal: new AbortController().signal });

@@ -16,7 +16,7 @@ export function createWebFetchTool(fetchFn: FetchLike = globalThis.fetch as Fetc
       const parsed = params.safeParse(rawArgs);
       if (!parsed.success) {
         return {
-          content: `web_fetch: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+          content: `web_fetch: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
           isError: true,
         };
       }
@@ -24,11 +24,11 @@ export function createWebFetchTool(fetchFn: FetchLike = globalThis.fetch as Fetc
       try {
         const res = await fetchFn(a.url, { signal: ctx.signal });
         const text = await res.text();
-        const capped = text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) + "\n… (kesildi)" : text;
+        const capped = text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) + "\n… (truncated)" : text;
         return { content: capped, isError: !res.ok };
       } catch (e) {
         return {
-          content: `web_fetch hatası: ${e instanceof Error ? e.message : String(e)}`,
+          content: `web_fetch error: ${e instanceof Error ? e.message : String(e)}`,
           isError: true,
         };
       }

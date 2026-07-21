@@ -16,7 +16,7 @@ export const globTool: Tool = {
     const parsed = params.safeParse(rawArgs);
     if (!parsed.success) {
       return {
-        content: `glob: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        content: `glob: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
         isError: true,
       };
     }
@@ -24,16 +24,16 @@ export const globTool: Tool = {
     const isMatch = picomatch(a.pattern);
     const out: string[] = [];
     for await (const abs of walkFiles(ctx.cwd)) {
-      // picomatch POSIX ayraç bekler; Windows'ta normalize et.
+      // picomatch expects POSIX separators; normalize on Windows.
       const rel = relative(ctx.cwd, abs).split(sep).join("/");
       if (isMatch(rel)) {
         out.push(rel);
         if (out.length >= MAX_RESULTS) {
-          out.push(`… (${MAX_RESULTS}+ sonuç, kesildi)`);
+          out.push(`… (${MAX_RESULTS}+ results, truncated)`);
           break;
         }
       }
     }
-    return { content: out.length ? out.join("\n") : "eşleşme yok", isError: false };
+    return { content: out.length ? out.join("\n") : "no matches", isError: false };
   },
 };

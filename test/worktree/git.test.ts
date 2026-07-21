@@ -10,13 +10,13 @@ afterEach(async () => {
 });
 
 describe("defaultGitRunner", () => {
-  it("başarılı komutta stdout + code 0 döner", async () => {
+  it("returns stdout + code 0 on a successful command", async () => {
     repo = await initTmpRepo();
     const r = await defaultGitRunner(["rev-parse", "--abbrev-ref", "HEAD"], repo);
     expect(r.code).toBe(0);
     expect(r.stdout.trim()).toBe("main");
   });
-  it("başarısız komutta nonzero code döner (throw etmez)", async () => {
+  it("returns a nonzero code on a failed command (does not throw)", async () => {
     repo = await initTmpRepo();
     const r = await defaultGitRunner(["this-is-not-a-git-command"], repo);
     expect(r.code).not.toBe(0);

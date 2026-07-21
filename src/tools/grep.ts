@@ -16,7 +16,7 @@ export const grepTool: Tool = {
     const parsed = params.safeParse(rawArgs);
     if (!parsed.success) {
       return {
-        content: `grep: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        content: `grep: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
         isError: true,
       };
     }
@@ -26,7 +26,7 @@ export const grepTool: Tool = {
       re = new RegExp(a.pattern, a.flags ?? "");
     } catch (e) {
       return {
-        content: `grep: geçersiz regex: ${e instanceof Error ? e.message : String(e)}`,
+        content: `grep: invalid regex: ${e instanceof Error ? e.message : String(e)}`,
         isError: true,
       };
     }
@@ -38,19 +38,19 @@ export const grepTool: Tool = {
       } catch {
         continue;
       }
-      if (text.includes("\u0000")) continue; // ikili dosyayı atla (null bayt)
+      if (text.includes("\u0000")) continue; // skip binary files (null byte)
       const rel = relative(ctx.cwd, abs);
       const lines = text.split("\n");
       for (let i = 0; i < lines.length; i++) {
         if (re.test(lines[i])) {
           out.push(`${rel}:${i + 1}:${lines[i]}`);
           if (out.length >= MAX_MATCHES) {
-            out.push(`… (${MAX_MATCHES}+ eşleşme, kesildi)`);
+            out.push(`… (${MAX_MATCHES}+ matches, truncated)`);
             return { content: out.join("\n"), isError: false };
           }
         }
       }
     }
-    return { content: out.length ? out.join("\n") : "eşleşme yok", isError: false };
+    return { content: out.length ? out.join("\n") : "no matches", isError: false };
   },
 };

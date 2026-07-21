@@ -15,21 +15,21 @@ export class RoleRegistry {
 
   resolve(roleName: string): { model: string; systemPrompt: string } {
     const role = this.roles[roleName];
-    if (!role) throw new Error(`tanımsız role: ${roleName}`);
-    if (!role.models.length) throw new Error(`role '${roleName}' için model tanımlı değil`);
+    if (!role) throw new Error(`undefined role: ${roleName}`);
+    if (!role.models.length) throw new Error(`role '${roleName}' has no model defined`);
 
     const i = this.index.get(roleName) ?? 0;
     const model = role.models[i % role.models.length];
     this.index.set(roleName, i + 1);
 
     let systemPrompt = role.systemPrompt ?? this.defaultPrompts[roleName];
-    if (systemPrompt === undefined) throw new Error(`role '${roleName}' için systemPrompt yok`);
+    if (systemPrompt === undefined) throw new Error(`role '${roleName}' has no systemPrompt`);
 
     if (this.skillRegistry) {
       try {
         systemPrompt = applySkills(systemPrompt, role.skills ?? [], this.skillRegistry);
       } catch (e) {
-        throw new Error(`role '${roleName}' skill hatası: ${e instanceof Error ? e.message : String(e)}`);
+        throw new Error(`role '${roleName}' skill error: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
 

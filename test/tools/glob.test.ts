@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("glob", () => {
-  it("desene uyan göreli yolları döner", async () => {
+  it("returns relative paths matching the pattern", async () => {
     await mkdir(join(dir, "src"), { recursive: true });
     await writeFile(join(dir, "src/a.ts"), "", "utf8");
     await writeFile(join(dir, "src/b.js"), "", "utf8");
@@ -25,13 +25,13 @@ describe("glob", () => {
     expect(res.content).not.toContain("src/b.js");
   });
 
-  it("eşleşme yoksa bilgilendirir", async () => {
+  it("reports when there are no matches", async () => {
     await writeFile(join(dir, "a.txt"), "", "utf8");
     const res = await globTool.run({ pattern: "**/*.rs" }, ctx());
-    expect(res.content).toContain("eşleşme yok");
+    expect(res.content).toContain("no matches");
   });
 
-  it("geçersiz args'ta hata döner, throw etmez", async () => {
+  it("returns an error on invalid args, does not throw", async () => {
     const res = await globTool.run({}, ctx());
     expect(res.isError).toBe(true);
   });

@@ -1,23 +1,23 @@
 import type { z } from "zod";
 
-// --- Mesajlar ---
+// --- Messages ---
 export type Role = "system" | "user" | "assistant" | "tool";
 
 export interface ToolCall {
   id: string;
   name: string;
-  arguments: string; // ham JSON string (LLM'den geldiği gibi)
+  arguments: string; // raw JSON string (as it comes from the LLM)
 }
 
 export interface Message {
   role: Role;
   content: string;
-  toolCalls?: ToolCall[]; // assistant mesajlarında
-  toolCallId?: string; // role === "tool" olan mesajlarda
-  name?: string; // tool adı (role === "tool")
+  toolCalls?: ToolCall[]; // on assistant messages
+  toolCallId?: string; // on messages where role === "tool"
+  name?: string; // tool name (role === "tool")
 }
 
-// --- Tool'lar ---
+// --- Tools ---
 export type PermissionLevel = "safe" | "write" | "exec";
 export type PermissionMode = "ask" | "acceptEdits" | "auto";
 
@@ -32,8 +32,8 @@ export interface ToolContext {
 }
 
 export interface PermissionDescriptor {
-  allowKey: string; // shell: komut · dosya: hedef yol
-  preview: string; // kullanıcıya gösterilecek özet (komut, diff başlığı, vb.)
+  allowKey: string; // shell: command · file: target path
+  preview: string; // summary to show the user (command, diff title, etc.)
 }
 
 export interface Tool {
@@ -42,7 +42,7 @@ export interface Tool {
   permissionLevel: PermissionLevel;
   parameters: z.ZodType;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
-  // write/exec tool'ları onay isteği üretir; safe tool'larda gerekmez.
+  // write/exec tools produce a permission request; not needed for safe tools.
   describe?(args: Record<string, unknown>): PermissionDescriptor;
 }
 
@@ -64,7 +64,7 @@ export interface Provider {
   chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent>;
 }
 
-// --- Agent event stream (UI bunlara abone olur) ---
+// --- Agent event stream (the UI subscribes to these) ---
 export type AgentEvent =
   | { type: "message.delta"; text: string }
   | { type: "message.done"; message: Message }
@@ -81,7 +81,7 @@ export type AgentEvent =
   | { type: "error"; message: string }
   | { type: "abort" };
 
-// --- Tip guard'lar ---
+// --- Type guards ---
 export function isTextDelta(
   e: ChatEvent,
 ): e is Extract<ChatEvent, { type: "text-delta" }> {

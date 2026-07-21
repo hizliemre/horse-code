@@ -23,7 +23,7 @@ function readTurn(path: string): ChatEvent[] {
   ];
 }
 function deps(provider: MockProvider, signal?: AbortSignal): TaskCycleDeps {
-  const roles: Record<string, RoleConfig> = { coach: { models: ["m"], systemPrompt: "coach ol" } };
+  const roles: Record<string, RoleConfig> = { coach: { models: ["m"], systemPrompt: "be a coach" } };
   return {
     provider,
     roleRegistry: new RoleRegistry(roles, {}, new SkillRegistry()),
@@ -35,23 +35,23 @@ function deps(provider: MockProvider, signal?: AbortSignal): TaskCycleDeps {
 }
 
 describe("runCoachChat", () => {
-  it("tek-tur: prompt'u yanıtlar", async () => {
-    const p = new MockProvider([textTurn("cevabım")]);
-    expect(await runCoachChat(deps(p), "merhaba", dir)).toBe("cevabım");
+  it("single turn: answers the prompt", async () => {
+    const p = new MockProvider([textTurn("my answer")]);
+    expect(await runCoachChat(deps(p), "hello", dir)).toBe("my answer");
   });
 
-  it("salt-okunur tool'larla okuyup cevaplar; write/shell toolset'te yok", async () => {
-    await writeFile(join(dir, "a.txt"), "içerik", "utf8");
-    const p = new MockProvider([readTurn("a.txt"), textTurn("okudum ve cevaplıyorum")]);
-    const out = await runCoachChat(deps(p), "a.txt nedir", dir);
-    expect(out).toBe("okudum ve cevaplıyorum");
+  it("reads with read-only tools and answers; write/shell not in the toolset", async () => {
+    await writeFile(join(dir, "a.txt"), "content", "utf8");
+    const p = new MockProvider([readTurn("a.txt"), textTurn("I read it and I'm answering")]);
+    const out = await runCoachChat(deps(p), "what is a.txt", dir);
+    expect(out).toBe("I read it and I'm answering");
     const names = p.requests[0].tools.map((t) => t.name);
     expect(names).toEqual(expect.arrayContaining(["read_file", "grep", "glob", "skill"]));
     expect(names).not.toContain("write_file");
     expect(names).not.toContain("shell");
   });
 
-  it("iptal edilmişse fırlatır", async () => {
+  it("throws if cancelled", async () => {
     const ac = new AbortController();
     ac.abort();
     const p = new MockProvider([textTurn("x")]);

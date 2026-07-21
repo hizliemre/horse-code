@@ -10,17 +10,17 @@ let repo: string;
 afterEach(async () => { if (repo) await rm(repo, { recursive: true, force: true }); });
 
 describe("WorktreeManager.diff", () => {
-  it("base'e karşı baseBranch değişikliklerini unified diff'te verir", async () => {
+  it("returns baseBranch changes against base as a unified diff", async () => {
     repo = await initTmpRepo();
     const mgr = new WorktreeManager({ repoRoot: repo });
     const s = await mgr.openSession("main", "job");
-    await writeFile(join(s.baseWorktree, "yeni.txt"), "içerik\n", "utf8");
+    await writeFile(join(s.baseWorktree, "new.txt"), "content\n", "utf8");
     const g = (args: string[]) => defaultGitRunner(args, s.baseWorktree);
     await g(["add", "-A"]);
-    await g(["commit", "-m", "değişiklik"]);
+    await g(["commit", "-m", "change"]);
     const d = await mgr.diff(s, "main");
-    expect(d).toContain("yeni.txt");
-    expect(d).toContain("içerik");
+    expect(d).toContain("new.txt");
+    expect(d).toContain("content");
   });
 });
 
@@ -32,16 +32,16 @@ function mgrWithDiff(stdout: string): WorktreeManager {
 }
 
 describe("manager.diff size-cap", () => {
-  it("kısa diff aynen döner", async () => {
-    expect(await mgrWithDiff("kısa diff").diff(session, "main")).toBe("kısa diff");
+  it("short diff is returned unchanged", async () => {
+    expect(await mgrWithDiff("short diff").diff(session, "main")).toBe("short diff");
   });
 
-  it("uzun diff kesilir + kesme-notu eklenir", async () => {
+  it("long diff gets truncated + truncation note appended", async () => {
     const long = "x".repeat(70_000);
     const out = await mgrWithDiff(long).diff(session, "main");
     expect(out.length).toBeLessThan(70_000);
-    expect(out).toContain("diff kısaltıldı");
-    expect(out).toContain("10000 karakter atlandı"); // 70000 - 60000
-    expect(out.startsWith("x".repeat(100))).toBe(true); // baş korunur
+    expect(out).toContain("diff truncated");
+    expect(out).toContain("10000 characters omitted"); // 70000 - 60000
+    expect(out.startsWith("x".repeat(100))).toBe(true); // start is preserved
   });
 });

@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 describe("WorktreeManager push", () => {
-  it("base branch'i remote'a push eder", async () => {
+  it("pushes the base branch to the remote", async () => {
     repo = await initTmpRepo();
     bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     await defaultGitRunner(["init", "--bare", "-b", "main"], bare);
@@ -25,19 +25,19 @@ describe("WorktreeManager push", () => {
     const s = await wm.openSession("main", "job");
     await wm.push(s);
     const r = await defaultGitRunner(["rev-parse", "--verify", `refs/heads/${s.baseBranch}`], bare);
-    expect(r.code).toBe(0); // bare remote'ta branch var
+    expect(r.code).toBe(0); // branch exists on the bare remote
   });
 
-  it("origin yoksa push no-op (throw etmez)", async () => {
-    repo = await initTmpRepo(); // origin EKLENMEZ
+  it("push is a no-op when there's no origin (does not throw)", async () => {
+    repo = await initTmpRepo(); // origin is NOT added
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
-    await expect(wm.push(s)).resolves.toBeUndefined(); // sessiz döner, hata yok
+    await expect(wm.push(s)).resolves.toBeUndefined(); // resolves silently, no error
   });
 });
 
 describe("WorktreeManager openPR", () => {
-  it("adaptörü doğru argümanlarla çağırır ve url döner", async () => {
+  it("calls the adapter with correct arguments and returns the url", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");

@@ -9,8 +9,9 @@ export interface SubmitToolHandle<T> {
 }
 
 /**
- * Parametreleri = verilen zod şeması olan bir "submit" tool'u ve yakalayıcı kutu döner.
- * Model submit'i çağırınca args doğrulanır; geçerliyse kutuya yazılır, geçersizse isError döner.
+ * Returns a "submit" tool whose parameters are the given zod schema, plus a capturing box.
+ * When the model calls submit, the args are validated; if valid they're written to the box,
+ * if invalid isError is returned.
  */
 export function buildSubmitTool<T>(schema: z.ZodType<T>): SubmitToolHandle<T> {
   let box: { value: T } | undefined;
@@ -35,8 +36,8 @@ export function buildSubmitTool<T>(schema: z.ZodType<T>): SubmitToolHandle<T> {
 }
 
 /**
- * Bir role'ü yapılandırılmış çıktı üretecek şekilde koşar: submit tool'unu role'ün
- * registry'sine ekler, runRoleAgent'ı sürer, geçerli submit yakalanınca doğrulanmış nesneyi döner.
+ * Runs a role so it produces structured output: adds the submit tool to the role's
+ * registry, drives runRoleAgent, and returns the validated object once a valid submit is captured.
  */
 export async function runStructuredRole<T>(
   opts: RoleAgentOptions,
@@ -49,11 +50,11 @@ export async function runStructuredRole<T>(
 
   for await (const ev of runRoleAgent({ ...opts, tools: registry })) {
     if (ev.type === "error") throw new Error(ev.message);
-    if (ev.type === "abort") throw new Error("iptal edildi");
-    if (handle.result() !== undefined) break; // geçerli submit yakalandı → erken çık
+    if (ev.type === "abort") throw new Error("cancelled");
+    if (handle.result() !== undefined) break; // valid submit captured → exit early
   }
 
   const r = handle.result();
-  if (r === undefined) throw new Error("structured role: submit çağrılmadı");
+  if (r === undefined) throw new Error("structured role: submit was not called");
   return r.value;
 }

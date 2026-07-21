@@ -16,7 +16,7 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-rev-")); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-// principal (review vs "SON KARAR" final) + senior (write→done) içerik-provider.
+// principal (review vs "FINAL DECISION" final) + senior (write→done) content-provider.
 function revisionProvider(opts: { reviews: string[]; final?: string }): Provider {
   let reviewCall = 0;
   return {
@@ -43,8 +43,8 @@ function revisionProvider(opts: { reviews: string[]; final?: string }): Provider
         return;
       }
       if (sys.includes("P-senior-coder")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "fix.txt", content: "düzeltme" })); return; }
-        yield* stop("bitti"); return;
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "fix.txt", content: "fix" })); return; }
+        yield* stop("done"); return;
       }
       yield* stop("ok");
     },
@@ -74,7 +74,7 @@ function rdeps(provider: Provider, manager: RevisionDeps["manager"], signal?: Ab
 const session = (d: string): WorktreeSession => ({ jobSlug: "j", root: "/x", baseWorktree: d, baseBranch: "hc/j/base" });
 
 describe("runRevision", () => {
-  it("onay ilk turda → approved(0); senior/postComments/commit çağrılmaz", async () => {
+  it("approval on the first round → approved(0); senior/postComments/commit not called", async () => {
     const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
     const mgr = fakeManager();
     let posted = 0;
@@ -87,7 +87,7 @@ describe("runRevision", () => {
     expect(board.get("__revision__")!.stageHistory.some((s) => s.action === "pr:approved")).toBe(true);
   });
 
-  it("bir revizyon → onay: postComments + senior yazar + commit/push; approved(1)", async () => {
+  it("one revision → approval: postComments + senior writes + commit/push; approved(1)", async () => {
     const p = revisionProvider({ reviews: ['{"decision":"request-changes","comments":["testsiz"]}', '{"decision":"approve","comments":[]}'] });
     const mgr = fakeManager();
     const posted: string[][] = [];
@@ -100,26 +100,26 @@ describe("runRevision", () => {
     expect(existsSync(join(dir, "fix.txt"))).toBe(true);
   });
 
-  it("maxRounds → accept: son karar kabul", async () => {
+  it("maxRounds → accept: final decision accepted", async () => {
     const p = revisionProvider({ reviews: ['{"decision":"request-changes","comments":["a"]}'], final: '{"decision":"accept","question":""}' });
     const mgr = fakeManager();
     const res = await runRevision(rdeps(p, mgr), session(dir), new Board(), async () => {}, async () => "x", 2);
     expect(res.status).toBe("accepted");
     if (res.status === "accepted") expect(res.rounds).toBe(2);
-    expect(mgr.commits).toBe(1); // yalnız round1'de revize (round2 son karar)
+    expect(mgr.commits).toBe(1); // only revised on round1 (round2 is the final decision)
   });
 
-  it("maxRounds → insana sor: askUser çağrılır, cevap döner", async () => {
-    const p = revisionProvider({ reviews: ['{"decision":"request-changes","comments":["a"]}'], final: '{"decision":"ask-human","question":"X mi Y mi?"}' });
+  it("maxRounds → ask a human: askUser is called, answer is returned", async () => {
+    const p = revisionProvider({ reviews: ['{"decision":"request-changes","comments":["a"]}'], final: '{"decision":"ask-human","question":"X or Y?"}' });
     let asked = "";
-    const res = await runRevision(rdeps(p, fakeManager()), session(dir), new Board(), async () => {}, async (q) => { asked = q; return "tamam"; }, 1);
+    const res = await runRevision(rdeps(p, fakeManager()), session(dir), new Board(), async () => {}, async (q) => { asked = q; return "okay"; }, 1);
     expect(res.status).toBe("human");
-    if (res.status === "human") { expect(res.answer).toBe("tamam"); expect(res.rounds).toBe(1); }
-    expect(asked).toBe("X mi Y mi?");
+    if (res.status === "human") { expect(res.answer).toBe("okay"); expect(res.rounds).toBe(1); }
+    expect(asked).toBe("X or Y?");
   });
 
-  it("prDiff verilince principal review isteği diff'i içerir", async () => {
-    // requests yakalayan basit provider
+  it("when prDiff is given, the principal review request includes the diff", async () => {
+    // simple provider that captures requests
     const requests: import("../../src/core/types.js").ChatRequest[] = [];
     const p: import("../../src/core/types.js").Provider = {
       async *chat(req) {
@@ -139,7 +139,7 @@ describe("runRevision", () => {
     expect(principalReq).toBeDefined();
   });
 
-  it("iptal edilmişse fırlatır", async () => {
+  it("rethrows if aborted", async () => {
     const ac = new AbortController(); ac.abort();
     const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
     await expect(

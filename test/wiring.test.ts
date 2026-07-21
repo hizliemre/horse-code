@@ -6,7 +6,7 @@ import { SkillRegistry } from "../src/skills/registry.js";
 import { WorktreeManager } from "../src/worktree/manager.js";
 import type { Provider } from "../src/core/types.js";
 
-const fakeProvider: Provider = { async *chat() { /* buildJobDeps çağırmaz */ } };
+const fakeProvider: Provider = { async *chat() { /* buildJobDeps does not call this */ } };
 function baseConfig(over: Partial<ResolvedConfig> = {}): ResolvedConfig {
   return { baseUrl: "http://x", model: "cc/m", mode: "auto", allowlist: [], roles: {}, ...over };
 }
@@ -20,28 +20,28 @@ function deps(config: ResolvedConfig) {
 }
 
 describe("buildJobDeps", () => {
-  it("her REQUIRED_ROLES resolve olur (config'te olmasa bile)", () => {
+  it("every REQUIRED_ROLES resolves (even if not in config)", () => {
     const d = deps(baseConfig());
     for (const r of REQUIRED_ROLES) {
       expect(() => d.roleRegistry.resolve(r), r).not.toThrow();
       expect(d.roleRegistry.resolve(r).model).toBe("cc/m");
     }
   });
-  it("council resolve olur; rounds=3; permission mode config'ten", () => {
+  it("council resolves; rounds=3; permission mode from config", () => {
     const d = deps(baseConfig({ mode: "ask" }));
     expect(d.councilors.length).toBeGreaterThan(0);
     expect(() => d.councilRegistry.resolve(d.councilors[0].name)).not.toThrow();
     expect(d.rounds).toBe(3);
   });
-  it("config.roles varsayılanı ezer", () => {
-    const d = deps(baseConfig({ roles: { coder: { models: ["özel/m"], systemPrompt: "özel coder" } } }));
-    expect(d.roleRegistry.resolve("coder").model).toBe("özel/m");
-    expect(d.roleRegistry.resolve("coder").systemPrompt).toContain("özel coder");
+  it("config.roles overrides the default", () => {
+    const d = deps(baseConfig({ roles: { coder: { models: ["custom/m"], systemPrompt: "custom coder" } } }));
+    expect(d.roleRegistry.resolve("coder").model).toBe("custom/m");
+    expect(d.roleRegistry.resolve("coder").systemPrompt).toContain("custom coder");
   });
 });
 
 describe("logPRAdapter", () => {
-  it("createPR loglar + placeholder url döner", async () => {
+  it("createPR logs + returns a placeholder url", async () => {
     const logs: string[] = [];
     const r = await logPRAdapter((s) => logs.push(s)).createPR({ branch: "hc/j/base", base: "main", title: "T", body: "B" });
     expect(logs[0]).toContain("hc/j/base");

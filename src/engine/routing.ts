@@ -8,7 +8,7 @@ import type { TaskCycleDeps, ImplementerRole } from "./task-types.js";
 
 const RouteSchema = z.object({ role: z.enum(["coder", "designer"]) });
 
-/** Task title'dan implementer role seçer. Başarısız → "coder"; signal.aborted → fırlatır. */
+/** Picks the implementer role from the task title. On failure → "coder"; signal.aborted → throws. */
 export async function routeTask(deps: TaskCycleDeps, task: Card): Promise<ImplementerRole> {
   try {
     const { model, systemPrompt } = deps.roleRegistry.resolve("router");

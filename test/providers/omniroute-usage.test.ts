@@ -21,8 +21,8 @@ async function drain(it: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
 
 const req: ChatRequest = { model: "m", messages: [{ role: "user", content: "x" }], tools: [] };
 
-describe("OmniRouteProvider — usage header'ları", () => {
-  it("usage header'larını done'dan önce usage event'i olarak yayar", async () => {
+describe("OmniRouteProvider — usage headers", () => {
+  it("emits usage headers as a usage event before done", async () => {
     const fetch: FetchLike = async () =>
       sseResponse(
         ['data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n', "data: [DONE]\n"],

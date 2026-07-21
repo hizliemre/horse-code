@@ -17,10 +17,10 @@ interface ToolCallAccumulator {
 }
 
 /**
- * omniroute'un TUTARSIZ hata gövdesini tek mesaja indirger:
+ * Reduces omniroute's INCONSISTENT error body to a single message:
  *  - 401: { "error": "<string>" }
- *  - diğer: { "error": { "message": "..." } }
- *  - JSON değilse / uygun alan yoksa: "omniroute <status>"
+ *  - other: { "error": { "message": "..." } }
+ *  - if not JSON / no suitable field: "omniroute <status>"
  */
 export async function readErrorMessage(res: Response): Promise<string> {
   let body: unknown;
@@ -44,7 +44,7 @@ export class OmniRouteProvider implements Provider {
 
   constructor(opts: OmniRouteOptions) {
     this.apiKey = opts.apiKey;
-    this.baseUrl = opts.baseUrl.replace(/\/$/, ""); // sondaki slash'ı at
+    this.baseUrl = opts.baseUrl.replace(/\/$/, ""); // strip trailing slash
     this.fetchFn = opts.fetch ?? (globalThis.fetch as FetchLike);
   }
 
@@ -74,7 +74,7 @@ export class OmniRouteProvider implements Provider {
     }
     const stream = res.body;
     if (!stream) {
-      yield { type: "error", message: "omniroute: boş yanıt gövdesi" };
+      yield { type: "error", message: "omniroute: empty response body" };
       return;
     }
 
@@ -87,7 +87,7 @@ export class OmniRouteProvider implements Provider {
         try {
           chunk = JSON.parse(payload);
         } catch {
-          continue; // bozuk chunk → atla
+          continue; // malformed chunk → skip
         }
         const choice = (chunk as { choices?: unknown[] })?.choices?.[0] as
           | { delta?: Record<string, unknown>; finish_reason?: string | null }

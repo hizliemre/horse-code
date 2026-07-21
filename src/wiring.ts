@@ -22,7 +22,7 @@ export interface BuildJobDepsOpts {
   signal: AbortSignal;
 }
 
-/** Config + varsayılanlardan tam bir JobDeps kurar; her rol resolve olur. */
+/** Builds a full JobDeps from config + defaults; every role gets resolved. */
 export function buildJobDeps(opts: BuildJobDepsOpts): JobDeps {
   const { config } = opts;
   const roles: Record<string, RoleConfig> = {};
@@ -55,15 +55,15 @@ export function buildJobDeps(opts: BuildJobDepsOpts): JobDeps {
   };
 }
 
-/** H2 PRAdapter'ı: PR intent'ini loglar + placeholder url döner (gerçek MCP → G). */
+/** H2 PRAdapter: logs the PR intent + returns a placeholder url (real MCP → G). */
 export function logPRAdapter(log: (s: string) => void): RevisionPRAdapter {
   return {
     async createPR(input) {
-      log(`PR açılacaktı: ${input.branch} → ${input.base} — "${input.title}"`);
-      return { url: "(pending: G — gerçek MCP)" };
+      log(`PR would have been opened: ${input.branch} → ${input.base} — "${input.title}"`);
+      return { url: "(pending: G — real MCP)" };
     },
     async postComments(comments) {
-      if (comments.length) log(`PR yorumları: ${comments.join("; ")}`);
+      if (comments.length) log(`PR comments: ${comments.join("; ")}`);
     },
   };
 }

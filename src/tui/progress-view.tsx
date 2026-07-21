@@ -2,14 +2,14 @@ import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import { phaseLabel } from "./labels.js";
 
-// Özgün spinner: 4'lük track içinde bir "0" (top) sağa-sola gidip gelir (ping-pong): oo0o → ooo0 → …
-// Track küçük "o"lar (sönük), top "0" parlak marka mavisi.
+// Custom spinner: within a 4-cell track, a "0" (ball) moves back and forth (ping-pong): oo0o → ooo0 → …
+// The track is dim "o"s, the ball "0" is bright brand blue.
 const TRACK = 4;
-const FRAMES: number[] = [0, 1, 2, 3, 2, 1]; // topun pozisyonu (ping-pong)
+const FRAMES: number[] = [0, 1, 2, 3, 2, 1]; // the ball's position (ping-pong)
 const BALL = "#1a9fd8";
 const DIM = "#3a5a68";
 
-/** Job işlenirken sola-dayalı ping-pong spinner (0 top track'te gidip gelir). */
+/** Left-aligned ping-pong spinner while a job is running (the "0" ball moves back and forth on the track). */
 export function RunningHorse(): React.ReactElement {
   const [i, setI] = useState(0);
   useEffect(() => {
@@ -30,7 +30,7 @@ export function RunningHorse(): React.ReactElement {
   );
 }
 
-/** Sola-dayalı: spinner + faz etiketi yan yana. */
+/** Left-aligned: spinner + phase label side by side. */
 export function ProgressView({ phase, detail }: { phase: string; detail?: string; cols?: number }): React.ReactElement {
   return (
     <Box>

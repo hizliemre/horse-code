@@ -4,33 +4,33 @@ import React from "react";
 import { parseInline, Markdown } from "../../src/tui/markdown.js";
 
 describe("markdown", () => {
-  it("parseInline **kalın** / `kod` / _italik_ ayrıştırır", () => {
-    const segs = parseInline("normal **kalın** ve `kod` bitti");
-    expect(segs.find((s) => s.bold)?.text).toBe("kalın");
-    expect(segs.find((s) => s.code)?.text).toBe("kod");
-    expect(segs.map((s) => s.text).join("")).toBe("normal kalın ve kod bitti");
+  it("parseInline parses **bold** / `code` / _italic_", () => {
+    const segs = parseInline("normal **bold** and `code` done");
+    expect(segs.find((s) => s.bold)?.text).toBe("bold");
+    expect(segs.find((s) => s.code)?.text).toBe("code");
+    expect(segs.map((s) => s.text).join("")).toBe("normal bold and code done");
   });
 
-  it("Markdown kalın metni ** işaretleri olmadan render eder", () => {
-    const f = render(<Markdown text="Ben **Gemini** modeliyim" />).lastFrame() ?? "";
+  it("Markdown renders bold text without ** markers", () => {
+    const f = render(<Markdown text="I am **Gemini** model" />).lastFrame() ?? "";
     expect(f).toContain("Gemini");
     expect(f).not.toContain("**");
   });
 
-  it("Markdown başlık ve liste render eder (işaretsiz)", () => {
-    const f = render(<Markdown text={"# Başlık\n- madde bir"} />).lastFrame() ?? "";
-    expect(f).toContain("Başlık");
+  it("Markdown renders a heading and a list (unmarked)", () => {
+    const f = render(<Markdown text={"# Heading\n- item one"} />).lastFrame() ?? "";
+    expect(f).toContain("Heading");
     expect(f).not.toContain("# ");
-    expect(f).toContain("madde bir");
+    expect(f).toContain("item one");
     expect(f).toContain("•");
   });
 
-  it("Markdown kod-bloğunu dil-etiketi + satır-numarası ile render eder", () => {
+  it("Markdown renders a code block with a language label + line numbers", () => {
     const f = render(<Markdown text={"```csharp\nvar x = 1;\nreturn x;\n```"} />).lastFrame() ?? "";
-    expect(f).toContain("csharp");      // dil algılandı
-    expect(f).toContain("1 │");         // satır numarası + ayraç
+    expect(f).toContain("csharp");      // language detected
+    expect(f).toContain("1 │");         // line number + separator
     expect(f).toContain("2 │");
-    expect(f).toContain("return");      // kod içeriği (tek-token; renklendirme aralara ANSI koyar)
-    expect(f).not.toContain("```");     // fence gizli
+    expect(f).toContain("return");      // code content (single token; coloring inserts ANSI in between)
+    expect(f).not.toContain("```");     // fence hidden
   });
 });

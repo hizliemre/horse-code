@@ -29,19 +29,19 @@ export interface ReviewOutcome { approved: boolean }
 
 function councilPrompt(perspective: string): string {
   return (
-    `Sen bir review council üyesisin. Perspektifin: ${perspective}. ` +
-    `Verilen dokümanı bu perspektiften incele; gerekçeli concerns listesi ve öneri (approve/revise) üret.`
+    `You are a review council member. Your perspective: ${perspective}. ` +
+    `Review the given document from this perspective; produce a reasoned concerns list and a recommendation (approve/revise).`
   );
 }
 
-/** Councilor'ları round-robin bir RoleRegistry'ye çevirir (name → perspektif prompt'lu role). */
+/** Converts councilors into a round-robin RoleRegistry (name → role with a perspective prompt). */
 export function buildCouncilRegistry(councilors: CouncilorConfig[]): RoleRegistry {
   const roles: Record<string, RoleConfig> = {};
   for (const c of councilors) roles[c.name] = { models: c.models, systemPrompt: councilPrompt(c.perspective) };
   return new RoleRegistry(roles);
 }
 
-/** Councilor'ları paralel koşar; her biri dokümanı salt-okunur inceleyip isimli assessment üretir. */
+/** Runs the councilors in parallel; each one reviews the document read-only and produces a named assessment. */
 export async function runCouncil(deps: ReviewDeps, workdir: string, docPath: string): Promise<Assessment[]> {
   return Promise.all(
     deps.councilors.map(async (c) => {
@@ -58,7 +58,7 @@ export async function runCouncil(deps: ReviewDeps, workdir: string, docPath: str
   );
 }
 
-/** Judge council değerlendirmelerini sentezleyip tek karar verir (pass/revize/ask-human). */
+/** Judge synthesizes the council's evaluations into a single decision (pass/revise/ask-human). */
 export async function runJudge(
   deps: ReviewDeps, workdir: string, docPath: string, assessments: Assessment[],
 ): Promise<JudgeDecision> {
@@ -74,8 +74,8 @@ export async function runJudge(
 }
 
 /**
- * §6 review döngüsü: council → judge; pass→onaylı, revize→revise(feedback)→tekrar,
- * ask-human→askUser→feedback→revise→tekrar. maxRounds tükenince son insan kararı (onayla/durdur).
+ * §6 review loop: council → judge; pass→approved, revise→revise(feedback)→retry,
+ * ask-human→askUser→feedback→revise→retry. Once maxRounds is exhausted, a final human decision (approve/stop).
  */
 export async function runReviewLoop(
   deps: ReviewDeps,
@@ -92,11 +92,11 @@ export async function runReviewLoop(
     let feedback = d.feedback;
     if (d.decision === "ask-human") {
       const answer = await askUser(d.question);
-      feedback = [...feedback, `İnsan cevabı: ${answer}`];
+      feedback = [...feedback, `Human answer: ${answer}`];
     }
     await revise(feedback);
   }
-  const answer = await askUser(`${maxRounds} revize turunda onaylanmadı. Onayla / durdur?`);
-  // Kelime-sınırlı tam eşleşme: "onaylamıyorum" gibi olumsuzlukları yanlışlıkla onay sayma.
-  return { approved: /^\s*(onayla|approve|evet|yes)\s*$/i.test(answer) };
+  const answer = await askUser(`Not approved after ${maxRounds} revision rounds. Approve / stop?`);
+  // Word-boundary exact match: don't count negations like "I don't approve" as approval by substring.
+  return { approved: /^\s*(approve|yes)\s*$/i.test(answer) };
 }

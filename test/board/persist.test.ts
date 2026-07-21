@@ -14,20 +14,20 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe("board kalıcılığı", () => {
-  it("saveBoard üst dizini oluşturur ve loadBoard aynı board'u döner", async () => {
+describe("board persistence", () => {
+  it("saveBoard creates parent directories and loadBoard returns the same board", async () => {
     const b = new Board();
     b.addCard({ id: "t1", title: "a", deps: ["x"] });
     b.move("t1", "REVIEW", "coder");
     b.addReviewNote("t1", "n");
-    const path = join(dir, "sessions", "s1", "board.json"); // üst dizinler yok
+    const path = join(dir, "sessions", "s1", "board.json"); // parent directories don't exist yet
     await saveBoard(b, path);
     expect(existsSync(path)).toBe(true);
     const back = await loadBoard(path);
     expect(back.list()).toEqual(b.list());
   });
 
-  it("var olmayan dosyada loadBoard hata verir", async () => {
-    await expect(loadBoard(join(dir, "yok.json"))).rejects.toThrow();
+  it("loadBoard throws for a nonexistent file", async () => {
+    await expect(loadBoard(join(dir, "missing.json"))).rejects.toThrow();
   });
 });

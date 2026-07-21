@@ -30,7 +30,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       return;
     }
     if (turn >= maxTurns) {
-      yield { type: "error", message: `maksimum turn sayısı aşıldı (${maxTurns})` };
+      yield { type: "error", message: `maximum turn count exceeded (${maxTurns})` };
       return;
     }
     turn++;
@@ -38,7 +38,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     let assistantText = "";
     const toolCalls: ToolCall[] = [];
     let errored = false;
-    // messages: her turn'de snapshot (kopya) — provider iç diziyi referansla tutmasın
+    // messages: snapshot (copy) each turn — so the provider doesn't hold a reference to our internal array
     const req: ChatRequest = { model: opts.model, messages: [...working], tools: schemas };
 
     for await (const ev of opts.provider.chat(req, opts.signal)) {
@@ -54,7 +54,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
         errored = true;
         break;
       }
-      // "done" → yok say; döngü toolCalls'a göre karar verir
+      // "done" → ignore; the loop decides based on toolCalls
     }
     if (errored) return;
 
@@ -78,7 +78,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     for (const r of results) {
       working.push({ role: "tool", toolCallId: r.id, name: r.name, content: r.result.content });
     }
-    // döngü başa döner → LLM tool sonuçlarını görür
+    // loop goes back to the top → LLM sees the tool results
   }
 }
 
@@ -87,8 +87,8 @@ export async function runToCompletion(opts: RoleAgentOptions): Promise<Message> 
   for await (const ev of runRoleAgent(opts)) {
     if (ev.type === "message.done") last = ev.message;
     else if (ev.type === "error") throw new Error(ev.message);
-    else if (ev.type === "abort") throw new Error("iptal edildi");
+    else if (ev.type === "abort") throw new Error("cancelled");
   }
-  if (!last) throw new Error("runToCompletion: mesaj üretilmedi");
+  if (!last) throw new Error("runToCompletion: no message was produced");
   return last;
 }

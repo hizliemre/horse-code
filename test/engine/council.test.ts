@@ -24,11 +24,11 @@ function submit(argsJson: string): ChatEvent[] {
 }
 function writeTurn(): ChatEvent[] {
   return [
-    { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: '{"path":"out.txt","content":"kod"}' } },
+    { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: '{"path":"out.txt","content":"code"}' } },
     { type: "done", finishReason: "tool_calls" },
   ];
 }
-const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "bitti" }, { type: "done", finishReason: "stop" }];
+const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }];
 
 function deps(provider: MockProvider): TaskCycleDeps {
   const roles: Record<string, RoleConfig> = {
@@ -48,15 +48,15 @@ function deps(provider: MockProvider): TaskCycleDeps {
 }
 function boardWithTask(): Board {
   const b = new Board();
-  b.addCard({ id: "t1", title: "X yap" });
+  b.addCard({ id: "t1", title: "Do X" });
   return b;
 }
 
 describe("runEscalationCouncil", () => {
-  it("pass: architect diagnoz → senior implement → reviewer pass; stage kayıtları + senior plan görür", async () => {
+  it("pass: architect diagnosis → senior implements → reviewer pass; stage records + senior sees the plan", async () => {
     // architect submit → senior write → senior done → reviewer pass
     const p = new MockProvider([
-      submit('{"rootCause":"eksik test","plan":["testi ekle","kodu düzelt"]}'),
+      submit('{"rootCause":"missing tests","plan":["add tests","fix the code"]}'),
       writeTurn(), doneTurn,
       submit('{"verdict":"pass","notes":[]}'),
     ]);
@@ -68,27 +68,27 @@ describe("runEscalationCouncil", () => {
     expect(actions).toContain("council:diagnosed");
     expect(actions).toContain("council:implemented");
     expect(actions).toContain("reviewed:pass");
-    // senior implement (requests[1]) architect planını (reviewNotes) mesajında gördü
+    // senior implement (requests[1]) saw the architect's plan (reviewNotes) in its message
     expect(p.requests[1].messages[0].content).toBe("P-senior-coder");
-    expect(p.requests[1].messages.some((m) => typeof m.content === "string" && m.content.includes("testi ekle"))).toBe(true);
-    expect(await readFile(join(dir, "out.txt"), "utf8")).toBe("kod");
+    expect(p.requests[1].messages.some((m) => typeof m.content === "string" && m.content.includes("add tests"))).toBe(true);
+    expect(await readFile(join(dir, "out.txt"), "utf8")).toBe("code");
   });
 
-  it("fail: reviewer fail → Verdict fail döner, DONE'a taşınmaz (REVIEW'da kalır)", async () => {
+  it("fail: reviewer fail → Verdict returns fail, not moved to DONE (stays in REVIEW)", async () => {
     const p = new MockProvider([
       submit('{"rootCause":"x","plan":["y"]}'),
       writeTurn(), doneTurn,
-      submit('{"verdict":"fail","notes":["hâlâ hata"]}'),
+      submit('{"verdict":"fail","notes":["still failing"]}'),
     ]);
     const board = boardWithTask();
     const v = await runEscalationCouncil(deps(p), board, "t1", dir, "coder");
     expect(v.verdict).toBe("fail");
-    expect(v.notes).toEqual(["hâlâ hata"]);
+    expect(v.notes).toEqual(["still failing"]);
     expect(board.get("t1")!.column).toBe("REVIEW");
     expect(board.get("t1")!.stageHistory.map((s) => s.action)).toContain("reviewed:fail");
   });
 
-  it("designer ailesi: senior-designer implement eder", async () => {
+  it("designer family: senior-designer implements", async () => {
     const p = new MockProvider([
       submit('{"rootCause":"x","plan":["y"]}'),
       writeTurn(), doneTurn,

@@ -4,82 +4,82 @@ import React from "react";
 import { Board, PhaseBar, Prompt, App, Message, Splash } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
-describe("Ink bileşenleri", () => {
-  it("Board kart title'larını ve kolon başlıklarını gösterir", () => {
+describe("Ink components", () => {
+  it("Board shows card titles and column headers", () => {
     const { lastFrame } = render(
       <Board cards={[
-        { id: "1", title: "Alfa", column: "TODO" },
+        { id: "1", title: "Alpha", column: "TODO" },
         { id: "2", title: "Beta", column: "DONE" },
       ]} />,
     );
     const f = lastFrame() ?? "";
     expect(f).toContain("TODO");
     expect(f).toContain("DONE");
-    expect(f).toContain("Alfa");
+    expect(f).toContain("Alpha");
     expect(f).toContain("Beta");
   });
 
-  it("PhaseBar fazı ve detayı gösterir", () => {
+  it("PhaseBar shows the phase and the detail", () => {
     const { lastFrame } = render(<PhaseBar phase="waves" detail="running" />);
     const f = lastFrame() ?? "";
     expect(f).toContain("waves");
     expect(f).toContain("running");
   });
 
-  it("Prompt soruyu ve girdi işaretçisini gösterir", () => {
-    const { lastFrame } = render(<Prompt question="Devam?" onSubmit={() => {}} />);
+  it("Prompt shows the question and the input caret", () => {
+    const { lastFrame } = render(<Prompt question="Continue?" onSubmit={() => {}} />);
     const f = lastFrame() ?? "";
-    expect(f).toContain("Devam?");
+    expect(f).toContain("Continue?");
     expect(f).toContain(">");
   });
 
-  it("App başlangıç state'ini render eder (dostça faz + kartlar)", () => {
+  it("App renders the initial state (friendly phase + cards)", () => {
     const c = new TuiController();
     c.onEvent({ kind: "phase", phase: "waves" });
-    c.onEvent({ kind: "board", cards: [{ id: "1", title: "Alfa-gorev", column: "IN-PROGRESS" }] });
+    c.onEvent({ kind: "board", cards: [{ id: "1", title: "Alpha-task", column: "IN-PROGRESS" }] });
     const { lastFrame, unmount } = render(<App controller={c} />);
     const f = lastFrame() ?? "";
-    expect(f).toContain("Coding"); // dostça faz etiketi (waves)
-    expect(f).toContain("Alfa-gorev");
+    expect(f).toContain("Coding"); // friendly phase label (waves)
+    expect(f).toContain("Alpha-task");
     unmount();
   });
 
-  it("App pending soru varsa Prompt render eder", () => {
+  it("App renders Prompt when there is a pending question", () => {
     const c = new TuiController();
-    void c.ask("Onaylıyor musun?");
+    void c.ask("Do you approve?");
     const { lastFrame } = render(<App controller={c} />);
-    expect(lastFrame() ?? "").toContain("Onaylıyor musun?");
+    expect(lastFrame() ?? "").toContain("Do you approve?");
   });
 
-  it("Message user → '›' + metin (label yok)", () => {
-    const f = render(<Message role="user" text="selam dünya" cols={80} />).lastFrame() ?? "";
+  it("Message user → '›' + text (no label)", () => {
+    const f = render(<Message role="user" text="hello world" cols={80} />).lastFrame() ?? "";
     expect(f).toContain("›");
-    expect(f).toContain("selam dünya");
-    expect(f).not.toContain("sen");
+    expect(f).toContain("hello world");
+    expect(f).not.toContain("you");
   });
 
-  it("Message assistant → '●' circle + metin (label yok)", () => {
-    const f = render(<Message role="assistant" text="merhaba" cols={80} />).lastFrame() ?? "";
+  it("Message assistant → '●' circle + text (no label)", () => {
+    const f = render(<Message role="assistant" text="hello" cols={80} />).lastFrame() ?? "";
     expect(f).toContain("●");
-    expect(f).toContain("merhaba");
+    expect(f).toContain("hello");
     expect(f).not.toContain("hcode");
   });
 
-  it("Splash block-art (at + wordmark) render eder", () => {
+  it("Splash renders block-art (horse + wordmark)", () => {
     expect(render(<Splash cols={80} rows={40} />).lastFrame() ?? "").toContain("█");
   });
 
-  it("App input mode: görev-input hint + kutu render eder", () => {
+  it("App input mode: renders the task-input hint + box", () => {
     const c = new TuiController();
     void c.awaitTask();
     expect(render(<App controller={c} />).lastFrame() ?? "").toContain(">");
   });
 
-  it("App mode undefined → running (tek-shot korunur, board render)", () => {
+  it("App mode undefined → running (one-shot preserved, board renders)", () => {
     const c = new TuiController();
-    c.onEvent({ kind: "board", cards: [{ id: "1", title: "Görev", column: "TODO" }] });
+    c.onEvent({ kind: "board", cards: [{ id: "1", title: "Task", column: "TODO" }] });
     const f = render(<App controller={c} />).lastFrame() ?? "";
-    expect(f).toContain("Görev");
+    expect(f).toContain("Task");
     expect(f).not.toContain("Type your task");
   });
 });

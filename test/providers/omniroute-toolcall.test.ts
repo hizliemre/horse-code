@@ -19,10 +19,10 @@ async function drain(it: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
   return out;
 }
 
-const req: ChatRequest = { model: "m", messages: [{ role: "user", content: "hava" }], tools: [] };
+const req: ChatRequest = { model: "m", messages: [{ role: "user", content: "weather" }], tools: [] };
 
-describe("OmniRouteProvider — tool-call birleştirme", () => {
-  it("parça parça gelen tool_calls'ı index'e göre birleştirip tek event yayar", async () => {
+describe("OmniRouteProvider — tool-call merging", () => {
+  it("merges tool_calls arriving in fragments by index into a single event", async () => {
     const fetch: FetchLike = async () =>
       sseResponse([
         'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather","arguments":"{\\"ci"}}]},"finish_reason":null}]}\n',

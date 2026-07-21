@@ -5,7 +5,7 @@ import { defaultGitRunner } from "../../src/worktree/git.js";
 import { WorktreeManager } from "../../src/worktree/manager.js";
 import type { WorktreeSession, TaskWorktree } from "../../src/worktree/manager.js";
 
-/** Geçici bir git repo başlatır: init -b main + user config + initial commit. Repo yolunu döner. */
+/** Starts a temporary git repo: init -b main + user config + initial commit. Returns the repo path. */
 export async function initTmpRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "hc-wt-"));
   const g = (args: string[]) => defaultGitRunner(args, dir);
@@ -18,8 +18,8 @@ export async function initTmpRepo(): Promise<string> {
   return dir;
 }
 
-/** Gerçek bir merge conflict kurar: base'e shared.txt → aynı base'den A(AAA) ve B(BBB) →
- *  mergeTask(A) merged, mergeTask(B) conflict. Base mid-merge kalır; task = B döner. */
+/** Sets up a real merge conflict: shared.txt in base → from the same base A(AAA) and B(BBB) →
+ *  mergeTask(A) merged, mergeTask(B) conflict. Base is left mid-merge; returns task = B. */
 export async function createMergeConflict(): Promise<{
   repo: string; mgr: WorktreeManager; session: WorktreeSession; task: TaskWorktree;
 }> {

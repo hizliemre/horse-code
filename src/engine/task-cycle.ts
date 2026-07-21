@@ -4,7 +4,7 @@ import { runImplementer } from "./implementer.js";
 import { runReviewer } from "./reviewer.js";
 import type { TaskCycleDeps, Verdict, RunnableRole } from "./task-types.js";
 
-/** Verilen açık rol ile tek-tur çekirdek (routing YOK): implement → review → Board geçişleri. */
+/** Single-round core with an explicit given role (NO routing): implement → review → Board transitions. */
 export async function runCycleWithRole(
   deps: TaskCycleDeps,
   board: Board,
@@ -22,7 +22,7 @@ export async function runCycleWithRole(
     board.clearReviewNotes(taskId);
     board.move(taskId, "DONE", "code-reviewer");
   } else {
-    const notes = v.notes.length > 0 ? v.notes : ["review başarısız (not verilmedi)"];
+    const notes = v.notes.length > 0 ? v.notes : ["review failed (no notes given)"];
     board.appendStage(taskId, {
       role: "code-reviewer",
       action: "reviewed:fail",
@@ -35,7 +35,7 @@ export async function runCycleWithRole(
   return v;
 }
 
-/** Bir task'ın tek-tur yaşam döngüsü: route → runCycleWithRole. */
+/** A task's single-round lifecycle: route → runCycleWithRole. */
 export async function runTaskCycle(
   deps: TaskCycleDeps,
   board: Board,
@@ -43,7 +43,7 @@ export async function runTaskCycle(
   worktreePath: string,
 ): Promise<Verdict> {
   const task = board.get(taskId);
-  if (!task) throw new Error(`runTaskCycle: bilinmeyen task: ${taskId}`);
+  if (!task) throw new Error(`runTaskCycle: unknown task: ${taskId}`);
 
   const role = await routeTask(deps, task);
   board.setWorktree(taskId, worktreePath);

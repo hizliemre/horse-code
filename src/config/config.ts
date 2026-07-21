@@ -31,7 +31,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   roles: {},
 };
 
-// Dosyalardan okunabilecek alanlar (hepsi opsiyonel).
+// Fields that can be read from files (all optional).
 const fileSchema = z
   .object({
     apiKey: z.string().optional(),
@@ -66,7 +66,7 @@ function parseFile(raw: string | undefined): FileConfig {
     const parsed = fileSchema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : {};
   } catch {
-    return {}; // bozuk JSON → katmanı yok say
+    return {}; // malformed JSON → ignore this layer
   }
 }
 
@@ -81,7 +81,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   const global = parseFile(opts.readFile(`${opts.home}/.horsecode/config.json`));
   const project = parseFile(opts.readFile(`${opts.cwd}/.horsecode/config.json`));
 
-  // Güvenlik: proje config'i apiKey taşıyamaz.
+  // Security: project config cannot carry an apiKey.
   const { apiKey: _leak, ...projectSafe } = project;
 
   const merged: ResolvedConfig = {
@@ -90,13 +90,13 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
     ...projectSafe,
   } as ResolvedConfig;
 
-  // allowlist için birleştirme yerine "en spesifik kazanır" (project varsa onu al).
+  // For allowlist, "most specific wins" instead of merging (use project's if present).
   merged.allowlist = projectSafe.allowlist ?? global.allowlist ?? [];
 
-  // roles: global + proje shallow merge (aynı adlı role projede ezilir).
+  // roles: shallow merge of global + project (same-named role is overridden by project).
   merged.roles = { ...(global.roles ?? {}), ...(projectSafe.roles ?? {}) };
 
-  // env en yüksek öncelik.
+  // env has the highest priority.
   if (opts.env.OMNIROUTE_API_KEY) merged.apiKey = opts.env.OMNIROUTE_API_KEY;
   if (opts.env.OMNIROUTE_BASE_URL) merged.baseUrl = opts.env.OMNIROUTE_BASE_URL;
 

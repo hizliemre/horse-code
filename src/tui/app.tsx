@@ -13,7 +13,7 @@ export interface RunTuiOpts {
   job: { prompt: string; fromBranch: string; jobName: string; maxRounds: number; revisionRounds?: number; prTitle?: string };
 }
 
-/** Ink TUI: controller kur → seam'ler controller.ask üzerinden → App render → runJob → unmount. */
+/** Ink TUI: set up the controller → seams go through controller.ask → render App → runJob → unmount. */
 export async function runTui(opts: RunTuiOpts): Promise<JobResult> {
   const controller = new TuiController();
   const read: LineReader = (q) => controller.ask(q);
@@ -36,16 +36,17 @@ export interface RunTuiReplOpts {
   formatResult: (res: JobResult) => string;
 }
 
-/** TUI REPL: görev-input → canlı job → rapor → döngü. Ctrl+C çıkar; job hatası izole edilir. */
+/** TUI REPL: task input → live job → report → loop. Ctrl+C exits; job errors are isolated. */
 export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const controller = new TuiController();
   const read: LineReader = (q) => controller.ask(q);
   const deps = opts.buildDeps(read);
-  // Fullscreen (Claude Code modeli): alt-screen buffer + synchronized output (DECSET 2026).
-  // Ink her frame'de tüm ekranı yeniden yazar → normalde flicker; her yazımı 2026h…2026l ile sararak
-  // terminal frame'i atomik uygular → flicker gider (destekleyen terminallerde; diğerleri escape'i yok
-  // sayar). İç-scroll ise components.tsx'te manuel satır-pencere ile (Ink overflow bug'ı baypas).
-  // Çıkışta (Ctrl+C dahil) alt-screen kapatılır + stdout.write eski haline döner.
+  // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
+  // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
+  // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
+  // that support it; others ignore the escape). Inner-scroll is handled in components.tsx with a
+  // manual line-window (bypasses an Ink overflow bug). On exit (including Ctrl+C) the alt-screen
+  // is closed and stdout.write is restored to its original.
   const origWrite = process.stdout.write.bind(process.stdout);
   const patched = ((chunk: unknown, ...rest: unknown[]): boolean =>
     typeof chunk === "string"
@@ -56,32 +57,33 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     if (restored) return;
     restored = true;
     process.stdout.write = origWrite;
-    // önce kitty protokolü pop, sonra alt-screen kapat + imleç geri.
-    try { origWrite("\x1b[<u\x1b[?1049l\x1b[?25h"); } catch { /* yut */ }
+    // first pop the kitty protocol, then close the alt-screen + restore the cursor.
+    try { origWrite("\x1b[<u\x1b[?1049l\x1b[?25h"); } catch { /* swallow */ }
   };
-  // alt-screen + kitty keyboard protokolü (flag 1: disambiguate) → Shift+Enter ayrı dizi (\x1b[13;2u)
-  // olarak gelir (düz Enter yine \r, oklar yine legacy → Ink scroll bozulmaz). Desteklemeyen terminaller
-  // \x1b[>1u'yu yok sayar (zararsız; o terminallerde Alt+Enter veya key-mapping gerekir).
+  // alt-screen + kitty keyboard protocol (flag 1: disambiguate) → Shift+Enter arrives as a separate
+  // sequence (\x1b[13;2u) (plain Enter is still \r, arrows are still legacy → Ink scroll isn't broken).
+  // Terminals that don't support it ignore \x1b[>1u (harmless; those terminals need Alt+Enter or
+  // key-mapping instead).
   origWrite("\x1b[?1049h\x1b[H\x1b[>1u");
   process.stdout.write = patched;
   process.once("exit", restore);
-  // Kitty protokolünde Ctrl+C artık \x03 değil \x1b[99;5u olarak gelir → Ink exitOnCtrlC göremez.
-  // Input mode'da InputLine yönetir (doluysa temizle / boşsa çık); job çalışırken global handler çıkar.
+  // Under the kitty protocol, Ctrl+C no longer arrives as \x03 but as \x1b[99;5u → Ink's exitOnCtrlC can't see it.
+  // In input mode InputLine handles it (clear if non-empty / exit if empty); while a job is running the global handler exits.
   const onCtrlC = (chunk: Buffer | string): void => {
     const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
     if (s !== "\x03" && s !== "\x1b[99;5u") return;
-    if ((controller.getState().mode ?? "running") === "input") return; // InputLine handle eder
+    if ((controller.getState().mode ?? "running") === "input") return; // InputLine handles it
     restore();
     process.exit(0);
   };
   process.stdin.on("data", onCtrlC);
-  // awaitTask'i render'dan ÖNCE çağır → ilk render input-mode (Prompt + useInput aktif) → Ink stdin'i tutar.
+  // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(<App controller={controller} fullscreen />);
   try {
     for (;;) {
       const task = await taskPromise;
-      // Konuşma geçmişi: transcript'in son öğesi bu prompt → onu hariç tut (coach'a önceki turnler gider).
+      // Conversation history: the transcript's last item is this prompt → exclude it (previous turns go to the coach).
       const history = controller.getState().transcript.slice(0, -1).map((m) => ({ role: m.role, content: m.text }));
       controller.beginRun();
       try {
@@ -95,9 +97,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         });
         controller.endRun(opts.formatResult(res), res.refinedPrompt);
       } catch (e) {
-        controller.endRun(`hata: ${e instanceof Error ? e.message : String(e)}`);
+        controller.endRun(`error: ${e instanceof Error ? e.message : String(e)}`);
       }
-      taskPromise = controller.awaitTask(); // sonraki görev için input-mode
+      taskPromise = controller.awaitTask(); // input-mode for the next task
     }
   } finally {
     instance.unmount();

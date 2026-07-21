@@ -6,7 +6,7 @@ let repo: string;
 afterEach(async () => { if (repo) await rm(repo, { recursive: true, force: true }); });
 
 describe("WorktreeManager.unmergedFiles", () => {
-  it("çakışık dosyaları listeler; abortMerge sonrası []", async () => {
+  it("lists conflicted files; empty after abortMerge", async () => {
     const c = await createMergeConflict();
     repo = c.repo;
     expect(await c.mgr.unmergedFiles(c.session)).toEqual(["shared.txt"]);

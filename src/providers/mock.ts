@@ -1,8 +1,8 @@
 import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
 
 /**
- * Test double: her chat() çağrısı için önceden yazılmış bir ChatEvent turn'ü yayar.
- * Çok-turlu loop'ları (tool-call → tool sonucu → ikinci turn) deterministik test eder.
+ * Test double: emits a pre-scripted ChatEvent turn for each chat() call.
+ * Deterministically tests multi-turn loops (tool-call → tool result → second turn).
  */
 export class MockProvider implements Provider {
   private index = 0;

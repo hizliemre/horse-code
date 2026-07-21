@@ -3,15 +3,15 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 
 const skill = (name: string, description = "d", content = "c") => ({ name, description, content });
 
-describe("SkillRegistry çekirdek", () => {
+describe("SkillRegistry core", () => {
   it("register + get", () => {
     const r = new SkillRegistry();
-    r.register(skill("tdd", "TDD akışı", "tdd içerik"));
-    expect(r.get("tdd")).toEqual({ name: "tdd", description: "TDD akışı", content: "tdd içerik" });
-    expect(r.get("yok")).toBeUndefined();
+    r.register(skill("tdd", "TDD workflow", "tdd content"));
+    expect(r.get("tdd")).toEqual({ name: "tdd", description: "TDD workflow", content: "tdd content" });
+    expect(r.get("missing")).toBeUndefined();
   });
 
-  it("list ekleme sırasını korur, {name,description} verir", () => {
+  it("list preserves insertion order, returns {name,description}", () => {
     const r = new SkillRegistry();
     r.register(skill("a"));
     r.register(skill("b", "bb"));
@@ -21,11 +21,11 @@ describe("SkillRegistry çekirdek", () => {
     ]);
   });
 
-  it("aynı adlı skill ezilir (son kazanır)", () => {
+  it("same-named skill is overwritten (last wins)", () => {
     const r = new SkillRegistry();
-    r.register(skill("x", "eski"));
-    r.register(skill("x", "yeni"));
-    expect(r.get("x")!.description).toBe("yeni");
+    r.register(skill("x", "old"));
+    r.register(skill("x", "new"));
+    expect(r.get("x")!.description).toBe("new");
     expect(r.list()).toHaveLength(1);
   });
 });

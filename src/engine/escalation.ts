@@ -12,18 +12,18 @@ export type HumanDecision =
 export type AskHuman = (ctx: { card: Card; verdict: Verdict }) => Promise<HumanDecision>;
 
 export interface EscalationDeps extends TaskCycleDeps {
-  rounds: number; // tier başına tur (config escalation.rounds; varsayılan 3)
+  rounds: number; // turns per tier (config escalation.rounds; default 3)
   askHuman: AskHuman;
 }
 
-/** attempts + tier başına tur sayısından tier: 0 implementer, 1 senior, 2 konsey. */
+/** Derives the tier from attempts + turns-per-tier: 0 implementer, 1 senior, 2 council. */
 export function tierOf(attempts: number, rounds: number): 0 | 1 | 2 {
   return attempts < rounds ? 0 : attempts < 2 * rounds ? 1 : 2;
 }
 
 /**
- * Task-seviyesi escalation merdiveni: route→aile, tier(attempts/N) ile rol yükseltme
- * (implementer → senior → konsey). Konsey de çözemezse askHuman seam'i (accept/retry/abandon).
+ * Task-level escalation ladder: route→family, tier(attempts/N) escalates the role
+ * (implementer → senior → council). If the council can't resolve it either, the askHuman seam kicks in (accept/retry/abandon).
  */
 export async function runTaskWithEscalation(
   deps: EscalationDeps,
@@ -32,9 +32,9 @@ export async function runTaskWithEscalation(
   cwd: string,
 ): Promise<Verdict> {
   const task = board.get(taskId);
-  if (!task) throw new Error(`runTaskWithEscalation: bilinmeyen task: ${taskId}`);
+  if (!task) throw new Error(`runTaskWithEscalation: unknown task: ${taskId}`);
 
-  const family = await routeTask(deps, task); // bir kez: coder | designer
+  const family = await routeTask(deps, task); // once: coder | designer
   board.setWorktree(taskId, cwd);
 
   for (;;) {
@@ -45,12 +45,12 @@ export async function runTaskWithEscalation(
       const role: RunnableRole =
         tier === 0 ? family : family === "designer" ? "senior-designer" : "senior-coder";
       const v = await runCycleWithRole(deps, board, taskId, cwd, role);
-      if (v.verdict === "pass") return v; // runCycleWithRole DONE'a taşıdı
-      board.incrementAttempts(taskId); // fail → tier ilerler
+      if (v.verdict === "pass") return v; // runCycleWithRole moved it to DONE
+      board.incrementAttempts(taskId); // fail → tier advances
       continue;
     }
 
-    // tier 2 — escalation konseyi
+    // tier 2 — escalation council
     const v = await runEscalationCouncil(deps, board, taskId, cwd, family);
     if (v.verdict === "pass") {
       board.clearReviewNotes(taskId);
@@ -58,7 +58,7 @@ export async function runTaskWithEscalation(
       return v;
     }
 
-    // konsey fail → insana sor
+    // council fail → ask the human
     const decision = await deps.askHuman({ card: board.get(taskId)!, verdict: v });
     if (decision.action === "accept") {
       board.appendStage(taskId, { role: "human", action: "human:accept" });
@@ -74,7 +74,7 @@ export async function runTaskWithEscalation(
       });
       board.clearReviewNotes(taskId);
       for (const n of decision.notes) board.addReviewNote(taskId, n);
-      board.incrementAttempts(taskId); // tier 2'de kalır, konsey tekrar
+      board.incrementAttempts(taskId); // stays at tier 2, council retries
       continue;
     }
     // abandon

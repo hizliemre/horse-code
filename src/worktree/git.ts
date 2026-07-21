@@ -5,7 +5,7 @@ export type GitRunner = (
   cwd: string,
 ) => Promise<{ stdout: string; stderr: string; code: number }>;
 
-/** git'i child_process ile çalıştırır; asla throw etmez, {stdout, stderr, code} döner. */
+/** Runs git via child_process; never throws, returns {stdout, stderr, code}. */
 export const defaultGitRunner: GitRunner = (args, cwd) =>
   new Promise((resolve) => {
     let stdout = "";

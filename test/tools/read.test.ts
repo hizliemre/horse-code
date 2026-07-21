@@ -15,25 +15,25 @@ afterEach(async () => {
 });
 
 describe("read_file", () => {
-  it("var olan dosyanın içeriğini döner", async () => {
-    await writeFile(join(dir, "a.txt"), "merhaba", "utf8");
+  it("returns the contents of an existing file", async () => {
+    await writeFile(join(dir, "a.txt"), "hello", "utf8");
     const res = await readFileTool.run({ path: "a.txt" }, ctx());
-    expect(res).toEqual({ content: "merhaba", isError: false });
+    expect(res).toEqual({ content: "hello", isError: false });
   });
 
-  it("olmayan dosyada isError:true döner (throw etmez)", async () => {
-    const res = await readFileTool.run({ path: "yok.txt" }, ctx());
+  it("returns isError:true for a nonexistent file (does not throw)", async () => {
+    const res = await readFileTool.run({ path: "missing.txt" }, ctx());
     expect(res.isError).toBe(true);
     expect(res.content).toContain("read_file");
   });
 
-  it("geçersiz args'ta throw etmez, isError:true döner", async () => {
+  it("does not throw on invalid args, returns isError:true", async () => {
     const res1 = await readFileTool.run({}, ctx());
     expect(res1.isError).toBe(true);
-    expect(res1.content).toMatch(/geçersiz|invalid/i);
+    expect(res1.content).toMatch(/invalid/i);
 
     const res2 = await readFileTool.run({ path: 123 }, ctx());
     expect(res2.isError).toBe(true);
-    expect(res2.content).toMatch(/geçersiz|invalid/i);
+    expect(res2.content).toMatch(/invalid/i);
   });
 });

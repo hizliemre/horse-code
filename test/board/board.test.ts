@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { Board } from "../../src/board/board.js";
 
-describe("Board çekirdek", () => {
-  it("addCard yeni kartı TODO'da, attempts 0, boş dizilerle ekler", () => {
+describe("Board core", () => {
+  it("addCard adds a new card in TODO with attempts 0 and empty arrays", () => {
     const b = new Board();
     const c = b.addCard({ id: "t1", title: "ilk", deps: ["x"] });
     expect(c).toEqual({
@@ -11,17 +11,17 @@ describe("Board çekirdek", () => {
     });
   });
 
-  it("aynı id ikinci kez → hata", () => {
+  it("same id a second time → error", () => {
     const b = new Board();
     b.addCard({ id: "t1", title: "a" });
-    expect(() => b.addCard({ id: "t1", title: "b" })).toThrow(/zaten var/);
+    expect(() => b.addCard({ id: "t1", title: "b" })).toThrow(/already exists/);
   });
 
-  it("get bilinmeyen id'de undefined döner", () => {
-    expect(new Board().get("yok")).toBeUndefined();
+  it("get returns undefined for an unknown id", () => {
+    expect(new Board().get("missing")).toBeUndefined();
   });
 
-  it("list ekleme sırasını korur; byColumn filtreler", () => {
+  it("list preserves insertion order; byColumn filters", () => {
     const b = new Board();
     b.addCard({ id: "a", title: "a" });
     b.addCard({ id: "b", title: "b" });
@@ -30,17 +30,17 @@ describe("Board çekirdek", () => {
     expect(b.byColumn("DONE")).toEqual([]);
   });
 
-  it("get savunmalı kopya döner (dış mutasyon iç durumu bozmaz)", () => {
+  it("get returns a defensive copy (external mutation doesn't corrupt internal state)", () => {
     const b = new Board();
     b.addCard({ id: "t1", title: "a" });
     const c = b.get("t1")!;
-    c.reviewNotes.push("dışarıdan");
+    c.reviewNotes.push("external");
     c.column = "DONE";
     expect(b.get("t1")!.reviewNotes).toEqual([]);
     expect(b.get("t1")!.column).toBe("TODO");
   });
 
-  it("onChange her mutasyonda çağrılır", () => {
+  it("onChange is called on every mutation", () => {
     const b = new Board();
     let calls = 0;
     b.onChange = () => { calls++; };
@@ -54,7 +54,7 @@ describe("Board çekirdek", () => {
     expect(calls).toBe(7);
   });
 
-  it("onChange yoksa mutasyon normal çalışır (geriye uyumlu)", () => {
+  it("onChange being unset doesn't break mutations (backward compatible)", () => {
     const b = new Board();
     b.addCard({ id: "t1", title: "X" });
     b.move("t1", "DONE");

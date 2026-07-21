@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import { parseArgs, renderResult, shouldUseTui } from "../src/cli.js";
 
 describe("parseArgs", () => {
-  it("prompt + flag'ler", () => {
-    expect(parseArgs(["X ekle", "--branch", "dev", "--rounds", "2"])).toEqual({ prompt: "X ekle", fromBranch: "dev", rounds: 2 });
+  it("prompt + flags", () => {
+    expect(parseArgs(["Add X", "--branch", "dev", "--rounds", "2"])).toEqual({ prompt: "Add X", fromBranch: "dev", rounds: 2 });
   });
-  it("çok kelimeli prompt birleşir; kısa flag'ler", () => {
-    expect(parseArgs(["merhaba", "dünya", "-b", "main", "-j", "isim"])).toEqual({ prompt: "merhaba dünya", fromBranch: "main", jobName: "isim" });
+  it("multi-word prompt joins; short flags", () => {
+    expect(parseArgs(["hello", "world", "-b", "main", "-j", "name"])).toEqual({ prompt: "hello world", fromBranch: "main", jobName: "name" });
   });
   it("parseArgs --revision-rounds", () => {
     expect(parseArgs(["X", "--revision-rounds", "2"])).toEqual({ prompt: "X", revisionRounds: 2 });
@@ -15,23 +15,23 @@ describe("parseArgs", () => {
 
 describe("renderResult", () => {
   it("chat → response", () => {
-    expect(renderResult({ kind: "chat", response: "cevap" })).toBe("cevap");
+    expect(renderResult({ kind: "chat", response: "answer" })).toBe("answer");
   });
-  it("rejected → stage'i içerir", () => {
+  it("rejected → contains the stage", () => {
     expect(renderResult({ kind: "rejected", stage: "spec" })).toContain("spec");
   });
-  it("done → rapor + PR url", () => {
+  it("done → report + PR url", () => {
     const out = renderResult({
-      kind: "done", report: "rapor",
+      kind: "done", report: "report",
       wave: { status: "completed", session: {} as never, pr: { url: "http://pr" }, waves: [] },
       session: {} as never,
     });
-    expect(out).toContain("rapor");
+    expect(out).toContain("report");
     expect(out).toContain("http://pr");
   });
-  it("renderResult done: revision durumunu yazar", () => {
+  it("renderResult done: writes the revision status", () => {
     const out = renderResult({
-      kind: "done", report: "rapor",
+      kind: "done", report: "report",
       wave: { status: "completed", session: {} as never, pr: { url: "http://pr" }, waves: [] },
       revision: { status: "approved", rounds: 0 },
       session: {} as never,
@@ -40,25 +40,25 @@ describe("renderResult", () => {
   });
 });
 
-describe("cli TUI dallanması", () => {
-  it("parseArgs --no-tui bayrağını okur", () => {
-    expect(parseArgs(["--no-tui", "yap", "bir", "şey"]).noTui).toBe(true);
-    expect(parseArgs(["yap", "bir", "şey"]).noTui).toBeUndefined();
+describe("cli TUI branching", () => {
+  it("parseArgs reads the --no-tui flag", () => {
+    expect(parseArgs(["--no-tui", "do", "something"]).noTui).toBe(true);
+    expect(parseArgs(["do", "something"]).noTui).toBeUndefined();
   });
 
-  it("shouldUseTui: stdin+stdout TTY ve --no-tui yok → true", () => {
+  it("shouldUseTui: stdin+stdout TTY and no --no-tui → true", () => {
     expect(shouldUseTui(true, true, false)).toBe(true);
   });
 
-  it("shouldUseTui: stdout TTY değil → false (pipe/CI)", () => {
+  it("shouldUseTui: stdout not TTY → false (pipe/CI)", () => {
     expect(shouldUseTui(true, false, false)).toBe(false);
   });
 
-  it("shouldUseTui: stdin TTY değil → false (echo x | hcode; Ink raw-mode çökmesini önler)", () => {
+  it("shouldUseTui: stdin not TTY → false (echo x | hcode; prevents an Ink raw-mode crash)", () => {
     expect(shouldUseTui(false, true, false)).toBe(false);
   });
 
-  it("shouldUseTui: --no-tui → false (ikisi de TTY olsa bile)", () => {
+  it("shouldUseTui: --no-tui → false (even if both are TTY)", () => {
     expect(shouldUseTui(true, true, true)).toBe(false);
   });
 });

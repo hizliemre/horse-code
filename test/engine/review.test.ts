@@ -17,7 +17,7 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-review-")); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-// İçerik-tabanlı deterministik provider: councilor (systemPrompt "Perspektif") + judge ("P-judge").
+// Content-based deterministic provider: councilor (systemPrompt "perspective") + judge ("P-judge").
 export function reviewProvider(opts: { assessments?: Record<string, string>; judge?: string[] }): Provider {
   let judgeCall = 0;
   return {
@@ -27,7 +27,7 @@ export function reviewProvider(opts: { assessments?: Record<string, string>; jud
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: args } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;
       };
-      if (sys.includes("Perspektif")) {
+      if (sys.includes("perspective")) {
         const key = Object.keys(opts.assessments ?? {}).find((k) => sys.includes(k));
         yield* emit((opts.assessments ?? {})[key ?? ""] ?? '{"concerns":[],"recommendation":"approve"}');
         return;
@@ -45,8 +45,8 @@ export function reviewProvider(opts: { assessments?: Record<string, string>; jud
 }
 
 export const councilors: CouncilorConfig[] = [
-  { name: "security", perspective: "güvenlik açıkları", models: ["m"] },
-  { name: "arch", perspective: "mimari katmanlar", models: ["m"] },
+  { name: "security", perspective: "security vulnerabilities", models: ["m"] },
+  { name: "arch", perspective: "architectural layers", models: ["m"] },
 ];
 
 export function rdeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
@@ -64,31 +64,31 @@ export function rdeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
 }
 
 describe("buildCouncilRegistry", () => {
-  it("councilor'ı role'e çevirir; resolve model + perspektif prompt döner", () => {
+  it("converts a councilor into a role; resolve returns the model + perspective prompt", () => {
     const reg = buildCouncilRegistry(councilors);
     const r = reg.resolve("security");
     expect(r.model).toBe("m");
-    expect(r.systemPrompt).toContain("güvenlik açıkları");
+    expect(r.systemPrompt).toContain("security vulnerabilities");
   });
 });
 
 describe("runCouncil", () => {
-  it("councilor'ları paralel koşar → isimli assessment'lar; salt-okunur toolset", async () => {
+  it("runs the councilors in parallel → named assessments; read-only toolset", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({
       assessments: {
-        "güvenlik": '{"concerns":["secret sızıntısı"],"recommendation":"revise"}',
-        "mimari": '{"concerns":[],"recommendation":"approve"}',
+        "security": '{"concerns":["secret leak"],"recommendation":"revise"}',
+        "architectural": '{"concerns":[],"recommendation":"approve"}',
       },
     });
     const out = await runCouncil(rdeps(p), dir, "spec.md");
     const byName = Object.fromEntries(out.map((a) => [a.name, a]));
     expect(byName.security.recommendation).toBe("revise");
-    expect(byName.security.concerns).toEqual(["secret sızıntısı"]);
+    expect(byName.security.concerns).toEqual(["secret leak"]);
     expect(byName.arch.recommendation).toBe("approve");
   });
 
-  it("councilor toolset salt-okunur (read/grep/glob/skill; write/shell yok)", async () => {
+  it("councilor toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const { MockProvider } = await import("../../src/providers/mock.js");
     const p = new MockProvider([
@@ -106,21 +106,21 @@ describe("runCouncil", () => {
 });
 
 describe("runJudge", () => {
-  it("assessments + judge → karar", async () => {
+  it("assessments + judge → decision", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["testsiz"],"question":""}'] });
+    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["no tests"],"question":""}'] });
     const d = await runJudge(rdeps(p), dir, "spec.md", [
       { name: "security", concerns: ["x"], recommendation: "revise" },
     ]);
     expect(d.decision).toBe("revise");
-    expect(d.feedback).toEqual(["testsiz"]);
+    expect(d.feedback).toEqual(["no tests"]);
   });
 });
 
 describe("runReviewLoop", () => {
   const noRevise = async () => {};
 
-  it("pass ilk turda → approved, revise çağrılmaz", async () => {
+  it("pass on the first round → approved, revise not called", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ judge: ['{"decision":"pass","feedback":[],"question":""}'] });
     let revised = 0;
@@ -129,41 +129,41 @@ describe("runReviewLoop", () => {
     expect(revised).toBe(0);
   });
 
-  it("revize → revise(feedback) → ikinci tur pass → approved", async () => {
+  it("revise → revise(feedback) → second round pass → approved", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["testsiz"],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["no tests"],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
     const feedbacks: string[][] = [];
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async () => "x", 3);
     expect(out.approved).toBe(true);
-    expect(feedbacks).toEqual([["testsiz"]]);
+    expect(feedbacks).toEqual([["no tests"]]);
   });
 
-  it("ask-human → askUser çağrılır, cevap sonraki revise feedback'inde → pass", async () => {
+  it("ask-human → askUser is called, the answer lands in the next revise feedback → pass", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ judge: ['{"decision":"ask-human","feedback":["belirsiz"],"question":"X mi Y mi?"}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const p = reviewProvider({ judge: ['{"decision":"ask-human","feedback":["unclear"],"question":"X or Y?"}', '{"decision":"pass","feedback":[],"question":""}'] });
     const feedbacks: string[][] = [];
     let asked = "";
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async (q) => { asked = q; return "X"; }, 3);
     expect(out.approved).toBe(true);
-    expect(asked).toBe("X mi Y mi?");
+    expect(asked).toBe("X or Y?");
     expect(feedbacks[0].some((s) => s.includes("X"))).toBe(true);
   });
 
-  it("maxRounds tükendi → son askUser 'onayla' → approved; 'durdur' → değil", async () => {
+  it("maxRounds exhausted → final askUser 'approve' → approved; 'stop' → not", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p1 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    const ok = await runReviewLoop(rdeps(p1), dir, "spec.md", noRevise, async () => "onayla", 2);
+    const ok = await runReviewLoop(rdeps(p1), dir, "spec.md", noRevise, async () => "approve", 2);
     expect(ok.approved).toBe(true);
     const p2 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    const stop = await runReviewLoop(rdeps(p2), dir, "spec.md", noRevise, async () => "durdur", 2);
+    const stop = await runReviewLoop(rdeps(p2), dir, "spec.md", noRevise, async () => "stop", 2);
     expect(stop.approved).toBe(false);
-    // olumsuzluk "onaylamıyorum" (içinde "onayla" geçer) yanlışlıkla onay SAYILMAZ
+    // negation "I don't approve" (contains "approve") is NOT wrongly counted as approval
     const p3 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    const neg = await runReviewLoop(rdeps(p3), dir, "spec.md", noRevise, async () => "onaylamıyorum", 2);
+    const neg = await runReviewLoop(rdeps(p3), dir, "spec.md", noRevise, async () => "I don't approve", 2);
     expect(neg.approved).toBe(false);
   });
 
-  it("iptal edilmişse fırlatır", async () => {
+  it("throws if cancelled", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const ac = new AbortController(); ac.abort();
     const p = reviewProvider({});

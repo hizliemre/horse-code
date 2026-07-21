@@ -19,7 +19,7 @@ export interface WaveOutcome {
   skipped: string[];
 }
 
-/** Söz-zinciri mutex: her çağrı öncekinin ardından koşar; sonucu/hatasını aynen döndürür. */
+/** Promise-chain mutex: each call runs after the previous one; returns its result/error as-is. */
 export function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(fn: () => Promise<T>): Promise<T> => {
@@ -30,8 +30,8 @@ export function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {
 }
 
 /**
- * Tek dalga: blocked bağımlılığa sahip task'ları atla; kalanları paylaşımlı mutex +
- * resolveConflict (merge kilidi içinde runConflictCouncil) ile paralel koş; sonuçları sınıfla.
+ * Single wave: skip tasks with a blocked dependency; run the rest in parallel with a shared mutex +
+ * resolveConflict (runConflictCouncil inside the merge lock); classify the results.
  */
 export async function runWave(
   deps: WaveEngineDeps,
@@ -43,7 +43,7 @@ export async function runWave(
   const skipped = taskIds.filter((t) => board.get(t)!.deps.some((d) => blocked.has(d)));
   const runnable = taskIds.filter((t) => !skipped.includes(t));
   for (const t of skipped) {
-    board.appendStage(t, { role: "team-lead", action: "skipped", note: "bağımlılık başarısız" });
+    board.appendStage(t, { role: "team-lead", action: "skipped", note: "dependency failed" });
   }
 
   const ser = createMutex();
@@ -54,8 +54,8 @@ export async function runWave(
           const r = await runConflictCouncil(deps, session, board, t, tw);
           return r.status === "resolved" ? { status: "merged" } : { status: "conflict", files };
         } catch (e) {
-          // iptal → fırlat (base mid-merge kalabilir; temizlik session teardown'a — G/H).
-          // Kuyruğa girmiş bir sibling merge dirty ağaca çarpsa git reddeder (merged dönmez) → false PR yok.
+          // abort → rethrow (base may be left mid-merge; cleanup is left to session teardown — G/H).
+          // If a queued sibling merge hits a dirty tree, git rejects it (won't return merged) → no false PR.
           if (deps.signal.aborted) throw e;
           try { await deps.manager.abortMerge(session); } catch { /* zaten temiz olabilir */ }
           return { status: "conflict", files };
@@ -88,7 +88,7 @@ function teamLeadOpts(deps: WaveEngineDeps, session: WorktreeSession): RoleAgent
   };
 }
 
-/** Bir session'da dalgaları yürütür (openSession YOK): team-lead → dalgalar → push+openPR / {partial}. */
+/** Runs waves within a session (NO openSession): team-lead → waves → push+openPR / {partial}. */
 export async function runWaves(
   deps: WaveEngineDeps,
   session: WorktreeSession,
@@ -104,12 +104,12 @@ export async function runWaves(
     const o = await runWave(deps, session, board, wave, blocked);
     for (const t of o.failed) { blocked.add(t); failed.push(t); }
     for (const t of o.skipped) { blocked.add(t); skipped.push(t); }
-    // başarılı merge'ler base'e commit'lendi → sonraki dalga güncellenmiş base'den türer (D otomatik)
+    // successful merges were committed to base → the next wave derives from the updated base (D automatic)
   }
 
   if (failed.length === 0 && skipped.length === 0) {
     await deps.manager.push(session);
-    const body = "Tamamlanan task'lar:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
+    const body = "Completed tasks:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
     const pr = await deps.manager.openPR(session, deps.prAdapter, {
       base: opts.base,
       title: opts.prTitle ?? `hc: ${session.jobSlug}`,
@@ -120,7 +120,7 @@ export async function runWaves(
   return { status: "partial", session, failed, skipped, waves };
 }
 
-/** Deterministik dış döngü: openSession → runWaves (geriye dönük uyumlu sarmalayıcı). */
+/** Deterministic outer loop: openSession → runWaves (backward-compatible wrapper). */
 export async function runWaveEngine(
   deps: WaveEngineDeps,
   board: Board,

@@ -23,11 +23,11 @@ function submit(argsJson: string): ChatEvent[] {
 }
 function writeTurn(): ChatEvent[] {
   return [
-    { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: '{"path":"out.txt","content":"kod"}' } },
+    { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: '{"path":"out.txt","content":"code"}' } },
     { type: "done", finishReason: "tool_calls" },
   ];
 }
-const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "bitti" }, { type: "done", finishReason: "stop" }];
+const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }];
 
 function deps(provider: MockProvider): TaskCycleDeps {
   const roles = {
@@ -47,12 +47,12 @@ function deps(provider: MockProvider): TaskCycleDeps {
 }
 function boardWithTask(): Board {
   const b = new Board();
-  b.addCard({ id: "t1", title: "X yap" });
+  b.addCard({ id: "t1", title: "do X" });
   return b;
 }
 
 describe("runTaskCycle", () => {
-  it("pass: implement → review → DONE, dosya yazılı, worktree + stage kaydı", async () => {
+  it("pass: implement → review → DONE, file written, worktree + stage recorded", async () => {
     // router(coder) → implementer(write, done) → reviewer(pass)
     const p = new MockProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}')]);
     const board = boardWithTask();
@@ -62,26 +62,26 @@ describe("runTaskCycle", () => {
     expect(c.column).toBe("DONE");
     expect(c.worktree).toBe(dir);
     expect(c.stageHistory.some((s) => s.action === "reviewed:pass")).toBe(true);
-    expect(await readFile(join(dir, "out.txt"), "utf8")).toBe("kod");
+    expect(await readFile(join(dir, "out.txt"), "utf8")).toBe("code");
   });
 
-  it("fail: TODO'ya döner, reviewNotes = notlar, reviewed:fail stage'i", async () => {
-    const p = new MockProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":["testsiz"]}')]);
+  it("fail: goes back to TODO, reviewNotes = notes, reviewed:fail stage", async () => {
+    const p = new MockProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":["no tests"]}')]);
     const board = boardWithTask();
     const v = await runTaskCycle(deps(p), board, "t1", dir);
     expect(v.verdict).toBe("fail");
     const c = board.get("t1")!;
     expect(c.column).toBe("TODO");
-    expect(c.reviewNotes).toEqual(["testsiz"]);
+    expect(c.reviewNotes).toEqual(["no tests"]);
     expect(c.stageHistory.some((s) => s.action === "reviewed:fail")).toBe(true);
   });
 
-  it("bilinmeyen task → hata", async () => {
+  it("unknown task → error", async () => {
     const p = new MockProvider([]);
-    await expect(runTaskCycle(deps(p), boardWithTask(), "yok", dir)).rejects.toThrow(/bilinmeyen task/);
+    await expect(runTaskCycle(deps(p), boardWithTask(), "missing", dir)).rejects.toThrow(/unknown task/);
   });
 
-  it("fail: notes boşsa bile dönüş sinyali korunur (varsayılan not eklenir)", async () => {
+  it("fail: return signal preserved even with empty notes (a default note is added)", async () => {
     const p = new MockProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":[]}')]);
     const board = boardWithTask();
     const v = await runTaskCycle(deps(p), board, "t1", dir);
@@ -91,23 +91,23 @@ describe("runTaskCycle", () => {
     expect(c.reviewNotes.length).toBeGreaterThan(0);
   });
 
-  it("pass: önceki fail'den kalan reviewNotes DONE'da temizlenir", async () => {
+  it("pass: leftover reviewNotes from a previous fail are cleared on DONE", async () => {
     const p = new MockProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}')]);
     const board = boardWithTask();
-    board.addReviewNote("t1", "eski");
+    board.addReviewNote("t1", "old");
     const v = await runTaskCycle(deps(p), board, "t1", dir);
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.reviewNotes).toEqual([]);
   });
 
-  it("runCycleWithRole: açık senior-coder rolüyle koşar (routing yok), pass→DONE", async () => {
-    // routing turn'ü YOK; ilk turn doğrudan implementer
+  it("runCycleWithRole: runs with an explicit senior-coder role (no routing), pass→DONE", async () => {
+    // NO routing turn; the first turn goes straight to the implementer
     const p = new MockProvider([writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}')]);
     const board = boardWithTask();
     const v = await runCycleWithRole(deps(p), board, "t1", dir, "senior-coder");
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.column).toBe("DONE");
-    // implementer senior-coder sistem prompt'uyla koştu
+    // implementer ran with the senior-coder system prompt
     expect(p.requests[0].messages[0].content).toBe("senior-coder");
   });
 });

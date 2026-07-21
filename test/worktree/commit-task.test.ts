@@ -9,7 +9,7 @@ let repo: string;
 afterEach(async () => { if (repo) await rm(repo, { recursive: true, force: true }); });
 
 describe("WorktreeManager.commitTask", () => {
-  it("task worktree değişikliklerini task branch'ine commit'ler", async () => {
+  it("commits task worktree changes to the task branch", async () => {
     repo = await initTmpRepo();
     const mgr = new WorktreeManager({ repoRoot: repo });
     const s = await mgr.openSession("main", "job");
@@ -20,12 +20,12 @@ describe("WorktreeManager.commitTask", () => {
     expect(log.stdout).toContain("hc: task a");
   });
 
-  it("değişiklik yokken no-op (hata yok, yeni commit yok)", async () => {
+  it("no-op when there are no changes (no error, no new commit)", async () => {
     repo = await initTmpRepo();
     const mgr = new WorktreeManager({ repoRoot: repo });
     const s = await mgr.openSession("main", "job");
     const tw = await mgr.deriveTask(s, "task b");
-    await mgr.commitTask(tw, "hc: task b"); // hiç değişiklik yok
+    await mgr.commitTask(tw, "hc: task b"); // no changes at all
     const log = await defaultGitRunner(["log", "--oneline", tw.branch], repo);
     expect(log.stdout).not.toContain("hc: task b");
   });

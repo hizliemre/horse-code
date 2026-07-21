@@ -9,26 +9,26 @@ const taskSchema = z.object({
   deps: z.array(z.string()),
 });
 
-// Not: superRefine dep-BÜTÜNLÜĞÜNÜ doğrular (tekrarlı id, dangling dep); ASİKLİKLİK burada
-// zorlanmaz — bağımlılık döngüleri downstream'de computeWaves (team-lead) tarafından yakalanır.
+// Note: superRefine validates dep INTEGRITY (duplicate id, dangling dep); ACYCLICITY is not
+// enforced here — dependency cycles are caught downstream by computeWaves (team-lead).
 export const TasksSchema = z
   .object({ tasks: z.array(taskSchema) })
   .superRefine((val, ctx) => {
     const ids = new Set<string>();
     for (const t of val.tasks) {
-      if (ids.has(t.id)) ctx.addIssue({ code: "custom", message: `tekrarlı task id: ${t.id}` });
+      if (ids.has(t.id)) ctx.addIssue({ code: "custom", message: `duplicate task id: ${t.id}` });
       ids.add(t.id);
     }
     for (const t of val.tasks) {
       for (const d of t.deps) {
         if (!ids.has(d)) {
-          ctx.addIssue({ code: "custom", message: `task ${t.id}: tanımsız bağımlılık: ${d}` });
+          ctx.addIssue({ code: "custom", message: `task ${t.id}: undefined dependency: ${d}` });
         }
       }
     }
   });
 
-/** Plan (opts.messages'te) → task kartlı bir Board. Dep-bütünlüğü submit-retry ile self-correct. */
+/** Plan (in opts.messages) → a Board with task cards. Dep integrity self-corrects via submit-retry. */
 export async function runProjectManager(opts: RoleAgentOptions): Promise<Board> {
   const { tasks } = await runStructuredRole(opts, TasksSchema);
   const board = new Board();

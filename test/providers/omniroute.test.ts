@@ -21,8 +21,8 @@ async function drain(it: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
 
 const req: ChatRequest = { model: "cc/claude-opus-4-8", messages: [{ role: "user", content: "hi" }], tools: [] };
 
-describe("OmniRouteProvider — metin streaming + hata", () => {
-  it("delta.content'leri text-delta olarak yayar ve done ile biter", async () => {
+describe("OmniRouteProvider — text streaming + error", () => {
+  it("emits delta.content as text-delta and ends with done", async () => {
     const fetch: FetchLike = async () =>
       sseResponse([
         'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hel"},"finish_reason":null}]}\n',
@@ -39,7 +39,7 @@ describe("OmniRouteProvider — metin streaming + hata", () => {
     ]);
   });
 
-  it("istek gövdesini ve Bearer header'ını doğru kurar", async () => {
+  it("builds the request body and Bearer header correctly", async () => {
     let captured: { url: string; init?: RequestInit } | undefined;
     const fetch: FetchLike = async (url, init) => {
       captured = { url, init };
@@ -55,7 +55,7 @@ describe("OmniRouteProvider — metin streaming + hata", () => {
     expect(sent.stream).toBe(true);
   });
 
-  it("!res.ok durumunda stream açmadan tek error event'i yayar", async () => {
+  it("emits a single error event without opening a stream when !res.ok", async () => {
     const fetch: FetchLike = async () =>
       new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     const provider = new OmniRouteProvider({ apiKey: "bad", baseUrl: "http://localhost:20128", fetch });
@@ -63,7 +63,7 @@ describe("OmniRouteProvider — metin streaming + hata", () => {
     expect(events).toEqual([{ type: "error", message: "Unauthorized" }]);
   });
 
-  it("fetch reddi (abort/ağ) tek error event'ine dönüşür", async () => {
+  it("converts a fetch rejection (abort/network) into a single error event", async () => {
     const fetch: FetchLike = async () => {
       throw new DOMException("The operation was aborted.", "AbortError");
     };
@@ -72,7 +72,7 @@ describe("OmniRouteProvider — metin streaming + hata", () => {
     expect(events).toEqual([{ type: "error", message: "The operation was aborted." }]);
   });
 
-  it("stream ortasında hata (abort/ağ kopması) throw etmez, error event'ine döner", async () => {
+  it("does not throw on a mid-stream error (abort/network drop), returns an error event instead", async () => {
     const fetch: FetchLike = async () => {
       const body = new ReadableStream<Uint8Array>({
         start(c) {
@@ -81,11 +81,11 @@ describe("OmniRouteProvider — metin streaming + hata", () => {
               'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n',
             ),
           );
-          // Reader'ın kuyruktaki chunk'ı önce tüketip yield etmesi için bir makro-görev
-          // (setTimeout) bekle; chat() içinde `await this.fetchFn(...)` gibi ek mikro-görev
-          // turları olduğundan, sadece bir mikro-görev bekletmek chunk enqueue edilir
-          // edilmez controller.error()'ın kuyruğu (ResetQueue) temizlemesine yol açıp
-          // "hi" chunk'ını kaybettirebiliyor (bkz. Node/undici stream davranışı).
+          // Wait a macrotask (setTimeout) so the reader consumes and yields the queued
+          // chunk first; since chat() has extra microtask turns like
+          // `await this.fetchFn(...)`, waiting only a microtask can let controller.error()
+          // clear the queue (ResetQueue) right after the chunk is enqueued, losing the
+          // "hi" chunk (see Node/undici stream behavior).
           setTimeout(() => c.error(new Error("stream boom")), 0);
         },
       });

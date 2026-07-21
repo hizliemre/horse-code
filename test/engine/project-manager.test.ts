@@ -10,9 +10,9 @@ function opts(provider: MockProvider): RoleAgentOptions {
   return {
     provider,
     model: "m",
-    systemPrompt: "sen project-manager'sın",
+    systemPrompt: "you are the project-manager",
     tools: new ToolRegistry(),
-    messages: [{ role: "user", content: "plan: X ve Y yap" }],
+    messages: [{ role: "user", content: "plan: do X and Y" }],
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     cwd: "/tmp",
@@ -27,7 +27,7 @@ function submitTurn(argsJson: string): ChatEvent[] {
 }
 
 describe("runProjectManager", () => {
-  it("task'ları Board kartlarına dönüştürür", async () => {
+  it("converts tasks into Board cards", async () => {
     const p = new MockProvider([
       submitTurn('{"tasks":[{"id":"t1","title":"X","deps":[]},{"id":"t2","title":"Y","deps":["t1"]}]}'),
     ]);
@@ -38,10 +38,10 @@ describe("runProjectManager", () => {
     ]);
   });
 
-  it("dangling dep → self-correct (superRefine isError → yeniden submit)", async () => {
+  it("dangling dep → self-correct (superRefine isError → resubmit)", async () => {
     const p = new MockProvider([
-      submitTurn('{"tasks":[{"id":"t1","title":"X","deps":["yok"]}]}'), // geçersiz
-      submitTurn('{"tasks":[{"id":"t1","title":"X","deps":[]}]}'), // düzeltilmiş
+      submitTurn('{"tasks":[{"id":"t1","title":"X","deps":["missing"]}]}'), // invalid
+      submitTurn('{"tasks":[{"id":"t1","title":"X","deps":[]}]}'), // corrected
     ]);
     const board = await runProjectManager(opts(p));
     expect(board.list().map((c) => c.id)).toEqual(["t1"]);

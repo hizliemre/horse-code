@@ -6,7 +6,7 @@ export type PermissionDecision = "allow" | "ask" | "deny";
 export interface PermissionRequest {
   level: PermissionLevel;
   preview: string;
-  allowKey: string; // shell: komut · dosya: hedef yol
+  allowKey: string; // shell: command · file: target path
 }
 
 export class PermissionEngine {
@@ -31,10 +31,10 @@ export class PermissionEngine {
   }
 
   check(req: PermissionRequest): PermissionDecision {
-    // safe her zaman serbest.
+    // safe is always free.
     if (req.level === "safe") return "allow";
 
-    // Allowlist eşleşmesi her modda geçerli (tehlikeli değilse).
+    // Allowlist match is valid in every mode (unless dangerous).
     const isExec = req.level === "exec";
     const dangerous = isExec && isDangerous(req.allowKey);
 

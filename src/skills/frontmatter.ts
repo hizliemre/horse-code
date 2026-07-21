@@ -1,4 +1,4 @@
-/** `---` frontmatter'dan name/description okur; yoksa { body: raw }. YAML dep yok. */
+/** Reads name/description from `---` frontmatter; otherwise { body: raw }. No YAML dependency. */
 export function parseFrontmatter(raw: string): { name?: string; description?: string; body: string } {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!m) return { body: raw };

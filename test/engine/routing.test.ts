@@ -20,7 +20,7 @@ const card = (title: string): Card => ({
 });
 function deps(provider: MockProvider, hasRouter = true, signal?: AbortSignal): TaskCycleDeps {
   const roles: Record<string, RoleConfig> = hasRouter
-    ? { router: { models: ["m"], systemPrompt: "route et" } }
+    ? { router: { models: ["m"], systemPrompt: "route it" } }
     : {};
   return {
     provider,
@@ -33,29 +33,29 @@ function deps(provider: MockProvider, hasRouter = true, signal?: AbortSignal): T
 }
 
 describe("routeTask", () => {
-  it("router 'designer' derse designer döner", async () => {
+  it("returns designer when the router says 'designer'", async () => {
     const p = new MockProvider([submitTurn('{"role":"designer"}')]);
-    expect(await routeTask(deps(p), card("buton tasarımı"))).toBe("designer");
+    expect(await routeTask(deps(p), card("button design"))).toBe("designer");
   });
-  it("router submit üretmezse coder fallback", async () => {
+  it("falls back to coder when the router doesn't produce a submit", async () => {
     const p = new MockProvider([[{ type: "text-delta", text: "?" }, { type: "done", finishReason: "stop" }]]);
     expect(await routeTask(deps(p), card("x"))).toBe("coder");
   });
-  it("router role tanımsızsa coder fallback", async () => {
+  it("falls back to coder when the router role is undefined", async () => {
     const p = new MockProvider([submitTurn('{"role":"designer"}')]);
     expect(await routeTask(deps(p, false), card("x"))).toBe("coder");
   });
-  it("iptal edilmişse fırlatır", async () => {
+  it("throws if cancelled", async () => {
     const ac = new AbortController();
     ac.abort();
     const p = new MockProvider([submitTurn('{"role":"coder"}')]);
     await expect(routeTask(deps(p, true, ac.signal), card("x"))).rejects.toThrow();
   });
 
-  it("skill listing prompt'a eklendiyse, skill tool da toolset'te olmalı (E-skills coupling)", async () => {
+  it("if the skill listing is added to the prompt, the skill tool must be in the toolset too (E-skills coupling)", async () => {
     const skillRegistry = new SkillRegistry();
-    skillRegistry.register({ name: "tdd", description: "TDD", content: "TDD içeriği" });
-    const roles: Record<string, RoleConfig> = { router: { models: ["m"], systemPrompt: "route et" } };
+    skillRegistry.register({ name: "tdd", description: "TDD", content: "TDD content" });
+    const roles: Record<string, RoleConfig> = { router: { models: ["m"], systemPrompt: "route it" } };
     const p = new MockProvider([submitTurn('{"role":"coder"}')]);
     const d: TaskCycleDeps = {
       provider: p,

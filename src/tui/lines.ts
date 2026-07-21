@@ -1,6 +1,6 @@
 import { parseInline } from "./markdown.js";
 
-// Bir satırın stilli parçaları (fullscreen viewport için içerik → düz satır dizisine flatten edilir).
+// The styled segments of a line (for the fullscreen viewport, content is flattened into a plain line array).
 export interface StyledSeg {
   text: string;
   color?: string;
@@ -13,7 +13,7 @@ export type StyledLine = StyledSeg[];
 
 const segLen = (l: StyledLine): number => l.reduce((a, s) => a + s.text.length, 0);
 
-/** Stilli parçaları kelime-bazında sarar (char değil): her segment kelimelerine bölünür, genişliğe göre paketlenir. */
+/** Wraps styled segments word-by-word (not char): each segment is split into words and packed by width. */
 export function wrapSegs(segs: StyledLine, width: number): StyledLine[] {
   const lines: StyledLine[] = [];
   let cur: StyledLine = [];
@@ -26,7 +26,7 @@ export function wrapSegs(segs: StyledLine, width: number): StyledLine[] {
         lines.push(cur);
         cur = [];
         curLen = 0;
-        if (isSpace) continue; // satır başında boşluk olmasın
+        if (isSpace) continue; // avoid leading space on a line
       }
       cur.push({ ...seg, text: part });
       curLen += part.length;
@@ -69,7 +69,7 @@ function inlineSegs(line: string): StyledLine {
   }));
 }
 
-/** Markdown → stilli satırlar (başlık, liste, kod-bloğu[dil+satır no+highlight], kalın/kod/italik). */
+/** Markdown → styled lines (heading, list, code block [language+line no+highlight], bold/code/italic). */
 export function flattenMarkdown(text: string, width: number): StyledLine[] {
   const src = text.split("\n");
   const out: StyledLine[] = [];
@@ -105,7 +105,7 @@ export function flattenMarkdown(text: string, width: number): StyledLine[] {
   return out;
 }
 
-/** Bir mesajı hanging-indent'li stilli satırlara çevirir (bullet ilk satırda, devamı girintili). */
+/** Converts a message into hanging-indent styled lines (bullet on the first line, continuation indented). */
 export function flattenMessage(role: "user" | "assistant", text: string, cols: number): StyledLine[] {
   const width = Math.max(20, cols - 2);
   const bullet: StyledSeg = role === "user" ? { text: "› ", color: "gray" } : { text: "● ", color: "green" };
@@ -114,10 +114,10 @@ export function flattenMessage(role: "user" | "assistant", text: string, cols: n
       ? wrapSegs([{ text, color: "gray" }], width)
       : flattenMarkdown(text, width);
   const withBullet = body.map((line, i) => [i === 0 ? bullet : { text: "  " }, ...line]);
-  return [...withBullet, []]; // mesaj sonuna bir boş satır → mesajlar bitişik render olmaz
+  return [...withBullet, []]; // one empty line at the end of the message → messages don't render flush together
 }
 
-/** Terminal boyutuna göre logo varyantı + wordmark → ortalanmış stilli satırlar. */
+/** Logo variant + wordmark based on terminal size → centered styled lines. */
 const G: Record<string, string[]> = {
   H: ["█  █", "████", "█  █"], O: ["████", "█  █", "████"], R: ["███ ", "██▄▀", "█  █"],
   S: ["▄███", "▀▀▀▄", "███▀"], E: ["████", "███ ", "████"], C: ["████", "█   ", "████"],
@@ -130,7 +130,7 @@ const hx = (a: number[]): string =>
 
 export function flattenSplash(cols: number, _rows: number): StyledLine[] {
   const showWordmark = cols >= WM_W + 2;
-  const lines: StyledLine[] = [[]]; // üstte boşluk
+  const lines: StyledLine[] = [[]]; // space at the top
   const center = (l: StyledLine): StyledLine => {
     const pad = Math.max(0, Math.floor((cols - segLen(l)) / 2));
     return pad ? [{ text: " ".repeat(pad) }, ...l] : l;

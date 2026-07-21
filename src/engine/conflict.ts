@@ -22,7 +22,7 @@ export interface ConflictDeps extends EscalationDeps {
 
 export type ConflictResult = { status: "resolved" } | { status: "unresolved"; task: TaskWorktree };
 
-/** Resolver toolset: dosya düzenleme (read/write/edit/grep/glob) + skill — SHELL YOK. */
+/** Resolver toolset: file editing (read/write/edit/grep/glob) + skill — NO SHELL. */
 function resolverRegistry(deps: ConflictDeps): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
@@ -34,22 +34,22 @@ function resolverRegistry(deps: ConflictDeps): ToolRegistry {
   return r;
 }
 
-/** Verilen dosyalardan herhangi biri hâlâ bir çakışma marker'ı (`<<<<<<<`) içeriyor mu. */
+/** Whether any of the given files still contains a conflict marker (`<<<<<<<`). */
 async function hasConflictMarkers(baseWorktree: string, files: string[]): Promise<boolean> {
   for (const f of files) {
     try {
       const content = await readFile(join(baseWorktree, f), "utf8");
       if (content.includes("<<<<<<<")) return true;
     } catch {
-      // dosya çözümde silinmiş olabilir (delete/modify) → marker yok say
+      // the file may have been deleted during resolution (delete/modify) → treat as no marker
     }
   }
   return false;
 }
 
 /**
- * Mid-merge base worktree'deki çakışmayı konseyle çözer: architect diagnoz → senior-coder resolve
- * (shell'siz) → marker taraması + code-reviewer → commitMerge. N tur çözülemezse abortMerge + insana sor.
+ * Resolves a conflict in the mid-merge base worktree via council: architect diagnosis → senior-coder resolve
+ * (no shell) → marker scan + code-reviewer → commitMerge. If unresolved after N rounds, abortMerge + ask a human.
  */
 export async function runConflictCouncil(
   deps: ConflictDeps,
@@ -58,7 +58,7 @@ export async function runConflictCouncil(
   taskId: string,
   task: TaskWorktree,
 ): Promise<ConflictResult> {
-  if (!board.get(taskId)) throw new Error(`runConflictCouncil: bilinmeyen task: ${taskId}`);
+  if (!board.get(taskId)) throw new Error(`runConflictCouncil: unknown task: ${taskId}`);
   const conflicted = await deps.manager.unmergedFiles(session);
   const rounds = Math.max(1, deps.rounds);
   const base = session.baseWorktree;
@@ -67,46 +67,46 @@ export async function runConflictCouncil(
     for (let i = 0; i < rounds; i++) {
       const card = board.get(taskId)!;
       const notes = card.reviewNotes.length
-        ? `\nİpuçları:\n${card.reviewNotes.map((n) => `- ${n}`).join("\n")}`
+        ? `\nHints:\n${card.reviewNotes.map((n) => `- ${n}`).join("\n")}`
         : "";
 
-      // 1. architect diagnoz (salt-okunur)
+      // 1. architect diagnosis (read-only)
       const arch = deps.roleRegistry.resolve("architect");
       const diagOpts: RoleAgentOptions = {
         provider: deps.provider, model: arch.model, systemPrompt: arch.systemPrompt,
         tools: readOnlyRegistry(deps),
         messages: [{ role: "user", content:
-          `Base worktree'de şu dosyalarda merge çakışması var: ${conflicted.join(", ")}. ` +
-          `Kök-nedeni belirle ve somut bir çözüm planı üret.${notes}` }],
+          `The base worktree has a merge conflict in the following files: ${conflicted.join(", ")}. ` +
+          `Identify the root cause and produce a concrete resolution plan.${notes}` }],
         permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
       };
       const plan = await runStructuredRole(diagOpts, ArchitectPlanSchema);
       board.appendStage(taskId, { role: "architect", action: "conflict:diagnosed", note: plan.rootCause });
 
-      // 2. senior-coder resolve (shell yok)
+      // 2. senior-coder resolve (no shell)
       const sr = deps.roleRegistry.resolve("senior-coder");
       const resolveOpts: RoleAgentOptions = {
         provider: deps.provider, model: sr.model, systemPrompt: sr.systemPrompt,
         tools: resolverRegistry(deps),
         messages: [{ role: "user", content:
-          `Base worktree'de şu dosyalardaki merge çakışmalarını çöz (tüm çakışma marker'larını ` +
-          `— <<<<<<< / ======= / >>>>>>> — kaldır, iki değişikliği tutarlı biçimde birleştir): ` +
+          `Resolve the merge conflicts in the following files in the base worktree (remove all conflict markers ` +
+          `— <<<<<<< / ======= / >>>>>>> — and merge the two changes consistently): ` +
           `${conflicted.join(", ")}.\nPlan:\n${plan.plan.map((p) => `- ${p}`).join("\n")}${notes}` }],
         permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
       };
       await runToCompletion(resolveOpts);
       board.appendStage(taskId, { role: "senior-coder", action: "conflict:resolved-attempt" });
 
-      // 3. verify: deterministik marker taraması + code-reviewer
+      // 3. verify: deterministic marker scan + code-reviewer
       if (await hasConflictMarkers(base, conflicted)) {
-        // reviewNotes = son turun başarısızlık nedeni (reviewer-fail dalıyla simetrik: clear+set)
+        // reviewNotes = reason the last round failed (symmetric with the reviewer-fail branch: clear+set)
         board.clearReviewNotes(taskId);
-        board.addReviewNote(taskId, `çakışma marker'ları hâlâ var: ${conflicted.join(", ")}`);
+        board.addReviewNote(taskId, `conflict markers still present: ${conflicted.join(", ")}`);
         continue;
       }
       const v = await runReviewer(deps, board.get(taskId)!, base);
       if (v.verdict === "pass") {
-        await deps.manager.commitMerge(session, `hc: conflict çözümü — ${card.title}`);
+        await deps.manager.commitMerge(session, `hc: conflict resolution — ${card.title}`);
         board.appendStage(taskId, { role: "code-reviewer", action: "conflict:merged" });
         return { status: "resolved" };
       }
@@ -114,17 +114,17 @@ export async function runConflictCouncil(
       for (const n of v.notes) board.addReviewNote(taskId, n);
     }
 
-    // rounds tükendi, base hâlâ mid-merge → insana sor
+    // rounds exhausted, base still mid-merge → ask a human
     const decision = await deps.askHuman({
       card: board.get(taskId)!,
-      verdict: { verdict: "fail", notes: [`merge conflict ${rounds} turda çözülemedi`] },
+      verdict: { verdict: "fail", notes: [`merge conflict not resolved in ${rounds} rounds`] },
     });
     if (decision.action === "retry") {
       board.clearReviewNotes(taskId);
       for (const n of decision.notes) board.addReviewNote(taskId, n);
       continue;
     }
-    // accept/abandon → abort (marker'lı/eksik commit olmaz)
+    // accept/abandon → abort (no commit with markers/left incomplete)
     await deps.manager.abortMerge(session);
     board.appendStage(taskId, { role: "human", action: "conflict:aborted" });
     return { status: "unresolved", task };

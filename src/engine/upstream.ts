@@ -18,7 +18,7 @@ import { runReviewLoop } from "./review.js";
 
 const askUserParams = z.object({ question: z.string() });
 
-/** Analyst'in kullanıcıya soru sorması için tool (buildSkillTool paterni); cevabı content'te döner. */
+/** Tool for the analyst to ask the user a question (buildSkillTool pattern); returns the answer in content. */
 export function buildAskUserTool(askUser: AskUser): Tool {
   return {
     name: "ask_user",
@@ -36,7 +36,7 @@ export function buildAskUserTool(askUser: AskUser): Tool {
   };
 }
 
-/** Dosya-yazan rollerin toolset'i: read/write/edit/grep/glob + skill (+ extra); shell/web YOK. */
+/** Toolset for file-writing roles: read/write/edit/grep/glob + skill (+ extra); NO shell/web. */
 function writerRegistry(deps: ReviewDeps, extra: Tool[] = []): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
@@ -49,7 +49,7 @@ function writerRegistry(deps: ReviewDeps, extra: Tool[] = []): ToolRegistry {
   return r;
 }
 
-/** Analyst: ask_user ile soru sorup spec dosyasını yazar (revize'de feedback ile). */
+/** Analyst: asks questions via ask_user and writes the spec file (with feedback on revision). */
 export async function runAnalyst(
   deps: ReviewDeps,
   workdir: string,
@@ -72,7 +72,7 @@ export async function runAnalyst(
   await runToCompletion(opts);
 }
 
-/** Planner: spec'i okuyup plan dosyasını yazar (revize'de feedback ile). ask_user YOK — soru sormaz. */
+/** Planner: reads the spec and writes the plan file (with feedback on revision). NO ask_user — it doesn't ask questions. */
 export async function runPlanner(
   deps: ReviewDeps,
   workdir: string,
@@ -100,8 +100,8 @@ export type UpstreamResult =
   | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" };
 
 /**
- * Upstream pipeline: refiner → route; chat→coach cevabı; pipeline→analyst spec (F2 review) →
- * planner plan (F2 review) → onaylı {specPath, planPath}; reddedilirse {rejected, stage}.
+ * Upstream pipeline: refiner → route; chat→coach response; pipeline→analyst spec (F2 review) →
+ * planner plan (F2 review) → approved {specPath, planPath}; if rejected, {rejected, stage}.
  */
 export async function runUpstream(
   deps: ReviewDeps,
@@ -111,10 +111,10 @@ export async function runUpstream(
   maxRounds: number,
   history: Message[] = [],
 ): Promise<UpstreamResult> {
-  // Refiner geçmişi görür → follow-up'lar bağlamda refine edilir (horse-code'un feature'ı her yerde geçerli).
+  // The refiner sees the history → follow-ups are refined in context (horse-code's feature applies everywhere).
   const r = await runRefiner(deps, prompt, history);
   if (routeIntent(r.intent) === "chat") {
-    // Chat: refine edilmiş prompt + konuşma geçmişi → bağlamsal, tutarlı çok-turlu cevap.
+    // Chat: refined prompt + conversation history → a contextual, consistent multi-turn response.
     const response = await runCoachChat(deps, r.refinedPrompt, workdir, history);
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response };
   }
@@ -127,8 +127,8 @@ export async function runUpstream(
     askUser, maxRounds,
   );
   if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
-  // Onaylı ama dosya yoksa (analyst yazmadı, judge yine de geçti): H'ye var-olmayan path verme.
-  if (!existsSync(join(workdir, specPath))) throw new Error(`analyst spec üretmedi: ${specPath}`);
+  // Approved but the file doesn't exist (analyst didn't write it, judge passed anyway): don't hand H a nonexistent path.
+  if (!existsSync(join(workdir, specPath))) throw new Error(`analyst did not produce a spec: ${specPath}`);
 
   const planPath = ".hc/plan.md";
   await runPlanner(deps, workdir, planPath, specPath, undefined);
@@ -138,7 +138,7 @@ export async function runUpstream(
     askUser, maxRounds,
   );
   if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
-  if (!existsSync(join(workdir, planPath))) throw new Error(`planner plan üretmedi: ${planPath}`);
+  if (!existsSync(join(workdir, planPath))) throw new Error(`planner did not produce a plan: ${planPath}`);
 
   return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "approved", specPath, planPath };
 }

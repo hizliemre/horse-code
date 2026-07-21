@@ -16,7 +16,7 @@ function mkIO(answers: string[], existing?: string) {
 }
 
 describe("runInit", () => {
-  it("boş baseUrl → default; apiKey yazılır", async () => {
+  it("empty baseUrl → default; apiKey is written", async () => {
     const { io, writes } = mkIO(["", "secret-key"]);
     await runInit(io);
     expect(writes).toHaveLength(1);
@@ -27,7 +27,7 @@ describe("runInit", () => {
     expect(cfg.apiKey).toBe("secret-key");
   });
 
-  it("girilen baseUrl kullanılır; boş apiKey → apiKey yok", async () => {
+  it("the entered baseUrl is used; empty apiKey → no apiKey", async () => {
     const { io, writes } = mkIO(["https://gw.example/v", "  "]);
     await runInit(io);
     const cfg = JSON.parse(writes[0].content);
@@ -35,7 +35,7 @@ describe("runInit", () => {
     expect("apiKey" in cfg).toBe(false);
   });
 
-  it("mevcut alanları korur; mevcut model korunur; boş apiKey öncekini temizler", async () => {
+  it("preserves existing fields; keeps the existing model; empty apiKey clears the previous one", async () => {
     const existing = JSON.stringify({ mode: "auto", model: "openai/gpt-4o", apiKey: "old", roles: { coder: { models: ["x"] } } });
     const { io, writes } = mkIO(["", ""], existing);
     await runInit(io);
@@ -46,7 +46,7 @@ describe("runInit", () => {
     expect("apiKey" in cfg).toBe(false);
   });
 
-  it("apiKey değeri log'a yazılmaz", async () => {
+  it("the apiKey value is not written to the log", async () => {
     const { io, logs } = mkIO(["", "TOPSECRET"]);
     await runInit(io);
     expect(logs.join("\n")).not.toContain("TOPSECRET");

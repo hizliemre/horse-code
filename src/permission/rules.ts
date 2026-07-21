@@ -1,8 +1,8 @@
 import picomatch from "picomatch";
 
-// Tehlikeli komut desenleri (kaba, tam kapsayıcı değil — auto modda ek güvenlik).
+// Dangerous command patterns (rough, not fully comprehensive — extra safety in auto mode).
 const DANGEROUS_PATTERNS: RegExp[] = [
-  /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b.*\s\/(\*|\s|$)/, // rm -rf / veya /*
+  /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b.*\s\/(\*|\s|$)/, // rm -rf / or /*
   /\brm\s+-rf\s+\/(\*|$)/,
   /:\(\)\s*\{.*\|.*&.*\}\s*;/, // fork bomb :(){ :|:& };:
   /\bmkfs\b/,
@@ -15,22 +15,22 @@ export function isDangerous(command: string): boolean {
   return DANGEROUS_PATTERNS.some((re) => re.test(command));
 }
 
-// Shell zincirleme/injection metakarakterleri: bunları içeren bir komut
-// prefix-allowlist ile GÜVENLE eşleştirilemez (örn "npm test && rm -rf ~").
+// Shell chaining/injection metacharacters: a command containing these
+// cannot be SAFELY matched against a prefix-allowlist (e.g. "npm test && rm -rf ~").
 const SHELL_METACHARACTERS = /[;&|`\n<>${}()]/;
 
 /**
- * allowKey bir kurala uyuyor mu?
- * @param kind "glob" → dosya yolu eşleştirmesi (picomatch); "prefix" → shell komutu prefix eşleşmesi.
- * Eşleşme türü çağıran (engine) tarafından `PermissionLevel`'e göre açıkça verilir — string
- * şeklinden tahmin edilmez.
+ * Does allowKey match a rule?
+ * @param kind "glob" → file path matching (picomatch); "prefix" → shell command prefix matching.
+ * The match kind is explicitly provided by the caller (engine) based on `PermissionLevel` —
+ * it is not guessed from the string's shape.
  */
 export function matchesAllowlist(
   allowKey: string,
   rules: string[],
   kind: "glob" | "prefix",
 ): boolean {
-  // Prefix modunda metakarakter içeren komut hiçbir kurala güvenle eşleşemez.
+  // In prefix mode, a command containing metacharacters cannot safely match any rule.
   if (kind === "prefix" && SHELL_METACHARACTERS.test(allowKey)) return false;
 
   for (const rule of rules) {

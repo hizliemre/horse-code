@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { Board } from "../../src/board/board.js";
 
-describe("Board serileştirme", () => {
-  it("toJSON version + kartları verir", () => {
+describe("Board serialization", () => {
+  it("toJSON returns version + cards", () => {
     const b = new Board();
     b.addCard({ id: "t1", title: "a" });
     b.move("t1", "REVIEW", "coder");
@@ -12,7 +12,7 @@ describe("Board serileştirme", () => {
     expect(data.cards[0].column).toBe("REVIEW");
   });
 
-  it("toJSON → fromJSON round-trip aynı kartları verir", () => {
+  it("toJSON → fromJSON round-trip returns the same cards", () => {
     const b = new Board();
     b.addCard({ id: "t1", title: "a", deps: ["x"] });
     b.addReviewNote("t1", "n");
@@ -21,7 +21,7 @@ describe("Board serileştirme", () => {
     expect(back.list()).toEqual(b.list());
   });
 
-  it("fromJSON geçersiz veride hata verir", () => {
+  it("fromJSON throws on invalid data", () => {
     expect(() => Board.fromJSON({ version: 1, cards: [{ id: "t1" }] })).toThrow();
     expect(() => Board.fromJSON({ version: 2, cards: [] })).toThrow();
     expect(() =>

@@ -1,6 +1,6 @@
 import type { Board } from "../board/board.js";
 
-/** Kartları deps'e göre topolojik dalgalara böler. Döngü/çözülemeyen dep → hata. */
+/** Splits cards into topological waves based on deps. Cycle/unresolvable dep → error. */
 export function computeWaves(board: Board): string[][] {
   const cards = board.list();
   const placed = new Set<string>();
@@ -10,7 +10,7 @@ export function computeWaves(board: Board): string[][] {
   while (remaining.length) {
     const layer = remaining.filter((c) => c.deps.every((d) => placed.has(d)));
     if (layer.length === 0) {
-      throw new Error("computeWaves: bağımlılık döngüsü veya çözülemeyen bağımlılık");
+      throw new Error("computeWaves: dependency cycle or unresolved dependency");
     }
     waves.push(layer.map((c) => c.id));
     for (const c of layer) placed.add(c.id);
@@ -19,7 +19,7 @@ export function computeWaves(board: Board): string[][] {
   return waves;
 }
 
-/** Dalgalar geçerli mi: her kart tam bir kez + her task'ın deps'i önceki dalgalarda. */
+/** Are the waves valid: each card exactly once + each task's deps in earlier waves. */
 export function validateWaves(waves: string[][], board: Board): boolean {
   const cards = board.list();
   const allIds = new Set(cards.map((c) => c.id));

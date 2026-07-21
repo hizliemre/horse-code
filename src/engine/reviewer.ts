@@ -14,7 +14,7 @@ export const VerdictSchema = z.object({
   notes: z.array(z.string()),
 });
 
-/** Reviewer'ın salt-okunur toolset'i: read/grep/glob + skill (write/edit/shell YOK). */
+/** Reviewer's read-only toolset: read/grep/glob + skill (NO write/edit/shell). */
 export function readOnlyRegistry(deps: TaskCycleDeps): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
@@ -24,7 +24,7 @@ export function readOnlyRegistry(deps: TaskCycleDeps): ToolRegistry {
   return r;
 }
 
-/** code-reviewer role'ünü salt-okunur tool'larla koşup structured verdikt döner. */
+/** Runs the code-reviewer role with read-only tools and returns a structured verdict. */
 export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string): Promise<Verdict> {
   const { model, systemPrompt } = deps.roleRegistry.resolve("code-reviewer");
   const opts: RoleAgentOptions = {

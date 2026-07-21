@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("grep", () => {
-  it("eşleşen satırları yol:satır:metin biçiminde döner", async () => {
+  it("returns matching lines in path:line:text format", async () => {
     await mkdir(join(dir, "src"), { recursive: true });
     await writeFile(join(dir, "src/a.ts"), "const foo = 1;\nconst bar = 2;", "utf8");
     const res = await grepTool.run({ pattern: "foo" }, ctx());
@@ -24,19 +24,19 @@ describe("grep", () => {
     expect(res.content).not.toContain("bar");
   });
 
-  it("eşleşme yoksa bilgilendirir (isError:false)", async () => {
-    await writeFile(join(dir, "a.txt"), "hiçbir şey", "utf8");
+  it("reports when there are no matches (isError:false)", async () => {
+    await writeFile(join(dir, "a.txt"), "nothing", "utf8");
     const res = await grepTool.run({ pattern: "zzz" }, ctx());
     expect(res.isError).toBe(false);
-    expect(res.content).toContain("eşleşme yok");
+    expect(res.content).toContain("no matches");
   });
 
-  it("bozuk regex'te isError döner", async () => {
+  it("returns isError on broken regex", async () => {
     const res = await grepTool.run({ pattern: "(" }, ctx());
     expect(res.isError).toBe(true);
   });
 
-  it("geçersiz args'ta throw etmez, isError:true döner", async () => {
+  it("does not throw on invalid args, returns isError:true", async () => {
     const res = await grepTool.run({}, ctx());
     expect(res.isError).toBe(true);
   });

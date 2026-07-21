@@ -5,17 +5,17 @@ import { ToolRegistry } from "../../src/tools/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { AgentEvent, Tool, ToolCall } from "../../src/core/types.js";
 
-// Basit sahte tool'lar
+// Simple fake tools
 const safeEcho: Tool = {
   name: "echo",
-  description: "girdiyi döner",
+  description: "returns the input",
   permissionLevel: "safe",
   parameters: z.object({ t: z.string() }),
   run: async (a) => ({ content: `echo:${a.t}`, isError: false }),
 };
 const writeTool: Tool = {
   name: "w",
-  description: "yazar",
+  description: "writes",
   permissionLevel: "write",
   parameters: z.object({ p: z.string() }),
   describe: (a) => ({ allowKey: String(a.p), preview: `write ${a.p}` }),
@@ -26,7 +26,7 @@ const throwsDescribe: Tool = {
   description: "describe throw",
   permissionLevel: "write",
   parameters: z.object({ p: z.string() }),
-  describe: () => { throw new Error("describe patladı"); },
+  describe: () => { throw new Error("describe threw"); },
   run: async () => ({ content: "x", isError: false }),
 };
 
@@ -56,17 +56,17 @@ const deps = (over: Partial<Parameters<typeof executeToolCalls>[1]>) => ({
 });
 
 describe("executeToolCalls", () => {
-  it("safe tool otomatik çalışır, sonuç çağrı sırasında döner", async () => {
+  it("safe tool runs automatically, result returned in call order", async () => {
     const { result } = await drainGen(executeToolCalls([call("1", "echo", { t: "hi" })], deps({})));
     expect(result).toEqual([{ id: "1", name: "echo", result: { content: "echo:hi", isError: false } }]);
   });
 
-  it("auto modda write tool çalışır", async () => {
+  it("write tool runs in auto mode", async () => {
     const { result } = await drainGen(executeToolCalls([call("1", "w", { p: "a.ts" })], deps({})));
     expect(result[0].result).toEqual({ content: "wrote:a.ts", isError: false });
   });
 
-  it("ask modda approve=false ise reddedilir (çalıştırılmaz)", async () => {
+  it("ask mode: denied when approve=false (not executed)", async () => {
     const { events, result } = await drainGen(
       executeToolCalls([call("1", "w", { p: "a.ts" })], deps({
         permission: new PermissionEngine({ mode: "ask", allowlist: [] }),
@@ -74,11 +74,11 @@ describe("executeToolCalls", () => {
       })),
     );
     expect(result[0].result.isError).toBe(true);
-    expect(result[0].result.content).toContain("reddetti");
+    expect(result[0].result.content).toContain("denied");
     expect(events.some((e) => e.type === "permission.ask")).toBe(true);
   });
 
-  it("ask modda approve=true ise çalışır", async () => {
+  it("ask mode: runs when approve=true", async () => {
     const { result } = await drainGen(
       executeToolCalls([call("1", "w", { p: "a.ts" })], deps({
         permission: new PermissionEngine({ mode: "ask", allowlist: [] }),
@@ -88,35 +88,35 @@ describe("executeToolCalls", () => {
     expect(result[0].result).toEqual({ content: "wrote:a.ts", isError: false });
   });
 
-  it("bilinmeyen tool → hata result", async () => {
-    const { result } = await drainGen(executeToolCalls([call("1", "yok", {})], deps({})));
+  it("unknown tool → error result", async () => {
+    const { result } = await drainGen(executeToolCalls([call("1", "missing", {})], deps({})));
     expect(result[0].result.isError).toBe(true);
-    expect(result[0].result.content).toContain("bilinmeyen tool");
+    expect(result[0].result.content).toContain("unknown tool");
   });
 
-  it("boş tool-call id → hata result (çalıştırılmaz)", async () => {
+  it("empty tool-call id → error result (not executed)", async () => {
     const { result } = await drainGen(executeToolCalls([call("", "echo", { t: "x" })], deps({})));
     expect(result[0].result.isError).toBe(true);
-    expect(result[0].result.content).toContain("geçersiz tool-call id");
+    expect(result[0].result.content).toContain("invalid tool-call id");
   });
 
-  it("describe throw → hata result (çalıştırılmaz)", async () => {
+  it("describe throws → error result (not executed)", async () => {
     const { result } = await drainGen(executeToolCalls([call("1", "bad", { p: "a" })], deps({})));
     expect(result[0].result.isError).toBe(true);
     expect(result[0].result.content).toContain("describe");
   });
 
-  it("çoklu safe tool paralel çalışır, sonuç çağrı sırasında", async () => {
+  it("multiple safe tools run in parallel, result in call order", async () => {
     const { result } = await drainGen(
       executeToolCalls([call("1", "echo", { t: "a" }), call("2", "echo", { t: "b" })], deps({})),
     );
     expect(result.map((r) => r.result.content)).toEqual(["echo:a", "echo:b"]);
   });
 
-  it("bozuk JSON argüman → hata result (çalıştırılmaz)", async () => {
+  it("malformed JSON argument → error result (not executed)", async () => {
     const badCall = { id: "1", name: "echo", arguments: "{not json" };
     const { result } = await drainGen(executeToolCalls([badCall], deps({})));
     expect(result[0].result.isError).toBe(true);
-    expect(result[0].result.content).toContain("geçersiz JSON");
+    expect(result[0].result.content).toContain("invalid JSON");
   });
 });

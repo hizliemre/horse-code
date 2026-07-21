@@ -51,7 +51,7 @@ function cloneCard(c: Card): Card {
 }
 
 export class Board {
-  onChange?: () => void; // her mutasyon sonrası çağrılır (varsa; H3a ilerleme event'leri)
+  onChange?: () => void; // called after every mutation (if set; H3a progress events)
   private cards = new Map<string, Card>();
 
   constructor(cards: Card[] = []) {
@@ -59,7 +59,7 @@ export class Board {
   }
 
   addCard(input: { id: string; title: string; deps?: string[] }): Card {
-    if (this.cards.has(input.id)) throw new Error(`kart zaten var: ${input.id}`);
+    if (this.cards.has(input.id)) throw new Error(`card already exists: ${input.id}`);
     const card: Card = {
       id: input.id,
       title: input.title,
@@ -89,7 +89,7 @@ export class Board {
 
   private require(id: string): Card {
     const c = this.cards.get(id);
-    if (!c) throw new Error(`bilinmeyen kart: ${id}`);
+    if (!c) throw new Error(`unknown card: ${id}`);
     return c;
   }
 

@@ -6,44 +6,44 @@ const ctx = () => ({ cwd: "/tmp", signal: new AbortController().signal });
 
 function reg(): SkillRegistry {
   const r = new SkillRegistry();
-  r.register({ name: "tdd", description: "TDD akışı", content: "önce test yaz" });
-  r.register({ name: "cs", description: "kod standartları", content: "temiz kod" });
+  r.register({ name: "tdd", description: "TDD workflow", content: "write tests first" });
+  r.register({ name: "cs", description: "code standards", content: "clean code" });
   return r;
 }
 
 describe("applySkills", () => {
-  it("zorunlu içerik + keşfedilebilir listing ekler", () => {
+  it("adds mandatory content + a discoverable listing", () => {
     const out = applySkills("BASE", ["tdd"], reg());
     expect(out).toContain("BASE");
-    expect(out).toContain("# Zorunlu Skill'ler");
+    expect(out).toContain("# Mandatory Skills");
     expect(out).toContain("## tdd");
-    expect(out).toContain("önce test yaz");
-    expect(out).toContain("# Keşfedilebilir Skill'ler");
-    expect(out).not.toContain("- tdd: TDD akışı");
-    expect(out).toContain("- cs: kod standartları");
+    expect(out).toContain("write tests first");
+    expect(out).toContain("# Discoverable Skills");
+    expect(out).not.toContain("- tdd: TDD workflow");
+    expect(out).toContain("- cs: code standards");
   });
 
-  it("tanımsız zorunlu skill → hata", () => {
-    expect(() => applySkills("BASE", ["yok"], reg())).toThrow(/tanımsız skill/);
+  it("undefined mandatory skill → error", () => {
+    expect(() => applySkills("BASE", ["missing"], reg())).toThrow(/undefined skill/);
   });
 
-  it("boş registry + boş mandatory → basePrompt değişmez", () => {
+  it("empty registry + empty mandatory → basePrompt unchanged", () => {
     expect(applySkills("BASE", [], new SkillRegistry())).toBe("BASE");
   });
 });
 
 describe("buildSkillTool", () => {
-  it("bilinen skill'in içeriğini döner", async () => {
+  it("returns a known skill's content", async () => {
     const t = buildSkillTool(reg());
     expect(t.name).toBe("skill");
     expect(t.permissionLevel).toBe("safe");
     const res = await t.run({ name: "tdd" }, ctx());
-    expect(res).toEqual({ content: "önce test yaz", isError: false });
+    expect(res).toEqual({ content: "write tests first", isError: false });
   });
 
-  it("bilinmeyen skill → isError", async () => {
-    const res = await buildSkillTool(reg()).run({ name: "yok" }, ctx());
+  it("unknown skill → isError", async () => {
+    const res = await buildSkillTool(reg()).run({ name: "missing" }, ctx());
     expect(res.isError).toBe(true);
-    expect(res.content).toContain("bulunamadı");
+    expect(res.content).toContain("not found");
   });
 });

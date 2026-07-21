@@ -2,23 +2,23 @@ import type { Board } from "../board/board.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult } from "../worktree/manager.js";
 import { runTaskWithEscalation, type EscalationDeps } from "./escalation.js";
 
-/** E4a yalnızca bu üç metodu kullanır (stub/mock enjeksiyonu için dar arayüz). */
+/** E4a only uses these three methods (a narrow interface for stub/mock injection). */
 export type WaveTaskManager = Pick<WorktreeManager, "deriveTask" | "commitTask" | "mergeTask">;
 
 export interface WaveTaskDeps extends EscalationDeps {
   manager: WaveTaskManager;
-  /** Git-mutating adımları (derive, merge) serileştiren mutex; paralel dalgada E4c sağlar.
-   *  Varsayılan: kimlik. */
+  /** Mutex serializing the git-mutating steps (derive, merge); provides E4c in a parallel wave.
+   *  Default: identity. */
   serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
-  /** Conflict'i serileştirilmiş merge bloğu içinde çözer (E4c wiring: runConflictCouncil). */
+  /** Resolves a conflict inside the serialized merge block (E4c wiring: runConflictCouncil). */
   resolveConflict?: (task: TaskWorktree, files: string[]) => Promise<MergeResult>;
 }
 
 /**
- * runWaveTask sonucu. Çağıran (E4b/E4c) için sözleşme notları:
- * - `conflict`: base worktree merge ortasında bırakılır (`MERGE_HEAD` var) — bir sonraki
- *   `mergeTask`'tan ÖNCE E4b resolve + `commitMerge` ya da `abortMerge` yapmalı.
- * - Hiçbir dal task worktree'sini/branch'ini temizlemez (`removeTask`/`closeSession` → E4c).
+ * runWaveTask result. Contract notes for the caller (E4b/E4c):
+ * - `conflict`: the base worktree is left mid-merge (`MERGE_HEAD` exists) — BEFORE the next
+ *   `mergeTask`, E4b must resolve + `commitMerge` or `abortMerge`.
+ * - No branch cleans up the task worktree/branch (`removeTask`/`closeSession` → E4c).
  */
 export type TaskResult =
   | { status: "merged"; task: TaskWorktree }
@@ -26,8 +26,8 @@ export type TaskResult =
   | { status: "task-failed"; task: TaskWorktree };
 
 /**
- * Bir task'ın dalga içi yaşam döngüsü: base'den worktree türet → escalation ile koş →
- * geçerse worktree'yi commit'le + base'e merge. Conflict yalnızca relay edilir (çözüm E4b).
+ * A task's in-wave lifecycle: derive a worktree from base → run it through escalation →
+ * on success, commit the worktree + merge into base. Conflicts are only relayed (resolution is E4b).
  */
 export async function runWaveTask(
   deps: WaveTaskDeps,
@@ -36,21 +36,21 @@ export async function runWaveTask(
   taskId: string,
 ): Promise<TaskResult> {
   const card = board.get(taskId);
-  if (!card) throw new Error(`runWaveTask: bilinmeyen task: ${taskId}`);
+  if (!card) throw new Error(`runWaveTask: unknown task: ${taskId}`);
 
   const ser = deps.serialize ?? (<T>(f: () => Promise<T>) => f());
   const tw = await ser(() => deps.manager.deriveTask(session, card.title));
 
   const rounds = Math.max(1, deps.rounds);
   const v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree);
-  deps.signal.throwIfAborted(); // escalation sırasında iptal geldiyse commit/merge'e geçme
+  deps.signal.throwIfAborted(); // don't proceed to commit/merge if an abort came in during escalation
 
   if (v.verdict === "fail") {
     board.appendStage(taskId, { role: "team-lead", action: "task-failed" });
     return { status: "task-failed", task: tw };
   }
 
-  // pass → worktree değişikliklerini task branch'ine commit'le, sonra base'e merge et
+  // pass → commit the worktree changes to the task branch, then merge into base
   await deps.manager.commitTask(tw, `hc: ${card.title}`);
   const mr = await ser(async () => {
     const r = await deps.manager.mergeTask(session, tw);

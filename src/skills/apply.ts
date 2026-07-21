@@ -2,24 +2,24 @@ import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import type { SkillRegistry } from "./registry.js";
 
-/** basePrompt'a zorunlu skill içeriklerini ve keşfedilebilir listing'i ekler. */
+/** Appends mandatory skill contents and a discoverable listing to basePrompt. */
 export function applySkills(basePrompt: string, mandatory: string[], registry: SkillRegistry): string {
   const parts: string[] = [basePrompt];
 
   if (mandatory.length) {
     const sections = mandatory.map((name) => {
       const skill = registry.get(name);
-      if (!skill) throw new Error(`applySkills: tanımsız skill: ${name}`);
+      if (!skill) throw new Error(`applySkills: undefined skill: ${name}`);
       return `## ${skill.name}\n${skill.content}`;
     });
-    parts.push(`# Zorunlu Skill'ler\n${sections.join("\n\n")}`);
+    parts.push(`# Mandatory Skills\n${sections.join("\n\n")}`);
   }
 
   const mandatorySet = new Set(mandatory);
   const available = registry.list().filter((s) => !mandatorySet.has(s.name));
   if (available.length) {
     const lines = available.map((s) => `- ${s.name}: ${s.description}`);
-    parts.push(`# Keşfedilebilir Skill'ler (skill tool ile içeriğini çağır)\n${lines.join("\n")}`);
+    parts.push(`# Discoverable Skills (call the skill tool to fetch its content)\n${lines.join("\n")}`);
   }
 
   return parts.join("\n\n");
@@ -27,7 +27,7 @@ export function applySkills(basePrompt: string, mandatory: string[], registry: S
 
 const skillParams = z.object({ name: z.string() });
 
-/** Bir skill'in içeriğini adıyla getiren "skill" tool'u (çağıran toolset'e ekler). */
+/** A "skill" tool that fetches a skill's content by name (add to the caller's toolset). */
 export function buildSkillTool(registry: SkillRegistry): Tool {
   return {
     name: "skill",
@@ -37,10 +37,10 @@ export function buildSkillTool(registry: SkillRegistry): Tool {
     run: async (rawArgs) => {
       const parsed = skillParams.safeParse(rawArgs);
       if (!parsed.success) {
-        return { content: `skill: geçersiz args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
+        return { content: `skill: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       }
       const skill = registry.get(parsed.data.name);
-      if (!skill) return { content: `skill bulunamadı: ${parsed.data.name}`, isError: true };
+      if (!skill) return { content: `skill not found: ${parsed.data.name}`, isError: true };
       return { content: skill.content, isError: false };
     },
   };
