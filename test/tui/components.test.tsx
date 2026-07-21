@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 describe("Ink bileşenleri", () => {
@@ -50,16 +50,25 @@ describe("Ink bileşenleri", () => {
     expect(lastFrame() ?? "").toContain("Onaylıyor musun?");
   });
 
-  it("App input mode: görev-input + son rapor gösterir", () => {
-    const c = new TuiController();
-    c.endRun("İş bitti: (yerel: hc/x/base)");
-    const { lastFrame } = render(<App controller={c} />);
-    const f = lastFrame() ?? "";
-    expect(f).toContain("Görevini yaz");
-    expect(f).toContain("İş bitti");
+  it("Message user → '›' + metin (label yok)", () => {
+    const f = render(<Message role="user" text="selam dünya" />).lastFrame() ?? "";
+    expect(f).toContain("›");
+    expect(f).toContain("selam dünya");
+    expect(f).not.toContain("sen");
   });
 
-  it("App input mode (rapor yok): sadece görev-input", () => {
+  it("Message assistant → '●' circle + metin (label yok)", () => {
+    const f = render(<Message role="assistant" text="merhaba" />).lastFrame() ?? "";
+    expect(f).toContain("●");
+    expect(f).toContain("merhaba");
+    expect(f).not.toContain("hcode");
+  });
+
+  it("Splash block-art (at + wordmark) render eder", () => {
+    expect(render(<Splash cols={80} rows={40} />).lastFrame() ?? "").toContain("█");
+  });
+
+  it("App input mode: görev-input hint + kutu render eder", () => {
     const c = new TuiController();
     void c.awaitTask();
     expect(render(<App controller={c} />).lastFrame() ?? "").toContain("Görevini yaz");

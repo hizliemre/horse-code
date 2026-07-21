@@ -6,12 +6,12 @@ export interface TuiState {
   cards: BoardCardView[];
   pending?: { question: string };
   mode?: "input" | "running";
-  lastReport?: string;
+  transcript: { role: "user" | "assistant"; text: string }[];
 }
 
 /** runJob'un async seam'lerini (onEvent + ask) React state'ine köprüler. Saf state-machine. */
 export class TuiController {
-  private state: TuiState = { phase: "", cards: [] };
+  private state: TuiState = { phase: "", cards: [], transcript: [] };
   private pendingResolve?: (s: string) => void;
   private taskResolve?: (t: string) => void;
   private listeners = new Set<() => void>();
@@ -64,6 +64,8 @@ export class TuiController {
   submitTask(task: string): void {
     const resolve = this.taskResolve;
     this.taskResolve = undefined;
+    this.state = { ...this.state, transcript: [...this.state.transcript, { role: "user", text: task }] };
+    this.notify();
     resolve?.(task);
   }
 
@@ -73,7 +75,7 @@ export class TuiController {
   }
 
   endRun(report: string): void {
-    this.state = { ...this.state, mode: "input", lastReport: report };
+    this.state = { ...this.state, mode: "input", transcript: [...this.state.transcript, { role: "assistant", text: report }] };
     this.notify();
   }
 }
