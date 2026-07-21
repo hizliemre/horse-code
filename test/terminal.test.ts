@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { makeAskUser, makeApprove, makeAskHuman } from "../src/terminal.js";
+import { PassThrough } from "node:stream";
+import { makeAskUser, makeApprove, makeAskHuman, nodeLineReader } from "../src/terminal.js";
 import type { PermissionRequest } from "../src/permission/engine.js";
 import type { Card } from "../src/board/board.js";
 
@@ -46,5 +47,20 @@ describe("seam caret sunumu (TUI çift-'>' önlenir)", () => {
     expect(captured.trimEnd().endsWith(">")).toBe(false);
     await makeAskHuman(cap)({ card, verdict });
     expect(captured.trimEnd().endsWith(">")).toBe(false);
+  });
+});
+
+describe("nodeLineReader piped-race", () => {
+  it("tüm input+EOF önce gelse de ardışık read'ler satırları kaçırmaz", async () => {
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const { read, close } = nodeLineReader(input, output);
+    input.write("birinci\n");
+    input.write("ikinci\n");
+    input.end();
+    expect(await read("q1")).toBe("birinci");
+    expect(await read("q2")).toBe("ikinci");
+    expect(await read("q3")).toBe(""); // EOF sonrası boş
+    close();
   });
 });
