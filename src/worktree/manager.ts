@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
 
+/** PR diff'i revision prompt'unu şişirmesin: bu char sınırının üstü kesilir. */
+const MAX_DIFF_CHARS = 60_000;
+
 export interface WorktreeSession {
   jobSlug: string;
   root: string;
@@ -88,7 +91,9 @@ export class WorktreeManager {
   /** base branch'e karşı base worktree'deki değişikliklerin unified diff'i (PR diff'i). */
   async diff(session: WorktreeSession, base: string): Promise<string> {
     const r = await this.git(["diff", `${base}...${session.baseBranch}`], session.baseWorktree);
-    return r.stdout;
+    const out = r.stdout;
+    if (out.length <= MAX_DIFF_CHARS) return out;
+    return out.slice(0, MAX_DIFF_CHARS) + `\n… (diff kısaltıldı: ${out.length - MAX_DIFF_CHARS} karakter atlandı)`;
   }
 
   async commitMerge(session: WorktreeSession, message?: string): Promise<void> {
