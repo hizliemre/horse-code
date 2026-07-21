@@ -37,6 +37,24 @@ describe("WorktreeManager.openSession", () => {
     expect(a.jobSlug).toBe("job");
     expect(b.jobSlug).toBe("job-2");
   });
+
+  it("bootstraps an initial commit in a fresh repo (unborn HEAD) so the worktree can be created", async () => {
+    // `git init` with no commits → HEAD is unborn; openSession must not fail with "invalid reference: main".
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    repo = await mkdtemp(join(tmpdir(), "hc-fresh-"));
+    const g = (args: string[]): Promise<{ code: number }> => defaultGitRunner(args, repo as string);
+    await g(["init", "-b", "main"]);
+    await g(["config", "user.email", "test@hc.local"]);
+    await g(["config", "user.name", "hc test"]);
+    expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).not.toBe(0); // no commits yet
+
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "add-login-page");
+    expect(s.jobSlug).toBe("add-login-page");
+    expect(existsSync(s.baseWorktree)).toBe(true);
+    expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).toBe(0); // now has the bootstrap commit
+  });
 });
 
 describe("WorktreeManager.deriveTask", () => {

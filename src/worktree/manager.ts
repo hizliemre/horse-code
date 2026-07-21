@@ -46,7 +46,19 @@ export class WorktreeManager {
     return r.stdout;
   }
 
+  /**
+   * A worktree must branch off a commit. A freshly `git init`-ed repo has an unborn HEAD (no commits),
+   * so `git worktree add … <branch>` fails with "invalid reference". Bootstrap one empty commit so
+   * horse-code works in a brand-new repository.
+   */
+  private async ensureBaseCommit(): Promise<void> {
+    const head = await this.git(["rev-parse", "--verify", "--quiet", "HEAD"], this.repoRoot);
+    if (head.code === 0) return; // repo already has at least one commit
+    await this.run(["commit", "--allow-empty", "-m", "hc: initial commit"], this.repoRoot);
+  }
+
   async openSession(fromBranch: string, jobName: string): Promise<WorktreeSession> {
+    await this.ensureBaseCommit();
     const worktreesDir = join(this.repoRoot, ".horsecode", "worktrees");
     await mkdir(worktreesDir, { recursive: true });
     await writeFile(join(worktreesDir, ".gitignore"), "*\n", "utf8");

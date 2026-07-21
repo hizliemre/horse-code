@@ -11,12 +11,18 @@ describe("toSlug", () => {
     expect(toSlug("   ")).toBe("job");
     expect(toSlug("!!!")).toBe("job");
   });
-  it("caps length so it stays a valid path component, no trailing dash", () => {
+  it("keeps at most 5 words (meaningful branch-name length), no trailing dash", () => {
     const long = "antigravity hesaplarında hata alıyorum 422 missing google projectid for antigravity account auto discovery via loadcodeassist found no cloud code project";
     const s = toSlug(long);
+    expect(s.split("-").length).toBeLessThanOrEqual(5);
     expect(s.length).toBeLessThanOrEqual(60);
     expect(s.endsWith("-")).toBe(false);
-    expect(s).toBe("antigravity-hesaplar-nda-hata-al-yorum-422-missing-google-pr");
+    expect(s).toBe("antigravity-hesaplar-nda-hata-al");
+  });
+
+  it("leaves a clean English title (≤5 words) intact", () => {
+    expect(toSlug("add-login-page")).toBe("add-login-page");
+    expect(toSlug("fix null crash on submit here")).toBe("fix-null-crash-on-submit");
   });
 });
 

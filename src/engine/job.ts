@@ -66,8 +66,10 @@ export async function runJob(
   // Lazy worktree: opened only when the pipeline actually needs to write files (the analyst's spec).
   // A plain chat turn never calls this → no worktree is created for chat.
   let session: WorktreeSession | undefined;
-  const ensureWorktree = async (): Promise<string> => {
-    if (!session) session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
+  // nameHint = the refiner's short English title → a meaningful worktree name; falls back to the job name
+  // (raw-prompt slug) only if the refiner produced no title.
+  const ensureWorktree = async (nameHint?: string): Promise<string> => {
+    if (!session) session = await deps.manager.openSession(opts.fromBranch, nameHint || opts.jobName);
     return session.baseWorktree;
   };
   try {

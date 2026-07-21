@@ -106,7 +106,7 @@ export type UpstreamResult =
  */
 export async function runUpstream(
   deps: ReviewDeps,
-  ensureWorktree: () => Promise<string>,
+  ensureWorktree: (nameHint?: string) => Promise<string>,
   prompt: string,
   askUser: AskUser,
   maxRounds: number,
@@ -129,8 +129,9 @@ export async function runUpstream(
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response };
   }
 
-  // Feature/bugfix → open the worktree now; the analyst's spec is the first real file write.
-  const workdir = await ensureWorktree();
+  // Feature/bugfix → open the worktree now; name it from the refiner's short English title (not the raw
+  // prompt slug). The analyst's spec is the first real file write.
+  const workdir = await ensureWorktree(r.title);
   const specPath = ".hc/spec.md";
   await runAnalyst(deps, workdir, specPath, r.refinedPrompt, undefined, askUser);
   const specOut = await runReviewLoop(
