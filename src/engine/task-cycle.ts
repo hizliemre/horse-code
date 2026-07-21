@@ -13,6 +13,7 @@ export async function runCycleWithRole(
   role: RunnableRole,
 ): Promise<Verdict> {
   board.move(taskId, "IN-PROGRESS", role);
+  board.setModel(taskId, deps.roleRegistry.peekModel(role)); // surface the implementer model in the live-agents UI
   await runImplementer(deps, role, board.get(taskId)!, cwd);
   board.move(taskId, "REVIEW", role);
 

@@ -17,6 +17,7 @@ export interface Card {
   reviewNotes: string[];
   attempts: number;
   stageHistory: StageEvent[];
+  model?: string; // the model of the implementer currently working this card (for the live-agents UI)
 }
 
 export interface BoardData {
@@ -102,6 +103,12 @@ export class Board {
 
   appendStage(id: string, event: StageEvent): void {
     this.require(id).stageHistory.push({ ...event });
+    this.onChange?.();
+  }
+
+  /** Records the model of the implementer now working this card (surfaced in the live-agents UI). */
+  setModel(id: string, model: string): void {
+    this.require(id).model = model;
     this.onChange?.();
   }
 

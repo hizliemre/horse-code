@@ -185,6 +185,38 @@ describe("TuiController", () => {
     expect(new TuiController().getState().currentModel).toBe("");
   });
 
+  it("board event → runningAgents: IN-PROGRESS cards only, with model + a stable start time", () => {
+    let t = 1000;
+    const c = new TuiController(() => t);
+    c.beginRun();
+    c.onEvent({ kind: "board", cards: [
+      { id: "t1", title: "add-login", column: "IN-PROGRESS", model: "cc/opus" },
+      { id: "t2", title: "wire-store", column: "IN-PROGRESS", model: "go/flash" },
+      { id: "t3", title: "docs", column: "TODO" },
+    ] });
+    const a1 = c.getState().runningAgents;
+    expect(a1.map((a) => a.id)).toEqual(["t1", "t2"]); // TODO excluded
+    expect(a1.find((a) => a.id === "t1")).toMatchObject({ title: "add-login", model: "cc/opus", startedAt: 1000 });
+
+    t = 5000; // t1 finishes; t2 keeps running
+    c.onEvent({ kind: "board", cards: [
+      { id: "t1", title: "add-login", column: "DONE", model: "cc/opus" },
+      { id: "t2", title: "wire-store", column: "IN-PROGRESS", model: "go/flash" },
+    ] });
+    const a2 = c.getState().runningAgents;
+    expect(a2.map((a) => a.id)).toEqual(["t2"]); // finished agent dropped
+    expect(a2[0].startedAt).toBe(1000); // t2's start time is stable across board events (duration keeps counting)
+  });
+
+  it("beginRun and endRun clear runningAgents", () => {
+    const c = new TuiController();
+    c.beginRun();
+    c.onEvent({ kind: "board", cards: [{ id: "t1", title: "x", column: "IN-PROGRESS", model: "m" }] });
+    expect(c.getState().runningAgents).toHaveLength(1);
+    c.endRun("done");
+    expect(c.getState().runningAgents).toEqual([]);
+  });
+
   it("note appends an assistant message (used by /help)", () => {
     const c = new TuiController();
     c.endRun("hi");

@@ -11,6 +11,14 @@ export interface TurnMeta {
   running: boolean;
 }
 
+/** A sub-agent currently working a task (IN-PROGRESS card) — shown live under the input. */
+export interface RunningAgent {
+  id: string;
+  title: string;
+  model?: string;
+  startedAt: number;
+}
+
 export interface TuiState {
   phase: string;
   detail?: string;
@@ -22,15 +30,17 @@ export interface TuiState {
   meta?: TurnMeta;
   picker?: { models: string[]; loading: boolean; error?: string };
   currentModel: string;
+  runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
 }
 
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
-  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "" };
+  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [] };
   private pendingResolve?: (s: string) => void;
   private taskResolve?: (t: string) => void;
   private queue: string[] = []; // prompts submitted while running → drained by awaitTask
   private listeners = new Set<() => void>();
+  private agentStarts = new Map<string, number>(); // card id → when it entered IN-PROGRESS (our clock)
   private now: () => number;
 
   constructor(now: () => number = () => Date.now()) {
@@ -53,12 +63,24 @@ export class TuiController {
   // arrow-bound: passed to runJob as onEvent (preserves this)
   onEvent = (ev: ProgressEvent): void => {
     if (ev.kind === "phase") this.state = { ...this.state, phase: ev.phase, detail: ev.detail };
-    else if (ev.kind === "board") this.state = { ...this.state, cards: ev.cards };
+    else if (ev.kind === "board") this.state = { ...this.state, cards: ev.cards, runningAgents: this.deriveAgents(ev.cards) };
     // refined: swap the raw prompt for the refined one live (the coach/pipeline only ever sees the refine),
     // so the transcript shows what was actually handed downstream. endRun does the same as a fallback.
     else this.state = { ...this.state, transcript: replaceLastUser(this.state.transcript, ev.refinedPrompt) };
     this.notify();
   };
+
+  /** Reconciles the running-agent list from the board: IN-PROGRESS cards, each with a stable start time. */
+  private deriveAgents(cards: BoardCardView[]): RunningAgent[] {
+    const inProgress = cards.filter((c) => c.column === "IN-PROGRESS");
+    const live = new Set(inProgress.map((c) => c.id));
+    for (const id of this.agentStarts.keys()) if (!live.has(id)) this.agentStarts.delete(id); // finished → drop
+    return inProgress.map((c) => {
+      let startedAt = this.agentStarts.get(c.id);
+      if (startedAt === undefined) { startedAt = this.now(); this.agentStarts.set(c.id, startedAt); } // newly started
+      return { id: c.id, title: c.title, model: c.model, startedAt };
+    });
+  }
 
   // arrow-bound: passed to meterProvider → accumulates the running turn's tokens + latest active model.
   onUsage = (s: UsageSample): void => {
@@ -124,9 +146,10 @@ export class TuiController {
   }
 
   beginRun(): void {
+    this.agentStarts.clear();
     this.state = {
       ...this.state,
-      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined,
+      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [],
       meta: { model: "", promptTokens: 0, completionTokens: 0, startedAt: this.now(), running: true },
     };
     this.notify();
@@ -142,7 +165,8 @@ export class TuiController {
     const meta: TurnMeta | undefined = m
       ? { ...m, running: false, durationMs: m.startedAt !== undefined ? this.now() - m.startedAt : m.durationMs }
       : undefined;
-    this.state = { ...this.state, mode: "input", transcript: t, meta };
+    this.agentStarts.clear();
+    this.state = { ...this.state, mode: "input", transcript: t, meta, runningAgents: [] };
     this.notify();
   }
 

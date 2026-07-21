@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
@@ -157,6 +157,24 @@ describe("Ink components", () => {
     expect(c.getState().transcript).toEqual([]);
     expect(c.getState().mode).toBe("input");
     unmount();
+  });
+
+  it("RunningAgents shows the count header + each agent's task, live duration, and model", () => {
+    const agents = [
+      { id: "t1", title: "add-login-endpoint", model: "cc/claude-opus-4-8", startedAt: Date.now() - 72_000 },
+      { id: "t2", title: "wire-session-store", model: "opencode-go/deepseek-v4-flash", startedAt: Date.now() - 44_000 },
+    ];
+    const f = strip(render(<RunningAgents agents={agents} cols={90} />).lastFrame());
+    expect(f).toContain("2 agents running");
+    expect(f).toContain("add-login-endpoint");
+    expect(f).toContain("cc/claude-opus-4-8");
+    expect(f).toMatch(/1m 12s/); // live elapsed from startedAt
+    expect(f).toContain("●");
+  });
+
+  it("RunningAgents uses singular 'agent' for one", () => {
+    const f = strip(render(<RunningAgents agents={[{ id: "t1", title: "x", model: "m", startedAt: Date.now() }]} cols={80} />).lastFrame());
+    expect(f).toContain("1 agent running");
   });
 
   it("parsePending strips the [question]/[permission]/[human] tag + leading newline", () => {

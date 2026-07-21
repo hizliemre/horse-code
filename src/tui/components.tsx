@@ -7,7 +7,7 @@ import { ProgressView } from "./progress-view.js";
 import { donePhrase } from "./labels.js";
 import { fmtDuration } from "./format.js";
 import { Markdown } from "./markdown.js";
-import type { TurnMeta } from "./controller.js";
+import type { TurnMeta, RunningAgent } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
@@ -88,6 +88,34 @@ export function PhaseBar({ phase, detail }: { phase: string; detail?: string }):
 export function MetricsLine({ meta, model }: { meta: TurnMeta; model?: string }): React.ReactElement {
   const shown = model || meta.model || "—";
   return <Text dimColor wrap="truncate-end">{`  ${shown}`}</Text>;
+}
+
+/**
+ * Live panel of the sub-agents currently working tasks (the parallel wave), shown under the input:
+ * a count header + one row each — "● <task> · <elapsed> · <model>". The elapsed time ticks locally.
+ */
+export function RunningAgents({ agents, cols }: { agents: RunningAgent[]; cols: number }): React.ReactElement {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 250);
+    return () => clearInterval(id);
+  }, []);
+  const width = Math.max(20, cols - 2);
+  return (
+    <Box flexDirection="column" width={width}>
+      <Text dimColor>{`  ${agents.length} ${agents.length === 1 ? "agent" : "agents"} running`}</Text>
+      {agents.map((a) => {
+        const dur = fmtDuration(Date.now() - a.startedAt);
+        return (
+          <Text key={a.id} wrap="truncate-end">
+            <Text color="cyan">{"  ● "}</Text>
+            {a.title}
+            <Text dimColor>{`  · ${dur}${a.model ? ` · ${a.model}` : ""}`}</Text>
+          </Text>
+        );
+      })}
+    </Box>
+  );
 }
 
 // Sequences counted as newline (do NOT submit): plain LF, Alt+Enter (ESC+CR/LF), and the known
@@ -517,8 +545,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const metricsH = state.meta ? 1 : 0;
     const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
     const queuedH = state.queued > 0 ? 1 : 0;
+    // Live-agents panel under the input: 1 header line + one row per running sub-agent.
+    const agentsH = state.runningAgents.length > 0 ? 1 + state.runningAgents.length : 0;
     const paletteH = slashOpen ? slashCmds.length + 3 : 0; // border(2) + command rows + hint(1)
-    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH;
+    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -557,6 +587,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           />
         </Box>
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
+        {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}
       </Box>

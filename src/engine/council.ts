@@ -56,6 +56,7 @@ export async function runEscalationCouncil(
   board.addReviewNote(taskId, plan.rootCause);
   for (const step of plan.plan) board.addReviewNote(taskId, step);
   board.move(taskId, "IN-PROGRESS", senior);
+  board.setModel(taskId, deps.roleRegistry.peekModel(senior)); // surface the senior model in the live-agents UI
   await runImplementer(deps, senior, board.get(taskId)!, cwd);
   board.appendStage(taskId, { role: senior, action: "council:implemented" });
   board.move(taskId, "REVIEW", senior);
