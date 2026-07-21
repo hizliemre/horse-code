@@ -5,6 +5,7 @@ import { makeAskUser } from "../terminal.js";
 import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
 import { toSlug } from "../worktree/slug.js";
+import { meterProvider } from "../providers/meter.js";
 import { TuiController } from "./controller.js";
 import { App } from "./components.js";
 
@@ -34,13 +35,16 @@ export interface RunTuiReplOpts {
   buildDeps: (read: LineReader) => JobDeps;
   jobBase: { fromBranch: string; maxRounds: number; revisionRounds?: number };
   formatResult: (res: JobResult) => string;
+  model?: string; // configured default model → shown in the metrics line when a call reports no model
 }
 
 /** TUI REPL: task input → live job → report → loop. Ctrl+C exits; job errors are isolated. */
 export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const controller = new TuiController();
   const read: LineReader = (q) => controller.ask(q);
-  const deps = opts.buildDeps(read);
+  const deps0 = opts.buildDeps(read);
+  // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
+  const deps: JobDeps = { ...deps0, provider: meterProvider(deps0.provider, controller.onUsage) };
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
   // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
@@ -79,7 +83,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   process.stdin.on("data", onCtrlC);
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
-  const instance = render(<App controller={controller} fullscreen />);
+  const instance = render(<App controller={controller} fullscreen model={opts.model} />);
   try {
     for (;;) {
       const task = await taskPromise;

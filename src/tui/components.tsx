@@ -5,6 +5,8 @@ import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { ProgressView } from "./progress-view.js";
 import { Markdown } from "./markdown.js";
+import { phaseLabel } from "./labels.js";
+import type { TurnMeta } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage } from "./lines.js";
 
@@ -29,6 +31,33 @@ export function PhaseBar({ phase, detail }: { phase: string; detail?: string }):
   return <Text>Phase: {phase}{detail ? ` — ${detail}` : ""}</Text>;
 }
 
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/**
+ * One-line metrics under the input: while running, the active stage + model + live elapsed + turn tokens;
+ * once done, the frozen model + duration + tokens for the last turn. `wrap="truncate-end"` keeps it 1 row
+ * (the fullscreen height math reserves exactly one line for it).
+ */
+export function MetricsLine({ meta, phase, fallbackModel }: { meta: TurnMeta; phase: string; fallbackModel?: string }): React.ReactElement {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!meta.running) return;
+    const id = setInterval(() => tick((n) => n + 1), 250);
+    return () => clearInterval(id);
+  }, [meta.running]);
+  const model = meta.model || fallbackModel || "—";
+  const tok = meta.promptTokens + meta.completionTokens;
+  const secs = meta.running
+    ? (meta.startedAt !== undefined ? (Date.now() - meta.startedAt) / 1000 : 0)
+    : (meta.durationMs ?? 0) / 1000;
+  const stage = meta.running ? `${phaseLabel(phase)} · ` : "";
+  return (
+    <Text dimColor wrap="truncate-end">{`  ${stage}${model} · ${secs.toFixed(1)}s · ${fmtTokens(tok)} tok`}</Text>
+  );
+}
+
 // Sequences counted as newline (do NOT submit): plain LF, Alt+Enter (ESC+CR/LF), and the known
 // escapes terminals send for Shift+Enter (kitty CSI-u, xterm modifyOtherKeys).
 const NEWLINE_SEQS = new Set(["\n", "\x1b\r", "\x1b\n", "\x1b[13;2u", "\x1b[27;2;13~"]);
@@ -38,11 +67,12 @@ const RIGHT = new Set(["\x1b[C", "\x1bOC"]);
 const HOME = new Set(["\x1b[H", "\x1b[1~", "\x1bOH"]);
 const END = new Set(["\x1b[F", "\x1b[4~", "\x1bOF"]);
 
-export function InputLine({ value, cursor, onChange, onSubmit }: {
+export function InputLine({ value, cursor, onChange, onSubmit, width }: {
   value: string;
   cursor: number;
   onChange: (value: string, cursor: number) => void;
   onSubmit: (value: string) => void;
+  width?: number;
 }): React.ReactElement {
   // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
@@ -79,7 +109,10 @@ export function InputLine({ value, cursor, onChange, onSubmit }: {
   for (let i = 0; i < cursor; i++) { if (value[i] === "\n") { cLine++; cCol = 0; } else cCol++; }
   const lines = value.split("\n");
   return (
-    <Box flexDirection="column">
+    // Explicit width: Ink caches a Text node's intrinsic measured width; jumping the value from short to
+    // long in one render (e.g. history recall from empty) keeps the stale narrow width and mis-wraps. Binding
+    // the box to a fixed width makes wrapping depend on the box, not the cached measure.
+    <Box flexDirection="column" width={width}>
       {lines.map((line, i) => {
         const prefix = i === 0 ? "> " : "  ";
         if (i !== cLine) return <Text key={i}><Text color="cyan">{prefix}</Text>{line}</Text>;
@@ -215,7 +248,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false }: { controller: TuiController; fullscreen?: boolean }): React.ReactElement {
+export function App({ controller, fullscreen = false, model }: { controller: TuiController; fullscreen?: boolean; model?: string }): React.ReactElement {
   const [state, setState] = useState(controller.getState());
   useEffect(() => controller.subscribe(() => setState(controller.getState())), [controller]);
   const { stdout } = useStdout();
@@ -287,10 +320,11 @@ export function App({ controller, fullscreen = false }: { controller: TuiControl
   const mode = state.mode ?? "running";
   const bottom =
     mode === "input" ? (
-      <Box marginTop={1} borderStyle="round" borderColor="gray" paddingX={1}>
+      <Box marginTop={1} borderStyle="round" borderColor="gray" paddingX={1} width={size.cols} flexShrink={0}>
         <InputLine
           value={draft}
           cursor={draftCursor}
+          width={Math.max(1, size.cols - 4)}
           onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); }}
           onSubmit={(t) => {
             if (t.trim()) historyRef.current = [...historyRef.current, t];
@@ -308,16 +342,27 @@ export function App({ controller, fullscreen = false }: { controller: TuiControl
     );
 
   // Fullscreen (Claude Code model): flatten content into plain styled lines → manually render the
-  // exactly-fitting window (no Ink overflow bug). Input is FIXED at the bottom; ↑/↓/PgUp/PgDn scrolls through history.
+  // exactly-fitting window (no Ink overflow bug). The input is ALWAYS visible at the bottom; while a job
+  // runs, a cyan status box sits above it and a metrics line below it. ↑/↓/PgUp/PgDn scrolls history.
   if (fullscreen) {
     const allLines: StyledLine[] = [
       ...flattenSplash(size.cols, size.rows),
       ...state.transcript.flatMap((m) => flattenMessage(m.role, m.text, size.cols)),
     ];
-    // input box: border(2) + marginTop(1) + visual lines (logical + wrap, synced from draft).
     const cw = Math.max(1, size.cols - 4);
     const inputH = draft.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil((l.length + 3) / cw)), 0);
-    const bottomH = mode === "input" ? 3 + inputH : 8;
+    const running = mode === "running";
+    const showStatus = running || !!state.pending;
+    // status box height (deterministic → no Ink overflow): progress(1) + board + pending, plus border(2).
+    const boardLines = state.cards.length
+      ? 1 + Math.max(...COLUMNS.map((col) => state.cards.filter((c) => c.column === col).length))
+      : 0;
+    const pendingLines = state.pending ? Math.max(1, Math.ceil(state.pending.question.length / cw)) : 0;
+    const statusBoxH = showStatus ? 1 + boardLines + pendingLines + 2 : 0;
+    const inputBoxH = 3 + inputH; // marginTop(1) + border(2) + inputH
+    const metricsH = state.meta ? 1 : 0;
+    const queuedH = state.queued > 0 ? 1 : 0;
+    const bottomH = statusBoxH + inputBoxH + metricsH + queuedH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -328,7 +373,30 @@ export function App({ controller, fullscreen = false }: { controller: TuiControl
       <Box flexDirection="column" height={size.rows}>
         <ViewportLines lines={windowed} height={viewportH} />
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
-        {bottom}
+        {showStatus ? (
+          <Box borderStyle="round" borderColor="cyan" paddingX={1} width={size.cols} flexShrink={0} flexDirection="column">
+            <ProgressView phase={state.phase} detail={state.detail} cols={size.cols} />
+            {state.cards.length ? <Board cards={state.cards} /> : null}
+            {state.pending ? <Box width={cw}><Text color="yellow">{state.pending.question}</Text></Box> : null}
+          </Box>
+        ) : null}
+        <Box marginTop={1} borderStyle="round" borderColor={state.pending ? "yellow" : "gray"} paddingX={1} width={size.cols} flexShrink={0}>
+          <InputLine
+            value={draft}
+            cursor={draftCursor}
+            width={cw}
+            onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); }}
+            onSubmit={(t) => {
+              // Pending approval question → the answer routes to controller.answer (single input, no modal).
+              if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); controller.answer(t); return; }
+              if (t.trim()) historyRef.current = [...historyRef.current, t];
+              histIdxRef.current = -1; stashRef.current = "";
+              setScroll(0); setDraft(""); setDraftCursor(0); controller.submitTask(t);
+            }}
+          />
+        </Box>
+        {state.meta ? <MetricsLine meta={state.meta} phase={state.phase} fallbackModel={model} /> : null}
+        {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
       </Box>
     );
   }

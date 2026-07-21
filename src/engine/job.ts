@@ -67,7 +67,7 @@ export async function runJob(
   try {
     const workdir = session.baseWorktree;
     emit({ kind: "phase", phase: "upstream" });
-    const up = await runUpstream(deps, workdir, opts.prompt, opts.askUser, opts.maxRounds, opts.history);
+    const up = await runUpstream(deps, workdir, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit);
 
     if (up.kind === "chat") {
       emit({ kind: "phase", phase: "chat" });

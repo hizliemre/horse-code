@@ -18,6 +18,24 @@ describe("TuiController", () => {
     expect(c.getState().cards).toEqual([{ id: "a", title: "A", column: "TODO" }]);
   });
 
+  it("onEvent refined → replaces the last user message live", () => {
+    const c = new TuiController();
+    c.awaitTask();
+    c.submitTask("raw prompt");
+    let notified = 0;
+    c.subscribe(() => { notified++; });
+    c.onEvent({ kind: "refined", refinedPrompt: "Refined prompt" });
+    expect(c.getState().transcript).toEqual([{ role: "user", text: "Refined prompt" }]);
+    expect(notified).toBe(1);
+  });
+
+  it("onEvent refined → no-op when the last message isn't a user message", () => {
+    const c = new TuiController();
+    c.endRun("assistant only");
+    c.onEvent({ kind: "refined", refinedPrompt: "Refined prompt" });
+    expect(c.getState().transcript).toEqual([{ role: "assistant", text: "assistant only" }]);
+  });
+
   it("ask sets pending + notifies; answer resolves the promise + clears pending", async () => {
     const c = new TuiController();
     let notified = 0;
@@ -93,5 +111,48 @@ describe("TuiController", () => {
 
   it("one-shot: mode stays undefined if never set (backward compatibility)", () => {
     expect(new TuiController().getState().mode).toBeUndefined();
+  });
+
+  it("submitTask while no consumer is waiting → queues instead of appending", () => {
+    const c = new TuiController();
+    c.submitTask("queued while busy");
+    expect(c.getState().queued).toBe(1);
+    expect(c.getState().transcript).toEqual([]);
+  });
+
+  it("awaitTask drains a queued prompt immediately (append + resolve)", async () => {
+    const c = new TuiController();
+    c.submitTask("q1"); // queued (nobody awaiting)
+    const p = c.awaitTask();
+    expect(await p).toBe("q1");
+    expect(c.getState().transcript).toEqual([{ role: "user", text: "q1" }]);
+    expect(c.getState().queued).toBe(0);
+  });
+
+  it("onUsage accumulates turn tokens + tracks the latest active model", () => {
+    const c = new TuiController();
+    c.beginRun();
+    c.onUsage({ model: "m-a", promptTokens: 10, completionTokens: 5 });
+    c.onUsage({ model: "m-b", promptTokens: 3, completionTokens: 2 });
+    const meta = c.getState().meta!;
+    expect(meta.model).toBe("m-b");
+    expect(meta.promptTokens).toBe(13);
+    expect(meta.completionTokens).toBe(7);
+    expect(meta.running).toBe(true);
+  });
+
+  it("beginRun resets meta + starts the clock; endRun freezes duration", () => {
+    let t = 1000;
+    const c = new TuiController(() => t);
+    c.beginRun();
+    c.onUsage({ model: "m", promptTokens: 4, completionTokens: 1 });
+    t = 3500;
+    c.awaitTask(); // simulate the REPL waiting for the next prompt
+    c.submitTask("x");
+    c.endRun("report");
+    const meta = c.getState().meta!;
+    expect(meta.running).toBe(false);
+    expect(meta.durationMs).toBe(2500);
+    expect(meta.promptTokens).toBe(4);
   });
 });

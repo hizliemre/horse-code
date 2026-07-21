@@ -178,6 +178,13 @@ describe("runUpstream", () => {
     if (res.kind === "rejected") expect(res.stage).toBe("spec");
   });
 
+  it("emits a refined event with the refined prompt before running downstream", async () => {
+    const p = upstreamProvider({ intent: "chat" });
+    const events: { kind: string; refinedPrompt?: string }[] = [];
+    await runUpstream(udeps(p), dir, "hello", async () => "x", 3, [], (ev) => events.push(ev));
+    expect(events).toContainEqual({ kind: "refined", refinedPrompt: "Do X" });
+  });
+
   it("throws if cancelled", async () => {
     const ac = new AbortController(); ac.abort();
     const p = upstreamProvider({ intent: "feature" });

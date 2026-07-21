@@ -125,6 +125,7 @@ export async function main(argv: string[]): Promise<void> {
         buildDeps,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
         formatResult: renderResult,
+        model: config.model,
       });
       return;
     }

@@ -8,7 +8,8 @@ export interface BoardCardView {
 
 export type ProgressEvent =
   | { kind: "phase"; phase: string; detail?: string }
-  | { kind: "board"; cards: BoardCardView[] };
+  | { kind: "board"; cards: BoardCardView[] }
+  | { kind: "refined"; refinedPrompt: string };
 
 /** Instant card view of the board (id/title/column). */
 export function snapshotBoard(board: Board): BoardCardView[] {

@@ -8,7 +8,7 @@ export const REQUIRED_ROLES = [
 
 export const DEFAULT_PROMPTS: Record<string, string> = {
   refiner:
-    "Refine the user's request concisely and clearly, and classify its intent: 'chat' (conversation/question), 'feature' (new feature/work), 'bugfix' (bug fix). Return the result via submit as {refinedPrompt, intent}.",
+    "Rewrite the user's message down to the raw core intent the AI needs to act on — clear, direct, and structured. Strip all politeness, emotional, and filler words (please, thanks, kindly, 'could you', 'would you', 'I'd like', etc.) and anything that carries no instruction. Do NOT add words, qualifiers, or scope the user did not state (e.g. do not add 'always'). Keep the user's own perspective and form — a question stays a question, an instruction stays an instruction; do NOT describe the user in the third person and do NOT answer the request. Example: a polite request like 'would you please answer me in language X?' becomes just 'respond in language X' (drop 'please'; do not add 'always' or any scope the user didn't state). Always write refinedPrompt in English, regardless of the language the user wrote in. Also classify the intent: 'chat' (conversation/question), 'feature' (new feature/work), 'bugfix' (bug fix). Return the result via submit as {refinedPrompt, intent}.",
   coach:
     "Answer the user's technical questions. If needed, inspect the repository with read_file/grep/glob. Be concise, direct, and helpful.",
   analyst:
