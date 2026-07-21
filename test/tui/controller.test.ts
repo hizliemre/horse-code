@@ -47,4 +47,35 @@ describe("TuiController", () => {
     c.onEvent({ kind: "phase", phase: "b" });
     expect(n).toBe(1);
   });
+
+  it("awaitTask mode=input + notify; submitTask promise'i çözer", async () => {
+    const c = new TuiController();
+    let n = 0; c.subscribe(() => { n++; });
+    const p = c.awaitTask();
+    expect(c.getState().mode).toBe("input");
+    expect(n).toBe(1);
+    c.submitTask("bir görev");
+    expect(await p).toBe("bir görev");
+  });
+
+  it("beginRun mode=running + board/phase sıfırlar", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "board", cards: [{ id: "a", title: "A", column: "TODO" }] });
+    c.onEvent({ kind: "phase", phase: "waves" });
+    c.beginRun();
+    expect(c.getState().mode).toBe("running");
+    expect(c.getState().cards).toEqual([]);
+    expect(c.getState().phase).toBe("");
+  });
+
+  it("endRun mode=input + lastReport", () => {
+    const c = new TuiController();
+    c.endRun("rapor metni");
+    expect(c.getState().mode).toBe("input");
+    expect(c.getState().lastReport).toBe("rapor metni");
+  });
+
+  it("tek-shot: mode set edilmezse undefined (geriye uyum)", () => {
+    expect(new TuiController().getState().mode).toBeUndefined();
+  });
 });

@@ -48,6 +48,15 @@ export function Prompt({ question, onSubmit }: { question: string; onSubmit: (s:
 export function App({ controller }: { controller: TuiController }): React.ReactElement {
   const [state, setState] = useState(controller.getState());
   useEffect(() => controller.subscribe(() => setState(controller.getState())), [controller]);
+  const mode = state.mode ?? "running";
+  if (mode === "input") {
+    return (
+      <Box flexDirection="column">
+        {state.lastReport ? <Text>{state.lastReport}</Text> : null}
+        <Prompt question="Görevini yaz (Ctrl+C çıkış):" onSubmit={(t) => controller.submitTask(t)} />
+      </Box>
+    );
+  }
   return (
     <Box flexDirection="column">
       <PhaseBar phase={state.phase} detail={state.detail} />
