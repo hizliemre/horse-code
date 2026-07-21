@@ -98,6 +98,8 @@ export class WorktreeManager {
 
   async commitMerge(session: WorktreeSession, message?: string): Promise<void> {
     await this.run(["add", "-A"], session.baseWorktree);
+    const staged = await this.git(["diff", "--cached", "--quiet"], session.baseWorktree);
+    if (staged.code === 0) return; // sahnede değişiklik yok → commit'i atla (nothing-to-commit throw'unu önle)
     await this.run(message ? ["commit", "-m", message] : ["commit", "--no-edit"], session.baseWorktree);
   }
 
