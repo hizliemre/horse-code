@@ -37,6 +37,8 @@ export function toOpenAIBody(req: ChatRequest): Record<string, unknown> {
     model: req.model,
     messages: toOpenAIMessages(req.messages),
     stream: true,
+    // Ask the backend to append a final chunk carrying token usage (streaming otherwise omits it).
+    stream_options: { include_usage: true },
   };
   const tools = toOpenAITools(req.tools);
   if (tools) {

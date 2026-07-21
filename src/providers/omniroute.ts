@@ -80,6 +80,7 @@ export class OmniRouteProvider implements Provider {
 
     const toolCalls = new Map<number, ToolCallAccumulator>();
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
+    let usage: { promptTokens: number; completionTokens: number } | undefined;
 
     try {
       for await (const payload of parseSSE(stream)) {
@@ -89,6 +90,10 @@ export class OmniRouteProvider implements Provider {
         } catch {
           continue; // malformed chunk → skip
         }
+        // Usage arrives (with include_usage) in a final chunk whose `choices` is empty → read it before
+        // the no-choice skip below.
+        const u = (chunk as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
+        if (u) usage = { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 };
         const choice = (chunk as { choices?: unknown[] })?.choices?.[0] as
           | { delta?: Record<string, unknown>; finish_reason?: string | null }
           | undefined;
@@ -125,14 +130,19 @@ export class OmniRouteProvider implements Provider {
       yield { type: "tool-call", toolCall };
     }
 
-    const inHeader = res.headers.get("X-OmniRoute-Tokens-In");
-    const outHeader = res.headers.get("X-OmniRoute-Tokens-Out");
-    if (inHeader !== null || outHeader !== null) {
-      yield {
-        type: "usage",
-        promptTokens: Number(inHeader) || 0,
-        completionTokens: Number(outHeader) || 0,
-      };
+    // Prefer usage from the stream (include_usage); fall back to omniroute's response headers.
+    if (usage) {
+      yield { type: "usage", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens };
+    } else {
+      const inHeader = res.headers.get("X-OmniRoute-Tokens-In");
+      const outHeader = res.headers.get("X-OmniRoute-Tokens-Out");
+      if (inHeader !== null || outHeader !== null) {
+        yield {
+          type: "usage",
+          promptTokens: Number(inHeader) || 0,
+          completionTokens: Number(outHeader) || 0,
+        };
+      }
     }
 
     yield { type: "done", finishReason };

@@ -50,6 +50,7 @@ describe("toOpenAIBody", () => {
     const body = toOpenAIBody(req);
     expect(body.model).toBe("m");
     expect(body.stream).toBe(true);
+    expect(body.stream_options).toEqual({ include_usage: true });
     expect("tools" in body).toBe(false);
     expect("tool_choice" in body).toBe(false);
   });
