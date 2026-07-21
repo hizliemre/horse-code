@@ -16,15 +16,17 @@ export interface TuiState {
   detail?: string;
   cards: BoardCardView[];
   pending?: { question: string };
-  mode?: "input" | "running";
+  mode?: "input" | "running" | "picker";
   transcript: { role: "user" | "assistant"; text: string }[];
   queued: number; // prompts typed while a job is running, waiting to run next
   meta?: TurnMeta;
+  picker?: { models: string[]; loading: boolean; error?: string };
+  currentModel: string;
 }
 
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
-  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0 };
+  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "" };
   private pendingResolve?: (s: string) => void;
   private taskResolve?: (t: string) => void;
   private queue: string[] = []; // prompts submitted while running → drained by awaitTask
@@ -141,6 +143,31 @@ export class TuiController {
       ? { ...m, running: false, durationMs: m.startedAt !== undefined ? this.now() - m.startedAt : m.durationMs }
       : undefined;
     this.state = { ...this.state, mode: "input", transcript: t, meta };
+    this.notify();
+  }
+
+  openPicker(): void {
+    this.state = { ...this.state, mode: "picker", picker: { models: [], loading: true } };
+    this.notify();
+  }
+
+  setPickerModels(models: string[]): void {
+    this.state = { ...this.state, picker: { models, loading: false } };
+    this.notify();
+  }
+
+  setPickerError(msg: string): void {
+    this.state = { ...this.state, picker: { models: [], loading: false, error: msg } };
+    this.notify();
+  }
+
+  applyModel(model: string): void {
+    this.state = { ...this.state, mode: "input", picker: undefined, currentModel: model };
+    this.notify();
+  }
+
+  cancelPicker(): void {
+    this.state = { ...this.state, mode: "input", picker: undefined };
     this.notify();
   }
 }

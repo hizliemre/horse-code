@@ -155,4 +155,33 @@ describe("TuiController", () => {
     expect(meta.durationMs).toBe(2500);
     expect(meta.promptTokens).toBe(4);
   });
+
+  it("picker: openPicker → setPickerModels → applyModel flow", () => {
+    const c = new TuiController();
+    c.openPicker();
+    expect(c.getState().mode).toBe("picker");
+    expect(c.getState().picker).toEqual({ models: [], loading: true });
+
+    c.setPickerModels(["a/one", "b/two"]);
+    expect(c.getState().picker).toEqual({ models: ["a/one", "b/two"], loading: false });
+
+    c.applyModel("a/one");
+    expect(c.getState().mode).toBe("input");
+    expect(c.getState().picker).toBeUndefined();
+    expect(c.getState().currentModel).toBe("a/one");
+  });
+
+  it("picker: setPickerError + cancelPicker", () => {
+    const c = new TuiController();
+    c.openPicker();
+    c.setPickerError("network down");
+    expect(c.getState().picker).toEqual({ models: [], loading: false, error: "network down" });
+    c.cancelPicker();
+    expect(c.getState().mode).toBe("input");
+    expect(c.getState().picker).toBeUndefined();
+  });
+
+  it("currentModel starts empty", () => {
+    expect(new TuiController().getState().currentModel).toBe("");
+  });
 });
