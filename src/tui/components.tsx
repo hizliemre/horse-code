@@ -10,8 +10,28 @@ import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { parseKittyKey } from "./keys.js";
+import { matchCommands, helpText, type SlashCommand } from "./commands.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
+
+/** Slash-command palette shown above the input when the draft starts with "/". */
+export function SlashPalette({ commands, selected, cols }: { commands: SlashCommand[]; selected: number; cols: number }): React.ReactElement {
+  const w = Math.max(24, cols - 2);
+  return (
+    <Box flexDirection="column" width={w} borderStyle="round" borderColor="cyan" paddingX={1}>
+      {commands.map((c, i) => {
+        const isSel = i === selected;
+        return (
+          <Text key={c.name} wrap="truncate-end">
+            <Text color={isSel ? "cyan" : undefined} inverse={isSel} bold={isSel}>{`${isSel ? "› " : "  "}${c.name}`}</Text>
+            <Text dimColor>{`  ${c.desc}`}</Text>
+          </Text>
+        );
+      })}
+      <Text dimColor wrap="truncate-end">{"↑/↓ select · Enter run · → complete · Esc cancel"}</Text>
+    </Box>
+  );
+}
 
 export function Board({ cards }: { cards: BoardCardView[] }): React.ReactElement {
   return (
@@ -78,18 +98,20 @@ const NUMPAD: Record<string, string> = {
   "\x1bOn": ".", "\x1bOo": "/", "\x1bOj": "*", "\x1bOk": "+", "\x1bOm": "-",
 };
 
-export function InputLine({ value, cursor, onChange, onSubmit, width }: {
+export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false }: {
   value: string;
   cursor: number;
   onChange: (value: string, cursor: number) => void;
   onSubmit: (value: string) => void;
   width?: number;
+  paletteOpen?: boolean; // when the slash palette is open, → is a "complete" gesture owned by App, not a cursor move
 }): React.ReactElement {
   // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
   const curRef = useRef(cursor); curRef.current = cursor;
   const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
   const onSubmitRef = useRef(onSubmit); onSubmitRef.current = onSubmit;
+  const paletteRef = useRef(paletteOpen); paletteRef.current = paletteOpen;
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   // Raw stdin: Enter(CR) submits; LF/kitty-CSI-u newline; left/right arrow moves the cursor; insert/delete
   // in the middle; Ctrl+C clears if non-empty, exits if empty. Up/down/PgUp go to App's useInput (scroll).
@@ -105,7 +127,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width }: {
       if (s === "\x7f" || s === "\x08") { if (c > 0) change(v.slice(0, c - 1) + v.slice(c), c - 1); return; }
       if (s === "\x1b[3~") { change(v.slice(0, c) + v.slice(c + 1), c); return; } // delete
       if (LEFT.has(s)) { change(v, Math.max(0, c - 1)); return; }
-      if (RIGHT.has(s)) { change(v, Math.min(v.length, c + 1)); return; }
+      if (RIGHT.has(s)) { if (paletteRef.current) return; change(v, Math.min(v.length, c + 1)); return; }
       if (HOME.has(s)) { change(v, 0); return; }
       if (END.has(s)) { change(v, v.length); return; }
       if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit (app-keypad SS3)
@@ -268,7 +290,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -276,6 +298,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   refinerModel?: string; // the refiner's model — shown only in the "refining… (model)" status line
   listModels?: () => Promise<string[]>;
   setModel?: (m: string) => void;
+  onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
   const [state, setState] = useState(controller.getState());
   useEffect(() => controller.subscribe(() => setState(controller.getState())), [controller]);
@@ -330,6 +353,19 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (histIdxRef.current < h.length - 1) { histIdxRef.current += 1; setInput(h[histIdxRef.current]); }
     else { histIdxRef.current = -1; setInput(stashRef.current); } // return to draft (empty if it was empty)
   };
+  // Slash-command palette: open when the input-mode draft starts with "/" and matches ≥1 command.
+  const [slashSel, setSlashSel] = useState(0);
+  const slashCmds = matchCommands(draft);
+  const slashOpen = (state.mode ?? "running") === "input" && !state.pending && draft.startsWith("/") && slashCmds.length > 0;
+  const slashIdx = Math.min(slashSel, Math.max(0, slashCmds.length - 1));
+  const completeSlash = (): void => { const c = slashCmds[slashIdx]; if (c) { setDraft(c.name); setDraftCursor(c.name.length); } };
+  const runSlash = (c: SlashCommand): void => {
+    setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
+    if (c.name === "/model") controller.openPicker();
+    else if (c.name === "/help") controller.note(helpText());
+    else if (c.name === "/clear") controller.clearTranscript();
+    else if (c.name === "/exit") onExit?.();
+  };
   const tlen = state.transcript.length;
   useEffect(() => { setScroll(0); }, [tlen]);
   // When the picker opens (loading), fetch the model list once and hand it to the controller.
@@ -357,6 +393,14 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const down = s === "\x1b[B" || s === "\x1bOB";
     const pgUp = s === "\x1b[5~";
     const pgDn = s === "\x1b[6~";
+    // Slash palette owns ↑/↓ (select), →/Tab (complete), Esc (cancel) while it's open.
+    if (slashOpen) {
+      if (up) { setSlashSel((n) => Math.max(0, n - 1)); return; }
+      if (down) { setSlashSel((n) => Math.min(slashCmds.length - 1, n + 1)); return; }
+      if (RIGHT.has(s) || s === "\t") { completeSlash(); return; }
+      const kk = parseKittyKey(s);
+      if (s === "\x1b" || kk?.type === "escape") { setDraft(""); setDraftCursor(0); return; }
+    }
     // In input mode ↑/↓ is command history; transcript scrolls via PgUp/PgDn. In job mode ↑/↓ scrolls.
     if (isInput && up) { historyPrev(); return; }
     if (isInput && down) { historyNext(); return; }
@@ -449,7 +493,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const metricsH = state.meta ? 1 : 0;
     const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
     const queuedH = state.queued > 0 ? 1 : 0;
-    const bottomH = statusH + inputBoxH + metricsH + queuedH + metricsGapH;
+    const paletteH = slashOpen ? slashCmds.length + 3 : 0; // border(2) + command rows + hint(1)
+    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -467,16 +512,19 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             {state.pending ? <Box width={cw}><Text color="yellow">{state.pending.question}</Text></Box> : null}
           </Box>
         ) : null}
+        {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
         <Box marginTop={inputMarginTop} borderStyle="round" borderColor={state.pending ? "yellow" : "gray"} paddingX={1} width={size.cols} flexShrink={0}>
           <InputLine
             value={draft}
             cursor={draftCursor}
             width={cw}
-            onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); }}
+            paletteOpen={slashOpen}
+            onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); setSlashSel(0); }}
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
               if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); controller.answer(t); return; }
-              if (t.trim() === "/model") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openPicker(); return; }
+              // Slash palette open → Enter runs the selected command instead of submitting a prompt.
+              if (slashOpen) { const c = slashCmds[slashIdx]; if (c) { runSlash(c); return; } }
               if (t.trim()) historyRef.current = [...historyRef.current, t];
               histIdxRef.current = -1; stashRef.current = "";
               setScroll(0); setDraft(""); setDraftCursor(0); controller.submitTask(t);

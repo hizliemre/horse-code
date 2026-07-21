@@ -121,6 +121,42 @@ describe("Ink components", () => {
     unmount();
   });
 
+  it("App: '/' opens the slash palette; typing filters it; → completes; Enter runs the command", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const clean = (f: string | undefined) => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+    const c = new TuiController();
+    c.awaitTask();
+    // seed a transcript so /clear has something to clear
+    c.submitTask("earlier prompt"); c.endRun("earlier answer");
+    const { stdin, lastFrame, unmount } = render(<App controller={c} fullscreen model="m" coachModel="cc/opus" />);
+    const waitFrame = async (t: string): Promise<void> => {
+      for (let i = 0; i < 200 && !clean(lastFrame()).includes(t); i++) await sleep(15);
+    };
+    const waitState = async (cond: () => boolean): Promise<void> => {
+      for (let i = 0; i < 200 && !cond(); i++) await sleep(15);
+    };
+    await waitFrame("> ");
+    stdin.write("/");
+    await waitFrame("/exit"); // palette lists every command
+    const f = clean(lastFrame());
+    expect(f).toContain("/model");
+    expect(f).toContain("/clear");
+    expect(f).toContain("Enter run"); // hint line
+    stdin.write("cl"); // filter → only /clear
+    // wait for the filter to actually apply (/model gone) — "/clear" alone is ambiguous since its
+    // description is present in the unfiltered list too.
+    for (let i = 0; i < 200 && clean(lastFrame()).includes("/model"); i++) await sleep(15);
+    expect(clean(lastFrame())).not.toContain("/model");
+    expect(clean(lastFrame())).toContain("/clear");
+    stdin.write("\x1b[C"); // → completes the selected command into the input
+    await waitFrame("> /clear");
+    stdin.write("\r"); // run /clear
+    await waitState(() => c.getState().transcript.length === 0);
+    expect(c.getState().transcript).toEqual([]);
+    expect(c.getState().mode).toBe("input");
+    unmount();
+  });
+
   it("App: numpad/odd escape sequences don't crash; PageUp scrolls (raw stdin, no Ink useInput)", async () => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const clean = (f: string | undefined) => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");

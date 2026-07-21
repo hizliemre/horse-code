@@ -170,6 +170,18 @@ export class TuiController {
     this.state = { ...this.state, mode: "input", picker: undefined };
     this.notify();
   }
+
+  /** Append an assistant-style note to the transcript (used by /help). */
+  note(text: string): void {
+    this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text }] };
+    this.notify();
+  }
+
+  /** Clear the conversation transcript + the last turn's metrics (used by /clear). */
+  clearTranscript(): void {
+    this.state = { ...this.state, transcript: [], meta: undefined };
+    this.notify();
+  }
 }
 
 /** Returns a copy of the transcript with the last entry's text swapped to `text`, only if it's a user entry. */

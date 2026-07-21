@@ -184,4 +184,26 @@ describe("TuiController", () => {
   it("currentModel starts empty", () => {
     expect(new TuiController().getState().currentModel).toBe("");
   });
+
+  it("note appends an assistant message (used by /help)", () => {
+    const c = new TuiController();
+    c.endRun("hi");
+    c.note("/model — switch\n/exit — quit");
+    expect(c.getState().transcript).toEqual([
+      { role: "assistant", text: "hi" },
+      { role: "assistant", text: "/model — switch\n/exit — quit" },
+    ]);
+  });
+
+  it("clearTranscript empties the transcript + drops the metrics (used by /clear)", () => {
+    let t = 0;
+    const c = new TuiController(() => t);
+    c.awaitTask(); c.submitTask("q"); c.beginRun();
+    c.onUsage({ model: "m", promptTokens: 5, completionTokens: 1 });
+    c.endRun("answer");
+    expect(c.getState().transcript.length).toBeGreaterThan(0);
+    c.clearTranscript();
+    expect(c.getState().transcript).toEqual([]);
+    expect(c.getState().meta).toBeUndefined();
+  });
 });
