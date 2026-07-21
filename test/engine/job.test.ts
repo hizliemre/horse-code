@@ -243,4 +243,26 @@ describe("runJob", () => {
       expect(res.kind).toBe("chat");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
+
+  it("beklenmedik throw'da session temizlenir (orphan worktree yok)", async () => {
+    const repo = await initTmpRepo();
+    const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
+    try {
+      await defaultGitRunner(["init", "--bare", "-b", "main"], bare);
+      await defaultGitRunner(["remote", "add", "origin", bare], repo);
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      let closed = false;
+      const origClose = mgr.closeSession.bind(mgr);
+      mgr.closeSession = async (s) => { closed = true; return origClose(s); };
+      mgr.commitMerge = async () => { throw new Error("patla"); }; // approved sonrası erken throw
+      const p = jobProvider({ intent: "feature" });
+      await expect(
+        runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 }),
+      ).rejects.toThrow("patla");
+      expect(closed).toBe(true); // catch closeSession'ı çağırdı
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+      await rm(bare, { recursive: true, force: true });
+    }
+  });
 });
