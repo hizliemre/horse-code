@@ -2,13 +2,22 @@ import { describe, it, expect } from "vitest";
 import { buildJobDeps, logPRAdapter } from "../src/wiring.js";
 import { REQUIRED_ROLES } from "../src/prompts.js";
 import type { ResolvedConfig } from "../src/config/config.js";
+import { DEFAULT_CONFIG } from "../src/config/config.js";
 import { SkillRegistry } from "../src/skills/registry.js";
 import { WorktreeManager } from "../src/worktree/manager.js";
 import type { Provider } from "../src/core/types.js";
 
 const fakeProvider: Provider = { async *chat() { /* buildJobDeps does not call this */ } };
 function baseConfig(over: Partial<ResolvedConfig> = {}): ResolvedConfig {
-  return { baseUrl: "http://x", model: "cc/m", mode: "auto", allowlist: [], roles: {}, ...over };
+  return {
+    baseUrl: "http://x",
+    model: "cc/m",
+    mode: "auto",
+    allowlist: [],
+    roles: {},
+    specKit: DEFAULT_CONFIG.specKit,
+    ...over,
+  };
 }
 function deps(config: ResolvedConfig) {
   return buildJobDeps({

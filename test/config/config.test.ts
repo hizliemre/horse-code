@@ -134,4 +134,17 @@ describe("loadConfig", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
     expect(cfg.council).toBeUndefined();
   });
+
+  it("defaults specKit.version and reads it from a file", () => {
+    const cfg = loadConfig({
+      cwd: "/x", home: "/h", env: {},
+      readFile: (p) => (p === "/h/.horsecode/config.json" ? '{"specKit":{"version":"v0.14.0"}}' : undefined),
+    });
+    expect(cfg.specKit.version).toBe("v0.14.0");
+  });
+
+  it("specKit falls back to the default version when absent", () => {
+    const cfg = loadConfig({ cwd: "/x", home: "/h", env: {}, readFile: () => undefined });
+    expect(cfg.specKit.version).toBe("v0.13.2");
+  });
 });

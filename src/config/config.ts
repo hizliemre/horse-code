@@ -21,6 +21,7 @@ export interface ResolvedConfig {
   allowlist: string[];
   roles: Record<string, RoleConfig>;
   council?: { councilors: CouncilorConfig[] };
+  specKit: { version: string };
 }
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
@@ -29,6 +30,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   mode: "ask",
   allowlist: [],
   roles: {},
+  specKit: { version: "v0.13.2" },
 };
 
 // Fields that can be read from files (all optional).
@@ -56,6 +58,7 @@ const fileSchema = z
         ),
       })
       .optional(),
+    specKit: z.object({ version: z.string() }).optional(),
   })
   .partial();
 
@@ -96,6 +99,9 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // roles: shallow merge of global + project (same-named role is overridden by project).
   merged.roles = { ...(global.roles ?? {}), ...(projectSafe.roles ?? {}) };
+
+  // specKit: "most specific wins" instead of merging (use project's if present).
+  merged.specKit = projectSafe.specKit ?? global.specKit ?? DEFAULT_CONFIG.specKit;
 
   // env has the highest priority.
   if (opts.env.OMNIROUTE_API_KEY) merged.apiKey = opts.env.OMNIROUTE_API_KEY;
