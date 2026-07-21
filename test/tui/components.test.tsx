@@ -50,20 +50,22 @@ describe("Ink bileşenleri", () => {
     expect(lastFrame() ?? "").toContain("Onaylıyor musun?");
   });
 
-  it("Message user → 'sen' prefix + metin", () => {
+  it("Message user → '›' + metin (label yok)", () => {
     const f = render(<Message role="user" text="selam dünya" />).lastFrame() ?? "";
-    expect(f).toContain("sen");
+    expect(f).toContain("›");
     expect(f).toContain("selam dünya");
+    expect(f).not.toContain("sen");
   });
 
-  it("Message assistant → 'hcode' prefix + metin", () => {
+  it("Message assistant → '●' circle + metin (label yok)", () => {
     const f = render(<Message role="assistant" text="merhaba" />).lastFrame() ?? "";
-    expect(f).toContain("hcode");
+    expect(f).toContain("●");
     expect(f).toContain("merhaba");
+    expect(f).not.toContain("hcode");
   });
 
-  it("Splash HORSE CODE wordmark'ı içerir", () => {
-    expect(render(<Splash />).lastFrame() ?? "").toContain("H O R S E");
+  it("Splash block-art (at + wordmark) render eder", () => {
+    expect(render(<Splash cols={80} rows={40} />).lastFrame() ?? "").toContain("█");
   });
 
   it("App input mode: görev-input hint + kutu render eder", () => {
