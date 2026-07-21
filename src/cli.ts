@@ -93,11 +93,6 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   const args = parseArgs(argv);
-  if (!args.prompt) {
-    console.error('kullanım: hcode "<prompt>" [--branch b] [--job j] [--rounds n] [--revision-rounds n] [--no-tui]');
-    process.exitCode = 1;
-    return;
-  }
   const cwd = process.cwd();
   const config = loadConfig({
     cwd,
@@ -113,7 +108,6 @@ export async function main(argv: string[]): Promise<void> {
   const remoteUrl = (await defaultGitRunner(["remote", "get-url", "origin"], cwd)).stdout.trim();
   const prAdapter = makePRAdapter({ platform: detectPlatform(remoteUrl), run: defaultCmdRunner, cwd, log: (s) => console.log(s) });
   const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
-  const jobName = args.jobName ?? (toSlug(args.prompt) || "hcode-job");
   const buildDeps = (read: LineReader): JobDeps =>
     buildJobDeps({
       config, provider, skillRegistry, manager, prAdapter,
@@ -121,13 +115,32 @@ export async function main(argv: string[]): Promise<void> {
       approve: makeApprove(read),
       signal: new AbortController().signal,
     });
+  const useTui = shouldUseTui(!!process.stdin.isTTY, !!process.stdout.isTTY, !!args.noTui);
+
+  // Argümansız + interaktif TTY → TUI REPL (görev-input döngüsü).
+  if (!args.prompt) {
+    if (useTui) {
+      const { runTuiRepl } = await import("./tui/app.js");
+      await runTuiRepl({
+        buildDeps,
+        jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
+        formatResult: renderResult,
+      });
+      return;
+    }
+    console.error('kullanım: hcode "<prompt>" [--branch b] [--job j] [--rounds n] [--revision-rounds n] [--no-tui]  |  hcode (interaktif TUI REPL)  |  hcode init');
+    process.exitCode = 1;
+    return;
+  }
+
+  const jobName = args.jobName ?? (toSlug(args.prompt) || "hcode-job");
   const job = {
     prompt: args.prompt, fromBranch, jobName,
     maxRounds: args.rounds ?? 3,
     ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }),
   };
 
-  if (shouldUseTui(!!process.stdin.isTTY, !!process.stdout.isTTY, !!args.noTui)) {
+  if (useTui) {
     const { runTui } = await import("./tui/app.js"); // ink'i yalnız TUI dalında yükle
     const res = await runTui({ buildDeps, job });
     console.log(renderResult(res));
