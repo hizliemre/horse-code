@@ -2,7 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useStdin } from "ink";
 import { parseKittyKey } from "./keys.js";
 
-const VISIBLE = 10;
+const VISIBLE = 8;
+// Total rows the picker occupies (for the fullscreen height reservation in App):
+// border(2) + header(1) + filter(1) + scroll-up(1) + VISIBLE + scroll-down(1) + hint(1).
+export const PICKER_HEIGHT = VISIBLE + 7;
 
 export function ModelPicker({ models, current, loading, error, cols, onSelect, onCancel }: {
   models: string[];
@@ -47,28 +50,45 @@ export function ModelPicker({ models, current, loading, error, cols, onSelect, o
     return () => { stdin.off("data", onData); };
   }, [stdin, setRawMode, isRawModeSupported]);
 
+  const total = models.length;
   const start = Math.max(0, Math.min(sel - Math.floor(VISIBLE / 2), Math.max(0, filtered.length - VISIBLE)));
   const windowed = filtered.slice(start, start + VISIBLE);
-  const w = Math.max(10, cols - 2);
+  const above = start;
+  const below = Math.max(0, filtered.length - (start + VISIBLE));
+  const w = Math.max(24, cols - 2);
+  // Blank filler rows so the body is always VISIBLE tall (no visual drift as the list shrinks).
+  const filler = Array.from({ length: Math.max(0, VISIBLE - windowed.length) }, (_, i) => (
+    <Text key={`f${i}`}> </Text>
+  ));
+  // Body: while loading/error, a message centered in the VISIBLE band; otherwise the list.
+  const body = loading
+    ? [<Text key="l" dimColor>{"  Loading models…"}</Text>, ...Array.from({ length: VISIBLE - 1 }, (_, i) => <Text key={`lp${i}`}> </Text>)]
+    : error
+      ? [<Text key="e" color="red" wrap="truncate-end">{`  Couldn't fetch models: ${error}`}</Text>, ...Array.from({ length: VISIBLE - 1 }, (_, i) => <Text key={`ep${i}`}> </Text>)]
+      : filtered.length === 0
+        ? [<Text key="n" dimColor>{`  (no models match "${filter}")`}</Text>, ...Array.from({ length: VISIBLE - 1 }, (_, i) => <Text key={`np${i}`}> </Text>)]
+        : [
+            ...windowed.map((m, i) => {
+              const isSel = start + i === sel;
+              return (
+                <Text key={m} color={isSel ? "cyan" : undefined} inverse={isSel} wrap="truncate-end">
+                  {`${isSel ? "› " : "  "}${m}`}
+                </Text>
+              );
+            }),
+            ...filler,
+          ];
   return (
-    <Box flexDirection="column" width={w}>
-      <Text bold>{`Select model · current: ${current}`}</Text>
-      {loading ? (
-        <Text dimColor>Loading models…</Text>
-      ) : error ? (
-        <Text color="red">{`Couldn't fetch models: ${error} · Esc to cancel`}</Text>
-      ) : (
-        <>
-          <Text color="cyan">{`> ${filter}`}</Text>
-          {windowed.map((m, i) => {
-            const isSel = start + i === sel;
-            return (
-              <Text key={m} inverse={isSel} wrap="truncate-end">{`${isSel ? "▶ " : "  "}${m}`}</Text>
-            );
-          })}
-          <Text dimColor>↑/↓ move · Enter apply · Esc cancel</Text>
-        </>
-      )}
+    <Box flexDirection="column" width={w} height={PICKER_HEIGHT} borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold wrap="truncate-end">{`━━ Select model ━━  ${loading || error ? "" : `${filtered.length}/${total}`}`}</Text>
+      <Text wrap="truncate-end">
+        <Text color="cyan">{"filter: "}</Text>{filter}<Text inverse>{" "}</Text>
+        <Text dimColor>{`   current: ${current}`}</Text>
+      </Text>
+      <Text dimColor>{above > 0 ? `  ▲ ${above} more` : " "}</Text>
+      {body}
+      <Text dimColor>{below > 0 ? `  ▼ ${below} more` : " "}</Text>
+      <Text dimColor wrap="truncate-end">{"↑/↓ select · Enter apply · Esc cancel · type to filter"}</Text>
     </Box>
   );
 }

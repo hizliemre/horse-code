@@ -8,7 +8,7 @@ import { Markdown } from "./markdown.js";
 import type { TurnMeta } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage } from "./lines.js";
-import { ModelPicker } from "./model-picker.js";
+import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { parseKittyKey } from "./keys.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
@@ -405,7 +405,7 @@ export function App({ controller, fullscreen = false, model, listModels, setMode
       ...state.transcript.flatMap((m) => flattenMessage(m.role, m.text, size.cols)),
     ];
     if (state.mode === "picker") {
-      const PICKER_H = 14; // header + filter + 10 rows + hint + marginTop (deterministic)
+      const PICKER_H = PICKER_HEIGHT + 1; // the ModelPicker box + its marginTop (deterministic)
       const viewportH = Math.max(3, size.rows - PICKER_H - 1);
       const maxScroll = Math.max(0, allLines.length - viewportH);
       maxScrollRef.current = maxScroll;
