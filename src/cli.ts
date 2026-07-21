@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
 import { OmniRouteProvider } from "./providers/omniroute.js";
@@ -14,6 +14,7 @@ import { makeAskUser, makeApprove, makeAskHuman, nodeLineReader } from "./termin
 import type { LineReader } from "./terminal.js";
 import { runJob } from "./engine/job.js";
 import type { JobResult, JobDeps } from "./engine/job.js";
+import { runInit } from "./init.js";
 
 export interface CliArgs {
   prompt: string;
@@ -78,6 +79,19 @@ async function currentBranch(cwd: string): Promise<string> {
 }
 
 export async function main(argv: string[]): Promise<void> {
+  if (argv[0] === "init") {
+    const { read, close } = nodeLineReader();
+    try {
+      await runInit({
+        read,
+        readFile: (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } },
+        writeFile: (p, c) => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, c); },
+        home: process.env.HOME ?? "",
+        log: (s) => console.log(s),
+      });
+    } finally { close(); }
+    return;
+  }
   const args = parseArgs(argv);
   if (!args.prompt) {
     console.error('kullanım: hcode "<prompt>" [--branch b] [--job j] [--rounds n] [--revision-rounds n] [--no-tui]');
