@@ -231,4 +231,14 @@ describe("runJob", () => {
       expect(events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase)).toEqual(["upstream", "chat"]);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
+
+  it("onEvent throw ederse job düşmez (gözlemci izole)", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const p = jobProvider({ intent: "chat" });
+      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "x", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: () => { throw new Error("render patladı"); } });
+      expect(res.kind).toBe("chat");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
 });

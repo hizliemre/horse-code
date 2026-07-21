@@ -59,7 +59,9 @@ export async function runJob(
   deps: JobDeps,
   opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void },
 ): Promise<JobResult> {
-  const emit = opts.onEvent ?? (() => {});
+  // onEvent hatası engine'i düşürmesin: gözlemci senkron çağrılır (board mutation'larında derinden).
+  const onEvent = opts.onEvent;
+  const emit = onEvent ? (ev: ProgressEvent) => { try { onEvent(ev); } catch { /* observer hatası izole */ } } : () => {};
   const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
   const workdir = session.baseWorktree;
   emit({ kind: "phase", phase: "upstream" });
