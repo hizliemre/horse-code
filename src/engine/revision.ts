@@ -84,32 +84,32 @@ export async function runRevision(
   maxRounds: number,
   prDiff?: string,
 ): Promise<RevisionResult> {
-  board.addCard({ id: "revision", title: "PR revision" });
+  board.addCard({ id: "__revision__", title: "PR revision" });
   const base = session.baseWorktree;
   const rounds = Math.max(1, maxRounds);
 
   for (let round = 1; round <= rounds; round++) {
     const v = await principalReview(deps, base, prDiff);
     if (v.decision === "approve") {
-      board.appendStage("revision", { role: "principal-coder", action: "pr:approved" });
+      board.appendStage("__revision__", { role: "principal-coder", action: "pr:approved" });
       return { status: "approved", rounds: round - 1 };
     }
-    board.appendStage("revision", { role: "principal-coder", action: "pr:changes", note: v.comments.join("; ") });
+    board.appendStage("__revision__", { role: "principal-coder", action: "pr:changes", note: v.comments.join("; ") });
 
     if (round === rounds) {
       const f = await principalFinal(deps, base);
       if (f.decision === "accept") {
-        board.appendStage("revision", { role: "principal-coder", action: "pr:final:accept" });
+        board.appendStage("__revision__", { role: "principal-coder", action: "pr:final:accept" });
         return { status: "accepted", rounds };
       }
       const answer = await askUser(f.question);
-      board.appendStage("revision", { role: "human", action: "pr:human", note: answer });
+      board.appendStage("__revision__", { role: "human", action: "pr:human", note: answer });
       return { status: "human", rounds, answer };
     }
 
     await postComments(v.comments);
     await seniorRevise(deps, base, v.comments);
-    board.appendStage("revision", { role: "senior-coder", action: "pr:revised" });
+    board.appendStage("__revision__", { role: "senior-coder", action: "pr:revised" });
     await deps.manager.commitMerge(session, `hc: revision ${round}`);
     await deps.manager.push(session);
   }
