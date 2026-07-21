@@ -1,7 +1,8 @@
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import type { Board } from "../board/board.js";
-import type { WorktreeManager, WorktreeSession, PRAdapter } from "../worktree/manager.js";
+import type { WorktreeManager, WorktreeSession } from "../worktree/manager.js";
+import type { RevisionPRAdapter } from "../adapters/pr.js";
 import type { ReviewDeps, AskUser } from "./review.js";
 import type { AskHuman } from "./escalation.js";
 import { readOnlyRegistry } from "./reviewer.js";
@@ -9,10 +10,11 @@ import { runUpstream } from "./upstream.js";
 import { runProjectManager } from "./project-manager.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
+import { runRevision, type RevisionResult } from "./revision.js";
 
 export interface JobDeps extends ReviewDeps {
   manager: WorktreeManager;
-  prAdapter: PRAdapter;
+  prAdapter: RevisionPRAdapter;
   rounds: number;
   askHuman: AskHuman;
 }
@@ -20,7 +22,7 @@ export interface JobDeps extends ReviewDeps {
 export type JobResult =
   | { kind: "chat"; response: string }
   | { kind: "rejected"; stage: "spec" | "plan" }
-  | { kind: "done"; wave: WaveEngineResult; report: string; session: WorktreeSession };
+  | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession };
 
 function pmOpts(deps: JobDeps, workdir: string, planPath: string): RoleAgentOptions {
   const { model, systemPrompt } = deps.roleRegistry.resolve("project-manager");
@@ -54,7 +56,7 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
  */
 export async function runJob(
   deps: JobDeps,
-  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string },
+  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number },
 ): Promise<JobResult> {
   const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
   const workdir = session.baseWorktree;
@@ -72,6 +74,15 @@ export async function runJob(
   await deps.manager.commitMerge(session, "hc: spec + plan"); // spec/plan → baseBranch (PR'a girer)
   const board = await runProjectManager(pmOpts(deps, workdir, up.planPath));
   const wave = await runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle });
+  let revision: RevisionResult | undefined;
+  if (wave.status === "completed") {
+    const prDiff = await deps.manager.diff(session, opts.fromBranch);
+    revision = await runRevision(
+      deps, session, board,
+      (c) => deps.prAdapter.postComments(c),
+      opts.askUser, opts.revisionRounds ?? 3, prDiff,
+    );
+  }
   const report = await runCoachReport(deps, session, board);
-  return { kind: "done", wave, report, session };
+  return { kind: "done", wave, revision, report, session };
 }

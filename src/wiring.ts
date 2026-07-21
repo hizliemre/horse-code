@@ -9,13 +9,14 @@ import type { SkillRegistry } from "./skills/registry.js";
 import type { WorktreeManager, PRAdapter } from "./worktree/manager.js";
 import type { AskHuman } from "./engine/escalation.js";
 import type { JobDeps } from "./engine/job.js";
+import type { RevisionPRAdapter } from "./adapters/pr.js";
 
 export interface BuildJobDepsOpts {
   config: ResolvedConfig;
   provider: Provider;
   skillRegistry: SkillRegistry;
   manager: WorktreeManager;
-  prAdapter: PRAdapter;
+  prAdapter: RevisionPRAdapter;
   askHuman: AskHuman;
   approve: (req: PermissionRequest) => Promise<boolean>;
   signal: AbortSignal;
@@ -55,11 +56,14 @@ export function buildJobDeps(opts: BuildJobDepsOpts): JobDeps {
 }
 
 /** H2 PRAdapter'ı: PR intent'ini loglar + placeholder url döner (gerçek MCP → G). */
-export function logPRAdapter(log: (s: string) => void): PRAdapter {
+export function logPRAdapter(log: (s: string) => void): RevisionPRAdapter {
   return {
     async createPR(input) {
       log(`PR açılacaktı: ${input.branch} → ${input.base} — "${input.title}"`);
       return { url: "(pending: G — gerçek MCP)" };
+    },
+    async postComments(comments) {
+      if (comments.length) log(`PR yorumları: ${comments.join("; ")}`);
     },
   };
 }

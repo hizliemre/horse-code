@@ -85,6 +85,12 @@ export class WorktreeManager {
     return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
   }
 
+  /** base branch'e karşı base worktree'deki değişikliklerin unified diff'i (PR diff'i). */
+  async diff(session: WorktreeSession, base: string): Promise<string> {
+    const r = await this.git(["diff", `${base}...${session.baseBranch}`], session.baseWorktree);
+    return r.stdout;
+  }
+
   async commitMerge(session: WorktreeSession, message?: string): Promise<void> {
     await this.run(["add", "-A"], session.baseWorktree);
     await this.run(message ? ["commit", "-m", message] : ["commit", "--no-edit"], session.baseWorktree);

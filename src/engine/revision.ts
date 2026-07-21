@@ -34,12 +34,15 @@ export type RevisionResult =
   | { status: "accepted"; rounds: number }
   | { status: "human"; rounds: number; answer: string };
 
-async function principalReview(deps: RevisionDeps, base: string) {
+async function principalReview(deps: RevisionDeps, base: string, prDiff?: string) {
   const { model, systemPrompt } = deps.roleRegistry.resolve("principal-coder");
+  const content = prDiff
+    ? `PR review: şu diff'i incele:\n${prDiff}\n(gerekirse read-tool'larla worktree'yi de incele.) approve veya request-changes + somut comment'ler ver.`
+    : "PR review: base worktree'deki tüm değişiklikleri bütünsel incele. approve veya request-changes + somut comment'ler ver.";
   const opts: RoleAgentOptions = {
     provider: deps.provider, model, systemPrompt,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content: "PR review: base worktree'deki tüm değişiklikleri bütünsel incele. approve veya request-changes + somut comment'ler ver." }],
+    messages: [{ role: "user", content }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };
   return runStructuredRole(opts, PrincipalReviewSchema);
@@ -79,13 +82,14 @@ export async function runRevision(
   postComments: PostComments,
   askUser: AskUser,
   maxRounds: number,
+  prDiff?: string,
 ): Promise<RevisionResult> {
   board.addCard({ id: "revision", title: "PR revision" });
   const base = session.baseWorktree;
   const rounds = Math.max(1, maxRounds);
 
   for (let round = 1; round <= rounds; round++) {
-    const v = await principalReview(deps, base);
+    const v = await principalReview(deps, base, prDiff);
     if (v.decision === "approve") {
       board.appendStage("revision", { role: "principal-coder", action: "pr:approved" });
       return { status: "approved", rounds: round - 1 };
