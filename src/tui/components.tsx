@@ -16,6 +16,32 @@ import { matchCommands, helpText, type SlashCommand } from "./commands.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
+/** Splits a pending prompt into its kind + clean body (terminal.ts tags them "[question]"/"[permission]"/"[human]"). */
+export function parsePending(raw: string): { kind: "question" | "permission" | "human"; body: string } {
+  const t = raw.replace(/^\s+/, "");
+  const m = t.match(/^\[(question|permission|human)\]\s*/);
+  if (m) return { kind: m[1] as "question" | "permission" | "human", body: t.slice(m[0].length).trim() };
+  return { kind: "question", body: t.trim() };
+}
+
+const PENDING_STYLE = {
+  question: { icon: "?", label: "Question", color: "yellow" as const },
+  permission: { icon: "⚠", label: "Permission", color: "red" as const },
+  human: { icon: "◆", label: "Review", color: "cyan" as const },
+};
+
+/** Renders a pending question/permission/review prompt: a colored icon + label header, then the body text. */
+export function PendingQuestion({ text, cols }: { text: string; cols: number }): React.ReactElement {
+  const { kind, body } = parsePending(text);
+  const s = PENDING_STYLE[kind];
+  return (
+    <Box flexDirection="column" width={Math.max(20, cols - 2)}>
+      <Text color={s.color} bold>{`${s.icon} ${s.label}`}</Text>
+      <Text>{body}</Text>
+    </Box>
+  );
+}
+
 /** Slash-command palette shown above the input when the draft starts with "/". */
 export function SlashPalette({ commands, selected, cols }: { commands: SlashCommand[]; selected: number; cols: number }): React.ReactElement {
   const w = Math.max(24, cols - 2);
@@ -464,15 +490,21 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const cw = Math.max(1, size.cols - 4);
     const inputH = draft.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil((l.length + 3) / cw)), 0);
     const running = mode === "running";
+    // While a question is pending the job is blocked waiting for the user → hide the "refining…" status
+    // (it would keep ticking as if working). Show the running status only when nothing is pending.
+    const progressLine = running && !state.pending;
     // After a turn finishes, the running status is replaced by a static "zottired for 1m 23s" completion line.
     const doneLine = !!state.meta && !state.meta.running && !state.pending;
-    const showStatus = running || !!state.pending || doneLine;
+    const showStatus = progressLine || !!state.pending || doneLine;
     // Status lines sit directly above the input (no box, no gap). Height is deterministic → no Ink overflow.
     const boardLines = showStatus && state.cards.length
       ? 1 + Math.max(...COLUMNS.map((col) => state.cards.filter((c) => c.column === col).length))
       : 0;
-    const pendingLines = state.pending ? Math.max(1, Math.ceil(state.pending.question.length / cw)) : 0;
-    const statusH = (running || doneLine ? 1 : 0) + boardLines + pendingLines; // progress/done(1) + board + pending
+    // Pending prompt: 1 header line + the body's wrapped lines (it can be a multi-line numbered list).
+    const pendingLines = state.pending
+      ? 1 + parsePending(state.pending.question).body.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / cw)), 0)
+      : 0;
+    const statusH = (progressLine || doneLine ? 1 : 0) + boardLines + pendingLines; // progress/done(1) + board + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     const inputBoxH = 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
@@ -492,10 +524,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
         {showStatus ? (
           <Box flexDirection="column">
-            {running ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} meta={state.meta} cols={size.cols} /></Box> : null}
+            {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} meta={state.meta} cols={size.cols} /></Box> : null}
             {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}`}</Text></Box> : null}
             {boardLines ? <Board cards={state.cards} /> : null}
-            {state.pending ? <Box width={cw}><Text color="yellow">{state.pending.question}</Text></Box> : null}
+            {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
           </Box>
         ) : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}

@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
+
+const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
 
 describe("Ink components", () => {
   it("Board shows card titles and column headers", () => {
@@ -155,6 +157,33 @@ describe("Ink components", () => {
     expect(c.getState().transcript).toEqual([]);
     expect(c.getState().mode).toBe("input");
     unmount();
+  });
+
+  it("parsePending strips the [question]/[permission]/[human] tag + leading newline", () => {
+    expect(parsePending("\n[question] What now?")).toEqual({ kind: "question", body: "What now?" });
+    expect(parsePending("\n[permission] rm -rf\napprove? (y/n)").kind).toBe("permission");
+    expect(parsePending("\n[human] task X").kind).toBe("human");
+    expect(parsePending("no tag here")).toEqual({ kind: "question", body: "no tag here" });
+  });
+
+  it("PendingQuestion renders the '? Question' header + clean body (no raw tag)", () => {
+    const f = strip(render(<PendingQuestion text={"\n[question] Which stack?\n1. Python\n2. TS"} cols={80} />).lastFrame());
+    expect(f).toContain("? Question");
+    expect(f).toContain("Which stack?");
+    expect(f).toContain("1. Python");
+    expect(f).not.toContain("[question]");
+  });
+
+  it("App: while a question is pending, the 'refining' status is hidden and the question renders cleanly", () => {
+    const c = new TuiController();
+    c.awaitTask(); c.submitTask("x"); c.beginRun();
+    c.onEvent({ kind: "phase", phase: "upstream" }); // would show "refining…" if not pending
+    void c.ask("\n[question] Clarify the scope please");
+    const f = strip(render(<App controller={c} fullscreen model="m" coachModel="cc/opus" />).lastFrame());
+    expect(f).toContain("? Question");
+    expect(f).toContain("Clarify the scope please");
+    expect(f).not.toContain("refining"); // the running status is hidden while blocked on the user
+    expect(f).not.toContain("[question]");
   });
 
   it("App: after a chat turn finishes, shows the 'zottired for Xm XXs' completion line", () => {
