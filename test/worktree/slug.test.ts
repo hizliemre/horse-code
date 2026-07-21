@@ -11,6 +11,13 @@ describe("toSlug", () => {
     expect(toSlug("   ")).toBe("job");
     expect(toSlug("!!!")).toBe("job");
   });
+  it("caps length so it stays a valid path component, no trailing dash", () => {
+    const long = "antigravity hesaplarında hata alıyorum 422 missing google projectid for antigravity account auto discovery via loadcodeassist found no cloud code project";
+    const s = toSlug(long);
+    expect(s.length).toBeLessThanOrEqual(60);
+    expect(s.endsWith("-")).toBe(false);
+    expect(s).toBe("antigravity-hesaplar-nda-hata-al-yorum-422-missing-google-pr");
+  });
 });
 
 describe("uniqueSlug", () => {
