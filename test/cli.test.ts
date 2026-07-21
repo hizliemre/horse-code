@@ -46,15 +46,19 @@ describe("cli TUI dallanması", () => {
     expect(parseArgs(["yap", "bir", "şey"]).noTui).toBeUndefined();
   });
 
-  it("shouldUseTui: TTY var ve --no-tui yok → true", () => {
-    expect(shouldUseTui(true, false)).toBe(true);
+  it("shouldUseTui: stdin+stdout TTY ve --no-tui yok → true", () => {
+    expect(shouldUseTui(true, true, false)).toBe(true);
   });
 
-  it("shouldUseTui: TTY yok → false (pipe/CI)", () => {
-    expect(shouldUseTui(false, false)).toBe(false);
+  it("shouldUseTui: stdout TTY değil → false (pipe/CI)", () => {
+    expect(shouldUseTui(true, false, false)).toBe(false);
   });
 
-  it("shouldUseTui: --no-tui → false (TTY olsa bile)", () => {
-    expect(shouldUseTui(true, true)).toBe(false);
+  it("shouldUseTui: stdin TTY değil → false (echo x | hcode; Ink raw-mode çökmesini önler)", () => {
+    expect(shouldUseTui(false, true, false)).toBe(false);
+  });
+
+  it("shouldUseTui: --no-tui → false (ikisi de TTY olsa bile)", () => {
+    expect(shouldUseTui(true, true, true)).toBe(false);
   });
 });

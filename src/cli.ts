@@ -61,8 +61,10 @@ export function renderResult(res: JobResult): string {
   return `${res.report}\n\nDurum: ${res.wave.status} — ${pr}${rev}`;
 }
 
-export function shouldUseTui(isTTY: boolean, noTui: boolean): boolean {
-  return isTTY && !noTui;
+// TUI hem stdin hem stdout TTY iken açılır: stdin pipe olursa (echo x | hcode)
+// Ink Q&A anında non-TTY stdin'de setRawMode ile çöker → o durumda düz moda düş.
+export function shouldUseTui(stdinTTY: boolean, stdoutTTY: boolean, noTui: boolean): boolean {
+  return stdinTTY && stdoutTTY && !noTui;
 }
 
 async function currentBranch(cwd: string): Promise<string> {
@@ -111,7 +113,7 @@ export async function main(argv: string[]): Promise<void> {
     ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }),
   };
 
-  if (shouldUseTui(!!process.stdout.isTTY, !!args.noTui)) {
+  if (shouldUseTui(!!process.stdin.isTTY, !!process.stdout.isTTY, !!args.noTui)) {
     const { runTui } = await import("./tui/app.js"); // ink'i yalnız TUI dalında yükle
     const res = await runTui({ buildDeps, job });
     console.log(renderResult(res));
