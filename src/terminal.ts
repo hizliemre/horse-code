@@ -6,12 +6,12 @@ import type { PermissionRequest } from "./permission/engine.js";
 export type LineReader = (prompt: string) => Promise<string>;
 
 export function makeAskUser(read: LineReader): AskUser {
-  return (question) => read(`\n[soru] ${question}\n> `);
+  return (question) => read(`\n[soru] ${question}`);
 }
 
 export function makeApprove(read: LineReader): (req: PermissionRequest) => Promise<boolean> {
   return async (req) => {
-    const ans = (await read(`\n[izin] ${req.preview}\nonayla? (e/h) > `)).trim().toLowerCase();
+    const ans = (await read(`\n[izin] ${req.preview}\nonayla? (e/h)`)).trim().toLowerCase();
     return ans === "e" || ans === "evet" || ans === "y" || ans === "yes";
   };
 }
@@ -19,7 +19,7 @@ export function makeApprove(read: LineReader): (req: PermissionRequest) => Promi
 export function makeAskHuman(read: LineReader): AskHuman {
   return async (ctx) => {
     const notes = ctx.verdict.notes.join("; ");
-    const ans = (await read(`\n[insan] task "${ctx.card.title}" — ${notes}\n(accept / retry: <not> / abandon) > `)).trim();
+    const ans = (await read(`\n[insan] task "${ctx.card.title}" — ${notes}\n(accept / retry: <not> / abandon)`)).trim();
     const low = ans.toLowerCase();
     if (low === "accept" || low === "kabul") return { action: "accept" };
     if (low.startsWith("retry")) {
@@ -36,5 +36,5 @@ export function makeAskHuman(read: LineReader): AskHuman {
  */
 export function nodeLineReader(): { read: LineReader; close: () => void } {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return { read: (prompt) => rl.question(prompt), close: () => rl.close() };
+  return { read: (prompt) => rl.question(prompt + "\n> "), close: () => rl.close() };
 }
