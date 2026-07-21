@@ -157,6 +157,20 @@ describe("Ink components", () => {
     unmount();
   });
 
+  it("App: after a chat turn finishes, shows the 'zottired for Xm XXs' completion line", () => {
+    let t = 0;
+    const c = new TuiController(() => t);
+    c.awaitTask(); c.submitTask("x"); c.beginRun();
+    c.onEvent({ kind: "phase", phase: "upstream" });
+    c.onEvent({ kind: "phase", phase: "chat" }); // coach phase = zottiring
+    t = 83_000; // 1m 23s elapsed
+    c.awaitTask(); c.submitTask("y"); c.endRun("answer");
+    const clean = (f: string | undefined) => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+    const { lastFrame, unmount } = render(<App controller={c} fullscreen model="m" coachModel="cc/opus" />);
+    expect(clean(lastFrame())).toContain("zottired for 1m 23s");
+    unmount();
+  });
+
   it("App: numpad/odd escape sequences don't crash; PageUp scrolls (raw stdin, no Ink useInput)", async () => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const clean = (f: string | undefined) => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");

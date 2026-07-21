@@ -38,6 +38,21 @@ describe("phase labels + running horse", () => {
     r.unmount();
   });
 
+  it("while running, shows live elapsed + tokens in parens next to the verb (writes 'tokens', not 'tok')", () => {
+    const meta = { model: "", promptTokens: 1234, completionTokens: 456, startedAt: Date.now() - 12_000, running: true };
+    const r = render(<ProgressView phase="chat" meta={meta} />);
+    const f = clean(r.lastFrame());
+    expect(f).toMatch(/\(\d+s · 1\.7k tokens\)/);
+    expect(f).not.toContain("tok)"); // not the old "tok" abbreviation
+    r.unmount();
+  });
+
+  it("no metrics parens when there is no running meta", () => {
+    const r = render(<ProgressView phase="chat" />);
+    expect(clean(r.lastFrame())).not.toContain("tokens");
+    r.unmount();
+  });
+
   it("during refine, the label carries the refiner model; during chat it does not", () => {
     const refine = render(<ProgressView phase="upstream" refinerModel="prov/refine-model" />);
     expect(clean(refine.lastFrame())).toContain("(prov/refine-model)");

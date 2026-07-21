@@ -4,6 +4,8 @@ import type { BoardCardView } from "../engine/progress.js";
 import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { ProgressView } from "./progress-view.js";
+import { donePhrase } from "./labels.js";
+import { fmtDuration } from "./format.js";
 import { Markdown } from "./markdown.js";
 import type { TurnMeta } from "./controller.js";
 import type { StyledLine } from "./lines.js";
@@ -52,33 +54,14 @@ export function PhaseBar({ phase, detail }: { phase: string; detail?: string }):
   return <Text>Phase: {phase}{detail ? ` — ${detail}` : ""}</Text>;
 }
 
-function fmtTokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
-}
-
 /**
- * One-line metrics under the input: while running, the active stage + model + live elapsed + turn tokens;
- * once done, the frozen model + duration + tokens for the last turn. `wrap="truncate-end"` keeps it 1 row
- * (the fullscreen height math reserves exactly one line for it).
+ * One-line model indicator under the input — always the coach model (never the last call's model, so it
+ * doesn't flip to the refiner mid-refine). Duration + tokens live next to the status verb above the input;
+ * this line stays a compact 1-row model badge. `wrap="truncate-end"` keeps it a single row.
  */
 export function MetricsLine({ meta, model }: { meta: TurnMeta; model?: string }): React.ReactElement {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!meta.running) return;
-    const id = setInterval(() => tick((n) => n + 1), 250);
-    return () => clearInterval(id);
-  }, [meta.running]);
-  // Always the coach model (passed in) — never the last call's model, so it doesn't flip to the
-  // refiner's model mid-refine. The refiner model is surfaced only in the "refining… (model)" line.
   const shown = model || meta.model || "—";
-  const tok = meta.promptTokens + meta.completionTokens;
-  const secs = meta.running
-    ? (meta.startedAt !== undefined ? (Date.now() - meta.startedAt) / 1000 : 0)
-    : (meta.durationMs ?? 0) / 1000;
-  // No stage label here — while running it's already shown in the spinner line above; keep this compact.
-  return (
-    <Text dimColor wrap="truncate-end">{`  ${shown} · ${secs.toFixed(1)}s · ${fmtTokens(tok)} tok`}</Text>
-  );
+  return <Text dimColor wrap="truncate-end">{`  ${shown}`}</Text>;
 }
 
 // Sequences counted as newline (do NOT submit): plain LF, Alt+Enter (ESC+CR/LF), and the known
@@ -438,7 +421,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       </Box>
     ) : (
       <Box flexDirection="column">
-        <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} cols={size.cols} />
+        <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} meta={state.meta} cols={size.cols} />
         <Board cards={state.cards} />
         {state.pending ? <Prompt question={state.pending.question} onSubmit={(s) => controller.answer(s)} /> : null}
       </Box>
@@ -481,13 +464,15 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const cw = Math.max(1, size.cols - 4);
     const inputH = draft.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil((l.length + 3) / cw)), 0);
     const running = mode === "running";
-    const showStatus = running || !!state.pending;
+    // After a turn finishes, the running status is replaced by a static "zottired for 1m 23s" completion line.
+    const doneLine = !!state.meta && !state.meta.running && !state.pending;
+    const showStatus = running || !!state.pending || doneLine;
     // Status lines sit directly above the input (no box, no gap). Height is deterministic → no Ink overflow.
     const boardLines = showStatus && state.cards.length
       ? 1 + Math.max(...COLUMNS.map((col) => state.cards.filter((c) => c.column === col).length))
       : 0;
     const pendingLines = state.pending ? Math.max(1, Math.ceil(state.pending.question.length / cw)) : 0;
-    const statusH = (running ? 1 : 0) + boardLines + pendingLines; // progress(1) + board + pending
+    const statusH = (running || doneLine ? 1 : 0) + boardLines + pendingLines; // progress/done(1) + board + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     const inputBoxH = 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
@@ -507,7 +492,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
         {showStatus ? (
           <Box flexDirection="column">
-            {running ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} cols={size.cols} /></Box> : null}
+            {running ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} meta={state.meta} cols={size.cols} /></Box> : null}
+            {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}`}</Text></Box> : null}
             {boardLines ? <Board cards={state.cards} /> : null}
             {state.pending ? <Box width={cw}><Text color="yellow">{state.pending.question}</Text></Box> : null}
           </Box>

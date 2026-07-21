@@ -17,3 +17,13 @@ export const PHASE_LABELS: Record<string, string> = {
 export function phaseLabel(phase: string): string {
   return PHASE_LABELS[phase] ?? phase;
 }
+
+// Past-tense completion verb shown when a turn finishes: "zottired for 1m 23s".
+export const DONE_PHRASES: Record<string, string> = {
+  upstream: "refined",
+  chat: "zottired",
+};
+
+export function donePhrase(phase: string): string {
+  return DONE_PHRASES[phase] ?? "done";
+}

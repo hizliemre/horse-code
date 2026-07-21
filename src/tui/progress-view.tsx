@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Box, Text } from "ink";
 import { phaseLabel } from "./labels.js";
+import { fmtTokens, fmtDuration } from "./format.js";
+import type { TurnMeta } from "./controller.js";
 
 // Per-phase accent: refine keeps the brand blue; the coach-waiting phase turns orange.
 const BLUE = "#1a9fd8";
@@ -63,18 +65,31 @@ export function ShimmerText({ text, accent = BLUE, bold = true }: { text: string
   );
 }
 
-/** Left-aligned: ping-pong ball + shimmering phase label. During refine the label shows the refiner model. */
+/**
+ * Left-aligned: ping-pong ball + shimmering phase label + live "(elapsed · N tokens)". During refine the
+ * label also shows the refiner model. The elapsed time ticks here; tokens come from `meta` (App re-renders).
+ */
 export function ProgressView(
-  { phase, detail, refinerModel }: { phase: string; detail?: string; cols?: number; refinerModel?: string },
+  { phase, detail, refinerModel, meta }: { phase: string; detail?: string; cols?: number; refinerModel?: string; meta?: TurnMeta },
 ): React.ReactElement {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!meta?.running) return;
+    const id = setInterval(() => tick((n) => n + 1), 250);
+    return () => clearInterval(id);
+  }, [meta?.running]);
   const accent = accentFor(phase);
   // The refiner model is shown ONLY here, alongside the refine status (never in the model line under the input).
   const suffix = phase === "upstream" && refinerModel ? ` (${refinerModel})` : detail ? ` — ${detail}` : "";
+  const metrics = meta?.running && meta.startedAt !== undefined
+    ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ${fmtTokens(meta.promptTokens + meta.completionTokens)} tokens)`
+    : "";
   return (
     <Box>
       <RunningHorse accent={accent} />
       <Text> </Text>
       <ShimmerText text={`${phaseLabel(phase)}${suffix}`} accent={accent} />
+      {metrics ? <Text dimColor>{metrics}</Text> : null}
     </Box>
   );
 }
