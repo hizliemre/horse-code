@@ -82,4 +82,31 @@ describe("Ink components", () => {
     expect(f).toContain("Task");
     expect(f).not.toContain("Type your task");
   });
+
+  it("App: /model opens the picker, lists models, applies a selection", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const clean = (f: string | undefined) => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+    const setCalls: string[] = [];
+    const c = new TuiController();
+    c.awaitTask(); // input mode
+    const { stdin, lastFrame, unmount } = render(
+      <App controller={c} fullscreen model="init/model"
+        listModels={async () => ["a/one", "b/two"]}
+        setModel={(m) => setCalls.push(m)} />,
+    );
+    await sleep(30);
+    stdin.write("/model");
+    await sleep(20);
+    stdin.write("\r"); // submit → opens picker
+    await sleep(40);   // fetch resolves
+    const f = clean(lastFrame());
+    expect(f).toContain("Select model");
+    expect(f).toContain("a/one");
+    stdin.write("\r"); // pick the first model
+    await sleep(30);
+    expect(setCalls).toEqual(["a/one"]);
+    expect(c.getState().mode).toBe("input");
+    expect(c.getState().currentModel).toBe("a/one");
+    unmount();
+  });
 });

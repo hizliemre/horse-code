@@ -8,6 +8,7 @@ import { Markdown } from "./markdown.js";
 import type { TurnMeta } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage } from "./lines.js";
+import { ModelPicker } from "./model-picker.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -247,7 +248,13 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model }: { controller: TuiController; fullscreen?: boolean; model?: string }): React.ReactElement {
+export function App({ controller, fullscreen = false, model, listModels, setModel }: {
+  controller: TuiController;
+  fullscreen?: boolean;
+  model?: string;
+  listModels?: () => Promise<string[]>;
+  setModel?: (m: string) => void;
+}): React.ReactElement {
   const [state, setState] = useState(controller.getState());
   useEffect(() => controller.subscribe(() => setState(controller.getState())), [controller]);
   const { stdout } = useStdout();
@@ -303,6 +310,18 @@ export function App({ controller, fullscreen = false, model }: { controller: Tui
   };
   const tlen = state.transcript.length;
   useEffect(() => { setScroll(0); }, [tlen]);
+  // When the picker opens (loading), fetch the model list once and hand it to the controller.
+  useEffect(() => {
+    if (state.mode === "picker" && state.picker?.loading && listModels) {
+      let cancelled = false;
+      listModels().then(
+        (models) => { if (!cancelled) controller.setPickerModels(models); },
+        (e) => { if (!cancelled) controller.setPickerError(e instanceof Error ? e.message : String(e)); },
+      );
+      return () => { cancelled = true; };
+    }
+    return undefined;
+  }, [state.mode, state.picker?.loading, listModels, controller]);
   useInput((_input, key) => {
     const isInput = (state.mode ?? "running") === "input";
     // In input mode ↑/↓ is command history; transcript scrolls via PgUp/PgDn. In job mode ↑/↓ scrolls.
@@ -314,7 +333,7 @@ export function App({ controller, fullscreen = false, model }: { controller: Tui
     else if (key.downArrow) setScroll((s) => Math.max(0, s - 1));
     else if (key.pageUp) setScroll((s) => Math.min(m, s + page));
     else if (key.pageDown) setScroll((s) => Math.max(0, s - page));
-  }, { isActive: fullscreen });
+  }, { isActive: fullscreen && state.mode !== "picker" });
 
   const mode = state.mode ?? "running";
   const bottom =
@@ -348,6 +367,32 @@ export function App({ controller, fullscreen = false, model }: { controller: Tui
       ...flattenSplash(size.cols, size.rows),
       ...state.transcript.flatMap((m) => flattenMessage(m.role, m.text, size.cols)),
     ];
+    if (state.mode === "picker") {
+      const PICKER_H = 14; // header + filter + 10 rows + hint + marginTop (deterministic)
+      const viewportH = Math.max(3, size.rows - PICKER_H - 1);
+      const maxScroll = Math.max(0, allLines.length - viewportH);
+      maxScrollRef.current = maxScroll;
+      const clamped = Math.min(scroll, maxScroll);
+      const end = allLines.length - clamped;
+      const win = allLines.slice(Math.max(0, end - viewportH), end);
+      return (
+        <Box flexDirection="column" height={size.rows}>
+          <ViewportLines lines={win} height={viewportH} />
+          <Text dimColor> </Text>
+          <Box marginTop={1}>
+            <ModelPicker
+              models={state.picker?.models ?? []}
+              current={state.currentModel || model || "—"}
+              loading={state.picker?.loading ?? false}
+              error={state.picker?.error}
+              cols={size.cols}
+              onSelect={(m) => { setModel?.(m); controller.applyModel(m); }}
+              onCancel={() => controller.cancelPicker()}
+            />
+          </Box>
+        </Box>
+      );
+    }
     const cw = Math.max(1, size.cols - 4);
     const inputH = draft.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil((l.length + 3) / cw)), 0);
     const running = mode === "running";
@@ -389,13 +434,14 @@ export function App({ controller, fullscreen = false, model }: { controller: Tui
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
               if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); controller.answer(t); return; }
+              if (t.trim() === "/model") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openPicker(); return; }
               if (t.trim()) historyRef.current = [...historyRef.current, t];
               histIdxRef.current = -1; stashRef.current = "";
               setScroll(0); setDraft(""); setDraftCursor(0); controller.submitTask(t);
             }}
           />
         </Box>
-        {state.meta ? <MetricsLine meta={state.meta} fallbackModel={model} /> : null}
+        {state.meta ? <MetricsLine meta={state.meta} fallbackModel={state.currentModel || model} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
       </Box>
     );
