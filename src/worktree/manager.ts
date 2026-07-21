@@ -134,6 +134,8 @@ export class WorktreeManager {
   }
 
   async push(session: WorktreeSession, remote = "origin"): Promise<void> {
+    const check = await this.git(["remote", "get-url", remote], session.baseWorktree);
+    if (check.code !== 0) return; // remote yok → local-only, push atla
     await this.run(["push", remote, session.baseBranch], session.baseWorktree);
   }
 

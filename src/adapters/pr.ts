@@ -83,8 +83,8 @@ export function makePRAdapter(opts: { platform: "github" | "azure" | "unknown"; 
   if (opts.platform === "azure") return azAdapter(opts.run, opts.cwd, opts.log);
   return {
     async createPR(input) {
-      opts.log(`PR (bilinmeyen platform): ${input.branch} → ${input.base} — "${input.title}"`);
-      return { url: "(bilinmeyen platform — PR açılmadı)" };
+      opts.log(`PR (yerel — remote/platform yok): ${input.branch} → ${input.base} — "${input.title}"`);
+      return { url: `(yerel: ${input.branch})` };
     },
     async postComments(comments) {
       if (comments.length) opts.log(`PR yorumları: ${comments.join("; ")}`);

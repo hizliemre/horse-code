@@ -27,6 +27,13 @@ describe("WorktreeManager push", () => {
     const r = await defaultGitRunner(["rev-parse", "--verify", `refs/heads/${s.baseBranch}`], bare);
     expect(r.code).toBe(0); // bare remote'ta branch var
   });
+
+  it("origin yoksa push no-op (throw etmez)", async () => {
+    repo = await initTmpRepo(); // origin EKLENMEZ
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "job");
+    await expect(wm.push(s)).resolves.toBeUndefined(); // sessiz döner, hata yok
+  });
 });
 
 describe("WorktreeManager openPR", () => {
