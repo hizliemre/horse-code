@@ -1,28 +1,39 @@
+/** A parsed SSE line: a `data:` payload, or a `:` comment (omniroute ships real token counts as comments). */
+export interface SSELine {
+  kind: "data" | "comment";
+  value: string;
+}
+
 /**
- * Processes a single SSE line. Lines that don't start with "data:" are skipped.
- * If the payload is "[DONE]", returns `done: true` to signal the stream has ended;
- * otherwise yields the payload (if present).
+ * Processes a single SSE line.
+ * - "data: <payload>" → yields { kind: "data", value: payload }; "[DONE]" ends the stream (returns true).
+ * - ": <comment>" → yields { kind: "comment", value: comment } (omniroute appends real usage as comments).
+ * - anything else (blank lines, event:/id: fields) → skipped.
  */
-function* handleLine(line: string): Generator<string, boolean> {
+function* handleLine(line: string): Generator<SSELine, boolean> {
   const trimmed = line.trim();
-  if (!trimmed.startsWith("data:")) return false;
-  const payload = trimmed.slice(5).trim();
-  if (payload === "[DONE]") return true;
-  if (payload) yield payload;
+  if (trimmed.startsWith("data:")) {
+    const payload = trimmed.slice(5).trim();
+    if (payload === "[DONE]") return true;
+    if (payload) yield { kind: "data", value: payload };
+    return false;
+  }
+  if (trimmed.startsWith(":")) {
+    const value = trimmed.slice(1).trim();
+    if (value) yield { kind: "comment", value };
+  }
   return false;
 }
 
 /**
- * Parses an SSE (text/event-stream) body. Yields the payload of each
- * "data: <payload>" line; stops once "[DONE]" is seen. Lines split across
- * chunk boundaries are joined in the buffer. Lines that don't start with
- * "data:" are skipped. If the stream closes without a trailing newline on
- * the last line (defensive parsing — the SSE spec doesn't guarantee this),
+ * Parses an SSE (text/event-stream) body. Yields a typed line for each "data:" payload and ":" comment;
+ * stops once "[DONE]" is seen. Lines split across chunk boundaries are joined in the buffer. If the stream
+ * closes without a trailing newline on the last line (defensive — the SSE spec doesn't guarantee this),
  * the remaining line left in the buffer is processed too.
  */
 export async function* parseSSE(
   body: ReadableStream<Uint8Array>,
-): AsyncIterable<string> {
+): AsyncIterable<SSELine> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

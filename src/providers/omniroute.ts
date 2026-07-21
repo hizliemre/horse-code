@@ -81,12 +81,22 @@ export class OmniRouteProvider implements Provider {
     const toolCalls = new Map<number, ToolCallAccumulator>();
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
     let usage: { promptTokens: number; completionTokens: number } | undefined;
+    // omniroute appends the REAL billed token counts as trailing SSE comments (":
+    // x-omniroute-tokens-in=48"). The stream's own usage chunk counts the full prompt the model saw —
+    // including the large Claude Code system prompt omniroute injects for cc/claude providers, most of
+    // which is prompt-cached and barely billed. So the comment counts are the truthful cost signal.
+    const billed: { in?: number; out?: number } = {};
 
     try {
-      for await (const payload of parseSSE(stream)) {
+      for await (const line of parseSSE(stream)) {
+        if (line.kind === "comment") {
+          const m = line.value.match(/^x-omniroute-tokens-(in|out)\s*=\s*(\d+)/i);
+          if (m) billed[m[1] === "in" ? "in" : "out"] = Number(m[2]);
+          continue;
+        }
         let chunk: unknown;
         try {
-          chunk = JSON.parse(payload);
+          chunk = JSON.parse(line.value);
         } catch {
           continue; // malformed chunk → skip
         }
@@ -130,8 +140,11 @@ export class OmniRouteProvider implements Provider {
       yield { type: "tool-call", toolCall };
     }
 
-    // Prefer usage from the stream (include_usage); fall back to omniroute's response headers.
-    if (usage) {
+    // Usage priority: real billed (SSE comments) → stream usage chunk → response headers. The billed
+    // comments reflect actual cost (post-cache), so they win over the stream's inflated prompt count.
+    if (billed.in !== undefined || billed.out !== undefined) {
+      yield { type: "usage", promptTokens: billed.in ?? 0, completionTokens: billed.out ?? 0 };
+    } else if (usage) {
       yield { type: "usage", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens };
     } else {
       const inHeader = res.headers.get("X-OmniRoute-Tokens-In");

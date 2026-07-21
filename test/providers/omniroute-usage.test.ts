@@ -53,6 +53,23 @@ describe("OmniRouteProvider — usage", () => {
     ]);
   });
 
+  it("real billed usage (SSE comments) wins over the inflated stream usage chunk", async () => {
+    // omniroute injects a large (cached) system prompt for cc/claude → the stream's prompt_tokens is huge,
+    // while the trailing comments carry the real billed counts. The comments must win.
+    const fetch: FetchLike = async () =>
+      sseResponse([
+        'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":2048,"completion_tokens":142}}\n',
+        ": x-omniroute-tokens-in=48\n",
+        ": x-omniroute-tokens-out=142\n",
+        "data: [DONE]\n",
+      ]);
+    const provider = new OmniRouteProvider({ baseUrl: "http://localhost:20128", fetch });
+    const events = await drain(provider.chat(req, new AbortController().signal));
+    expect(events).toContainEqual({ type: "usage", promptTokens: 48, completionTokens: 142 });
+    expect(events).not.toContainEqual({ type: "usage", promptTokens: 2048, completionTokens: 142 });
+  });
+
   it("stream usage wins over headers when both are present", async () => {
     const fetch: FetchLike = async () =>
       sseResponse(
