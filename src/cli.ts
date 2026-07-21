@@ -11,8 +11,9 @@ import { toSlug } from "./worktree/slug.js";
 import { buildJobDeps } from "./wiring.js";
 import { makePRAdapter, detectPlatform, defaultCmdRunner } from "./adapters/pr.js";
 import { makeAskUser, makeApprove, makeAskHuman, nodeLineReader } from "./terminal.js";
+import type { LineReader } from "./terminal.js";
 import { runJob } from "./engine/job.js";
-import type { JobResult } from "./engine/job.js";
+import type { JobResult, JobDeps } from "./engine/job.js";
 
 export interface CliArgs {
   prompt: string;
@@ -20,6 +21,7 @@ export interface CliArgs {
   jobName?: string;
   rounds?: number;
   revisionRounds?: number;
+  noTui?: boolean;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -27,6 +29,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let jobName: string | undefined;
   let rounds: number | undefined;
   let revisionRounds: number | undefined;
+  let noTui: boolean | undefined;
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -34,6 +37,7 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (a === "--job" || a === "-j") jobName = argv[++i];
     else if (a === "--rounds") rounds = Number(argv[++i]);
     else if (a === "--revision-rounds") revisionRounds = Number(argv[++i]);
+    else if (a === "--no-tui") noTui = true;
     else rest.push(a);
   }
   return {
@@ -42,6 +46,7 @@ export function parseArgs(argv: string[]): CliArgs {
     ...(jobName !== undefined && { jobName }),
     ...(rounds !== undefined && { rounds }),
     ...(revisionRounds !== undefined && { revisionRounds }),
+    ...(noTui !== undefined && { noTui }),
   };
 }
 
@@ -54,6 +59,12 @@ export function renderResult(res: JobResult): string {
       : `Kısmi: ${res.wave.failed.length} başarısız, ${res.wave.skipped.length} atlandı`;
   const rev = res.revision ? `\nrevision: ${res.revision.status}` : "";
   return `${res.report}\n\nDurum: ${res.wave.status} — ${pr}${rev}`;
+}
+
+// TUI hem stdin hem stdout TTY iken açılır: stdin pipe olursa (echo x | hcode)
+// Ink Q&A anında non-TTY stdin'de setRawMode ile çöker → o durumda düz moda düş.
+export function shouldUseTui(stdinTTY: boolean, stdoutTTY: boolean, noTui: boolean): boolean {
+  return stdinTTY && stdoutTTY && !noTui;
 }
 
 async function currentBranch(cwd: string): Promise<string> {
@@ -69,7 +80,7 @@ async function currentBranch(cwd: string): Promise<string> {
 export async function main(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   if (!args.prompt) {
-    console.error('kullanım: hcode "<prompt>" [--branch b] [--job j] [--rounds n] [--revision-rounds n]');
+    console.error('kullanım: hcode "<prompt>" [--branch b] [--job j] [--rounds n] [--revision-rounds n] [--no-tui]');
     process.exitCode = 1;
     return;
   }
@@ -87,22 +98,32 @@ export async function main(argv: string[]): Promise<void> {
   const manager = new WorktreeManager({ repoRoot: cwd });
   const remoteUrl = (await defaultGitRunner(["remote", "get-url", "origin"], cwd)).stdout.trim();
   const prAdapter = makePRAdapter({ platform: detectPlatform(remoteUrl), run: defaultCmdRunner, cwd, log: (s) => console.log(s) });
-  const { read, close } = nodeLineReader();
-  try {
-    const deps = buildJobDeps({
-      config, provider, skillRegistry, manager,
-      prAdapter,
+  const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
+  const jobName = args.jobName ?? (toSlug(args.prompt) || "hcode-job");
+  const buildDeps = (read: LineReader): JobDeps =>
+    buildJobDeps({
+      config, provider, skillRegistry, manager, prAdapter,
       askHuman: makeAskHuman(read),
       approve: makeApprove(read),
       signal: new AbortController().signal,
     });
-    const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
-    const jobName = args.jobName ?? (toSlug(args.prompt) || "hcode-job");
-    const res = await runJob(deps, {
-      prompt: args.prompt, fromBranch, jobName,
-      askUser: makeAskUser(read), maxRounds: args.rounds ?? 3,
-      revisionRounds: args.revisionRounds,
-    });
+  const job = {
+    prompt: args.prompt, fromBranch, jobName,
+    maxRounds: args.rounds ?? 3,
+    ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }),
+  };
+
+  if (shouldUseTui(!!process.stdin.isTTY, !!process.stdout.isTTY, !!args.noTui)) {
+    const { runTui } = await import("./tui/app.js"); // ink'i yalnız TUI dalında yükle
+    const res = await runTui({ buildDeps, job });
+    console.log(renderResult(res));
+    return;
+  }
+
+  const { read, close } = nodeLineReader();
+  try {
+    const deps = buildDeps(read);
+    const res = await runJob(deps, { ...job, askUser: makeAskUser(read) });
     console.log(renderResult(res));
   } finally {
     close(); // stdin'i kapat → süreç asılı kalmasın

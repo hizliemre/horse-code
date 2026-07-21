@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseArgs, renderResult } from "../src/cli.js";
+import { parseArgs, renderResult, shouldUseTui } from "../src/cli.js";
 
 describe("parseArgs", () => {
   it("prompt + flag'ler", () => {
@@ -37,5 +37,28 @@ describe("renderResult", () => {
       session: {} as never,
     });
     expect(out).toContain("revision");
+  });
+});
+
+describe("cli TUI dallanması", () => {
+  it("parseArgs --no-tui bayrağını okur", () => {
+    expect(parseArgs(["--no-tui", "yap", "bir", "şey"]).noTui).toBe(true);
+    expect(parseArgs(["yap", "bir", "şey"]).noTui).toBeUndefined();
+  });
+
+  it("shouldUseTui: stdin+stdout TTY ve --no-tui yok → true", () => {
+    expect(shouldUseTui(true, true, false)).toBe(true);
+  });
+
+  it("shouldUseTui: stdout TTY değil → false (pipe/CI)", () => {
+    expect(shouldUseTui(true, false, false)).toBe(false);
+  });
+
+  it("shouldUseTui: stdin TTY değil → false (echo x | hcode; Ink raw-mode çökmesini önler)", () => {
+    expect(shouldUseTui(false, true, false)).toBe(false);
+  });
+
+  it("shouldUseTui: --no-tui → false (ikisi de TTY olsa bile)", () => {
+    expect(shouldUseTui(true, true, true)).toBe(false);
   });
 });
