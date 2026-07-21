@@ -2,6 +2,11 @@
 export const PHASE_LABELS: Record<string, string> = {
   upstream: "refining…",
   chat: "zottiring…",
+  constitution: "Setting principles…",
+  specify: "Writing spec…",
+  clarify: "Clarifying…",
+  plan: "Planning…",
+  tasks: "Breaking into tasks…",
   rejected: "Rejected",
   approved: "Spec + plan approved",
   board: "Building tasks…",

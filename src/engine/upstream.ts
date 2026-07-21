@@ -1,70 +1,27 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { relative } from "node:path";
 import type { Message } from "../core/types.js";
-import { runToCompletion } from "../agent/loop.js";
-import type { RoleAgentOptions } from "../agent/loop.js";
-import { buildAskUserTool, writerRegistry } from "./writer-registry.js";
 import type { ReviewDeps, AskUser } from "./review.js";
 import { runRefiner, routeIntent, type Intent } from "./refiner.js";
 import { runCoachChat } from "./coach.js";
 import { runReviewLoop } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
+import { constitutionPath, nextFeatureSlug, scaffoldFeature } from "../speckit/layout.js";
+import type { PhaseDeps } from "../speckit/phases.js";
+import { runConstitution, runSpecify, runPlan, runTasks } from "../speckit/phases.js";
+import { runClarify } from "../speckit/clarify.js";
 
 export { buildAskUserTool } from "./writer-registry.js";
 
-/** Analyst: asks questions via ask_user and writes the spec file (with feedback on revision). */
-export async function runAnalyst(
-  deps: ReviewDeps,
-  workdir: string,
-  specPath: string,
-  prompt: string,
-  feedback: string[] | undefined,
-  askUser: AskUser,
-): Promise<void> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("analyst");
-  const tools = writerRegistry(deps.skillRegistry, [buildAskUserTool(askUser)]);
-  const content =
-    feedback && feedback.length
-      ? `Revise the "${specPath}" spec with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\nOriginal request: ${prompt}`
-      : `Request: "${prompt}". If needed, ask the user via ask_user; write the spec file to "${specPath}" with write_file.`;
-  const opts: RoleAgentOptions = {
-    provider: deps.provider, model, systemPrompt, tools,
-    messages: [{ role: "user", content }],
-    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
-  };
-  await runToCompletion(opts);
-}
-
-/** Planner: reads the spec and writes the plan file (with feedback on revision). NO ask_user — it doesn't ask questions. */
-export async function runPlanner(
-  deps: ReviewDeps,
-  workdir: string,
-  planPath: string,
-  specPath: string,
-  feedback: string[] | undefined,
-): Promise<void> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("planner");
-  const tools = writerRegistry(deps.skillRegistry);
-  const content =
-    feedback && feedback.length
-      ? `Revise the "${planPath}" plan with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\n(from the "${specPath}" spec)`
-      : `Read the "${specPath}" spec and write the plan to "${planPath}" with write_file.`;
-  const opts: RoleAgentOptions = {
-    provider: deps.provider, model, systemPrompt, tools,
-    messages: [{ role: "user", content }],
-    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
-  };
-  await runToCompletion(opts);
-}
-
 export type UpstreamResult =
   | { intent: Intent; refinedPrompt: string; kind: "chat"; response: string }
-  | { intent: Intent; refinedPrompt: string; kind: "approved"; specPath: string; planPath: string }
+  | { intent: Intent; refinedPrompt: string; kind: "approved"; specPath: string; planPath: string; tasksPath: string }
   | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" };
 
 /**
- * Upstream pipeline: refiner → route; chat→coach response; pipeline→analyst spec (F2 review) →
- * planner plan (F2 review) → approved {specPath, planPath}; if rejected, {rejected, stage}.
+ * Upstream pipeline: refiner → route; chat→coach response; feature/bugfix→spec-kit phases
+ * (constitution → specify → clarify → plan → tasks) with the council/judge review loop after spec AND plan.
+ * On approval returns {specPath, planPath, tasksPath}; if rejected, {rejected, stage}.
  */
 export async function runUpstream(
   deps: ReviewDeps,
@@ -92,28 +49,58 @@ export async function runUpstream(
   }
 
   // Feature/bugfix → open the worktree now; name it from the refiner's short English title (not the raw
-  // prompt slug). The analyst's spec is the first real file write.
+  // prompt slug). The spec-kit phases are the first real file writes.
   const workdir = await ensureWorktree(r.title);
-  const specPath = ".hc/spec.md";
-  await runAnalyst(deps, workdir, specPath, r.refinedPrompt, undefined, askUser);
+  const p: PhaseDeps = { deps, templates: deps.specKit, workdir, askUser };
+
+  // Constitution: establish project principles once — only if this worktree has none yet.
+  if (!existsSync(constitutionPath(workdir))) {
+    emit({ kind: "phase", phase: "constitution" });
+    await runConstitution(p);
+  }
+
+  const slug = nextFeatureSlug(workdir, r.title);
+  const paths = scaffoldFeature(workdir, slug);
+
+  // Specify → council/judge review loop (revise = re-run specify with feedback).
+  emit({ kind: "phase", phase: "specify" });
+  await runSpecify(p, paths, r.refinedPrompt);
+  const specRel = relative(workdir, paths.spec);
   const specOut = await runReviewLoop(
-    deps, workdir, specPath,
-    (fb) => runAnalyst(deps, workdir, specPath, r.refinedPrompt, fb, askUser),
+    deps, workdir, specRel,
+    (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
     askUser, maxRounds,
   );
   if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
-  // Approved but the file doesn't exist (analyst didn't write it, judge passed anyway): don't hand H a nonexistent path.
-  if (!existsSync(join(workdir, specPath))) throw new Error(`analyst did not produce a spec: ${specPath}`);
+  // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
+  if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
 
-  const planPath = ".hc/plan.md";
-  await runPlanner(deps, workdir, planPath, specPath, undefined);
+  // Clarify: structured Q&A loop that tightens the spec before planning (capped inside runClarify).
+  emit({ kind: "phase", phase: "clarify" });
+  await runClarify(p, paths);
+
+  // Plan → council/judge review loop (revise = re-run plan with feedback).
+  emit({ kind: "phase", phase: "plan" });
+  await runPlan(p, paths);
+  const planRel = relative(workdir, paths.plan);
   const planOut = await runReviewLoop(
-    deps, workdir, planPath,
-    (fb) => runPlanner(deps, workdir, planPath, specPath, fb),
+    deps, workdir, planRel,
+    (fb) => runPlan(p, paths, fb),
     askUser, maxRounds,
   );
   if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
-  if (!existsSync(join(workdir, planPath))) throw new Error(`planner did not produce a plan: ${planPath}`);
+  if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
 
-  return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "approved", specPath, planPath };
+  // Tasks: break the approved plan into the actionable task list handed downstream to the project-manager.
+  emit({ kind: "phase", phase: "tasks" });
+  await runTasks(p, paths);
+
+  return {
+    intent: r.intent,
+    refinedPrompt: r.refinedPrompt,
+    kind: "approved",
+    specPath: specRel,
+    planPath: planRel,
+    tasksPath: relative(workdir, paths.tasks),
+  };
 }

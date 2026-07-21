@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildAskUserTool, runAnalyst, runPlanner, runUpstream } from "../../src/engine/upstream.js";
+import { buildAskUserTool, runUpstream } from "../../src/engine/upstream.js";
 import type { ReviewDeps } from "../../src/engine/review.js";
 import { buildCouncilRegistry } from "../../src/engine/review.js";
 import type { CouncilorConfig, RoleConfig } from "../../src/config/config.js";
@@ -18,7 +19,9 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const ctx = (): ToolContext => ({ cwd: ".", signal: new AbortController().signal });
 
-// Content-based provider: responds based on systemPrompt (role) + tool messages; captures requests.
+// Content-based provider scripting the spec-kit pipeline: it keys off the systemPrompt (refiner / coach /
+// council perspective / judge) and, for the spec-kit phases, off the spec-kit command text ("COMMAND:<phase>"
+// injected by fakeSpecKit). Captures every request for assertions.
 export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
@@ -29,7 +32,10 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
       const toolMsgs = req.messages.filter((m) => m.role === "tool");
       const userContent = req.messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
-      const writeTarget = (userContent.match(/"([^"]+\.md)" with write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
+      // The phase prompts always name the write target LAST (spec/plan/tasks messages also mention upstream
+      // files), so take the last quoted *.md path.
+      const mds = [...userContent.matchAll(/"([^"]+\.md)"/g)].map((m) => m[1]);
+      const writeTarget = mds.length ? mds[mds.length - 1] : "spec.md";
       const submit = function* (a: string) {
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;
@@ -42,18 +48,21 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
         yield { type: "text-delta", text: t } as const;
         yield { type: "done", finishReason: "stop" } as const;
       };
-      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"Do X","intent":"${opts.intent ?? "feature"}"}`); return; }
+      const writeOnce = function* (content: string) {
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content })); return; }
+        yield* stop("done");
+      };
+      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"Do X","intent":"${opts.intent ?? "feature"}","title":"add-thing"}`); return; }
       if (sys.includes("P-coach")) { yield* stop("coach response"); return; }
-      if (sys.includes("P-analyst")) {
-        if (opts.skipWrite) { yield* stop("I didn't write it"); return; } // analyst that doesn't produce a file (guard test)
+      if (sys.includes("COMMAND:constitution")) { yield* writeOnce("# constitution"); return; }
+      if (sys.includes("COMMAND:specify")) {
+        if (opts.skipWrite) { yield* stop("I didn't write it"); return; } // specify that doesn't produce a file (guard test)
         if (opts.analystAsk && toolMsgs.length === 0) { yield* call("ask_user", JSON.stringify({ question: opts.analystAsk })); return; }
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# spec" })); return; }
-        yield* stop("done"); return;
+        yield* writeOnce("# spec"); return;
       }
-      if (sys.includes("P-planner")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# plan" })); return; }
-        yield* stop("done"); return;
-      }
+      if (sys.includes("COMMAND:clarify")) { yield* submit('{"nextQuestion":null}'); return; }
+      if (sys.includes("COMMAND:plan")) { yield* writeOnce("# plan"); return; }
+      if (sys.includes("COMMAND:tasks")) { yield* writeOnce("# tasks"); return; }
       if (sys.includes("perspective")) { yield* submit('{"concerns":[],"recommendation":"approve"}'); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
@@ -72,6 +81,7 @@ export function udeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
     coach: { models: ["m"], systemPrompt: "P-coach" },
     analyst: { models: ["m"], systemPrompt: "P-analyst" },
     planner: { models: ["m"], systemPrompt: "P-planner" },
+    "project-manager": { models: ["m"], systemPrompt: "P-pm" },
     judge: { models: ["m"], systemPrompt: "P-judge" },
   };
   const councilors: CouncilorConfig[] = [{ name: "sec", perspective: "security", models: ["m"] }];
@@ -105,53 +115,6 @@ describe("buildAskUserTool", () => {
   });
 });
 
-describe("runAnalyst", () => {
-  it("writes the spec file; toolset contains ask_user+write, no shell", async () => {
-    const p = upstreamProvider({});
-    await runAnalyst(udeps(p), dir, "spec.md", "Do X", undefined, async () => "x");
-    expect(await readFile(join(dir, "spec.md"), "utf8")).toBe("# spec");
-    const names = p.requests[0].tools.map((t) => t.name);
-    expect(names).toEqual(expect.arrayContaining(["ask_user", "write_file", "read_file", "grep", "glob", "skill"]));
-    expect(names).not.toContain("shell");
-    expect(names).not.toContain("web_fetch");
-  });
-
-  it("if feedback is non-empty, the notes appear in the request (revision)", async () => {
-    const p = upstreamProvider({});
-    await runAnalyst(udeps(p), dir, "spec.md", "Do X", ["was left untested"], async () => "x");
-    const userMsg = p.requests[0].messages.find((m) => m.role === "user")?.content ?? "";
-    expect(userMsg).toContain("was left untested");
-  });
-
-  it("if the analyst calls ask_user, askUser is triggered", async () => {
-    const p = upstreamProvider({ analystAsk: "X or Y?" });
-    let asked = "";
-    await runAnalyst(udeps(p), dir, "spec.md", "Do X", undefined, async (q) => { asked = q; return "X"; });
-    expect(asked).toBe("X or Y?");
-    expect(await readFile(join(dir, "spec.md"), "utf8")).toBe("# spec");
-  });
-});
-
-describe("runPlanner", () => {
-  it("writes the plan file; toolset has write, no ask_user", async () => {
-    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = upstreamProvider({});
-    await runPlanner(udeps(p), dir, "plan.md", "spec.md", undefined);
-    expect(await readFile(join(dir, "plan.md"), "utf8")).toBe("# plan");
-    const names = p.requests[0].tools.map((t) => t.name);
-    expect(names).toContain("write_file");
-    expect(names).not.toContain("ask_user");
-  });
-
-  it("if feedback is non-empty, the notes appear in the request", async () => {
-    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = upstreamProvider({});
-    await runPlanner(udeps(p), dir, "plan.md", "spec.md", ["missing the rollout wave"]);
-    const userMsg = p.requests[0].messages.find((m) => m.role === "user")?.content ?? "";
-    expect(userMsg).toContain("missing the rollout wave");
-  });
-});
-
 describe("runUpstream", () => {
   it("chat intent → coach response, without opening a worktree", async () => {
     const p = upstreamProvider({ intent: "chat" });
@@ -163,18 +126,42 @@ describe("runUpstream", () => {
     expect(opened).toBe(0); // a chat turn must never open the worktree
   });
 
-  it("feature → spec+plan approved → approved, both files written (opens worktree once)", async () => {
+  it("feature intent runs the spec-kit pipeline: constitution + specify + clarify + plan + tasks → approved", async () => {
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
     let opened = 0;
     const res = await runUpstream(udeps(p), () => { opened++; return Promise.resolve(dir); }, "Add X", async () => "x", 3);
     expect(res.kind).toBe("approved");
-    if (res.kind === "approved") {
-      expect(res.specPath).toBe(".hc/spec.md");
-      expect(res.planPath).toBe(".hc/plan.md");
-    }
-    expect(await readFile(join(dir, ".hc/spec.md"), "utf8")).toBe("# spec");
-    expect(await readFile(join(dir, ".hc/plan.md"), "utf8")).toBe("# plan");
     expect(opened).toBe(1); // the feature pipeline opens the worktree exactly once
+
+    // The refiner title is "add-thing" → the feature slug is the first "001-*" directory under specs/.
+    const featureDirs = await readdir(join(dir, "specs"));
+    expect(featureDirs).toHaveLength(1);
+    const slug = featureDirs[0];
+    expect(slug).toMatch(/^001-/);
+
+    // Constitution + all three feature artifacts exist with the phase content.
+    expect(await readFile(join(dir, ".specify/memory/constitution.md"), "utf8")).toBe("# constitution");
+    expect(await readFile(join(dir, "specs", slug, "spec.md"), "utf8")).toBe("# spec");
+    expect(await readFile(join(dir, "specs", slug, "plan.md"), "utf8")).toBe("# plan");
+    expect(await readFile(join(dir, "specs", slug, "tasks.md"), "utf8")).toBe("# tasks");
+
+    if (res.kind === "approved") {
+      expect(res.specPath).toBe(join("specs", slug, "spec.md"));
+      expect(res.planPath).toBe(join("specs", slug, "plan.md"));
+      expect(res.tasksPath).toBe(join("specs", slug, "tasks.md"));
+    }
+  });
+
+  it("skips the constitution phase when one already exists", async () => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(join(dir, ".specify", "memory"), { recursive: true });
+    await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# existing", "utf8");
+    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3);
+    expect(res.kind).toBe("approved");
+    // Untouched: no constitution phase ran, so the pre-existing content stays.
+    expect(await readFile(join(dir, ".specify/memory/constitution.md"), "utf8")).toBe("# existing");
+    expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:constitution"))).toBe(false);
   });
 
   it("if the spec isn't approved → rejected(spec)", async () => {
@@ -191,14 +178,22 @@ describe("runUpstream", () => {
     expect(events).toContainEqual({ kind: "refined", refinedPrompt: "Do X" });
   });
 
+  it("emits the spec-kit phase events in order", async () => {
+    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const phases: string[] = [];
+    await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); });
+    expect(phases).toEqual(["constitution", "specify", "clarify", "plan", "tasks"]);
+  });
+
   it("throws if cancelled", async () => {
     const ac = new AbortController(); ac.abort();
     const p = upstreamProvider({ intent: "feature" });
     await expect(runUpstream(udeps(p, ac.signal), () => Promise.resolve(dir), "X", async () => "x", 2)).rejects.toThrow();
   });
 
-  it("throws if the analyst doesn't produce a spec file (even if the judge still passes it)", async () => {
+  it("throws if specify doesn't produce a spec file (even if the judge still passes it)", async () => {
     const p = upstreamProvider({ intent: "feature", skipWrite: true, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
     await expect(runUpstream(udeps(p), () => Promise.resolve(dir), "X", async () => "x", 1)).rejects.toThrow(/spec/);
+    expect(existsSync(join(dir, ".specify/memory/constitution.md"))).toBe(true); // constitution still ran
   });
 });

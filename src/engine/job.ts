@@ -26,12 +26,12 @@ export type JobResult =
   | { kind: "rejected"; stage: "spec" | "plan"; refinedPrompt?: string }
   | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession; refinedPrompt?: string };
 
-function pmOpts(deps: JobDeps, workdir: string, planPath: string): RoleAgentOptions {
+function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
   const { model, systemPrompt } = deps.roleRegistry.resolve("project-manager");
   return {
     provider: deps.provider, model, systemPrompt,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content: `Read the "${planPath}" plan and break it into real tasks (id, title, deps).` }],
+    messages: [{ role: "user", content: `Read the "${tasksPath}" task list and turn it into board tasks (id, title, deps).` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
 }
@@ -95,7 +95,7 @@ export async function runJob(
     await deps.manager.commitMerge(session, "hc: spec + plan"); // spec/plan → baseBranch (goes into the PR)
 
     emit({ kind: "phase", phase: "board" });
-    const board = await runProjectManager(pmOpts(deps, workdir, up.planPath));
+    const board = await runProjectManager(pmOpts(deps, workdir, up.tasksPath));
     emit({ kind: "board", cards: snapshotBoard(board) });
     board.onChange = () => emit({ kind: "board", cards: snapshotBoard(board) });
 

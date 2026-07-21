@@ -31,7 +31,9 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
       const toolMsgs = req.messages.filter((m) => m.role === "tool");
       const userContent = req.messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
-      const writeTarget = (userContent.match(/"([^"]+\.md)" with write_file/) ?? userContent.match(/"([^"]+\.md)"/))?.[1] ?? "spec.md";
+      // Phase prompts name the write target LAST → take the last quoted *.md path.
+      const mds = [...userContent.matchAll(/"([^"]+\.md)"/g)].map((m) => m[1]);
+      const writeTarget = mds.length ? mds[mds.length - 1] : "spec.md";
       const submit = function* (a: string) {
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;
@@ -44,16 +46,17 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
         yield { type: "text-delta", text: t } as const;
         yield { type: "done", finishReason: "stop" } as const;
       };
-      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"do X","intent":"${opts.intent ?? "feature"}"}`); return; }
+      const writeOnce = function* (content: string) {
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content })); return; }
+        yield* stop("done");
+      };
+      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"do X","intent":"${opts.intent ?? "feature"}","title":"add-thing"}`); return; }
       if (sys.includes("P-coach")) { yield* stop("coach report"); return; }
-      if (sys.includes("P-analyst")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# spec" })); return; }
-        yield* stop("done"); return;
-      }
-      if (sys.includes("P-planner")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content: "# plan" })); return; }
-        yield* stop("done"); return;
-      }
+      if (sys.includes("COMMAND:constitution")) { yield* writeOnce("# constitution"); return; }
+      if (sys.includes("COMMAND:specify")) { yield* writeOnce("# spec"); return; }
+      if (sys.includes("COMMAND:clarify")) { yield* submit('{"nextQuestion":null}'); return; }
+      if (sys.includes("COMMAND:plan")) { yield* writeOnce("# plan"); return; }
+      if (sys.includes("COMMAND:tasks")) { yield* writeOnce("# tasks"); return; }
       if (sys.includes("P-pm")) { yield* submit('{"tasks":[{"id":"t1","title":"task-a","deps":[]}]}'); return; }
       if (sys.includes("P-router")) { yield* submit('{"role":"coder"}'); return; }
       if (sys.includes("P-reviewer")) { yield* submit('{"verdict":"pass","notes":[]}'); return; }
@@ -163,8 +166,10 @@ describe("runJob", () => {
       if (res.kind === "done") {
         expect(res.wave.status).toBe("completed");
         expect(res.report).toBe("coach report");
-        expect(existsSync(join(res.session.baseWorktree, ".hc/spec.md"))).toBe(true);
-        expect(existsSync(join(res.session.baseWorktree, ".hc/plan.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, ".specify/memory/constitution.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, "specs/001-add-thing/spec.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, "specs/001-add-thing/plan.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, "specs/001-add-thing/tasks.md"))).toBe(true);
         expect(res.revision?.status).toBe("approved"); // principal approved on the first round
       }
       expect(adapter.calls).toBe(1);
@@ -219,7 +224,7 @@ describe("runJob", () => {
       const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
       expect(res.kind).toBe("done");
       const phases = events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase);
-      expect(phases).toEqual(["upstream", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
+      expect(phases).toEqual(["upstream", "constitution", "specify", "clarify", "plan", "tasks", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
       expect(events.some((e) => e.kind === "board")).toBe(true);
     } finally {
       await rm(repo, { recursive: true, force: true });
