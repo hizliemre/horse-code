@@ -40,4 +40,13 @@ describe("loadSpecKit", () => {
     const bad: FetchLike = async () => new Response("nope", { status: 404 });
     await expect(loadSpecKit({ version: "v0.0.0", home, fetch: bad })).rejects.toThrow(/spec-kit template fetch failed \(404\)/);
   });
+
+  it("rejects a path-traversal-shaped version without hitting the network", async () => {
+    const throwingFetch: FetchLike = async () => {
+      throw new Error("network should not be called for an invalid version");
+    };
+    await expect(
+      loadSpecKit({ version: "../../etc", home, fetch: throwingFetch }),
+    ).rejects.toThrow(/not a valid spec-kit release tag/);
+  });
 });
