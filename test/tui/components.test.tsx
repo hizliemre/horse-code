@@ -94,16 +94,21 @@ describe("Ink components", () => {
         listModels={async () => ["a/one", "b/two"]}
         setModel={(m) => setCalls.push(m)} />,
     );
+    // Poll instead of a fixed sleep: React 19's concurrent rendering can leave a transient blank frame,
+    // so wait until the picker has actually painted before asserting.
+    const waitForFrame = async (text: string): Promise<void> => {
+      for (let i = 0; i < 40 && !clean(lastFrame()).includes(text); i++) await sleep(15);
+    };
     await sleep(30);
     stdin.write("/model");
     await sleep(20);
     stdin.write("\r"); // submit → opens picker
-    await sleep(40);   // fetch resolves
+    await waitForFrame("a/one"); // wait until the fetched models are painted (not just the loading header)
     const f = clean(lastFrame());
     expect(f).toContain("Select model");
     expect(f).toContain("a/one");
     stdin.write("\r"); // pick the first model
-    await sleep(30);
+    for (let i = 0; i < 40 && c.getState().mode !== "input"; i++) await sleep(15);
     expect(setCalls).toEqual(["a/one"]);
     expect(c.getState().mode).toBe("input");
     expect(c.getState().currentModel).toBe("a/one");

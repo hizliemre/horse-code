@@ -20,19 +20,21 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "ink": "^5.2.1",
+    "ink": "^7.1.1",
     "picomatch": "^4.0.2",
-    "react": "^18.3.1",
+    "react": "^19.2.8",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^26.1.1",
     "@types/picomatch": "^3.0.1",
-    "@types/react": "^18.3.31",
+    "@types/react": "^19.2.17",
     "ink-testing-library": "^4.0.0",
     "pngjs": "^7.0.0",
-    "tsup": "^8.2.4",
+    "react-devtools-core": "^7.0.1",
+    "react-dom": "^19.2.8",
+    "tsup": "^8.5.1",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
   }
