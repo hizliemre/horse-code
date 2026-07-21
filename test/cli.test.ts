@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseArgs, renderResult } from "../src/cli.js";
+import { parseArgs, renderResult, shouldUseTui } from "../src/cli.js";
 
 describe("parseArgs", () => {
   it("prompt + flag'ler", () => {
@@ -37,5 +37,24 @@ describe("renderResult", () => {
       session: {} as never,
     });
     expect(out).toContain("revision");
+  });
+});
+
+describe("cli TUI dallanması", () => {
+  it("parseArgs --no-tui bayrağını okur", () => {
+    expect(parseArgs(["--no-tui", "yap", "bir", "şey"]).noTui).toBe(true);
+    expect(parseArgs(["yap", "bir", "şey"]).noTui).toBeUndefined();
+  });
+
+  it("shouldUseTui: TTY var ve --no-tui yok → true", () => {
+    expect(shouldUseTui(true, false)).toBe(true);
+  });
+
+  it("shouldUseTui: TTY yok → false (pipe/CI)", () => {
+    expect(shouldUseTui(false, false)).toBe(false);
+  });
+
+  it("shouldUseTui: --no-tui → false (TTY olsa bile)", () => {
+    expect(shouldUseTui(true, true)).toBe(false);
   });
 });
