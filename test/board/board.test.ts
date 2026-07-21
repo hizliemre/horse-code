@@ -39,4 +39,25 @@ describe("Board çekirdek", () => {
     expect(b.get("t1")!.reviewNotes).toEqual([]);
     expect(b.get("t1")!.column).toBe("TODO");
   });
+
+  it("onChange her mutasyonda çağrılır", () => {
+    const b = new Board();
+    let calls = 0;
+    b.onChange = () => { calls++; };
+    b.addCard({ id: "t1", title: "X" });               // 1
+    b.move("t1", "IN-PROGRESS");                        // 2
+    b.appendStage("t1", { role: "r", action: "a" });   // 3
+    b.addReviewNote("t1", "n");                         // 4
+    b.clearReviewNotes("t1");                           // 5
+    b.incrementAttempts("t1");                          // 6
+    b.setWorktree("t1", "/w");                          // 7
+    expect(calls).toBe(7);
+  });
+
+  it("onChange yoksa mutasyon normal çalışır (geriye uyumlu)", () => {
+    const b = new Board();
+    b.addCard({ id: "t1", title: "X" });
+    b.move("t1", "DONE");
+    expect(b.get("t1")!.column).toBe("DONE");
+  });
 });
