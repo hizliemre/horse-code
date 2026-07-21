@@ -109,4 +109,20 @@ describe("Ink components", () => {
     expect(c.getState().currentModel).toBe("a/one");
     unmount();
   });
+
+  it("App: numpad/odd escape sequences don't crash; PageUp scrolls (raw stdin, no Ink useInput)", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const clean = (f: string | undefined) => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
+    const c = new TuiController();
+    c.awaitTask();
+    for (let i = 0; i < 6; i++) { c.submitTask(`line ${i} `.repeat(20)); c.endRun(`reply ${i} `.repeat(20)); c.awaitTask(); }
+    const { stdin, lastFrame, unmount } = render(<App controller={c} fullscreen model="x" />);
+    await sleep(30);
+    stdin.write("\x1bOp"); // numpad key in application mode — Ink's parser would crash; must be ignored
+    await sleep(20);
+    stdin.write("\x1b[5~"); // PageUp → scroll up → the "N more" hint appears
+    await sleep(20);
+    expect(clean(lastFrame())).toContain("more");
+    unmount();
+  });
 });

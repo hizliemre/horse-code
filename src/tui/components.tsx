@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, memo } from "react";
-import { Box, Text, useInput, useStdout, useStdin, Static } from "ink";
+import { Box, Text, useStdout, useStdin, Static } from "ink";
 import type { BoardCardView } from "../engine/progress.js";
 import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
@@ -322,18 +322,37 @@ export function App({ controller, fullscreen = false, model, listModels, setMode
     }
     return undefined;
   }, [state.mode, state.picker?.loading, listModels, controller]);
-  useInput((_input, key) => {
+  // Scroll / command-history keys via RAW stdin instead of Ink's useInput. Ink's parseKeypress can
+  // yield an undefined `sequence` for some keys (e.g. numpad in application-keypad mode), then
+  // `input.startsWith('')` throws and crashes the app. Parsing the few sequences we care about
+  // ourselves and ignoring the rest sidesteps that entirely.
+  const { stdin: rootStdin } = useStdin();
+  const keyRef = useRef<(s: string) => void>(() => {});
+  keyRef.current = (s: string): void => {
+    if (!fullscreen || state.mode === "picker") return;
     const isInput = (state.mode ?? "running") === "input";
+    const up = s === "\x1b[A" || s === "\x1bOA";
+    const down = s === "\x1b[B" || s === "\x1bOB";
+    const pgUp = s === "\x1b[5~";
+    const pgDn = s === "\x1b[6~";
     // In input mode ↑/↓ is command history; transcript scrolls via PgUp/PgDn. In job mode ↑/↓ scrolls.
-    if (isInput && key.upArrow) { historyPrev(); return; }
-    if (isInput && key.downArrow) { historyNext(); return; }
+    if (isInput && up) { historyPrev(); return; }
+    if (isInput && down) { historyNext(); return; }
     const page = Math.max(1, size.rows - 8);
     const m = maxScrollRef.current;
-    if (key.upArrow) setScroll((s) => Math.min(m, s + 1));
-    else if (key.downArrow) setScroll((s) => Math.max(0, s - 1));
-    else if (key.pageUp) setScroll((s) => Math.min(m, s + page));
-    else if (key.pageDown) setScroll((s) => Math.max(0, s - page));
-  }, { isActive: fullscreen && state.mode !== "picker" });
+    if (up) setScroll((v) => Math.min(m, v + 1));
+    else if (down) setScroll((v) => Math.max(0, v - 1));
+    else if (pgUp) setScroll((v) => Math.min(m, v + page));
+    else if (pgDn) setScroll((v) => Math.max(0, v - page));
+  };
+  useEffect(() => {
+    if (!rootStdin || !fullscreen) return undefined;
+    const onData = (chunk: Buffer | string): void => {
+      keyRef.current(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+    };
+    rootStdin.on("data", onData);
+    return () => { rootStdin.off("data", onData); };
+  }, [rootStdin, fullscreen]);
 
   const mode = state.mode ?? "running";
   const bottom =
