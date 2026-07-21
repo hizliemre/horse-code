@@ -111,6 +111,7 @@ describe("Ink components", () => {
     await waitFrame("a/one"); // models painted
     expect(clean(lastFrame())).toContain("Select model");
     expect(clean(lastFrame())).toContain("a/one");
+    await sleep(40); // let ModelPicker's stdin effect attach before the selecting keystroke
     stdin.write("\r"); // pick the first model
     await waitState(() => c.getState().mode === "input");
     expect(setCalls).toEqual(["a/one"]);
@@ -130,7 +131,8 @@ describe("Ink components", () => {
     stdin.write("\x1bOp"); // numpad key in application mode — Ink's parser would crash; must be ignored
     await sleep(20);
     stdin.write("\x1b[5~"); // PageUp → scroll up → the "N more" hint appears
-    await sleep(20);
+    // Poll the frame (React 19 concurrent rendering under parallel-test load can defer the repaint).
+    for (let i = 0; i < 200 && !clean(lastFrame()).includes("more"); i++) await sleep(15);
     expect(clean(lastFrame())).toContain("more");
     unmount();
   });
