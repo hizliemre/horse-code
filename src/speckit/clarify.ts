@@ -17,7 +17,8 @@ export const ClarifyStepSchema = z.object({
  */
 export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 5): Promise<void> {
   const specRel = relative(p.workdir, paths.spec);
-  const { model } = p.deps.roleRegistry.resolve("analyst");
+  // peekModel: clarify is driven by the spec-kit clarify command prompt; only the analyst MODEL is needed.
+  const model = p.deps.roleRegistry.peekModel("analyst");
   const qa: string[] = [];
   for (let round = 0; round < maxRounds; round++) {
     const context = qa.length ? `\n\nAnswers so far:\n${qa.join("\n")}` : "";

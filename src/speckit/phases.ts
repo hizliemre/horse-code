@@ -15,7 +15,9 @@ export interface PhaseDeps { deps: TaskCycleDeps; templates: SpecKitTemplates; w
 const SKIP = "The workspace is already scaffolded — do NOT run any shell scripts. Use write_file to write the output file exactly at the path given below.";
 
 async function runRole(p: PhaseDeps, role: string, command: string, message: string, extraTools = false): Promise<void> {
-  const { model } = p.deps.roleRegistry.resolve(role);
+  // peekModel (not resolve): spec-kit phases drive the role with the spec-kit command prompt, so they only
+  // need the role's MODEL — the role's own system prompt is irrelevant here (analyst/planner have none).
+  const model = p.deps.roleRegistry.peekModel(role);
   const tools = writerRegistry(p.deps.skillRegistry, extraTools ? [buildAskUserTool(p.askUser)] : []);
   const opts: RoleAgentOptions = {
     provider: p.deps.provider,

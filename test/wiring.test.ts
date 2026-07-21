@@ -41,11 +41,18 @@ function deps(config: ResolvedConfig) {
 }
 
 describe("buildJobDeps", () => {
-  it("every REQUIRED_ROLES resolves (even if not in config)", async () => {
+  it("every REQUIRED_ROLES resolves to a model (analyst/planner are spec-kit-driven → model-only)", async () => {
     const d = await deps(baseConfig());
+    // analyst + planner have no default system prompt (spec-kit supplies it); they expose only a model via
+    // peekModel, so resolve() would throw for them — that's intended.
+    const MODEL_ONLY = new Set(["analyst", "planner"]);
     for (const r of REQUIRED_ROLES) {
-      expect(() => d.roleRegistry.resolve(r), r).not.toThrow();
-      expect(d.roleRegistry.resolve(r).model).toBe("cc/m");
+      if (MODEL_ONLY.has(r)) {
+        expect(d.roleRegistry.peekModel(r), r).toBe("cc/m");
+      } else {
+        expect(() => d.roleRegistry.resolve(r), r).not.toThrow();
+        expect(d.roleRegistry.resolve(r).model).toBe("cc/m");
+      }
     }
   });
   it("council resolves; rounds=3; permission mode from config", async () => {
