@@ -5,4 +5,5 @@ export default defineConfig({
   format: ["esm"],
   target: "node20",
   clean: true,
+  splitting: true,
 });
