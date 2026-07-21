@@ -33,14 +33,15 @@ describe("Ink bileşenleri", () => {
     expect(f).toContain(">");
   });
 
-  it("App başlangıç state'ini render eder (faz + kartlar)", () => {
+  it("App başlangıç state'ini render eder (dostça faz + kartlar)", () => {
     const c = new TuiController();
-    c.onEvent({ kind: "phase", phase: "board" });
-    c.onEvent({ kind: "board", cards: [{ id: "1", title: "Görev", column: "IN-PROGRESS" }] });
-    const { lastFrame } = render(<App controller={c} />);
+    c.onEvent({ kind: "phase", phase: "waves" });
+    c.onEvent({ kind: "board", cards: [{ id: "1", title: "Alfa-gorev", column: "IN-PROGRESS" }] });
+    const { lastFrame, unmount } = render(<App controller={c} />);
     const f = lastFrame() ?? "";
-    expect(f).toContain("board");
-    expect(f).toContain("Görev");
+    expect(f).toContain("Kodlanıyor"); // dostça faz etiketi (waves)
+    expect(f).toContain("Alfa-gorev");
+    unmount();
   });
 
   it("App pending soru varsa Prompt render eder", () => {

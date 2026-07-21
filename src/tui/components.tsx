@@ -4,6 +4,7 @@ import type { BoardCardView } from "../engine/progress.js";
 import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { HORSE_VARIANTS } from "./horse-art.js";
+import { ProgressView } from "./progress-view.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -192,7 +193,7 @@ export function App({ controller }: { controller: TuiController }): React.ReactE
         </Box>
       ) : (
         <Box flexDirection="column">
-          <PhaseBar phase={state.phase} detail={state.detail} />
+          <ProgressView phase={state.phase} detail={state.detail} />
           <Board cards={state.cards} />
           {state.pending ? <Prompt question={state.pending.question} onSubmit={(s) => controller.answer(s)} /> : null}
         </Box>
