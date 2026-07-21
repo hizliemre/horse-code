@@ -25,7 +25,11 @@ export class RoleRegistry {
     if (!role.models.length) throw new Error(`role '${roleName}' has no model defined`);
 
     const i = this.index.get(roleName) ?? 0;
-    const model = this.modelOverride ?? role.models[i % role.models.length];
+    // The refiner is an internal utility (intent distillation) pinned to its own configured model.
+    // The /model session override applies to work roles (coach, coders…) — never the refiner.
+    const model = this.modelOverride && roleName !== "refiner"
+      ? this.modelOverride
+      : role.models[i % role.models.length];
     this.index.set(roleName, i + 1);
 
     let systemPrompt = role.systemPrompt ?? this.defaultPrompts[roleName];

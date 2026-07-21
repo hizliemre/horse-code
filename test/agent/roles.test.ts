@@ -88,16 +88,17 @@ describe("RoleRegistry + skills", () => {
 });
 
 describe("RoleRegistry.setModelOverride", () => {
-  it("overrides the model for every role until cleared; systemPrompt unchanged", () => {
+  it("overrides work roles but NOT the refiner; clears on undefined/empty; systemPrompt unchanged", () => {
     const reg = new RoleRegistry(
-      { coder: { models: ["m1"] }, coach: { models: ["m2"] } },
-      { coder: "P-coder", coach: "P-coach" },
+      { coder: { models: ["m1"] }, coach: { models: ["m2"] }, refiner: { models: ["r1"] } },
+      { coder: "P-coder", coach: "P-coach", refiner: "P-refiner" },
     );
     expect(reg.resolve("coder").model).toBe("m1");
 
     reg.setModelOverride("live/model");
     expect(reg.resolve("coder").model).toBe("live/model");
     expect(reg.resolve("coach").model).toBe("live/model");
+    expect(reg.resolve("refiner").model).toBe("r1"); // refiner keeps its own configured model
     expect(reg.resolve("coder").systemPrompt).toBe("P-coder");
 
     reg.setModelOverride(undefined);
