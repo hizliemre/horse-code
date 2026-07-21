@@ -51,6 +51,22 @@ describe("runCoachChat", () => {
     expect(names).not.toContain("shell");
   });
 
+  it("injects the model + the user's language into the system prompt when language is given", async () => {
+    const p = new MockProvider([textTurn("cevabım")]);
+    await runCoachChat(deps(p), "which model are you?", dir, [], "Turkish");
+    const system = p.requests[0].messages.find((m) => m.role === "system")?.content ?? "";
+    expect(system).toContain('powered by the "m" model');
+    expect(system).toContain("Respond in Turkish.");
+  });
+
+  it("omits the language line when no language is given (still names the model)", async () => {
+    const p = new MockProvider([textTurn("answer")]);
+    await runCoachChat(deps(p), "hi", dir);
+    const system = p.requests[0].messages.find((m) => m.role === "system")?.content ?? "";
+    expect(system).toContain('powered by the "m" model');
+    expect(system).not.toContain("Respond in");
+  });
+
   it("throws if cancelled", async () => {
     const ac = new AbortController();
     ac.abort();

@@ -46,9 +46,33 @@ describe("runStructuredRole", () => {
     expect(p.requests).toHaveLength(2);
   });
 
-  it("throws if submit is never called", async () => {
+  it("prose (no submit) → nudged to retry, then a valid submit succeeds (2 requests)", async () => {
+    const prose: ChatEvent[] = [{ type: "text-delta", text: "I think it passes." }, { type: "done", finishReason: "stop" }];
+    const p = new MockProvider([prose, submitTurn('{"decision":"pass"}')]);
+    const out = await runStructuredRole(opts(p), schema);
+    expect(out).toEqual({ decision: "pass" });
+    expect(p.requests).toHaveLength(2); // first prose pass + one nudged retry
+    // the nudge is appended as a user turn before the retry
+    expect(JSON.stringify(p.requests[1].messages)).toContain("did not call the `submit` tool");
+  });
+
+  it("salvages JSON emitted in prose when the model never calls submit (1 request)", async () => {
+    const p = new MockProvider([[{ type: "text-delta", text: '{"decision":"fail"}' }, { type: "done", finishReason: "stop" }]]);
+    const out = await runStructuredRole(opts(p), schema);
+    expect(out).toEqual({ decision: "fail" });
+    expect(p.requests).toHaveLength(1); // salvaged without a retry
+  });
+
+  it("salvages a JSON block wrapped in surrounding prose", async () => {
+    const p = new MockProvider([[{ type: "text-delta", text: 'Here you go: {"decision":"pass"} — done.' }, { type: "done", finishReason: "stop" }]]);
+    const out = await runStructuredRole(opts(p), schema);
+    expect(out).toEqual({ decision: "pass" });
+  });
+
+  it("throws if submit is never called and nothing can be salvaged (after retries)", async () => {
     const p = new MockProvider([[{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }]]);
     await expect(runStructuredRole(opts(p), schema)).rejects.toThrow(/submit was not called/);
+    expect(p.requests).toHaveLength(3); // maxAttempts passes before giving up
   });
 
   it("throws on provider error", async () => {

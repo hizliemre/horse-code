@@ -75,7 +75,8 @@ export async function runJob(
     const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit);
 
     if (up.kind === "chat") {
-      emit({ kind: "phase", phase: "chat" });
+      // The "chat" phase is emitted inside runUpstream (right before the coach runs) so the UI shows the
+      // coach-waiting status while the coach actually works — no re-emit here.
       // No worktree was opened for a chat turn — nothing to close.
       return { kind: "chat", response: up.response, refinedPrompt: up.refinedPrompt };
     }

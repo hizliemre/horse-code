@@ -121,8 +121,11 @@ export async function runUpstream(
   // coach/pipeline runs (the refined prompt is what actually gets handed downstream).
   emit({ kind: "refined", refinedPrompt: r.refinedPrompt });
   if (routeIntent(r.intent) === "chat") {
+    // Refine is done → the coach now works. Emit the phase change here (not after) so the UI shows the
+    // coach-waiting status ("zottiring…") while the coach runs, not the refine status.
+    emit({ kind: "phase", phase: "chat" });
     // Chat: no worktree — the coach reads the repo in place (cwd ".") + history → a contextual response.
-    const response = await runCoachChat(deps, r.refinedPrompt, ".", history);
+    const response = await runCoachChat(deps, r.refinedPrompt, ".", history, r.language);
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response };
   }
 

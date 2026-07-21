@@ -10,10 +10,13 @@ export type Intent = "chat" | "feature" | "bugfix";
 export interface RefinerOutput {
   refinedPrompt: string;
   intent: Intent;
+  language: string;
 }
 export const RefinerSchema = z.object({
   refinedPrompt: z.string(),
   intent: z.enum(["chat", "feature", "bugfix"]),
+  // The natural language the user wrote in (English name, e.g. "Turkish") → the coach replies in it.
+  language: z.string().default("English"),
 });
 
 /**
