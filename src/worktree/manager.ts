@@ -57,8 +57,19 @@ export class WorktreeManager {
     await this.run(["commit", "--allow-empty", "-m", "hc: initial commit"], this.repoRoot);
   }
 
+  /**
+   * The ref to base the session's worktree on. Uses `fromBranch` when it resolves; otherwise falls back to
+   * HEAD. This covers the common fresh-repo mismatch: horse-code guesses "main" but the repo's actual
+   * (default/unborn) branch is "master", so "main" never resolves even after the bootstrap commit.
+   */
+  private async resolveBase(fromBranch: string): Promise<string> {
+    const ok = await this.git(["rev-parse", "--verify", "--quiet", fromBranch], this.repoRoot);
+    return ok.code === 0 ? fromBranch : "HEAD";
+  }
+
   async openSession(fromBranch: string, jobName: string): Promise<WorktreeSession> {
     await this.ensureBaseCommit();
+    const base = await this.resolveBase(fromBranch);
     const worktreesDir = join(this.repoRoot, ".horsecode", "worktrees");
     await mkdir(worktreesDir, { recursive: true });
     await writeFile(join(worktreesDir, ".gitignore"), "*\n", "utf8");
@@ -68,7 +79,7 @@ export class WorktreeManager {
     const baseWorktree = join(root, "base");
     const baseBranch = `hc/${jobSlug}/base`;
     await mkdir(join(root, "tasks"), { recursive: true });
-    await this.run(["worktree", "add", "-b", baseBranch, baseWorktree, fromBranch], this.repoRoot);
+    await this.run(["worktree", "add", "-b", baseBranch, baseWorktree, base], this.repoRoot);
     return { jobSlug, root, baseWorktree, baseBranch };
   }
 

@@ -71,6 +71,10 @@ export function shouldUseTui(stdinTTY: boolean, stdoutTTY: boolean, noTui: boole
 
 async function currentBranch(cwd: string): Promise<string> {
   try {
+    // symbolic-ref reports the branch name even on an unborn HEAD (fresh `git init`, e.g. "master"),
+    // where rev-parse --abbrev-ref returns "HEAD". Getting the real name avoids guessing "main" wrongly.
+    const sym = await defaultGitRunner(["symbolic-ref", "--short", "HEAD"], cwd);
+    if (sym.code === 0 && sym.stdout.trim()) return sym.stdout.trim();
     const r = await defaultGitRunner(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
     const b = r.stdout.trim();
     return b && b !== "HEAD" ? b : "main";

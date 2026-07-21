@@ -38,22 +38,32 @@ describe("WorktreeManager.openSession", () => {
     expect(b.jobSlug).toBe("job-2");
   });
 
-  it("bootstraps an initial commit in a fresh repo (unborn HEAD) so the worktree can be created", async () => {
-    // `git init` with no commits → HEAD is unborn; openSession must not fail with "invalid reference: main".
+  it("fresh repo, branch-name mismatch (real 'master', asked for 'main') → bootstraps + bases off HEAD", async () => {
+    // Reproduces the reported crash: `git init` leaves an unborn 'master' HEAD, horse-code guesses 'main',
+    // and `git worktree add … main` fails with "invalid reference: main". openSession must recover.
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     repo = await mkdtemp(join(tmpdir(), "hc-fresh-"));
     const g = (args: string[]): Promise<{ code: number }> => defaultGitRunner(args, repo as string);
-    await g(["init", "-b", "main"]);
+    await g(["init", "-b", "master"]); // real default branch is 'master', not 'main'
     await g(["config", "user.email", "test@hc.local"]);
     await g(["config", "user.name", "hc test"]);
     expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).not.toBe(0); // no commits yet
 
     const wm = new WorktreeManager({ repoRoot: repo });
-    const s = await wm.openSession("main", "add-login-page");
+    const s = await wm.openSession("main", "add-login-page"); // asked for 'main' (doesn't exist)
     expect(s.jobSlug).toBe("add-login-page");
     expect(existsSync(s.baseWorktree)).toBe(true);
-    expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).toBe(0); // now has the bootstrap commit
+    expect(await branchExists(repo, "hc/add-login-page/base")).toBe(true);
+    expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).toBe(0); // bootstrap commit landed
+  });
+
+  it("bases off HEAD when the requested branch doesn't exist in a repo that already has commits", async () => {
+    repo = await initTmpRepo(); // has a commit on 'main'
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("nonexistent-branch", "some-task"); // falls back to HEAD
+    expect(existsSync(s.baseWorktree)).toBe(true);
+    expect(await branchExists(repo, "hc/some-task/base")).toBe(true);
   });
 });
 
