@@ -71,7 +71,16 @@ describe("makePRAdapter", () => {
     const logs: string[] = [];
     const unk = makePRAdapter({ platform: "unknown", run: fakeRunner(), cwd: "/r", log: (s) => logs.push(s) });
     const pr = await unk.createPR({ branch: "b", base: "main", title: "T", body: "B" });
-    expect(pr.url).toContain("bilinmeyen");
+    expect(pr.url).toBe("(yerel: b)");
     expect(logs.length).toBeGreaterThan(0);
+  });
+
+  it("unknown platform: createPR yerel branch url'i döner + PR açmaz", async () => {
+    const logs: string[] = [];
+    const run = async () => ({ code: 0, stdout: "", stderr: "" }); // çağrılmamalı
+    const adapter = makePRAdapter({ platform: "unknown", run, cwd: "/x", log: (s) => logs.push(s) });
+    const res = await adapter.createPR({ branch: "hc/job/base", base: "main", title: "t", body: "b" });
+    expect(res.url).toBe("(yerel: hc/job/base)");
+    expect(logs.join("\n")).toContain("hc/job/base");
   });
 });
