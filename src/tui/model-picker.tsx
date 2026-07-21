@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useStdin } from "ink";
+import { parseKittyKey } from "./keys.js";
 
 const VISIBLE = 10;
 
@@ -30,12 +31,15 @@ export function ModelPicker({ models, current, loading, error, cols, onSelect, o
     const onData = (chunk: Buffer | string): void => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       const st = stRef.current, cb = cbRef.current;
-      if (s === "\x1b") { cb.onCancel(); return; } // bare Esc
+      const kk = parseKittyKey(s); // kitty CSI-u (iTerm2 with the protocol) → numpad chars, Enter, Esc
+      if (s === "\x1b" || kk?.type === "escape") { cb.onCancel(); return; } // Esc (legacy or kitty)
       if (st.loading || st.error) return; // only Esc works while loading / on error
       if (s === "\x1b[A" || s === "\x1bOA") { setSelected((n) => Math.max(0, n - 1)); return; }
       if (s === "\x1b[B" || s === "\x1bOB") { setSelected((n) => Math.min(st.filtered.length - 1, n + 1)); return; }
-      if (s === "\r") { const m = st.filtered[st.sel]; if (m) cb.onSelect(m); return; }
+      if (s === "\r" || kk?.type === "enter") { const m = st.filtered[st.sel]; if (m) cb.onSelect(m); return; }
       if (s === "\x7f" || s === "\x08") { setFilter((f) => f.slice(0, -1)); setSelected(0); return; }
+      if (kk?.type === "char") { setFilter((f) => f + kk.char); setSelected(0); return; } // kitty numpad char
+      if (kk) return; // other kitty functional key → ignore
       if (s.startsWith("\x1b")) return; // ignore other escape sequences
       if ([...s].every((ch) => ch >= " ")) { setFilter((f) => f + s); setSelected(0); }
     };

@@ -140,4 +140,19 @@ describe("Ink components", () => {
     expect(submitted).toBe("/2");
     unmount();
   });
+
+  it("InputLine: kitty CSI-u numpad (iTerm2 with the protocol) types chars incl '/' and numpad Enter submits", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let val = ""; let cur = 0; let submitted: string | undefined;
+    const onChange = (v: string, c: number) => { val = v; cur = c; };
+    const onSubmit = (t: string) => { submitted = t; };
+    const { stdin, rerender, unmount } = render(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={onSubmit} />);
+    await sleep(15);
+    stdin.write("\x1b[57410u"); await sleep(10); rerender(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={onSubmit} />); // numpad '/'
+    stdin.write("\x1b[57399u"); await sleep(10); rerender(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={onSubmit} />); // numpad '0'
+    expect(val).toBe("/0");
+    stdin.write("\x1b[57414u"); await sleep(10); // numpad Enter
+    expect(submitted).toBe("/0");
+    unmount();
+  });
 });

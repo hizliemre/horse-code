@@ -9,6 +9,7 @@ import type { TurnMeta } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage } from "./lines.js";
 import { ModelPicker } from "./model-picker.js";
+import { parseKittyKey } from "./keys.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -105,9 +106,15 @@ export function InputLine({ value, cursor, onChange, onSubmit, width }: {
       if (RIGHT.has(s)) { change(v, Math.min(v.length, c + 1)); return; }
       if (HOME.has(s)) { change(v, 0); return; }
       if (END.has(s)) { change(v, v.length); return; }
-      if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit
+      if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit (app-keypad SS3)
       const np = NUMPAD[s];
       if (np) { change(v.slice(0, c) + np + v.slice(c), c + np.length); return; } // numpad char (app-keypad SS3)
+      const kk = parseKittyKey(s); // kitty CSI-u numpad (what iTerm2 sends with the protocol enabled)
+      if (kk) {
+        if (kk.type === "enter") { onSubmitRef.current(v); return; }
+        if (kk.type === "char") { change(v.slice(0, c) + kk.char + v.slice(c), c + kk.char.length); return; }
+        return; // other CSI-u functional key → ignore
+      }
       if (s.startsWith("\x1b")) return; // up/down/PgUp/PgDn → App scroll handler
       if ([...s].every((ch) => ch >= " ")) change(v.slice(0, c) + s + v.slice(c), c + s.length); // insert printable
     };
