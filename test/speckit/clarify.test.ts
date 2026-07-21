@@ -21,6 +21,7 @@ function deps(p: MockProvider): TaskCycleDeps {
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: new AbortController().signal,
+    specKit: templates,
   };
 }
 const ask = (q: string | null): ChatEvent[] => [

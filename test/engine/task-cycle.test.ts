@@ -10,6 +10,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-cycle-")); });
@@ -43,6 +44,7 @@ function deps(provider: MockProvider): TaskCycleDeps {
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: new AbortController().signal,
+    specKit: fakeSpecKit,
   };
 }
 function boardWithTask(): Board {

@@ -10,7 +10,7 @@ import { TuiController } from "./controller.js";
 import { App } from "./components.js";
 
 export interface RunTuiOpts {
-  buildDeps: (read: LineReader) => JobDeps;
+  buildDeps: (read: LineReader) => Promise<JobDeps>;
   job: { prompt: string; fromBranch: string; jobName: string; maxRounds: number; revisionRounds?: number; prTitle?: string };
 }
 
@@ -18,7 +18,7 @@ export interface RunTuiOpts {
 export async function runTui(opts: RunTuiOpts): Promise<JobResult> {
   const controller = new TuiController();
   const read: LineReader = (q) => controller.ask(q);
-  const deps = opts.buildDeps(read);
+  const deps = await opts.buildDeps(read);
   const instance = render(<App controller={controller} />);
   try {
     return await runJob(deps, {
@@ -32,7 +32,7 @@ export async function runTui(opts: RunTuiOpts): Promise<JobResult> {
 }
 
 export interface RunTuiReplOpts {
-  buildDeps: (read: LineReader) => JobDeps;
+  buildDeps: (read: LineReader) => Promise<JobDeps>;
   jobBase: { fromBranch: string; maxRounds: number; revisionRounds?: number };
   formatResult: (res: JobResult) => string;
   model?: string; // configured default model → shown in the metrics line when a call reports no model
@@ -43,7 +43,7 @@ export interface RunTuiReplOpts {
 export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const controller = new TuiController();
   const read: LineReader = (q) => controller.ask(q);
-  const deps0 = opts.buildDeps(read);
+  const deps0 = await opts.buildDeps(read);
   // Coach model → always shown under the input; refiner model → shown only in the "refining… (model)" line.
   const coachModel = deps0.roleRegistry.peekModel("coach") || opts.model;
   const refinerModel = deps0.roleRegistry.peekModel("refiner") || opts.model;

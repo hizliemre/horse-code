@@ -16,6 +16,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider, ChatRequest } from "../../src/core/types.js";
 import type { ProgressEvent } from "../../src/engine/progress.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 // End-to-end provider that responds to all roles based on systemPrompt.
 function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[] } = {}): Provider & { requests: ChatRequest[] } {
@@ -113,6 +114,7 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
+    specKit: fakeSpecKit,
     councilRegistry: buildCouncilRegistry(councilors),
     councilors,
     manager,

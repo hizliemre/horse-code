@@ -113,12 +113,14 @@ export async function main(argv: string[]): Promise<void> {
   const remoteUrl = (await defaultGitRunner(["remote", "get-url", "origin"], cwd)).stdout.trim();
   const prAdapter = makePRAdapter({ platform: detectPlatform(remoteUrl), run: defaultCmdRunner, cwd, log: (s) => console.log(s) });
   const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
-  const buildDeps = (read: LineReader): JobDeps =>
+  const home = process.env.HOME ?? "";
+  const buildDeps = (read: LineReader): Promise<JobDeps> =>
     buildJobDeps({
       config, provider, skillRegistry, manager, prAdapter,
       askHuman: makeAskHuman(read),
       approve: makeApprove(read),
       signal: new AbortController().signal,
+      home,
     });
   const useTui = shouldUseTui(!!process.stdin.isTTY, !!process.stdout.isTTY, !!args.noTui);
 
@@ -157,7 +159,7 @@ export async function main(argv: string[]): Promise<void> {
 
   const { read, close } = nodeLineReader();
   try {
-    const deps = buildDeps(read);
+    const deps = await buildDeps(read);
     const res = await runJob(deps, { ...job, askUser: makeAskUser(read) });
     console.log(renderResult(res));
   } finally {

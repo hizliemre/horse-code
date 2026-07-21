@@ -16,6 +16,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 function submit(argsJson: string): ChatEvent[] {
   return [
@@ -47,6 +48,7 @@ function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: opts.signal ?? new AbortController().signal,
+    specKit: fakeSpecKit,
     rounds: opts.rounds ?? 3,
     askHuman: opts.askHuman ?? (async () => ({ action: "abandon" })),
     manager,

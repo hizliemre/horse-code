@@ -10,6 +10,7 @@ import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { Card, Board } from "../../src/board/board.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-impl-")); });
@@ -23,6 +24,7 @@ function deps(provider: MockProvider): TaskCycleDeps {
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: new AbortController().signal,
+    specKit: fakeSpecKit,
   };
 }
 const card = (over: Partial<Card> = {}): Card => ({

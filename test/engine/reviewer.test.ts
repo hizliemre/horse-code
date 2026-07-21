@@ -7,6 +7,7 @@ import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { Card } from "../../src/board/board.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 function submitTurn(argsJson: string): ChatEvent[] {
   return [
@@ -23,6 +24,7 @@ function deps(provider: MockProvider): TaskCycleDeps {
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: new AbortController().signal,
+    specKit: fakeSpecKit,
   };
 }
 

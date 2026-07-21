@@ -5,11 +5,13 @@ import { buildCouncilRegistry } from "./engine/review.js";
 import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_COUNCILORS } from "./prompts.js";
 import type { ResolvedConfig, RoleConfig, CouncilorConfig } from "./config/config.js";
 import type { Provider } from "./core/types.js";
+import type { FetchLike } from "./providers/omniroute.js";
 import type { SkillRegistry } from "./skills/registry.js";
 import type { WorktreeManager, PRAdapter } from "./worktree/manager.js";
 import type { AskHuman } from "./engine/escalation.js";
 import type { JobDeps } from "./engine/job.js";
 import type { RevisionPRAdapter } from "./adapters/pr.js";
+import { loadSpecKit } from "./speckit/templates.js";
 
 export interface BuildJobDepsOpts {
   config: ResolvedConfig;
@@ -20,10 +22,12 @@ export interface BuildJobDepsOpts {
   askHuman: AskHuman;
   approve: (req: PermissionRequest) => Promise<boolean>;
   signal: AbortSignal;
+  home: string;
+  fetch?: FetchLike;
 }
 
 /** Builds a full JobDeps from config + defaults; every role gets resolved. */
-export function buildJobDeps(opts: BuildJobDepsOpts): JobDeps {
+export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   const { config } = opts;
   const roles: Record<string, RoleConfig> = {};
   for (const name of REQUIRED_ROLES) {
@@ -39,6 +43,8 @@ export function buildJobDeps(opts: BuildJobDepsOpts): JobDeps {
 
   const permission = new PermissionEngine({ mode: config.mode, allowlist: config.allowlist });
 
+  const specKit = await loadSpecKit({ version: config.specKit.version, home: opts.home, fetch: opts.fetch });
+
   return {
     provider: opts.provider,
     roleRegistry,
@@ -46,6 +52,7 @@ export function buildJobDeps(opts: BuildJobDepsOpts): JobDeps {
     permission,
     approve: opts.approve,
     signal: opts.signal,
+    specKit,
     councilRegistry,
     councilors,
     manager: opts.manager,

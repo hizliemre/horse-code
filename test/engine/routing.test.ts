@@ -8,6 +8,7 @@ import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { Card } from "../../src/board/board.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 function submitTurn(argsJson: string): ChatEvent[] {
   return [
@@ -29,6 +30,7 @@ function deps(provider: MockProvider, hasRouter = true, signal?: AbortSignal): T
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
+    specKit: fakeSpecKit,
   };
 }
 
@@ -64,6 +66,7 @@ describe("routeTask", () => {
       permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
       approve: async () => true,
       signal: new AbortController().signal,
+      specKit: fakeSpecKit,
     };
     await routeTask(d, card("x"));
     expect(p.requests[0].tools.map((t) => t.name)).toContain("skill");

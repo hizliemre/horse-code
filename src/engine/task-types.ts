@@ -2,6 +2,7 @@ import type { Provider } from "../core/types.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { RoleRegistry } from "../agent/roles.js";
 import type { SkillRegistry } from "../skills/registry.js";
+import type { SpecKitTemplates } from "../speckit/templates.js";
 
 export interface TaskCycleDeps {
   provider: Provider;
@@ -10,6 +11,7 @@ export interface TaskCycleDeps {
   permission: PermissionEngine;
   approve: (req: PermissionRequest) => Promise<boolean>;
   signal: AbortSignal;
+  specKit: SpecKitTemplates;
 }
 
 export type ImplementerRole = "coder" | "designer";

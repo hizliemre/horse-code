@@ -10,6 +10,7 @@ import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider, ChatRequest, ToolContext } from "../../src/core/types.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-upstream-")); });
@@ -81,6 +82,7 @@ export function udeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
+    specKit: fakeSpecKit,
     councilRegistry: buildCouncilRegistry(councilors),
     councilors,
   };

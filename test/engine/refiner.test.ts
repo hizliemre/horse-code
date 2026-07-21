@@ -7,6 +7,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { fakeSpecKit } from "../support/fake-speckit.js";
 
 function submit(argsJson: string): ChatEvent[] {
   return [
@@ -23,6 +24,7 @@ function deps(provider: MockProvider, skillRegistry = new SkillRegistry(), signa
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
+    specKit: fakeSpecKit,
   };
 }
 
