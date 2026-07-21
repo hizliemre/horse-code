@@ -131,6 +131,8 @@ describe("runJob", () => {
       const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "hello", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 });
       expect(res.kind).toBe("chat");
       if (res.kind === "chat") expect(res.response).toBe("coach report");
+      // A chat turn must not create a worktree (lazy: opened only for the feature/bugfix pipeline).
+      expect(existsSync(join(repo, ".horsecode", "worktrees"))).toBe(false);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 

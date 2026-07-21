@@ -151,17 +151,20 @@ describe("runPlanner", () => {
 });
 
 describe("runUpstream", () => {
-  it("chat intent → coach response", async () => {
+  it("chat intent → coach response, without opening a worktree", async () => {
     const p = upstreamProvider({ intent: "chat" });
-    const res = await runUpstream(udeps(p), dir, "hello", async () => "x", 3);
+    let opened = 0;
+    const res = await runUpstream(udeps(p), () => { opened++; return Promise.resolve(dir); }, "hello", async () => "x", 3);
     expect(res.kind).toBe("chat");
     if (res.kind === "chat") expect(res.response).toBe("coach response");
     expect(res.intent).toBe("chat");
+    expect(opened).toBe(0); // a chat turn must never open the worktree
   });
 
-  it("feature → spec+plan approved → approved, both files written", async () => {
+  it("feature → spec+plan approved → approved, both files written (opens worktree once)", async () => {
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
-    const res = await runUpstream(udeps(p), dir, "Add X", async () => "x", 3);
+    let opened = 0;
+    const res = await runUpstream(udeps(p), () => { opened++; return Promise.resolve(dir); }, "Add X", async () => "x", 3);
     expect(res.kind).toBe("approved");
     if (res.kind === "approved") {
       expect(res.specPath).toBe(".hc/spec.md");
@@ -169,11 +172,12 @@ describe("runUpstream", () => {
     }
     expect(await readFile(join(dir, ".hc/spec.md"), "utf8")).toBe("# spec");
     expect(await readFile(join(dir, ".hc/plan.md"), "utf8")).toBe("# plan");
+    expect(opened).toBe(1); // the feature pipeline opens the worktree exactly once
   });
 
   it("if the spec isn't approved → rejected(spec)", async () => {
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    const res = await runUpstream(udeps(p), dir, "Add X", async () => "stop", 1);
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("spec");
   });
@@ -181,18 +185,18 @@ describe("runUpstream", () => {
   it("emits a refined event with the refined prompt before running downstream", async () => {
     const p = upstreamProvider({ intent: "chat" });
     const events: { kind: string; refinedPrompt?: string }[] = [];
-    await runUpstream(udeps(p), dir, "hello", async () => "x", 3, [], (ev) => events.push(ev));
+    await runUpstream(udeps(p), () => Promise.resolve(dir), "hello", async () => "x", 3, [], (ev) => events.push(ev));
     expect(events).toContainEqual({ kind: "refined", refinedPrompt: "Do X" });
   });
 
   it("throws if cancelled", async () => {
     const ac = new AbortController(); ac.abort();
     const p = upstreamProvider({ intent: "feature" });
-    await expect(runUpstream(udeps(p, ac.signal), dir, "X", async () => "x", 2)).rejects.toThrow();
+    await expect(runUpstream(udeps(p, ac.signal), () => Promise.resolve(dir), "X", async () => "x", 2)).rejects.toThrow();
   });
 
   it("throws if the analyst doesn't produce a spec file (even if the judge still passes it)", async () => {
     const p = upstreamProvider({ intent: "feature", skipWrite: true, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
-    await expect(runUpstream(udeps(p), dir, "X", async () => "x", 1)).rejects.toThrow(/spec/);
+    await expect(runUpstream(udeps(p), () => Promise.resolve(dir), "X", async () => "x", 1)).rejects.toThrow(/spec/);
   });
 });

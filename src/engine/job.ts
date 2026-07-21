@@ -63,23 +63,31 @@ export async function runJob(
   // don't let onEvent errors crash the engine: the observer is called synchronously (deep inside board mutations).
   const onEvent = opts.onEvent;
   const emit = onEvent ? (ev: ProgressEvent) => { try { onEvent(ev); } catch { /* observer error isolated */ } } : () => {};
-  const session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
+  // Lazy worktree: opened only when the pipeline actually needs to write files (the analyst's spec).
+  // A plain chat turn never calls this → no worktree is created for chat.
+  let session: WorktreeSession | undefined;
+  const ensureWorktree = async (): Promise<string> => {
+    if (!session) session = await deps.manager.openSession(opts.fromBranch, opts.jobName);
+    return session.baseWorktree;
+  };
   try {
-    const workdir = session.baseWorktree;
     emit({ kind: "phase", phase: "upstream" });
-    const up = await runUpstream(deps, workdir, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit);
+    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit);
 
     if (up.kind === "chat") {
       emit({ kind: "phase", phase: "chat" });
-      await deps.manager.closeSession(session);
+      // No worktree was opened for a chat turn — nothing to close.
       return { kind: "chat", response: up.response, refinedPrompt: up.refinedPrompt };
     }
     if (up.kind === "rejected") {
       emit({ kind: "phase", phase: "rejected", detail: up.stage });
-      await deps.manager.closeSession(session);
+      if (session) await deps.manager.closeSession(session);
       return { kind: "rejected", stage: up.stage, refinedPrompt: up.refinedPrompt };
     }
 
+    // Approved → the pipeline opened the worktree via ensureWorktree.
+    if (!session) throw new Error("runJob: approved without an open worktree");
+    const workdir = session.baseWorktree;
     emit({ kind: "phase", phase: "approved" });
     await deps.manager.commitMerge(session, "hc: spec + plan"); // spec/plan → baseBranch (goes into the PR)
 
@@ -110,7 +118,7 @@ export async function runJob(
     emit({ kind: "phase", phase: "done" });
     return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {
-    await deps.manager.closeSession(session).catch(() => {}); // clean up orphan worktree; don't let cleanup errors shadow the original
+    if (session) await deps.manager.closeSession(session).catch(() => {}); // clean up orphan worktree; don't shadow the original
     throw e;
   }
 }

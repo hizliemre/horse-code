@@ -106,7 +106,7 @@ export type UpstreamResult =
  */
 export async function runUpstream(
   deps: ReviewDeps,
-  workdir: string,
+  ensureWorktree: () => Promise<string>,
   prompt: string,
   askUser: AskUser,
   maxRounds: number,
@@ -114,16 +114,20 @@ export async function runUpstream(
   emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<UpstreamResult> {
   // The refiner sees the history → follow-ups are refined in context (horse-code's feature applies everywhere).
+  // Refiner + chat run WITHOUT a worktree (read-only / classify); the worktree is opened lazily below,
+  // only for the feature/bugfix pipeline — so a plain chat never creates a worktree.
   const r = await runRefiner(deps, prompt, history);
   // Surface the refined prompt as soon as it's ready → the UI can replace the raw prompt before the
   // coach/pipeline runs (the refined prompt is what actually gets handed downstream).
   emit({ kind: "refined", refinedPrompt: r.refinedPrompt });
   if (routeIntent(r.intent) === "chat") {
-    // Chat: refined prompt + conversation history → a contextual, consistent multi-turn response.
-    const response = await runCoachChat(deps, r.refinedPrompt, workdir, history);
+    // Chat: no worktree — the coach reads the repo in place (cwd ".") + history → a contextual response.
+    const response = await runCoachChat(deps, r.refinedPrompt, ".", history);
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response };
   }
 
+  // Feature/bugfix → open the worktree now; the analyst's spec is the first real file write.
+  const workdir = await ensureWorktree();
   const specPath = ".hc/spec.md";
   await runAnalyst(deps, workdir, specPath, r.refinedPrompt, undefined, askUser);
   const specOut = await runReviewLoop(
