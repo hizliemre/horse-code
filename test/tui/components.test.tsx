@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 describe("Ink bileşenleri", () => {
@@ -50,16 +50,23 @@ describe("Ink bileşenleri", () => {
     expect(lastFrame() ?? "").toContain("Onaylıyor musun?");
   });
 
-  it("App input mode: görev-input + son rapor gösterir", () => {
-    const c = new TuiController();
-    c.endRun("İş bitti: (yerel: hc/x/base)");
-    const { lastFrame } = render(<App controller={c} />);
-    const f = lastFrame() ?? "";
-    expect(f).toContain("Görevini yaz");
-    expect(f).toContain("İş bitti");
+  it("Message user → 'sen' prefix + metin", () => {
+    const f = render(<Message role="user" text="selam dünya" />).lastFrame() ?? "";
+    expect(f).toContain("sen");
+    expect(f).toContain("selam dünya");
   });
 
-  it("App input mode (rapor yok): sadece görev-input", () => {
+  it("Message assistant → 'hcode' prefix + metin", () => {
+    const f = render(<Message role="assistant" text="merhaba" />).lastFrame() ?? "";
+    expect(f).toContain("hcode");
+    expect(f).toContain("merhaba");
+  });
+
+  it("Splash HORSE CODE wordmark'ı içerir", () => {
+    expect(render(<Splash />).lastFrame() ?? "").toContain("H O R S E");
+  });
+
+  it("App input mode: görev-input hint + kutu render eder", () => {
     const c = new TuiController();
     void c.awaitTask();
     expect(render(<App controller={c} />).lastFrame() ?? "").toContain("Görevini yaz");

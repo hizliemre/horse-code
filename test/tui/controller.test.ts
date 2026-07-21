@@ -68,11 +68,27 @@ describe("TuiController", () => {
     expect(c.getState().phase).toBe("");
   });
 
-  it("endRun mode=input + lastReport", () => {
+  it("submitTask user mesajını transcript'e ekler", async () => {
+    const c = new TuiController();
+    const p = c.awaitTask();
+    c.submitTask("görev-1");
+    await p;
+    expect(c.getState().transcript).toEqual([{ role: "user", text: "görev-1" }]);
+  });
+
+  it("endRun assistant mesajını ekler + mode=input", () => {
     const c = new TuiController();
     c.endRun("rapor metni");
     expect(c.getState().mode).toBe("input");
-    expect(c.getState().lastReport).toBe("rapor metni");
+    expect(c.getState().transcript).toEqual([{ role: "assistant", text: "rapor metni" }]);
+  });
+
+  it("beginRun transcript'i korur (board sıfırlar)", () => {
+    const c = new TuiController();
+    c.endRun("önceki");
+    c.beginRun();
+    expect(c.getState().transcript).toEqual([{ role: "assistant", text: "önceki" }]);
+    expect(c.getState().cards).toEqual([]);
   });
 
   it("tek-shot: mode set edilmezse undefined (geriye uyum)", () => {
