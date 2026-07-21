@@ -11,7 +11,8 @@ export interface TaskCycleDeps {
   permission: PermissionEngine;
   approve: (req: PermissionRequest) => Promise<boolean>;
   signal: AbortSignal;
-  specKit: SpecKitTemplates;
+  /** Memoized, lazy loader for the spec-kit templates — only invoked by the feature/bugfix pipeline, never by chat. */
+  specKit: () => Promise<SpecKitTemplates>;
 }
 
 export type ImplementerRole = "coder" | "designer";

@@ -27,7 +27,7 @@ function deps(p: MockProvider): TaskCycleDeps {
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
     approve: async () => true,
     signal: new AbortController().signal,
-    specKit: fakeTemplates,
+    specKit: () => Promise.resolve(fakeTemplates),
   };
 }
 const writeTurn = (path: string, content: string): ChatEvent[] => [
@@ -50,6 +50,11 @@ describe("spec-kit phases", () => {
     const usr = JSON.stringify(p.requests[0].messages);
     expect(sys).toContain("COMMAND:specify");
     expect(usr).toContain("TEMPLATE:spec");
+    // Writer toolset safety: the phase runs with file tools only — NO shell / web (can't run bash scripts).
+    const toolNames = p.requests[0].tools?.map((t) => t.name) ?? [];
+    expect(toolNames).toEqual(expect.arrayContaining(["write_file", "read_file"]));
+    expect(toolNames).not.toContain("shell");
+    expect(toolNames).not.toContain("web_fetch");
   });
 
   it("runConstitution writes the constitution file", async () => {

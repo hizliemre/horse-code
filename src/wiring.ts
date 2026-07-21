@@ -12,6 +12,7 @@ import type { AskHuman } from "./engine/escalation.js";
 import type { JobDeps } from "./engine/job.js";
 import type { RevisionPRAdapter } from "./adapters/pr.js";
 import { loadSpecKit } from "./speckit/templates.js";
+import type { SpecKitTemplates } from "./speckit/templates.js";
 
 export interface BuildJobDepsOpts {
   config: ResolvedConfig;
@@ -43,7 +44,11 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
 
   const permission = new PermissionEngine({ mode: config.mode, allowlist: config.allowlist });
 
-  const specKit = await loadSpecKit({ version: config.specKit.version, home: opts.home, fetch: opts.fetch });
+  // Lazy + memoized: don't fetch spec-kit at build. A cold-cache fetch failure (bad tag, GitHub down) must
+  // NOT brick plain chat, which never touches spec-kit. The pipeline calls specKit() on demand; the first
+  // call caches the promise so repeated phases share one load.
+  let kitPromise: Promise<SpecKitTemplates> | undefined;
+  const specKit = () => (kitPromise ??= loadSpecKit({ version: config.specKit.version, home: opts.home, fetch: opts.fetch }));
 
   return {
     provider: opts.provider,

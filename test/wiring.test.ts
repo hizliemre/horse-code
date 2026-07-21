@@ -59,11 +59,24 @@ describe("buildJobDeps", () => {
     expect(d.roleRegistry.resolve("coder").model).toBe("custom/m");
     expect(d.roleRegistry.resolve("coder").systemPrompt).toContain("custom coder");
   });
-  it("attaches specKit with the configured version and working template/command accessors", async () => {
+  it("attaches specKit as a lazy loader with the configured version and working template/command accessors", async () => {
     const d = await deps(baseConfig({ specKit: { version: "v7.7.7" } }));
-    expect(d.specKit.version).toBe("v7.7.7");
-    expect(d.specKit.template("spec")).toContain("spec-template.md");
-    expect(d.specKit.command("plan")).toContain("commands/plan.md");
+    const kit = await d.specKit();
+    expect(kit.version).toBe("v7.7.7");
+    expect(kit.template("spec")).toContain("spec-template.md");
+    expect(kit.command("plan")).toContain("commands/plan.md");
+  });
+  it("does NOT fetch spec-kit at build time — the loader is lazy (regression guard for the chat must-fix)", async () => {
+    let fetched = 0;
+    const throwingFetch: FetchLike = async (url) => { fetched++; return new Response(`BODY ${url}`, { status: 200 }); };
+    await buildJobDeps({
+      config: baseConfig(), provider: fakeProvider, skillRegistry: new SkillRegistry(),
+      manager: new WorktreeManager({ repoRoot: "/tmp" }),
+      prAdapter: logPRAdapter(() => {}), askHuman: async () => ({ action: "abandon" }),
+      approve: async () => true, signal: new AbortController().signal,
+      home, fetch: throwingFetch,
+    });
+    expect(fetched).toBe(0); // building deps (as a plain chat turn does) must not touch the network
   });
 });
 

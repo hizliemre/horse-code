@@ -126,6 +126,15 @@ describe("runUpstream", () => {
     expect(opened).toBe(0); // a chat turn must never open the worktree
   });
 
+  it("chat intent never invokes the spec-kit loader (regression guard: a fetch failure must not brick chat)", async () => {
+    const p = upstreamProvider({ intent: "chat" });
+    let loaded = 0;
+    const d = { ...udeps(p), specKit: () => { loaded++; return Promise.reject(new Error("spec-kit must not load on a chat turn")); } };
+    const res = await runUpstream(d, () => Promise.resolve(dir), "hello", async () => "x", 3);
+    expect(res.kind).toBe("chat");
+    expect(loaded).toBe(0); // the loader was never called → no fetch happened
+  });
+
   it("feature intent runs the spec-kit pipeline: constitution + specify + clarify + plan + tasks → approved", async () => {
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
     let opened = 0;
@@ -169,6 +178,14 @@ describe("runUpstream", () => {
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("spec");
+  });
+
+  it("if the spec is approved but the plan isn't → rejected(plan)", async () => {
+    // Spec review passes; plan review returns revise and never approves → the plan-stage review loop rejects.
+    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"revise","feedback":["b"],"question":""}'] });
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
+    expect(res.kind).toBe("rejected");
+    if (res.kind === "rejected") expect(res.stage).toBe("plan");
   });
 
   it("emits a refined event with the refined prompt before running downstream", async () => {

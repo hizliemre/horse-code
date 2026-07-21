@@ -49,4 +49,19 @@ describe("loadSpecKit", () => {
       loadSpecKit({ version: "../../etc", home, fetch: throwingFetch }),
     ).rejects.toThrow(/not a valid spec-kit release tag/);
   });
+
+  it('rejects a ".." segment even without a slash (chars alone pass the class)', async () => {
+    const throwingFetch: FetchLike = async () => {
+      throw new Error("network should not be called for an invalid version");
+    };
+    // "v0.13..2" only uses allowed chars, so the char-class alone would let it through → the ".." guard catches it.
+    await expect(
+      loadSpecKit({ version: "v0.13..2", home, fetch: throwingFetch }),
+    ).rejects.toThrow(/not a valid spec-kit release tag/);
+  });
+
+  it("accepts a normal pinned tag like v0.13.2", async () => {
+    const sk = await loadSpecKit({ version: "v0.13.2", home, fetch: okFetch([]) });
+    expect(sk.version).toBe("v0.13.2");
+  });
 });

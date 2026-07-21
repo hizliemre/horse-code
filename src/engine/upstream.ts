@@ -51,7 +51,9 @@ export async function runUpstream(
   // Feature/bugfix → open the worktree now; name it from the refiner's short English title (not the raw
   // prompt slug). The spec-kit phases are the first real file writes.
   const workdir = await ensureWorktree(r.title);
-  const p: PhaseDeps = { deps, templates: deps.specKit, workdir, askUser };
+  // Load the spec-kit templates on demand (the chat branch above never reaches here, so chat never fetches).
+  const templates = await deps.specKit();
+  const p: PhaseDeps = { deps, templates, workdir, askUser };
 
   // Constitution: establish project principles once — only if this worktree has none yet.
   if (!existsSync(constitutionPath(workdir))) {

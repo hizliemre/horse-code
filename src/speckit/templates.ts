@@ -34,10 +34,10 @@ export async function loadSpecKit(opts: {
   home: string;
   fetch?: FetchLike;
 }): Promise<SpecKitTemplates> {
-  if (!/^[A-Za-z0-9._-]+$/.test(opts.version)) {
+  if (!/^[A-Za-z0-9._-]+$/.test(opts.version) || opts.version.includes("..")) {
     throw new Error(
       `spec-kit version "${opts.version}" is not a valid spec-kit release tag ` +
-        `(expected only letters, digits, dots, underscores, and hyphens).`,
+        `(expected only letters, digits, dots, underscores, and hyphens, with no ".." segment).`,
     );
   }
   const fetchFn = opts.fetch ?? (globalThis.fetch as FetchLike);
