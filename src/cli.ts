@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
@@ -158,7 +158,18 @@ export async function main(argv: string[]): Promise<void> {
 }
 
 // Yalnızca doğrudan çalıştırıldığında (bin) main'i koş; import (test) sırasında koşma.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// realpathSync: global bin symlink (npm link/-g) ile argv[1]=symlink yolu iken import.meta.url
+// çözülmüş gerçek yol → eşleşmezdi ve main hiç koşmazdı. Symlink'i çözerek eşitle.
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+if (isMainModule()) {
   main(process.argv.slice(2)).catch((e) => {
     console.error("hata:", e instanceof Error ? e.message : e);
     process.exitCode = 1;
