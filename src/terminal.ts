@@ -34,7 +34,29 @@ export function makeAskHuman(read: LineReader): AskHuman {
  * Üretim satır-okuyucusu (node:readline). `close()` çağrılmazsa stdin açık kalır ve süreç
  * asılı kalır → CLI iş bitince `close()` etmeli.
  */
-export function nodeLineReader(): { read: LineReader; close: () => void } {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return { read: (prompt) => rl.question(prompt + "\n> "), close: () => rl.close() };
+export function nodeLineReader(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+): { read: LineReader; close: () => void } {
+  const rl = createInterface({ input, output });
+  const buffered: string[] = [];
+  const waiters: ((line: string) => void)[] = [];
+  let closed = false;
+  rl.on("line", (line) => {
+    const w = waiters.shift();
+    if (w) w(line);
+    else buffered.push(line);
+  });
+  rl.on("close", () => {
+    closed = true;
+    while (waiters.length) waiters.shift()!(""); // kalan bekleyenlere boş cevap
+  });
+  // Satırlar kuyruklanır → ardışık read'ler race'siz (readline/promises question race'i giderilir).
+  const read: LineReader = (prompt) => {
+    output.write(prompt + "\n> ");
+    if (buffered.length) return Promise.resolve(buffered.shift()!);
+    if (closed) return Promise.resolve("");
+    return new Promise<string>((resolve) => { waiters.push(resolve); });
+  };
+  return { read, close: () => rl.close() };
 }

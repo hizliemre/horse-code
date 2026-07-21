@@ -75,4 +75,14 @@ describe("WorktreeManager merge yaşam döngüsü", () => {
     const status = await defaultGitRunner(["status", "--porcelain"], s.baseWorktree);
     expect(status.stdout.trim()).toBe("");
   });
+
+  it("commitMerge sahnede değişiklik yoksa no-op (throw etmez, yeni commit yok)", async () => {
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "job");
+    const before = (await defaultGitRunner(["rev-parse", "HEAD"], s.baseWorktree)).stdout.trim();
+    await expect(wm.commitMerge(s, "boş")).resolves.toBeUndefined();
+    const after = (await defaultGitRunner(["rev-parse", "HEAD"], s.baseWorktree)).stdout.trim();
+    expect(after).toBe(before); // yeni commit oluşmadı
+  });
 });

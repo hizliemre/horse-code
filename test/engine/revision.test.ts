@@ -84,7 +84,7 @@ describe("runRevision", () => {
     if (res.status === "approved") expect(res.rounds).toBe(0);
     expect(posted).toBe(0);
     expect(mgr.commits).toBe(0);
-    expect(board.get("revision")!.stageHistory.some((s) => s.action === "pr:approved")).toBe(true);
+    expect(board.get("__revision__")!.stageHistory.some((s) => s.action === "pr:approved")).toBe(true);
   });
 
   it("bir revizyon → onay: postComments + senior yazar + commit/push; approved(1)", async () => {
