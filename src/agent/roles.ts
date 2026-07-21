@@ -6,6 +6,7 @@ import type { SkillRegistry } from "../skills/registry.js";
 
 export class RoleRegistry {
   private index = new Map<string, number>();
+  private modelOverride?: string;
 
   constructor(
     private roles: Record<string, RoleConfig>,
@@ -13,13 +14,18 @@ export class RoleRegistry {
     private skillRegistry?: SkillRegistry,
   ) {}
 
+  /** Live-swap the model used by every role (session-only; clears on undefined/empty). */
+  setModelOverride(model?: string): void {
+    this.modelOverride = model && model.length > 0 ? model : undefined;
+  }
+
   resolve(roleName: string): { model: string; systemPrompt: string } {
     const role = this.roles[roleName];
     if (!role) throw new Error(`undefined role: ${roleName}`);
     if (!role.models.length) throw new Error(`role '${roleName}' has no model defined`);
 
     const i = this.index.get(roleName) ?? 0;
-    const model = role.models[i % role.models.length];
+    const model = this.modelOverride ?? role.models[i % role.models.length];
     this.index.set(roleName, i + 1);
 
     let systemPrompt = role.systemPrompt ?? this.defaultPrompts[roleName];

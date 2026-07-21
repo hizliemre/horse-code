@@ -86,3 +86,24 @@ describe("RoleRegistry + skills", () => {
     expect(() => reg.resolve("coder")).toThrow(/undefined skill/);
   });
 });
+
+describe("RoleRegistry.setModelOverride", () => {
+  it("overrides the model for every role until cleared; systemPrompt unchanged", () => {
+    const reg = new RoleRegistry(
+      { coder: { models: ["m1"] }, coach: { models: ["m2"] } },
+      { coder: "P-coder", coach: "P-coach" },
+    );
+    expect(reg.resolve("coder").model).toBe("m1");
+
+    reg.setModelOverride("live/model");
+    expect(reg.resolve("coder").model).toBe("live/model");
+    expect(reg.resolve("coach").model).toBe("live/model");
+    expect(reg.resolve("coder").systemPrompt).toBe("P-coder");
+
+    reg.setModelOverride(undefined);
+    expect(reg.resolve("coder").model).toBe("m1");
+
+    reg.setModelOverride("");
+    expect(reg.resolve("coach").model).toBe("m2"); // empty string clears
+  });
+});
