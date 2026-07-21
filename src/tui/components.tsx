@@ -5,7 +5,6 @@ import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { ProgressView } from "./progress-view.js";
 import { Markdown } from "./markdown.js";
-import { phaseLabel } from "./labels.js";
 import type { TurnMeta } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage } from "./lines.js";
@@ -40,7 +39,7 @@ function fmtTokens(n: number): string {
  * once done, the frozen model + duration + tokens for the last turn. `wrap="truncate-end"` keeps it 1 row
  * (the fullscreen height math reserves exactly one line for it).
  */
-export function MetricsLine({ meta, phase, fallbackModel }: { meta: TurnMeta; phase: string; fallbackModel?: string }): React.ReactElement {
+export function MetricsLine({ meta, fallbackModel }: { meta: TurnMeta; fallbackModel?: string }): React.ReactElement {
   const [, tick] = useState(0);
   useEffect(() => {
     if (!meta.running) return;
@@ -52,9 +51,9 @@ export function MetricsLine({ meta, phase, fallbackModel }: { meta: TurnMeta; ph
   const secs = meta.running
     ? (meta.startedAt !== undefined ? (Date.now() - meta.startedAt) / 1000 : 0)
     : (meta.durationMs ?? 0) / 1000;
-  const stage = meta.running ? `${phaseLabel(phase)} · ` : "";
+  // No stage label here — while running it's already shown in the spinner line above; keep this compact.
   return (
-    <Text dimColor wrap="truncate-end">{`  ${stage}${model} · ${secs.toFixed(1)}s · ${fmtTokens(tok)} tok`}</Text>
+    <Text dimColor wrap="truncate-end">{`  ${model} · ${secs.toFixed(1)}s · ${fmtTokens(tok)} tok`}</Text>
   );
 }
 
@@ -353,16 +352,17 @@ export function App({ controller, fullscreen = false, model }: { controller: Tui
     const inputH = draft.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil((l.length + 3) / cw)), 0);
     const running = mode === "running";
     const showStatus = running || !!state.pending;
-    // status box height (deterministic → no Ink overflow): progress(1) + board + pending, plus border(2).
-    const boardLines = state.cards.length
+    // Status lines sit directly above the input (no box, no gap). Height is deterministic → no Ink overflow.
+    const boardLines = showStatus && state.cards.length
       ? 1 + Math.max(...COLUMNS.map((col) => state.cards.filter((c) => c.column === col).length))
       : 0;
     const pendingLines = state.pending ? Math.max(1, Math.ceil(state.pending.question.length / cw)) : 0;
-    const statusBoxH = showStatus ? 1 + boardLines + pendingLines + 2 : 0;
-    const inputBoxH = 3 + inputH; // marginTop(1) + border(2) + inputH
+    const statusH = (running ? 1 : 0) + boardLines + pendingLines; // progress(1) + board + pending
+    const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
+    const inputBoxH = 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
     const queuedH = state.queued > 0 ? 1 : 0;
-    const bottomH = statusBoxH + inputBoxH + metricsH + queuedH;
+    const bottomH = statusH + inputBoxH + metricsH + queuedH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -374,13 +374,13 @@ export function App({ controller, fullscreen = false, model }: { controller: Tui
         <ViewportLines lines={windowed} height={viewportH} />
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
         {showStatus ? (
-          <Box borderStyle="round" borderColor="cyan" paddingX={1} width={size.cols} flexShrink={0} flexDirection="column">
-            <ProgressView phase={state.phase} detail={state.detail} cols={size.cols} />
-            {state.cards.length ? <Board cards={state.cards} /> : null}
+          <Box flexDirection="column">
+            {running ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} cols={size.cols} /></Box> : null}
+            {boardLines ? <Board cards={state.cards} /> : null}
             {state.pending ? <Box width={cw}><Text color="yellow">{state.pending.question}</Text></Box> : null}
           </Box>
         ) : null}
-        <Box marginTop={1} borderStyle="round" borderColor={state.pending ? "yellow" : "gray"} paddingX={1} width={size.cols} flexShrink={0}>
+        <Box marginTop={inputMarginTop} borderStyle="round" borderColor={state.pending ? "yellow" : "gray"} paddingX={1} width={size.cols} flexShrink={0}>
           <InputLine
             value={draft}
             cursor={draftCursor}
@@ -395,7 +395,7 @@ export function App({ controller, fullscreen = false, model }: { controller: Tui
             }}
           />
         </Box>
-        {state.meta ? <MetricsLine meta={state.meta} phase={state.phase} fallbackModel={model} /> : null}
+        {state.meta ? <MetricsLine meta={state.meta} fallbackModel={model} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
       </Box>
     );
