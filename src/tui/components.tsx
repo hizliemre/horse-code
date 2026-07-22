@@ -5,7 +5,7 @@ import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { ProgressView } from "./progress-view.js";
 import { donePhrase } from "./labels.js";
-import { fmtDuration, relTime } from "./format.js";
+import { fmtDuration, relTime, fmtTokens } from "./format.js";
 import { Markdown } from "./markdown.js";
 import type { TurnMeta, RunningAgent } from "./controller.js";
 import type { StyledLine } from "./lines.js";
@@ -1032,7 +1032,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         {showStatus ? (
           <Box flexDirection="column">
             {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} meta={state.meta} cols={size.cols} /></Box> : null}
-            {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}`}</Text></Box> : null}
+            {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
             {boardLines ? <Board cards={state.cards} /> : null}
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
           </Box>

@@ -38,12 +38,11 @@ describe("phase labels + running horse", () => {
     r.unmount();
   });
 
-  it("while running, shows live elapsed + tokens in parens next to the verb (writes 'tokens', not 'tok')", () => {
-    const meta = { model: "", promptTokens: 1234, completionTokens: 456, startedAt: Date.now() - 12_000, running: true };
+  it("while running, shows live elapsed + a broken-out token count (↑prompt ↓completion · N calls)", () => {
+    const meta = { model: "", promptTokens: 1234, completionTokens: 456, calls: 3, startedAt: Date.now() - 12_000, running: true };
     const r = render(<ProgressView phase="chat" meta={meta} />);
     const f = clean(r.lastFrame());
-    expect(f).toMatch(/\(\d+s · 1\.7k tokens\)/);
-    expect(f).not.toContain("tok)"); // not the old "tok" abbreviation
+    expect(f).toMatch(/\(\d+s · ↑1\.2k ↓456 · 3 calls\)/);
     r.unmount();
   });
 

@@ -6,8 +6,9 @@ import type { UsageSample } from "../providers/meter.js";
 /** Per-turn metrics shown under the input (active model + accumulated tokens + duration). */
 export interface TurnMeta {
   model: string;
-  promptTokens: number;
-  completionTokens: number;
+  promptTokens: number; // Σ billed input over every LLM call in the turn (re-sent context bills per call — no caching)
+  completionTokens: number; // Σ generated tokens
+  calls: number; // number of LLM calls the turn made (refiner + each coach tool-round + summarizer + subagents)
   startedAt?: number;
   durationMs?: number;
   running: boolean;
@@ -98,7 +99,7 @@ export class TuiController {
 
   // arrow-bound: passed to meterProvider → accumulates the running turn's tokens + latest active model.
   onUsage = (s: UsageSample): void => {
-    const m = this.state.meta ?? { model: "", promptTokens: 0, completionTokens: 0, running: true };
+    const m = this.state.meta ?? { model: "", promptTokens: 0, completionTokens: 0, calls: 0, running: true };
     this.state = {
       ...this.state,
       meta: {
@@ -106,6 +107,7 @@ export class TuiController {
         model: s.model || m.model,
         promptTokens: m.promptTokens + s.promptTokens,
         completionTokens: m.completionTokens + s.completionTokens,
+        calls: (m.calls ?? 0) + 1, // one usage event = one LLM call
       },
     };
     this.notify();
@@ -216,7 +218,7 @@ export class TuiController {
     this.state = {
       ...this.state,
       mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [], nextSteps: [],
-      meta: { model: "", promptTokens: 0, completionTokens: 0, startedAt: this.now(), running: true },
+      meta: { model: "", promptTokens: 0, completionTokens: 0, calls: 0, startedAt: this.now(), running: true },
     };
     this.notify();
   }

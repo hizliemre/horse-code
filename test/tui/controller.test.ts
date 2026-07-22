@@ -138,6 +138,7 @@ describe("TuiController", () => {
     expect(meta.model).toBe("m-b");
     expect(meta.promptTokens).toBe(13);
     expect(meta.completionTokens).toBe(7);
+    expect(meta.calls).toBe(2); // each usage event = one LLM call
     expect(meta.running).toBe(true);
   });
 

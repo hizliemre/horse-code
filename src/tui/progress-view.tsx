@@ -81,8 +81,10 @@ export function ProgressView(
   const accent = accentFor(phase);
   // The refiner model is shown ONLY here, alongside the refine status (never in the model line under the input).
   const suffix = phase === "upstream" && refinerModel ? ` (${refinerModel})` : detail ? ` — ${detail}` : "";
+  // Broken out (not one lump): re-sent context bills per call, so ↑ grows with each round — showing the
+  // split + call count makes it clear the total is cumulative across the turn's LLM calls, not one request.
   const metrics = meta?.running && meta.startedAt !== undefined
-    ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ${fmtTokens(meta.promptTokens + meta.completionTokens)} tokens)`
+    ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ↑${fmtTokens(meta.promptTokens)} ↓${fmtTokens(meta.completionTokens)} · ${meta.calls} call${meta.calls === 1 ? "" : "s"})`
     : "";
   return (
     <Box>
