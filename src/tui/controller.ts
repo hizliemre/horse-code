@@ -13,6 +13,11 @@ export interface TurnMeta {
   running: boolean;
 }
 
+/** Chat-flow items: user/assistant messages, plus inline tool activity (file writes/edits). */
+export type TranscriptItem =
+  | { role: "user" | "assistant"; text: string }
+  | { kind: "tool"; activity: ToolActivity };
+
 /** A sub-agent currently working a task (IN-PROGRESS card) — shown live under the input. */
 export interface RunningAgent {
   id: string;
@@ -27,7 +32,7 @@ export interface TuiState {
   cards: BoardCardView[];
   pending?: { question: string; options?: string[]; multiSelect?: boolean };
   mode?: "input" | "running" | "picker";
-  transcript: { role: "user" | "assistant"; text: string }[];
+  transcript: TranscriptItem[];
   queued: number; // prompts typed while a job is running, waiting to run next
   meta?: TurnMeta;
   // stage "role": the list is role names (pick which role to set); "model": the list is models.
@@ -35,12 +40,11 @@ export interface TuiState {
   picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
-  activity: ToolActivity[]; // recent file writes/edits (newest first) → live activity strip
 }
 
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
-  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [], activity: [] };
+  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [] };
   private pendingResolve?: (s: string) => void;
   private taskResolve?: (t: string) => void;
   private queue: string[] = []; // prompts submitted while running → drained by awaitTask
@@ -102,9 +106,9 @@ export class TuiController {
     this.notify();
   };
 
-  // arrow-bound: wired to deps.onActivity → the write/edit tools push here as they touch files.
+  // arrow-bound: wired to deps.onActivity → write/edit tools push here → inline in the chat flow.
   pushActivity = (a: ToolActivity): void => {
-    this.state = { ...this.state, activity: [a, ...this.state.activity].slice(0, 5) }; // newest first, cap 5
+    this.state = { ...this.state, transcript: [...this.state.transcript, { kind: "tool", activity: a }] };
     this.notify();
   };
 
@@ -161,7 +165,7 @@ export class TuiController {
     this.agentStarts.clear();
     this.state = {
       ...this.state,
-      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [], activity: [],
+      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [],
       meta: { model: "", promptTokens: 0, completionTokens: 0, startedAt: this.now(), running: true },
     };
     this.notify();
@@ -178,7 +182,7 @@ export class TuiController {
       ? { ...m, running: false, durationMs: m.startedAt !== undefined ? this.now() - m.startedAt : m.durationMs }
       : undefined;
     this.agentStarts.clear();
-    this.state = { ...this.state, mode: "input", transcript: t, meta, runningAgents: [], activity: [] };
+    this.state = { ...this.state, mode: "input", transcript: t, meta, runningAgents: [] };
     this.notify();
   }
 
@@ -253,8 +257,12 @@ function replaceLastUser(
   text: string,
 ): TuiState["transcript"] {
   const t = [...transcript];
-  if (t.length && t[t.length - 1].role === "user") {
-    t[t.length - 1] = { role: "user", text };
+  // Find the last user message in the current turn (skip inline tool items; stop at a previous assistant reply).
+  for (let i = t.length - 1; i >= 0; i--) {
+    const item = t[i];
+    if ("kind" in item) continue; // tool activity → skip
+    if (item.role === "assistant") break; // reached the previous turn
+    if (item.role === "user") { t[i] = { role: "user", text }; break; }
   }
   return t;
 }

@@ -185,7 +185,7 @@ describe("TuiController", () => {
     c.applyRoleModel("coder", "a/one");
     expect(c.getState().mode).toBe("input");
     expect(c.getState().picker).toBeUndefined();
-    expect(c.getState().transcript.at(-1)?.text).toBe("`coder` → a/one"); // confirmation note
+    expect(((c.getState().transcript.at(-1) as { text?: string } | undefined)?.text)).toBe("`coder` → a/one"); // confirmation note
   });
 
   it("picker: setPickerError + cancelPicker", () => {
@@ -202,13 +202,13 @@ describe("TuiController", () => {
     expect(new TuiController().getState().currentModel).toBe("");
   });
 
-  it("pushActivity keeps the 5 most recent file activities, newest first; beginRun/endRun clear them", () => {
+  it("pushActivity appends file writes/edits into the chat flow as inline tool items (in order)", () => {
     const c = new TuiController();
-    c.beginRun();
-    for (let i = 0; i < 7; i++) c.pushActivity({ tool: "write", target: `f${i}.md`, lines: i });
-    expect(c.getState().activity.map((a) => a.target)).toEqual(["f6.md", "f5.md", "f4.md", "f3.md", "f2.md"]);
-    c.endRun("done");
-    expect(c.getState().activity).toEqual([]);
+    c.awaitTask(); c.submitTask("do X"); c.beginRun();
+    c.pushActivity({ tool: "write", target: "spec.md", lines: 42, preview: ["# Spec"] });
+    c.pushActivity({ tool: "edit", target: "plan.md", lines: 3 });
+    const tool = c.getState().transcript.filter((m) => "kind" in m) as { kind: "tool"; activity: { tool: string; target: string } }[];
+    expect(tool.map((m) => [m.activity.tool, m.activity.target])).toEqual([["write", "spec.md"], ["edit", "plan.md"]]);
   });
 
   it("ask with options sets pending.options + multiSelect (choice question); answer resolves it", async () => {

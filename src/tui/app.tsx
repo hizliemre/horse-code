@@ -113,8 +113,11 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   try {
     for (;;) {
       const task = await taskPromise;
-      // Conversation history: the transcript's last item is this prompt → exclude it (previous turns go to the coach).
-      const history = controller.getState().transcript.slice(0, -1).map((m) => ({ role: m.role, content: m.text }));
+      // Conversation history: the transcript's last item is this prompt → exclude it (previous turns go to
+      // the coach). Inline tool-activity items carry no message → filter them out of the history.
+      const history = controller.getState().transcript.slice(0, -1)
+        .filter((m): m is { role: "user" | "assistant"; text: string } => !("kind" in m))
+        .map((m) => ({ role: m.role, content: m.text }));
       controller.beginRun();
       // Fresh abort controller per job → Ctrl+C aborts THIS job's signal; the next job gets a clean one.
       jobAbort = new AbortController();

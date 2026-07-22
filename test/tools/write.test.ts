@@ -65,7 +65,7 @@ describe("write_file", () => {
         { path: "a/spec.md", content: "l1\nl2\nl3\n" },
         { cwd: dir, signal: new AbortController().signal, onActivity: (a) => acts.push(a) },
       );
-      expect(acts).toEqual([{ tool: "write", target: "a/spec.md", lines: 4 }]);
+      expect(acts).toEqual([{ tool: "write", target: "a/spec.md", lines: 4, preview: ["l1", "l2", "l3", ""] }]);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

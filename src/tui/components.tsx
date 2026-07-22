@@ -8,9 +8,8 @@ import { donePhrase } from "./labels.js";
 import { fmtDuration } from "./format.js";
 import { Markdown } from "./markdown.js";
 import type { TurnMeta, RunningAgent } from "./controller.js";
-import type { ToolActivity } from "../core/types.js";
 import type { StyledLine } from "./lines.js";
-import { flattenSplash, flattenMessage, flattenMarkdown } from "./lines.js";
+import { flattenSplash, flattenMessage, flattenMarkdown, flattenTool } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
@@ -221,20 +220,6 @@ export function RunningAgents({ agents, cols }: { agents: RunningAgent[]; cols: 
  * Live file-activity strip (WrongStack-style) shown under the input while a job runs: one row per recent
  * write/edit — "● write specs/001-x/spec.md · 45L". Hard-truncated to width so it never bleeds scrollback.
  */
-export function ActivityStrip({ activity, cols }: { activity: ToolActivity[]; cols: number }): React.ReactElement {
-  const width = Math.max(20, cols - 2);
-  return (
-    <Box flexDirection="column" width={width}>
-      {activity.map((a, i) => (
-        <Text key={i} wrap="truncate">
-          <Text color="cyan">{"  ● "}</Text>
-          <Text dimColor>{`${a.tool} ${a.target} · ${a.lines}L`}</Text>
-        </Text>
-      ))}
-    </Box>
-  );
-}
-
 // Sequences counted as newline (do NOT submit): plain LF, Alt+Enter (ESC+CR/LF), and the known
 // escapes terminals send for Shift+Enter (kitty CSI-u, xterm modifyOtherKeys).
 const NEWLINE_SEQS = new Set(["\n", "\x1b\r", "\x1b\n", "\x1b[13;2u", "\x1b[27;2;13~"]);
@@ -618,7 +603,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   if (fullscreen) {
     const allLines: StyledLine[] = [
       ...flattenSplash(size.cols, size.rows),
-      ...state.transcript.flatMap((m) => flattenMessage(m.role, m.text, size.cols)),
+      ...state.transcript.flatMap((m) => ("kind" in m ? flattenTool(m.activity, size.cols) : flattenMessage(m.role, m.text, size.cols))),
     ];
     if (state.mode === "picker") {
       const PICKER_H = PICKER_HEIGHT + 1; // the ModelPicker box + its marginTop (deterministic)
@@ -689,9 +674,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const queuedH = state.queued > 0 ? 1 : 0;
     // Live-agents panel under the input: 1 header line + one row per running sub-agent.
     const agentsH = state.runningAgents.length > 0 ? 1 + state.runningAgents.length : 0;
-    const activityH = state.activity.length; // one row per recent file write/edit
     const paletteH = slashOpen ? slashCmds.length + 3 : 0; // border(2) + command rows + hint(1)
-    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + activityH;
+    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -756,7 +740,6 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         )}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
-        {state.activity.length > 0 ? <ActivityStrip activity={state.activity} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}
       </Box>
@@ -769,7 +752,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     | { kind: "msg"; role: "user" | "assistant"; text: string; cols: number };
   const items: Item[] = [
     { kind: "splash", cols: size.cols, rows: size.rows },
-    ...state.transcript.map((m) => ({ kind: "msg" as const, role: m.role, text: m.text, cols: size.cols })),
+    ...state.transcript.flatMap((m) => ("kind" in m ? [] : [{ kind: "msg" as const, role: m.role, text: m.text, cols: size.cols }])),
   ];
   return (
     <Box flexDirection="column">

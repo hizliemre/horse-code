@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { wrapSegs, flattenMarkdown, flattenMessage, flattenSplash } from "../../src/tui/lines.js";
+import { wrapSegs, flattenMarkdown, flattenMessage, flattenSplash, flattenTool } from "../../src/tui/lines.js";
 
 const txt = (lines: { text: string }[][]): string[] => lines.map((l) => l.map((s) => s.text).join(""));
 
@@ -50,6 +50,16 @@ describe("lines flatten", () => {
   it("flattenSplash produces lines based on size (not empty)", () => {
     const out = flattenSplash(80, 30);
     expect(out.length).toBeGreaterThan(0);
+  });
+
+  it("flattenTool renders a Claude-Code-style file block: verb(path) · N lines + preview", () => {
+    const w = flattenTool({ tool: "write", target: "specs/001-x/spec.md", lines: 152, preview: ["# Spec", "line2"] }, 90);
+    const wText = w.map((l) => l.map((s) => s.text).join("")).join("\n");
+    expect(wText).toContain("Write(specs/001-x/spec.md)");
+    expect(wText).toContain("152 lines");
+    expect(wText).toContain("# Spec");
+    const e = flattenTool({ tool: "edit", target: "plan.md", lines: 1 }, 90);
+    expect(e.map((l) => l.map((s) => s.text).join("")).join("\n")).toContain("Update(plan.md)");
   });
 
   it("flattenSplash includes the tagline, version, and greeting under the wordmark", () => {

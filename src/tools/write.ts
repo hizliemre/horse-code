@@ -31,7 +31,7 @@ export const writeFileTool: Tool = {
     try {
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, a.content, "utf8");
-      ctx.onActivity?.({ tool: "write", target: a.path, lines: a.content ? a.content.split("\n").length : 0 });
+      { const ls = a.content ? a.content.split("\n") : []; ctx.onActivity?.({ tool: "write", target: a.path, lines: ls.length, preview: ls.slice(0, 12) }); }
       return { content: `Written: ${a.path}`, isError: false };
     } catch (e) {
       return {

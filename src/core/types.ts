@@ -26,11 +26,12 @@ export interface ToolResult {
   isError: boolean;
 }
 
-/** A file-touching tool's activity, surfaced live in the UI (WrongStack-style: name + target + line count). */
+/** A file-touching tool's activity, surfaced in the chat flow (Claude Code-style: name + target + preview). */
 export interface ToolActivity {
-  tool: string;   // "write" | "edit"
-  target: string; // the file path (relative to cwd)
-  lines: number;  // lines written / changed
+  tool: string;      // "write" | "edit"
+  target: string;    // the file path (relative to cwd)
+  lines: number;     // lines written / changed
+  preview?: string[]; // first lines of the written / changed content (shown under the header)
 }
 
 export interface ToolContext {
