@@ -102,8 +102,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     restored = true;
     title.stop(); // stop the spinner, reset the tab title
     process.stdout.write = origWrite;
-    // first pop the kitty protocol, then close the alt-screen + restore the cursor.
-    try { origWrite("\x1b[<u\x1b[?1049l\x1b[?25h"); } catch { /* swallow */ }
+    // pop bracketed paste + the kitty protocol, then close the alt-screen + restore the cursor.
+    try { origWrite("\x1b[?2004l\x1b[<u\x1b[?1049l\x1b[?25h"); } catch { /* swallow */ }
   };
   // alt-screen + kitty keyboard protocol (flag 1: disambiguate) → Shift+Enter arrives as a separate
   // sequence (\x1b[13;2u) (plain Enter is still \r, arrows are still legacy → Ink scroll isn't broken).
@@ -112,7 +112,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // \x1b> = DECKPNM (numeric keypad): force the numpad to send characters, not application-mode SS3
   // sequences — otherwise numpad digits and `/` can't be typed. (InputLine also maps the SS3 forms as a
   // fallback for terminals that ignore this.)
-  origWrite("\x1b[?1049h\x1b[H\x1b[>1u\x1b>");
+  // …plus \x1b[?2004h = bracketed paste: the terminal wraps pastes in \x1b[200~ … \x1b[201~ so the input
+  // can insert them as one literal block (newlines preserved, no accidental submit).
+  origWrite("\x1b[?1049h\x1b[H\x1b[>1u\x1b>\x1b[?2004h");
   process.stdout.write = patched;
   process.once("exit", restore);
   // Per-job AbortController → Ctrl+C cancels the running job (aborts the in-flight request); a second

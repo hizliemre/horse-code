@@ -18,6 +18,7 @@ import { GLYPHS as ICONS } from "./glyphs.js";
 import { helpSections } from "./help.js";
 import { wordLeft, wordRight, lineStart, lineEnd } from "./input-edit.js";
 import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
+import { shouldCollapsePaste, pasteToken, expandPasteTokens } from "./paste.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -344,7 +345,7 @@ const NUMPAD: Record<string, string> = {
 };
 
 
-export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage, onHelp }: {
+export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage, onHelp, makePasteToken }: {
   value: string;
   cursor: number;
   onChange: (value: string, cursor: number) => void;
@@ -354,6 +355,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   jobRunning?: boolean;  // while a job runs, Ctrl+C is handled by App (cancel the job), not here (clear/exit)
   onPasteImage?: () => void; // Alt+V → grab an image off the clipboard (App reads it + stages it)
   onHelp?: () => void; // "?" on an empty input → open the help overlay
+  makePasteToken?: (text: string) => string; // App collapses a large paste → returns the placeholder to insert
 }): React.ReactElement {
   // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
@@ -364,14 +366,40 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   const runningRef = useRef(jobRunning); runningRef.current = jobRunning;
   const onPasteImageRef = useRef(onPasteImage); onPasteImageRef.current = onPasteImage;
   const onHelpRef = useRef(onHelp); onHelpRef.current = onHelp;
+  const makePasteTokenRef = useRef(makePasteToken); makePasteTokenRef.current = makePasteToken;
+  const pasteRef = useRef<{ active: boolean; buf: string }>({ active: false, buf: "" }); // accumulates a bracketed paste across chunks
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   // Raw stdin: Enter(CR) submits; LF/kitty-CSI-u newline; left/right arrow moves the cursor; insert/delete
   // in the middle; Ctrl+C clears if non-empty, exits if empty. Up/down/PgUp go to App's useInput (scroll).
   useEffect(() => {
     if (!stdin) return;
     if (isRawModeSupported && setRawMode) setRawMode(true);
+    // Insert a finished bracketed paste at the cursor (collapsed to a placeholder if large/multi-line).
+    const finalizePaste = (text: string): void => {
+      const v = valRef.current, c = curRef.current, change = onChangeRef.current;
+      const insert = shouldCollapsePaste(text) && makePasteTokenRef.current ? makePasteTokenRef.current(text) : text;
+      change(v.slice(0, c) + insert + v.slice(c), c + insert.length);
+    };
     const onData = (chunk: Buffer | string): void => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      // Bracketed paste (\x1b[200~ … \x1b[201~): buffer the whole paste (may span chunks) and insert it as
+      // one literal block — newlines preserved, no accidental submit on an embedded CR.
+      if (pasteRef.current.active) {
+        const end = s.indexOf("\x1b[201~");
+        if (end === -1) { pasteRef.current.buf += s; return; }
+        const full = pasteRef.current.buf + s.slice(0, end);
+        pasteRef.current = { active: false, buf: "" };
+        finalizePaste(full);
+        return;
+      }
+      const start = s.indexOf("\x1b[200~");
+      if (start !== -1) {
+        const rest = s.slice(start + 6);
+        const end = rest.indexOf("\x1b[201~");
+        if (end === -1) { pasteRef.current = { active: true, buf: rest }; return; } // paste continues in the next chunk
+        finalizePaste(rest.slice(0, end));
+        return;
+      }
       const v = valRef.current, c = curRef.current, change = onChangeRef.current;
       // Ctrl+C: while a job runs, defer to App (cancel the job / double-tap to quit); otherwise clear if non-empty, exit if empty.
       if (s === "\x03" || s === "\x1b[99;5u") { if (runningRef.current) return; if (v.length > 0) change("", 0); else process.exit(0); return; }
@@ -631,6 +659,15 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const [atDismissed, setAtDismissed] = useState(false); // Esc dismisses the @-picker until the token changes
   const filesRef = useRef<string[] | null>(null); // project file list, loaded once when the @-picker first opens
   const [, setFilesTick] = useState(0); // bump to re-render after the file list loads
+  // Collapsed pastes: the composer shows a ⟨paste #N⟩ placeholder; the full text is stored here and
+  // re-expanded when the prompt is submitted.
+  const pasteMapRef = useRef<Map<number, string>>(new Map());
+  const pasteIdRef = useRef(0);
+  const makePasteToken = (text: string): string => {
+    const id = ++pasteIdRef.current;
+    pasteMapRef.current.set(id, text);
+    return pasteToken(id, text);
+  };
   const slashCmds = matchCommands(draft);
   const slashOpen = (state.mode ?? "running") === "input" && !state.pending && draft.startsWith("/") && slashCmds.length > 0;
   const slashIdx = Math.min(slashSel, Math.max(0, slashCmds.length - 1));
@@ -961,6 +998,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             jobRunning={running}
             onPasteImage={pasteImage}
             onHelp={() => setHelpOpen(true)}
+            makePasteToken={makePasteToken}
             onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); setSlashSel(0); }}
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
@@ -985,12 +1023,15 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
                 controller.note(`Unknown command: \`${trimmed}\` — type \`/\` to see the available commands.`);
                 return;
               }
-              if (trimmed) historyRef.current = [...historyRef.current, t];
+              // Expand any collapsed-paste placeholders back to their full text before the prompt goes out.
+              const full = expandPasteTokens(t, pasteMapRef.current);
+              pasteMapRef.current.clear(); pasteIdRef.current = 0;
+              if (full.trim()) historyRef.current = [...historyRef.current, full];
               histIdxRef.current = -1; stashRef.current = "";
               setScroll(0); setDraft(""); setDraftCursor(0);
               // Submitting a plain prompt WHILE a job runs → ask how to deliver it (Queue / By-the-way / Steer).
-              if (running && trimmed) { setSendModeText(t); return; }
-              controller.submitTask(t);
+              if (running && full.trim()) { setSendModeText(full); return; }
+              controller.submitTask(full);
             }}
           />
         </Box>
