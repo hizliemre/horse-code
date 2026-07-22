@@ -160,10 +160,10 @@ describe("TuiController", () => {
     const c = new TuiController();
     c.openPicker();
     expect(c.getState().mode).toBe("picker");
-    expect(c.getState().picker).toEqual({ models: [], loading: true });
+    expect(c.getState().picker).toEqual({ models: [], loading: true, stage: "model" });
 
     c.setPickerModels(["a/one", "b/two"]);
-    expect(c.getState().picker).toEqual({ models: ["a/one", "b/two"], loading: false });
+    expect(c.getState().picker).toEqual({ models: ["a/one", "b/two"], loading: false, stage: "model" });
 
     c.applyModel("a/one");
     expect(c.getState().mode).toBe("input");
@@ -171,11 +171,28 @@ describe("TuiController", () => {
     expect(c.getState().currentModel).toBe("a/one");
   });
 
+  it("role picker: openRolePicker(roles) → chooseRole → setPickerModels → applyRoleModel", () => {
+    const c = new TuiController();
+    c.openRolePicker(["coach", "coder"]);
+    expect(c.getState().mode).toBe("picker");
+    expect(c.getState().picker).toEqual({ models: ["coach", "coder"], loading: false, stage: "role" });
+
+    c.chooseRole("coder"); // role chosen → model stage for that role (App fetches models)
+    expect(c.getState().picker).toEqual({ models: [], loading: true, stage: "model", role: "coder" });
+    c.setPickerModels(["a/one", "b/two"]);
+    expect(c.getState().picker).toMatchObject({ models: ["a/one", "b/two"], stage: "model", role: "coder" });
+
+    c.applyRoleModel("coder", "a/one");
+    expect(c.getState().mode).toBe("input");
+    expect(c.getState().picker).toBeUndefined();
+    expect(c.getState().transcript.at(-1)?.text).toBe("`coder` → a/one"); // confirmation note
+  });
+
   it("picker: setPickerError + cancelPicker", () => {
     const c = new TuiController();
     c.openPicker();
     c.setPickerError("network down");
-    expect(c.getState().picker).toEqual({ models: [], loading: false, error: "network down" });
+    expect(c.getState().picker).toEqual({ models: [], loading: false, error: "network down", stage: "model" });
     c.cancelPicker();
     expect(c.getState().mode).toBe("input");
     expect(c.getState().picker).toBeUndefined();

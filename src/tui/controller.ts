@@ -30,7 +30,9 @@ export interface TuiState {
   transcript: { role: "user" | "assistant"; text: string }[];
   queued: number; // prompts typed while a job is running, waiting to run next
   meta?: TurnMeta;
-  picker?: { models: string[]; loading: boolean; error?: string };
+  // stage "role": the list is role names (pick which role to set); "model": the list is models.
+  // role set (+ stage "model") → the picked model is applied to THAT role; role undefined → session-wide (/model).
+  picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
   activity: ToolActivity[]; // recent file writes/edits (newest first) → live activity strip
@@ -180,23 +182,50 @@ export class TuiController {
     this.notify();
   }
 
+  /** /model: pick a model for the whole session (role undefined). */
   openPicker(): void {
-    this.state = { ...this.state, mode: "picker", picker: { models: [], loading: true } };
+    this.state = { ...this.state, mode: "picker", picker: { models: [], loading: true, stage: "model" } };
+    this.notify();
+  }
+
+  /** /roles setmodel step 1: pick which role to set (list of role names). */
+  openRolePicker(roles: string[]): void {
+    this.state = { ...this.state, mode: "picker", picker: { models: roles, loading: false, stage: "role" } };
+    this.notify();
+  }
+
+  /** /roles setmodel step 2: a role was chosen → now pick a model for it (App fetches the model list). */
+  chooseRole(role: string): void {
+    this.state = { ...this.state, picker: { models: [], loading: true, stage: "model", role } };
     this.notify();
   }
 
   setPickerModels(models: string[]): void {
-    this.state = { ...this.state, picker: { models, loading: false } };
+    const p = this.state.picker;
+    if (!p) return;
+    this.state = { ...this.state, picker: { ...p, models, loading: false } };
     this.notify();
   }
 
   setPickerError(msg: string): void {
-    this.state = { ...this.state, picker: { models: [], loading: false, error: msg } };
+    const p = this.state.picker;
+    if (!p) return;
+    this.state = { ...this.state, picker: { ...p, models: [], loading: false, error: msg } };
     this.notify();
   }
 
   applyModel(model: string): void {
     this.state = { ...this.state, mode: "input", picker: undefined, currentModel: model };
+    this.notify();
+  }
+
+  /** Applies a model to a single role (per-role) and confirms it in the transcript. */
+  applyRoleModel(role: string, model: string): void {
+    this.state = {
+      ...this.state,
+      mode: "input", picker: undefined,
+      transcript: [...this.state.transcript, { role: "assistant", text: `\`${role}\` → ${model}` }],
+    };
     this.notify();
   }
 

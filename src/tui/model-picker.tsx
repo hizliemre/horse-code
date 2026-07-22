@@ -7,7 +7,7 @@ const VISIBLE = 8;
 // border(2) + header(1) + filter(1) + scroll-up(1) + VISIBLE + scroll-down(1) + hint(1).
 export const PICKER_HEIGHT = VISIBLE + 7;
 
-export function ModelPicker({ models, current, loading, error, cols, onSelect, onCancel }: {
+export function ModelPicker({ models, current, loading, error, cols, onSelect, onCancel, title = "Select model" }: {
   models: string[];
   current: string;
   loading: boolean;
@@ -15,6 +15,7 @@ export function ModelPicker({ models, current, loading, error, cols, onSelect, o
   cols: number;
   onSelect: (model: string) => void;
   onCancel: () => void;
+  title?: string; // header label (e.g. "Select model" | "Select role")
 }): React.ReactElement {
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState(0);
@@ -81,7 +82,7 @@ export function ModelPicker({ models, current, loading, error, cols, onSelect, o
           ];
   return (
     <Box flexDirection="column" width={w} height={PICKER_HEIGHT} borderStyle="round" borderColor="cyan" paddingX={1}>
-      <Text color="cyan" bold wrap="truncate-end">{`━━ Select model ━━  ${loading || error ? "" : `${filtered.length}/${total}`}`}</Text>
+      <Text color="cyan" bold wrap="truncate-end">{`━━ ${title} ━━  ${loading || error ? "" : `${filtered.length}/${total}`}`}</Text>
       <Text wrap="truncate-end">
         <Text color="cyan">{"filter: "}</Text>{filter}<Text inverse>{" "}</Text>
         <Text dimColor>{`   current: ${current}`}</Text>

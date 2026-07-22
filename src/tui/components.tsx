@@ -447,7 +447,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, listRoles, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -455,6 +455,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   refinerModel?: string; // the refiner's model — shown only in the "refining… (model)" status line
   listModels?: () => Promise<string[]>;
   setModel?: (m: string) => void;
+  setRoleModel?: (role: string, m: string) => void; // per-role model override (/roles setmodel)
   listRoles?: () => { name: string; model: string }[]; // /roles → role → model table
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
@@ -632,15 +633,28 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           <ViewportLines lines={win} height={viewportH} />
           <Text dimColor> </Text>
           <Box marginTop={1}>
-            <ModelPicker
-              models={state.picker?.models ?? []}
-              current={state.currentModel || model || "—"}
-              loading={state.picker?.loading ?? false}
-              error={state.picker?.error}
-              cols={size.cols}
-              onSelect={(m) => { setModel?.(m); controller.applyModel(m); }}
-              onCancel={() => controller.cancelPicker()}
-            />
+            {(() => {
+              const pk = state.picker;
+              const isRole = pk?.stage === "role";
+              const roleModel = pk?.role ? (listRoles?.().find((r) => r.name === pk.role)?.model ?? "—") : undefined;
+              return (
+                <ModelPicker
+                  key={`${pk?.stage}:${pk?.role ?? "global"}`} // remount on stage change → cursor/filter reset (no stale selection)
+                  models={pk?.models ?? []}
+                  current={isRole ? "" : (roleModel ?? (state.currentModel || model || "—"))}
+                  loading={pk?.loading ?? false}
+                  error={pk?.error}
+                  cols={size.cols}
+                  title={isRole ? "Select role" : (pk?.role ? `Model for ${pk.role}` : "Select model")}
+                  onSelect={(item) => {
+                    if (isRole) { controller.chooseRole(item); return; }                    // step 1 → step 2
+                    if (pk?.role) { setRoleModel?.(pk.role, item); controller.applyRoleModel(pk.role, item); return; } // per-role
+                    setModel?.(item); controller.applyModel(item);                            // session-wide (/model)
+                  }}
+                  onCancel={() => controller.cancelPicker()}
+                />
+              );
+            })()}
           </Box>
         </Box>
       );
@@ -724,7 +738,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /roles subcommands (no palette match for the arg form): show the table / reopen the picker.
               const cmd = t.trim().toLowerCase();
               if (cmd === "/roles") { setScroll(0); setDraft(""); setDraftCursor(0); controller.note(rolesReport()); return; }
-              if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openPicker(); return; }
+              if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
               if (t.trim()) historyRef.current = [...historyRef.current, t];
               histIdxRef.current = -1; stashRef.current = "";
               setScroll(0); setDraft(""); setDraftCursor(0); controller.submitTask(t);

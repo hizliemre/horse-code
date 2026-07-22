@@ -108,3 +108,20 @@ describe("RoleRegistry.setModelOverride", () => {
     expect(reg.resolve("coach").model).toBe("m2"); // empty string clears
   });
 });
+
+describe("RoleRegistry.setRoleModel", () => {
+  it("per-role override wins over the global override + config; applies to the refiner too; clears on empty", () => {
+    const reg = new RoleRegistry(
+      { coder: { models: ["m1"] }, coach: { models: ["m2"] }, refiner: { models: ["r1"] } },
+      { coder: "P-coder", coach: "P-coach", refiner: "P-refiner" },
+    );
+    reg.setModelOverride("live/global");
+    reg.setRoleModel("coder", "special/coder");
+    expect(reg.peekModel("coder")).toBe("special/coder"); // per-role beats global
+    expect(reg.peekModel("coach")).toBe("live/global");   // still the global override
+    reg.setRoleModel("refiner", "special/refiner");
+    expect(reg.resolve("refiner").model).toBe("special/refiner"); // explicit per-role applies even to refiner
+    reg.setRoleModel("coder", "");
+    expect(reg.peekModel("coder")).toBe("live/global"); // cleared → falls back to global override
+  });
+});
