@@ -10,6 +10,8 @@ export interface SlashCommand {
 export const COMMANDS: SlashCommand[] = [
   { name: "/model", desc: "Switch the model for this session" },
   { name: "/roles", desc: "Show roles and their models (/roles setmodel opens the picker)" },
+  { name: "/sessions", desc: "List resumable sessions for this project" },
+  { name: "/resume", desc: "Resume a past session (/resume N; /resume alone = most recent)" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },

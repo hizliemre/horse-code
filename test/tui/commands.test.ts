@@ -25,6 +25,14 @@ describe("slash commands", () => {
     expect(helpText()).toContain("/exit");
   });
 
+  it("surfaces the session commands (/sessions, /resume)", () => {
+    const names = COMMANDS.map((c) => c.name);
+    expect(names).toContain("/sessions");
+    expect(names).toContain("/resume");
+    expect(matchCommands("/res").map((c) => c.name)).toEqual(["/resume"]);
+    expect(matchCommands("/sess").map((c) => c.name)).toEqual(["/sessions"]);
+  });
+
   it("does NOT surface the internal spec-kit phase commands (they confuse users)", () => {
     const names = COMMANDS.map((c) => c.name);
     for (const internal of ["/constitution", "/specify", "/clarify", "/plan", "/tasks"]) {

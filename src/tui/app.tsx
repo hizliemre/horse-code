@@ -6,9 +6,11 @@ import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
+import { homedir } from "node:os";
 import { TuiController } from "./controller.js";
 import { App } from "./components.js";
 import { REQUIRED_ROLES } from "../prompts.js";
+import { SessionStore } from "../session/store.js";
 
 export interface RunTuiOpts {
   buildDeps: (read: LineReader) => Promise<JobDeps>;
@@ -56,6 +58,15 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const deps: JobDeps = { ...deps0, provider: meterProvider(deps0.provider, controller.onUsage), onActivity: controller.pushActivity };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
+  // Session persistence (per project) → the transcript is saved after every turn so a session can be resumed.
+  const store = new SessionStore({ home: homedir(), cwd: process.cwd() });
+  const listSessions = (): Promise<{ id: string; title: string; updatedAt: number; count: number }[]> =>
+    store.list().then((ss) => ss.filter((s) => s.id !== store.id)); // exclude the session we're writing to
+  const resumeSession = async (id: string): Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined> => {
+    const d = await store.load(id);
+    if (d) store.setActive(id); // continue that session → later saves overwrite it, not fork
+    return d;
+  };
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
   // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
@@ -108,6 +119,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   let taskPromise = controller.awaitTask();
   const instance = render(
     <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={(role, m) => deps0.roleRegistry.setRoleModel(role, m)} listRoles={listRoles}
+      listSessions={listSessions} resumeSession={resumeSession}
       onExit={() => { restore(); process.exit(0); }} />,
   );
   try {
@@ -135,6 +147,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       } catch (e) {
         controller.endRun(jobAbort.signal.aborted ? "cancelled" : `error: ${e instanceof Error ? e.message : String(e)}`);
       }
+      // Persist the conversation after every turn → the session can be resumed later (best-effort).
+      void store.save(controller.messages()).catch(() => { /* persistence is non-fatal */ });
       taskPromise = controller.awaitTask(); // input-mode for the next task
     }
   } finally {

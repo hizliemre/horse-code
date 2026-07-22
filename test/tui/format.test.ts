@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtTokens, fmtDuration } from "../../src/tui/format.js";
+import { fmtTokens, fmtDuration, relTime } from "../../src/tui/format.js";
 import { donePhrase } from "../../src/tui/labels.js";
 
 describe("fmtTokens", () => {
@@ -16,6 +16,16 @@ describe("fmtDuration", () => {
     expect(fmtDuration(83_000)).toBe("1m 23s");
     expect(fmtDuration(65_000)).toBe("1m 05s");
     expect(fmtDuration(0)).toBe("0s");
+  });
+});
+
+describe("relTime", () => {
+  it("buckets into just now / m / h / d ago", () => {
+    const now = 1_000_000_000_000;
+    expect(relTime(now - 10_000, now)).toBe("just now"); // <1m
+    expect(relTime(now - 5 * 60_000, now)).toBe("5m ago");
+    expect(relTime(now - 3 * 3_600_000, now)).toBe("3h ago");
+    expect(relTime(now - 2 * 86_400_000, now)).toBe("2d ago");
   });
 });
 

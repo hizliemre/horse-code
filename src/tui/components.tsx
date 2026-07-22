@@ -5,7 +5,7 @@ import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { ProgressView } from "./progress-view.js";
 import { donePhrase } from "./labels.js";
-import { fmtDuration } from "./format.js";
+import { fmtDuration, relTime } from "./format.js";
 import { Markdown } from "./markdown.js";
 import type { TurnMeta, RunningAgent } from "./controller.js";
 import type { StyledLine } from "./lines.js";
@@ -432,7 +432,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -442,6 +442,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   setModel?: (m: string) => void;
   setRoleModel?: (role: string, m: string) => void; // per-role model override (/roles setmodel)
   listRoles?: () => { name: string; model: string }[]; // /roles → role → model table
+  listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
+  resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
   const [state, setState] = useState(controller.getState());
@@ -509,10 +511,35 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const rows = (listRoles?.() ?? []).map((r) => `- \`${r.name}\` → ${r.model || "—"}`);
     return `**Roles & models:**\n${rows.join("\n")}\n\n_Type \`/roles setmodel\` (or \`/model\`) to change the session model._`;
   };
+  // /sessions → list resumable sessions (newest first) as a numbered note.
+  const doSessions = (): void => {
+    if (!listSessions) { controller.note("Sessions are not available."); return; }
+    listSessions().then((ss) => {
+      if (ss.length === 0) { controller.note("No past sessions for this project yet."); return; }
+      const rows = ss.map((s, i) => `${i + 1}. **${s.title}** — ${s.count} msg · ${relTime(s.updatedAt)}`);
+      controller.note(`**Sessions** (this project):\n${rows.join("\n")}\n\n_Type \`/resume N\` to continue one._`);
+    }, (e) => controller.note(`sessions error: ${e instanceof Error ? e.message : String(e)}`));
+  };
+  // /resume [N] → load the N-th (1-based, newest first) session; no arg = most recent.
+  const doResume = (arg?: string): void => {
+    if (!listSessions || !resumeSession) { controller.note("Resume is not available."); return; }
+    const n = arg && /^\d+$/.test(arg.trim()) ? parseInt(arg.trim(), 10) : 1;
+    listSessions().then((ss) => {
+      const s = ss[n - 1];
+      if (!s) { controller.note(`No session #${n} — type \`/sessions\` to list them.`); return; }
+      resumeSession(s.id).then((d) => {
+        if (!d) { controller.note("Could not load that session."); return; }
+        controller.loadTranscript(d.messages);
+        controller.note(`Resumed **${s.title}** (${d.messages.length} messages). Continue where you left off.`);
+      });
+    }, (e) => controller.note(`resume error: ${e instanceof Error ? e.message : String(e)}`));
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
     else if (c.name === "/roles") controller.note(rolesReport());
+    else if (c.name === "/sessions") doSessions();
+    else if (c.name === "/resume") doResume();
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -725,6 +752,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               const known = COMMANDS.find((c) => c.name === cmd);
               if (known) { runSlash(known); return; }
               if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
+              // /resume N (argument form) → resume the N-th session.
+              if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); doResume(trimmed.slice("/resume".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
               if (trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);

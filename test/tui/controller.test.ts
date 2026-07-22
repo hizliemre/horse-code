@@ -262,6 +262,31 @@ describe("TuiController", () => {
     ]);
   });
 
+  it("messages() returns only conversation messages, excluding inline tool items", () => {
+    const c = new TuiController();
+    c.awaitTask(); c.submitTask("do X"); c.beginRun();
+    c.pushActivity({ tool: "write", target: "spec.md", lines: 1, preview: ["x"] });
+    c.endRun("done");
+    expect(c.messages()).toEqual([
+      { role: "user", text: "do X" },
+      { role: "assistant", text: "done" },
+    ]);
+  });
+
+  it("loadTranscript replaces the transcript with a resumed session's messages (used by /resume)", () => {
+    const c = new TuiController();
+    c.awaitTask(); c.submitTask("stale"); c.beginRun(); c.endRun("stale answer");
+    c.loadTranscript([
+      { role: "user", text: "earlier prompt" },
+      { role: "assistant", text: "earlier reply" },
+    ]);
+    expect(c.getState().transcript).toEqual([
+      { role: "user", text: "earlier prompt" },
+      { role: "assistant", text: "earlier reply" },
+    ]);
+    expect(c.getState().meta).toBeUndefined();
+  });
+
   it("clearTranscript empties the transcript + drops the metrics (used by /clear)", () => {
     let t = 0;
     const c = new TuiController(() => t);

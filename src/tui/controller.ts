@@ -249,6 +249,19 @@ export class TuiController {
     this.state = { ...this.state, transcript: [], meta: undefined };
     this.notify();
   }
+
+  /** Replace the transcript with a resumed session's messages (used by /resume). */
+  loadTranscript(messages: { role: "user" | "assistant"; text: string }[]): void {
+    this.state = { ...this.state, transcript: messages.map((m) => ({ role: m.role, text: m.text })), meta: undefined };
+    this.notify();
+  }
+
+  /** The conversation messages only (tool-activity items excluded) — persisted for resume. */
+  messages(): { role: "user" | "assistant"; text: string }[] {
+    return this.state.transcript.filter(
+      (m): m is { role: "user" | "assistant"; text: string } => !("kind" in m),
+    );
+  }
 }
 
 /** Returns a copy of the transcript with the last entry's text swapped to `text`, only if it's a user entry. */
