@@ -284,6 +284,24 @@ describe("Ink components", () => {
     expect(f).not.toContain("[question]");
   });
 
+  it("App: /roles setmodel opens the model picker", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const c = new TuiController();
+    c.awaitTask();
+    const { stdin, lastFrame, unmount } = render(
+      <App controller={c} fullscreen model="m" listModels={async () => ["a/one"]}
+        listRoles={() => [{ name: "coach", model: "cc/opus" }]} />,
+    );
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("> "); i++) await sleep(15);
+    stdin.write("/roles setmodel");
+    // poll the INPUT line (the note hint would also contain "/roles setmodel")
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("> /roles setmodel"); i++) await sleep(15);
+    stdin.write("\r");
+    for (let i = 0; i < 200 && c.getState().mode !== "picker"; i++) await sleep(15);
+    expect(c.getState().mode).toBe("picker");
+    unmount();
+  });
+
   it("App: after a chat turn finishes, shows the 'zottired for Xm XXs' completion line", () => {
     let t = 0;
     const c = new TuiController(() => t);

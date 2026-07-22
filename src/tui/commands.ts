@@ -9,6 +9,7 @@ export interface SlashCommand {
 // are internal pipeline steps, NOT user commands — surfacing them in the palette only confuses users.
 export const COMMANDS: SlashCommand[] = [
   { name: "/model", desc: "Switch the model for this session" },
+  { name: "/roles", desc: "Show roles and their models (/roles setmodel opens the picker)" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },

@@ -8,6 +8,7 @@ import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { TuiController } from "./controller.js";
 import { App } from "./components.js";
+import { REQUIRED_ROLES } from "../prompts.js";
 
 export interface RunTuiOpts {
   buildDeps: (read: LineReader) => Promise<JobDeps>;
@@ -47,6 +48,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Coach model → always shown under the input; refiner model → shown only in the "refining… (model)" line.
   const coachModel = deps0.roleRegistry.peekModel("coach") || opts.model;
   const refinerModel = deps0.roleRegistry.peekModel("refiner") || opts.model;
+  // /roles → each role + the model it currently resolves to (reflects the live /model override).
+  const listRoles = (): { name: string; model: string }[] =>
+    REQUIRED_ROLES.map((r) => ({ name: r, model: deps0.roleRegistry.peekModel(r) }));
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.
   const deps: JobDeps = { ...deps0, provider: meterProvider(deps0.provider, controller.onUsage), onActivity: controller.pushActivity };
@@ -103,7 +107,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} listRoles={listRoles}
       onExit={() => { restore(); process.exit(0); }} />,
   );
   try {

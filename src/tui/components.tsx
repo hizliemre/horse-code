@@ -447,7 +447,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, listRoles, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -455,6 +455,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   refinerModel?: string; // the refiner's model — shown only in the "refining… (model)" status line
   listModels?: () => Promise<string[]>;
   setModel?: (m: string) => void;
+  listRoles?: () => { name: string; model: string }[]; // /roles → role → model table
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
   const [state, setState] = useState(controller.getState());
@@ -518,9 +519,14 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const slashOpen = (state.mode ?? "running") === "input" && !state.pending && draft.startsWith("/") && slashCmds.length > 0;
   const slashIdx = Math.min(slashSel, Math.max(0, slashCmds.length - 1));
   const completeSlash = (): void => { const c = slashCmds[slashIdx]; if (c) { setDraft(c.name); setDraftCursor(c.name.length); } };
+  const rolesReport = (): string => {
+    const rows = (listRoles?.() ?? []).map((r) => `- \`${r.name}\` → ${r.model || "—"}`);
+    return `**Roles & models:**\n${rows.join("\n")}\n\n_Type \`/roles setmodel\` (or \`/model\`) to change the session model._`;
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
+    else if (c.name === "/roles") controller.note(rolesReport());
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -715,6 +721,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); controller.answer(t); return; }
               // Slash palette open → Enter runs the selected command instead of submitting a prompt.
               if (slashOpen) { const c = slashCmds[slashIdx]; if (c) { runSlash(c); return; } }
+              // /roles subcommands (no palette match for the arg form): show the table / reopen the picker.
+              const cmd = t.trim().toLowerCase();
+              if (cmd === "/roles") { setScroll(0); setDraft(""); setDraftCursor(0); controller.note(rolesReport()); return; }
+              if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openPicker(); return; }
               if (t.trim()) historyRef.current = [...historyRef.current, t];
               histIdxRef.current = -1; stashRef.current = "";
               setScroll(0); setDraft(""); setDraftCursor(0); controller.submitTask(t);
