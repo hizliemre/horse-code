@@ -51,6 +51,7 @@ export class TuiController {
   private queue: string[] = []; // prompts submitted while running → drained by awaitTask
   private pendingAttachments: string[] = []; // pasted image data URIs staged for the next submit
   private turnAttachments: string[] = []; // snapshot handed to the running job (drained by takeAttachments)
+  private inbox: string[] = []; // "by-the-way" notes typed mid-run → folded into the running coach turn
   private listeners = new Set<() => void>();
   private agentStarts = new Map<string, number>(); // card id → when it entered IN-PROGRESS (our clock)
   private now: () => number;
@@ -189,6 +190,24 @@ export class TuiController {
     const a = this.turnAttachments;
     this.turnAttachments = [];
     return a;
+  }
+
+  /** "By-the-way": queue a note to fold into the running turn (with a transcript confirmation). */
+  addInboxNote(text: string): void {
+    this.inbox.push(text);
+    this.note(`↳ by-the-way (folded into the running turn): ${text}`);
+  }
+
+  /** Loop poll: take the next queued by-the-way note, or undefined. */
+  takeInboxNote(): string | undefined {
+    return this.inbox.shift();
+  }
+
+  /** Drain any by-the-way notes the running turn never consumed (run them as fresh turns instead). */
+  drainInbox(): string[] {
+    const n = this.inbox;
+    this.inbox = [];
+    return n;
   }
 
   beginRun(): void {

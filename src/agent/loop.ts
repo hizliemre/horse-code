@@ -17,6 +17,7 @@ export interface RoleAgentOptions {
   signal: AbortSignal;
   maxTurns?: number;
   onActivity?: (a: import("../core/types.js").ToolActivity) => void; // live file-write/edit activity → UI
+  inbox?: () => string | undefined; // polled each turn → a "by-the-way" note is folded in as a user message
 }
 
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
@@ -33,6 +34,11 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     if (turn >= maxTurns) {
       yield { type: "error", message: `maximum turn count exceeded (${maxTurns})` };
       return;
+    }
+    // "By-the-way" injection: fold any queued note in as a user message before this turn's request.
+    // Safe here — the previous turn's tool results are already appended, so a user message is well-ordered.
+    for (let note = opts.inbox?.(); note !== undefined; note = opts.inbox?.()) {
+      working.push({ role: "user", content: note });
     }
     turn++;
 

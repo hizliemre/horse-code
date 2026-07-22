@@ -274,6 +274,18 @@ describe("TuiController", () => {
     expect(c.takeAttachments()).toEqual([]); // drained once
   });
 
+  it("addInboxNote stages by-the-way notes (with a confirmation); takeInboxNote / drainInbox drain them", () => {
+    const c = new TuiController();
+    c.addInboxNote("also update the docs");
+    // a confirmation is shown in the transcript
+    expect(c.getState().transcript.some((m) => "role" in m && m.text.includes("also update the docs"))).toBe(true);
+    expect(c.takeInboxNote()).toBe("also update the docs");
+    expect(c.takeInboxNote()).toBeUndefined();
+    c.addInboxNote("x"); c.addInboxNote("y");
+    expect(c.drainInbox()).toEqual(["x", "y"]);
+    expect(c.takeInboxNote()).toBeUndefined();
+  });
+
   it("clearAttachments discards staged images", () => {
     const c = new TuiController();
     c.addAttachment("data:image/png;base64,AAA");

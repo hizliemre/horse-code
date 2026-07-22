@@ -91,6 +91,19 @@ describe("runRoleAgent", () => {
     expect(p.requests.length).toBe(3);
   });
 
+  it("inbox: a by-the-way note is folded in as a user message on a later turn", async () => {
+    const p = new MockProvider([
+      [{ type: "tool-call", toolCall: { id: "c1", name: "echo", arguments: '{"t":"x"}' } }, { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text-delta", text: "ok" }, { type: "done", finishReason: "stop" }],
+    ]);
+    const notes: (string | undefined)[] = [undefined, "also check the tests"]; // nothing on turn 1, a note before turn 2
+    let i = 0;
+    const inbox = (): string | undefined => notes[i++];
+    await drain(runRoleAgent(opts(p, { inbox })));
+    expect(p.requests[0].messages).not.toContainEqual({ role: "user", content: "also check the tests" });
+    expect(p.requests[1].messages).toContainEqual({ role: "user", content: "also check the tests" });
+  });
+
   it("previously aborted signal: emits abort event, provider is never called", async () => {
     const ac = new AbortController();
     ac.abort();

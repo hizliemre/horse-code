@@ -15,6 +15,8 @@ export interface TaskCycleDeps {
   specKit: () => Promise<SpecKitTemplates>;
   /** Live file-write/edit activity sink (wired to the TUI); undefined in headless/one-shot runs. */
   onActivity?: (a: ToolActivity) => void;
+  /** "By-the-way" note source: the coach loop polls it each turn to fold in mid-run guidance. */
+  inbox?: () => string | undefined;
 }
 
 export type ImplementerRole = "coder" | "designer";

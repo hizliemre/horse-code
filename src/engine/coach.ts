@@ -24,6 +24,7 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     approve: deps.approve,
     cwd,
     signal: deps.signal,
+    inbox: deps.inbox, // "by-the-way" notes typed mid-run are folded into the coach's turn
   };
   const msg = await runToCompletion(opts);
   return msg.content;

@@ -191,6 +191,61 @@ export function FilePicker({ matches, selected, query, cols }: { matches: string
   );
 }
 
+export type SendMode = "queue" | "byTheWay" | "steer";
+const SEND_MODES: { mode: SendMode; key: string; label: string; desc: string }[] = [
+  { mode: "queue", key: "q", label: "Queue", desc: "run after the current turn finishes" },
+  { mode: "byTheWay", key: "b", label: "By the way", desc: "fold into the running turn (no restart)" },
+  { mode: "steer", key: "s", label: "Steer", desc: "stop the current turn and run this next" },
+];
+
+/** Modal shown when you submit a prompt while a job runs: choose how the message is delivered. */
+export function SendModePicker({ text, cols, onSelect, onEscape }: {
+  text: string;
+  cols: number;
+  onSelect: (mode: SendMode) => void;
+  onEscape: () => void;
+}): React.ReactElement {
+  const [cursor, setCursor] = useState(0);
+  const cursorRef = useRef(0);
+  const cfg = useRef({ onSelect, onEscape });
+  cfg.current = { onSelect, onEscape };
+  const { stdin, setRawMode, isRawModeSupported } = useStdin();
+  useEffect(() => {
+    if (!stdin) return;
+    if (isRawModeSupported && setRawMode) setRawMode(true);
+    const onData = (chunk: Buffer | string): void => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      const kk = parseKittyKey(s);
+      if (s === "\x1b" || s === "\x03" || s === "\x1b[99;5u" || kk?.type === "escape") { cfg.current.onEscape(); return; }
+      if (s === "\x1b[A" || s === "\x1bOA") { cursorRef.current = Math.max(0, cursorRef.current - 1); setCursor(cursorRef.current); return; }
+      if (s === "\x1b[B" || s === "\x1bOB") { cursorRef.current = Math.min(SEND_MODES.length - 1, cursorRef.current + 1); setCursor(cursorRef.current); return; }
+      const quick = SEND_MODES.find((m) => m.key === s.toLowerCase());
+      if (quick) { cfg.current.onSelect(quick.mode); return; }
+      if (s === "\r" || kk?.type === "enter") { cfg.current.onSelect(SEND_MODES[cursorRef.current].mode); return; }
+    };
+    stdin.on("data", onData);
+    return () => { stdin.off("data", onData); };
+  }, [stdin, setRawMode, isRawModeSupported]);
+
+  const w = Math.max(24, cols - 2);
+  const preview = text.length > w - 12 ? `${text.slice(0, w - 13)}…` : text;
+  return (
+    <Box flexDirection="column" width={w} borderStyle="round" borderColor="#ff9a2e" paddingX={1}>
+      <Text dimColor wrap="truncate-end">{`Send while running: "${preview}"`}</Text>
+      {SEND_MODES.map((m, i) => {
+        const isSel = i === cursor;
+        return (
+          <Text key={m.mode} wrap="truncate-end">
+            <Text color={isSel ? "#ff9a2e" : undefined} inverse={isSel} bold={isSel}>{`${isSel ? "› " : "  "}[${m.key}] ${m.label}`}</Text>
+            <Text dimColor>{` — ${m.desc}`}</Text>
+          </Text>
+        );
+      })}
+      <Text dimColor wrap="truncate-end">↑/↓ or q/b/s · Enter select · Esc back to typing</Text>
+    </Box>
+  );
+}
+
 /** Slash-command palette shown above the input when the draft starts with "/". */
 export function SlashPalette({ commands, selected, cols }: { commands: SlashCommand[]; selected: number; cols: number }): React.ReactElement {
   const w = Math.max(24, cols - 2);
@@ -498,7 +553,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -510,6 +565,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listRoles?: () => { name: string; model: string }[]; // /roles → role → model table
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
+  cancelJob?: () => void; // abort the running job (Steer send-mode)
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
   const [state, setState] = useState(controller.getState());
@@ -570,6 +626,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   // Esc on a choice question dismisses the selector → fall back to free-text; reset per new question.
   const [choiceDismissed, setChoiceDismissed] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false); // "?" overlay (keyboard + commands cheat-sheet)
+  const [sendModeText, setSendModeText] = useState<string | null>(null); // prompt submitted mid-run, awaiting a send-mode choice
   const [atSel, setAtSel] = useState(0); // @-file picker selection
   const [atDismissed, setAtDismissed] = useState(false); // Esc dismisses the @-picker until the token changes
   const filesRef = useRef<string[] | null>(null); // project file list, loaded once when the @-picker first opens
@@ -591,6 +648,20 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     setDraft(before + ins + draft.slice(draftCursor));
     setDraftCursor((before + ins).length);
     setAtSel(0);
+  };
+  // Send-mode picker (submit while a job runs): deliver the message as Queue / By-the-way / Steer.
+  const dispatchSend = (mode: "queue" | "byTheWay" | "steer"): void => {
+    const t = sendModeText;
+    setSendModeText(null);
+    if (t === null) return;
+    if (mode === "byTheWay") { controller.addInboxNote(t); return; }
+    controller.submitTask(t); // Queue and Steer both enqueue…
+    if (mode === "steer") cancelJob?.(); // …Steer also aborts the current turn so the queued prompt runs now
+  };
+  const cancelSend = (): void => {
+    const t = sendModeText;
+    setSendModeText(null);
+    if (t) { setDraft(t); setDraftCursor(t.length); } // Esc → back to editing the message
   };
   const rolesReport = (): string => {
     const rows = (listRoles?.() ?? []).map((r) => `- \`${r.name}\` → ${r.model || "—"}`);
@@ -675,6 +746,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   keyRef.current = (s: string): void => {
     // Help overlay owns stdin while open: Esc / q / ? closes it, everything else is swallowed.
     if (helpOpen) { if (s === "\x1b" || s === "q" || s === "?") setHelpOpen(false); return; }
+    if (sendModeText !== null) return; // the SendModePicker owns stdin while it's open
     if (!fullscreen || state.mode === "picker") return;
     if (state.pending?.options?.length) return; // ChoiceInput owns stdin while a choice is pending
     const isInput = (state.mode ?? "running") === "input";
@@ -812,11 +884,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const choiceActive = choiceOptions.length > 0 && !choiceDismissed; // Esc dismisses → free-text fallback
     // Help overlay height: border(2) + title(1) + per-section (marginTop 1 + title 1 + entries) + footer(2).
     const helpH = 2 + 1 + helpSections().reduce((a, s) => a + 2 + s.entries.length, 0) + 2;
-    const inputBoxH = helpOpen
-      ? inputMarginTop + helpH
-      : choiceActive
-        ? inputMarginTop + choiceHeight(choiceOptions.length)
-        : 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
+    const inputBoxH = sendModeText !== null
+      ? inputMarginTop + 6 // send-mode picker: border(2) + title(1) + 3 modes + hint(1) - 1
+      : helpOpen
+        ? inputMarginTop + helpH
+        : choiceActive
+          ? inputMarginTop + choiceHeight(choiceOptions.length)
+          : 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
     const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
     const queuedH = state.queued > 0 ? 1 : 0;
@@ -845,7 +919,11 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         ) : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
         {atOpen ? <FilePicker matches={atMatches} selected={atIdx} query={at?.query ?? ""} cols={size.cols} /> : null}
-        {helpOpen ? (
+        {sendModeText !== null ? (
+          <Box marginTop={inputMarginTop}>
+            <SendModePicker text={sendModeText} cols={size.cols} onSelect={dispatchSend} onEscape={cancelSend} />
+          </Box>
+        ) : helpOpen ? (
           <Box marginTop={inputMarginTop}><HelpOverlay cols={size.cols} /></Box>
         ) : choiceActive ? (
           <Box marginTop={inputMarginTop}>
@@ -891,7 +969,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               }
               if (trimmed) historyRef.current = [...historyRef.current, t];
               histIdxRef.current = -1; stashRef.current = "";
-              setScroll(0); setDraft(""); setDraftCursor(0); controller.submitTask(t);
+              setScroll(0); setDraft(""); setDraftCursor(0);
+              // Submitting a plain prompt WHILE a job runs → ask how to deliver it (Queue / By-the-way / Steer).
+              if (running && trimmed) { setSendModeText(t); return; }
+              controller.submitTask(t);
             }}
           />
         </Box>

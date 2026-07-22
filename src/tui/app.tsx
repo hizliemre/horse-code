@@ -58,7 +58,12 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     REQUIRED_ROLES.map((r) => ({ name: r, model: deps0.roleRegistry.peekModel(r) }));
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.
-  const deps: JobDeps = { ...deps0, provider: meterProvider(deps0.provider, controller.onUsage), onActivity: controller.pushActivity };
+  const deps: JobDeps = {
+    ...deps0,
+    provider: meterProvider(deps0.provider, controller.onUsage),
+    onActivity: controller.pushActivity,
+    inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
+  };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
   // Session persistence (per project) → the transcript is saved after every turn so a session can be resumed.
@@ -134,6 +139,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const instance = render(
     <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={(role, m) => deps0.roleRegistry.setRoleModel(role, m)} listRoles={listRoles}
       listSessions={listSessions} resumeSession={resumeSession}
+      cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,
   );
   try {
@@ -165,6 +171,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       }
       // Persist the conversation after every turn → the session can be resumed later (best-effort).
       void store.save(controller.messages()).catch(() => { /* persistence is non-fatal */ });
+      // Any "by-the-way" notes the turn never consumed (e.g. a short chat or a non-coach turn) → run them next.
+      for (const note of controller.drainInbox()) controller.submitTask(note);
       taskPromise = controller.awaitTask(); // input-mode for the next task
     }
   } finally {
