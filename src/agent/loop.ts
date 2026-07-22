@@ -19,6 +19,7 @@ export interface RoleAgentOptions {
   maxTurns?: number;
   onActivity?: (a: import("../core/types.js").ToolActivity) => void; // live file-write/edit activity → UI
   inbox?: () => string | undefined; // polled each turn → a "by-the-way" note is folded in as a user message
+  remember?: (fact: string) => void; // remember_fact tool → persist a durable fact
 }
 
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
@@ -83,6 +84,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       cwd: opts.cwd,
       signal: opts.signal,
       onActivity: opts.onActivity,
+      remember: opts.remember,
     });
     for (const r of results) {
       // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.

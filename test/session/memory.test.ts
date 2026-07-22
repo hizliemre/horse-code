@@ -43,6 +43,20 @@ describe("MemoryStore", () => {
     expect(s.all().map((e) => e.text)).toEqual(["the api base url is https://new.example.com"]);
   });
 
+  it("serializes concurrent writes without losing entries (parallel-writer safety)", async () => {
+    // distinct-topic facts (no supersession between them) to isolate the concurrency behavior
+    const facts = [
+      "prefer pnpm over npm", "the api base is example.com", "tests live in spec dir",
+      "deploy runs on push", "logging uses pino library", "auth handled by clerk",
+      "database is postgres", "styling with tailwind", "bundler is tsup", "runtime targets node",
+    ];
+    const s = store();
+    await Promise.all(facts.map((f) => s.add(f)));
+    expect(s.all()).toHaveLength(10);
+    const reopened = store();
+    expect(await reopened.load()).toHaveLength(10); // all 10 survived on disk
+  });
+
   it("reinforce bumps a memory's use count and persists it", async () => {
     const s = store();
     const r = await s.add("prefer pnpm");

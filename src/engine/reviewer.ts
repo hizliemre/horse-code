@@ -7,6 +7,7 @@ import { readFileTool } from "../tools/read.js";
 import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
 import { buildSkillTool } from "../skills/apply.js";
+import { rememberFactTool } from "../tools/remember.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 
 export const VerdictSchema = z.object({
@@ -14,13 +15,14 @@ export const VerdictSchema = z.object({
   notes: z.array(z.string()),
 });
 
-/** Reviewer's read-only toolset: read/grep/glob + skill (NO write/edit/shell). */
-export function readOnlyRegistry(deps: TaskCycleDeps): ToolRegistry {
+/** Reviewer's read-only toolset: read/grep/glob + skill (NO write/edit/shell). Coach also gets remember_fact. */
+export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean } = {}): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
   r.register(grepTool);
   r.register(globTool);
   r.register(buildSkillTool(deps.skillRegistry));
+  if (opts.remember) r.register(rememberFactTool);
   return r;
 }
 

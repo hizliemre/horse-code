@@ -71,6 +71,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     pins: () => pinStore.list(), // context pins → coach system prompt
     memory: () => memStore.all(), // cross-session memory → retrieved + injected into relevant turns
     reinforceMemory: (id) => { void memStore.reinforce(id); }, // bump memories the coach actually cited
+    rememberFact: (fact) => { // remember_fact tool → persist a fact learned mid-turn (from a tool result)
+      void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 remembered: ${fact}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`); });
+    },
     compactionState: {}, // holds the compaction summary cache across turns (invalidated on /clear or /resume by fingerprint)
   };
   // /model picker → live-swap every role's model on the running session (no config write).

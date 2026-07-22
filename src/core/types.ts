@@ -41,6 +41,7 @@ export interface ToolContext {
   cwd: string;
   signal: AbortSignal;
   onActivity?: (a: ToolActivity) => void; // optional live-activity sink (file writes/edits)
+  remember?: (fact: string) => void; // persist a durable fact learned from a tool result (remember_fact tool)
 }
 
 export interface PermissionDescriptor {
