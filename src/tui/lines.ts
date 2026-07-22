@@ -125,6 +125,10 @@ const G: Record<string, string[]> = {
 };
 const WM = [0, 1, 2].map((r) => "HORSE CODE".split("").map((c) => G[c][r]).join(" "));
 const WM_W = Math.max(...WM.map((r) => r.length));
+const TAGLINE = "dıgıdık dıgıdık"; // the brand tagline (galloping onomatopoeia), same warm color as the logo
+const TAGLINE_COLOR = "#ff9a2e";
+export const VERSION = "v0.0.0-beta";
+const GREETING = "Welcome to Horse Code — describe a task to build, or type /help for commands.";
 const hx = (a: number[]): string =>
   "#" + a.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
 
@@ -148,6 +152,14 @@ export function flattenSplash(cols: number, _rows: number): StyledLine[] {
       }
       lines.push(center(segs));
     });
+    // Tagline + version, centered under the wordmark (same warm color as the logo for the tagline).
+    lines.push(center([{ text: TAGLINE, color: TAGLINE_COLOR, bold: true }]));
+    lines.push(center([{ text: VERSION, dim: true }]));
+    // Greeting (only when it fits without wrapping — center() pads but does not wrap).
+    if (cols >= GREETING.length + 2) {
+      lines.push([]);
+      lines.push(center([{ text: GREETING, dim: true }]));
+    }
   }
   lines.push([]);
   return lines;

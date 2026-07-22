@@ -51,4 +51,11 @@ describe("lines flatten", () => {
     const out = flattenSplash(80, 30);
     expect(out.length).toBeGreaterThan(0);
   });
+
+  it("flattenSplash includes the tagline, version, and greeting under the wordmark", () => {
+    const text = flattenSplash(100, 40).map((l) => l.map((s) => s.text).join("")).join("\n");
+    expect(text).toContain("dıgıdık dıgıdık");
+    expect(text).toContain("v0.0.0-beta");
+    expect(text).toContain("Welcome to Horse Code");
+  });
 });
