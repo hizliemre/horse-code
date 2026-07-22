@@ -53,6 +53,16 @@ describe("runCoachChat", () => {
     expect(names).not.toContain("shell");
   });
 
+  it("injects context pins into the system prompt", async () => {
+    const p = new MockProvider([textTurn("ok")]);
+    const d = { ...deps(p), pins: () => ["use pnpm", "target Node 22"] };
+    await runCoachChat(d, "hi", dir);
+    const system = p.requests[0].messages.find((m) => m.role === "system")?.content ?? "";
+    expect(system).toContain("User pins");
+    expect(system).toContain("- use pnpm");
+    expect(system).toContain("- target Node 22");
+  });
+
   it("injects the model + the user's language into the system prompt when language is given", async () => {
     const p = new MockProvider([textTurn("cevabım")]);
     await runCoachChat(deps(p), "which model are you?", dir, [], "Turkish");

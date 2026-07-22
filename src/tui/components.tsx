@@ -581,7 +581,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -593,6 +593,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listRoles?: () => { name: string; model: string }[]; // /roles → role → model table
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
+  listPins?: () => string[]; // /pins
+  addPin?: (text: string) => Promise<{ ok: true; pin: string } | { ok: false; error: string }>; // /pin <text>
+  removePin?: (n: number) => Promise<string | undefined>; // /pin rm N
   cancelJob?: () => void; // abort the running job (Steer send-mode)
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
@@ -751,6 +754,20 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     historyRef.current = [...historyRef.current, step];
     controller.submitTask(step);
   };
+  // /pins → list pinned facts.
+  const doPins = (): void => {
+    const pins = listPins?.() ?? [];
+    if (pins.length === 0) { controller.note("No pins yet — `/pin <text>` to add one."); return; }
+    controller.note(`**Pins** (this project):\n${pins.map((p, i) => `${i + 1}. ${p}`).join("\n")}\n\n_\`/pin rm N\` to remove._`);
+  };
+  // /pin <text> (add) · /pin rm N (remove) · /pin (list).
+  const doPin = (arg: string): void => {
+    if (!addPin || !removePin) { controller.note("Pins are not available."); return; }
+    const rm = arg.match(/^rm\s+(\d+)$/i);
+    if (rm) { removePin(parseInt(rm[1], 10)).then((r) => controller.note(r ? `Unpinned: ${r}` : `No pin #${rm[1]}.`)); return; }
+    if (!arg.trim()) { doPins(); return; }
+    addPin(arg.trim()).then((r) => controller.note(r.ok ? `Pinned: ${r.pin}` : `Couldn't pin: ${r.error}`));
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
@@ -758,6 +775,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/sessions") doSessions();
     else if (c.name === "/resume") doResume();
     else if (c.name === "/next") doNext();
+    else if (c.name === "/pins") doPins();
+    else if (c.name === "/pin") doPin("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -1017,6 +1036,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); doResume(trimmed.slice("/resume".length).trim()); return; }
               // /next N (argument form) → run the N-th suggested follow-up.
               if (cmd.startsWith("/next ")) { setScroll(0); setDraft(""); setDraftCursor(0); doNext(trimmed.slice("/next".length).trim()); return; }
+              // /pin <text> | /pin rm N (argument form).
+              if (cmd.startsWith("/pin ")) { setScroll(0); setDraft(""); setDraftCursor(0); doPin(trimmed.slice("/pin".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
               if (trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);

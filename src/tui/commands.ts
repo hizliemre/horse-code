@@ -13,6 +13,8 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/sessions", desc: "List resumable sessions for this project" },
   { name: "/resume", desc: "Resume a past session (/resume N; /resume alone = most recent)" },
   { name: "/next", desc: "Run a suggested follow-up (/next N; /next alone lists them)" },
+  { name: "/pin", desc: "Pin a fact for every turn (/pin <text>; /pin rm N)" },
+  { name: "/pins", desc: "List the pinned facts for this project" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },

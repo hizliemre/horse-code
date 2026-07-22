@@ -12,6 +12,7 @@ import { TuiController } from "./controller.js";
 import { App } from "./components.js";
 import { REQUIRED_ROLES } from "../prompts.js";
 import { SessionStore } from "../session/store.js";
+import { PinStore } from "../session/pins.js";
 import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
 
@@ -63,6 +64,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     provider: meterProvider(deps0.provider, controller.onUsage),
     onActivity: controller.pushActivity,
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
+    pins: () => pinStore.list(), // context pins → coach system prompt
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
@@ -75,6 +77,12 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     if (d) store.setActive(id); // continue that session → later saves overwrite it, not fork
     return d;
   };
+  // Context pins (per project) → injected into the coach's system prompt every turn.
+  const pinStore = new PinStore({ home: homedir(), cwd: process.cwd() });
+  await pinStore.load(); // populate the sync list() before the first request
+  const listPins = (): string[] => pinStore.list();
+  const addPin = (text: string): Promise<{ ok: true; pin: string } | { ok: false; error: string }> => pinStore.add(text);
+  const removePin = (n: number): Promise<string | undefined> => pinStore.remove(n);
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
   // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
@@ -141,6 +149,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const instance = render(
     <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={(role, m) => deps0.roleRegistry.setRoleModel(role, m)} listRoles={listRoles}
       listSessions={listSessions} resumeSession={resumeSession}
+      listPins={listPins} addPin={addPin} removePin={removePin}
       cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,
   );

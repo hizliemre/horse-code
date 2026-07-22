@@ -17,6 +17,8 @@ export interface TaskCycleDeps {
   onActivity?: (a: ToolActivity) => void;
   /** "By-the-way" note source: the coach loop polls it each turn to fold in mid-run guidance. */
   inbox?: () => string | undefined;
+  /** Context pins: short user facts injected into the system prompt every turn (survive compaction). */
+  pins?: () => string[];
 }
 
 export type ImplementerRole = "coder" | "designer";
