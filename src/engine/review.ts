@@ -10,7 +10,9 @@ export interface ReviewDeps extends TaskCycleDeps {
   councilRegistry: RoleRegistry;
   councilors: CouncilorConfig[];
 }
-export type AskUser = (question: string) => Promise<string>;
+/** Structured choices for a question → the TUI renders a selectable checkbox/radio list. */
+export interface AskOpts { options?: string[]; multiSelect?: boolean }
+export type AskUser = (question: string, opts?: AskOpts) => Promise<string>;
 
 export interface Assessment { name: string; concerns: string[]; recommendation: "approve" | "revise" }
 export const AssessmentSchema = z.object({

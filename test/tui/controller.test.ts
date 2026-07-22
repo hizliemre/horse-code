@@ -185,6 +185,15 @@ describe("TuiController", () => {
     expect(new TuiController().getState().currentModel).toBe("");
   });
 
+  it("ask with options sets pending.options + multiSelect (choice question); answer resolves it", async () => {
+    const c = new TuiController();
+    const p = c.ask("pick principles", { options: ["A", "B", "C"], multiSelect: true });
+    expect(c.getState().pending).toEqual({ question: "pick principles", options: ["A", "B", "C"], multiSelect: true });
+    c.answer("A; C");
+    expect(await p).toBe("A; C");
+    expect(c.getState().pending).toBeUndefined();
+  });
+
   it("board event → runningAgents: IN-PROGRESS cards only, with model + a stable start time", () => {
     let t = 1000;
     const c = new TuiController(() => t);

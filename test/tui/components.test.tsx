@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, ChoiceInput } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
@@ -156,6 +156,38 @@ describe("Ink components", () => {
     await waitState(() => c.getState().transcript.length === 0);
     expect(c.getState().transcript).toEqual([]);
     expect(c.getState().mode).toBe("input");
+    unmount();
+  });
+
+  it("ChoiceInput (multiSelect): space toggles checkboxes, Enter submits the checked options joined", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let answer: string | undefined;
+    const opts = ["Library-First", "CLI Interface", "Test-First", "Observability"];
+    const { stdin, lastFrame, unmount } = render(<ChoiceInput options={opts} multiSelect cols={70} onSubmit={(a) => { answer = a; }} />);
+    // React 19's concurrent rendering under parallel-test load defers the raw-stdin effect + repaints;
+    // poll for the first frame, then let the stdin handler attach before sending keys.
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("[ ] Library-First"); i++) await sleep(15);
+    expect(strip(lastFrame())).toContain("space toggle");
+    await sleep(50); // stdin effect attach
+    stdin.write("\x1b[B"); await sleep(25); stdin.write("\x1b[B"); await sleep(25); // → Test-First
+    stdin.write(" "); await sleep(25); // check Test-First
+    stdin.write("\x1b[B"); await sleep(25); stdin.write(" "); await sleep(25); // check Observability
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("[x] Observability"); i++) await sleep(15);
+    stdin.write("\r");
+    for (let i = 0; i < 200 && answer === undefined; i++) await sleep(15);
+    expect(answer).toBe("Test-First; Observability");
+    unmount();
+  });
+
+  it("ChoiceInput (single): arrow + Enter picks one option", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let answer: string | undefined;
+    const { stdin, lastFrame, unmount } = render(<ChoiceInput options={["one", "two", "three"]} multiSelect={false} cols={60} onSubmit={(a) => { answer = a; }} />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("one"); i++) await sleep(15);
+    await sleep(50); // stdin effect attach
+    stdin.write("\x1b[B"); await sleep(25); stdin.write("\r");
+    for (let i = 0; i < 200 && answer === undefined; i++) await sleep(15);
+    expect(answer).toBe("two");
     unmount();
   });
 

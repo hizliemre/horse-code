@@ -1,12 +1,12 @@
 import { createInterface } from "node:readline/promises";
-import type { AskUser } from "./engine/review.js";
+import type { AskUser, AskOpts } from "./engine/review.js";
 import type { AskHuman } from "./engine/escalation.js";
 import type { PermissionRequest } from "./permission/engine.js";
 
-export type LineReader = (prompt: string) => Promise<string>;
+export type LineReader = (prompt: string, opts?: AskOpts) => Promise<string>;
 
 export function makeAskUser(read: LineReader): AskUser {
-  return (question) => read(`\n[question] ${question}`);
+  return (question, opts) => read(`\n[question] ${question}`, opts);
 }
 
 export function makeApprove(read: LineReader): (req: PermissionRequest) => Promise<boolean> {
@@ -53,12 +53,28 @@ export function nodeLineReader(
   });
   // Lines are queued → consecutive reads are race-free (removes the readline/promises question race).
   // The prompt is shown via readline's own mechanism (setPrompt+prompt) → renders correctly on a TTY too.
-  const read: LineReader = (prompt) => {
-    rl.setPrompt(prompt + "\n> ");
+  const read: LineReader = async (prompt, opts) => {
+    // Plain-CLI fallback for choice questions: show a numbered list; the user types number(s).
+    const shown = opts?.options?.length
+      ? `${prompt}\n${opts.options.map((o, i) => `  ${i + 1}. ${o}`).join("\n")}` +
+        (opts.multiSelect ? "\n(enter one or more numbers, comma-separated)" : "")
+      : prompt;
+    rl.setPrompt(shown + "\n> ");
     rl.prompt();
-    if (buffered.length) return Promise.resolve(buffered.shift()!);
-    if (closed) return Promise.resolve("");
-    return new Promise<string>((resolve) => { waiters.push(resolve); });
+    let line: string;
+    if (buffered.length) line = buffered.shift()!;
+    else if (closed) line = "";
+    else line = await new Promise<string>((resolve) => { waiters.push(resolve); });
+    // Map a numeric pick (or comma-separated numbers) back to the option text; otherwise return as typed.
+    const options = opts?.options;
+    if (options?.length) {
+      const picks = line.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
+        const n = Number(s);
+        return Number.isInteger(n) && n >= 1 && n <= options.length ? options[n - 1] : s;
+      });
+      if (picks.length) return picks.join("; ");
+    }
+    return line;
   };
   return { read, close: () => rl.close() };
 }

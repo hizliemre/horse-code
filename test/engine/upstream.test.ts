@@ -113,6 +113,14 @@ describe("buildAskUserTool", () => {
     const res = await t.run({}, ctx());
     expect(res.isError).toBe(true);
   });
+
+  it("passes options + multiSelect through to askUser (multiple-choice question)", async () => {
+    let gotOpts: unknown;
+    const t = buildAskUserTool(async (_q, opts) => { gotOpts = opts; return "A; B"; });
+    const res = await t.run({ question: "pick", options: ["A", "B", "C"], multiSelect: true }, ctx());
+    expect(gotOpts).toEqual({ options: ["A", "B", "C"], multiSelect: true });
+    expect(res.content).toBe("A; B");
+  });
 });
 
 describe("runUpstream", () => {

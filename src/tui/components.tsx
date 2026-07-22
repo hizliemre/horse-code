@@ -58,6 +58,78 @@ export function PendingQuestion({ text, cols }: { text: string; cols: number }):
   );
 }
 
+/** Total rows a ChoiceInput occupies: border(2) + one row per option + hint(1). */
+export function choiceHeight(optionCount: number): number {
+  return optionCount + 3;
+}
+
+/**
+ * Selectable answer list for a multiple-choice ask_user question (replaces the free-text input): arrow
+ * keys move, space toggles a checkbox (multiSelect) or picks (single), Enter submits. The answer is the
+ * selected option text(s) joined by "; ".
+ */
+export function ChoiceInput({ options, multiSelect, cols, onSubmit }: {
+  options: string[];
+  multiSelect: boolean;
+  cols: number;
+  onSubmit: (answer: string) => void;
+}): React.ReactElement {
+  const [cursor, setCursor] = useState(0);
+  const [checked, setChecked] = useState<Set<number>>(new Set());
+  // Source-of-truth refs updated synchronously per keystroke (React 19 defers re-renders under load, so
+  // reading render-derived state in the handler would go stale). setState only drives the visual.
+  const cursorRef = useRef(0);
+  const checkedRef = useRef<Set<number>>(new Set());
+  const cfg = useRef({ options, multiSelect, onSubmit });
+  cfg.current = { options, multiSelect, onSubmit };
+
+  const { stdin, setRawMode, isRawModeSupported } = useStdin();
+  useEffect(() => {
+    if (!stdin) return;
+    if (isRawModeSupported && setRawMode) setRawMode(true);
+    const onData = (chunk: Buffer | string): void => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      const { options: opts, multiSelect: multi, onSubmit: submitCb } = cfg.current;
+      const submit = (): void => {
+        const picks = multi
+          ? (checkedRef.current.size ? [...checkedRef.current].sort((a, b) => a - b).map((i) => opts[i]) : [opts[cursorRef.current]])
+          : [opts[cursorRef.current]];
+        submitCb(picks.filter(Boolean).join("; "));
+      };
+      if (s === "\x1b[A" || s === "\x1bOA") { cursorRef.current = Math.max(0, cursorRef.current - 1); setCursor(cursorRef.current); return; }
+      if (s === "\x1b[B" || s === "\x1bOB") { cursorRef.current = Math.min(opts.length - 1, cursorRef.current + 1); setCursor(cursorRef.current); return; }
+      if (s === " ") {
+        if (multi) {
+          const nx = new Set(checkedRef.current);
+          if (nx.has(cursorRef.current)) nx.delete(cursorRef.current); else nx.add(cursorRef.current);
+          checkedRef.current = nx; setChecked(nx);
+        } else submit();
+        return;
+      }
+      const kk = parseKittyKey(s);
+      if (s === "\r" || kk?.type === "enter") { submit(); return; }
+    };
+    stdin.on("data", onData);
+    return () => { stdin.off("data", onData); };
+  }, [stdin, setRawMode, isRawModeSupported]);
+
+  const w = Math.max(24, cols - 2);
+  return (
+    <Box flexDirection="column" width={w} borderStyle="round" borderColor="cyan" paddingX={1}>
+      {options.map((opt, i) => {
+        const isSel = i === cursor;
+        const mark = multiSelect ? (checked.has(i) ? "[x] " : "[ ] ") : (isSel ? "◉ " : "○ ");
+        return (
+          <Text key={i} wrap="truncate-end">
+            <Text color={isSel ? "cyan" : undefined} inverse={isSel}>{`${isSel ? "› " : "  "}${mark}${opt}`}</Text>
+          </Text>
+        );
+      })}
+      <Text dimColor wrap="truncate-end">{multiSelect ? "↑/↓ move · space toggle · Enter submit" : "↑/↓ move · space/Enter select"}</Text>
+    </Box>
+  );
+}
+
 /** Slash-command palette shown above the input when the draft starts with "/". */
 export function SlashPalette({ commands, selected, cols }: { commands: SlashCommand[]; selected: number; cols: number }): React.ReactElement {
   const w = Math.max(24, cols - 2);
@@ -448,6 +520,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const keyRef = useRef<(s: string) => void>(() => {});
   keyRef.current = (s: string): void => {
     if (!fullscreen || state.mode === "picker") return;
+    if (state.pending?.options?.length) return; // ChoiceInput owns stdin while a choice is pending
     const isInput = (state.mode ?? "running") === "input";
     const up = s === "\x1b[A" || s === "\x1bOA";
     const down = s === "\x1b[B" || s === "\x1bOB";
@@ -557,7 +630,12 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       : 0;
     const statusH = (progressLine || doneLine ? 1 : 0) + boardLines + pendingLines; // progress/done(1) + board + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
-    const inputBoxH = 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
+    // A pending choice question replaces the free-text input with a ChoiceInput selector.
+    const choiceOptions = state.pending?.options ?? [];
+    const choiceActive = choiceOptions.length > 0;
+    const inputBoxH = choiceActive
+      ? inputMarginTop + choiceHeight(choiceOptions.length)
+      : 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
     const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
     const queuedH = state.queued > 0 ? 1 : 0;
@@ -584,6 +662,16 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           </Box>
         ) : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
+        {choiceActive ? (
+          <Box marginTop={inputMarginTop}>
+            <ChoiceInput
+              options={choiceOptions}
+              multiSelect={!!state.pending?.multiSelect}
+              cols={size.cols}
+              onSubmit={(ans) => { setScroll(0); controller.answer(ans); }}
+            />
+          </Box>
+        ) : (
         <Box marginTop={inputMarginTop} borderStyle="round" borderColor={state.pending ? "yellow" : "gray"} paddingX={1} width={size.cols} flexShrink={0}>
           <InputLine
             value={draft}
@@ -602,6 +690,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             }}
           />
         </Box>
+        )}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}

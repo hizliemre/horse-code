@@ -1,4 +1,5 @@
 import type { BoardCardView, ProgressEvent } from "../engine/progress.js";
+import type { AskOpts } from "../engine/review.js";
 import type { UsageSample } from "../providers/meter.js";
 
 /** Per-turn metrics shown under the input (active model + accumulated tokens + duration). */
@@ -23,7 +24,7 @@ export interface TuiState {
   phase: string;
   detail?: string;
   cards: BoardCardView[];
-  pending?: { question: string };
+  pending?: { question: string; options?: string[]; multiSelect?: boolean };
   mode?: "input" | "running" | "picker";
   transcript: { role: "user" | "assistant"; text: string }[];
   queued: number; // prompts typed while a job is running, waiting to run next
@@ -97,11 +98,12 @@ export class TuiController {
     this.notify();
   };
 
-  // arrow-bound: passed as LineReader → reused with makeAskUser/makeApprove/makeAskHuman
-  ask = (question: string): Promise<string> =>
+  // arrow-bound: passed as LineReader → reused with makeAskUser/makeApprove/makeAskHuman.
+  // opts.options → the UI renders a checkbox/radio selector instead of the free-text input.
+  ask = (question: string, opts?: AskOpts): Promise<string> =>
     new Promise<string>((resolve) => {
       this.pendingResolve = resolve;
-      this.state = { ...this.state, pending: { question } };
+      this.state = { ...this.state, pending: { question, options: opts?.options, multiSelect: opts?.multiSelect } };
       this.notify();
     });
 

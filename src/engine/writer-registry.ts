@@ -10,13 +10,23 @@ import { buildSkillTool } from "../skills/apply.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { AskUser } from "./review.js";
 
-const askUserParams = z.object({ question: z.string() });
+const askUserParams = z.object({
+  question: z.string(),
+  // For a multiple-choice question, list the choices here → the UI shows a selectable checkbox/radio list
+  // (arrow keys + Enter) instead of a free-text box. Omit for an open-ended question.
+  options: z.array(z.string()).optional(),
+  // Set true when the user may pick more than one option (checkboxes); false/omitted = pick one (radio).
+  multiSelect: z.boolean().optional(),
+});
 
 /** Tool for a role to ask the user a question; returns the answer in content. */
 export function buildAskUserTool(askUser: AskUser): Tool {
   return {
     name: "ask_user",
-    description: "Ask the user a question and get their answer.",
+    description:
+      "Ask the user a question and get their answer. For a multiple-choice question, pass `options` (the " +
+      "choices) — the UI shows a selectable list the user checks off; set `multiSelect: true` when they may " +
+      "pick several. Omit `options` for an open-ended (free-text) question.",
     permissionLevel: "safe",
     parameters: askUserParams,
     run: async (rawArgs) => {
@@ -24,7 +34,8 @@ export function buildAskUserTool(askUser: AskUser): Tool {
       if (!parsed.success) {
         return { content: `ask_user: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       }
-      return { content: await askUser(parsed.data.question), isError: false };
+      const { question, options, multiSelect } = parsed.data;
+      return { content: await askUser(question, { options, multiSelect }), isError: false };
     },
   };
 }

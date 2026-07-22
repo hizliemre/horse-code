@@ -17,7 +17,7 @@ export interface RunTuiOpts {
 /** Ink TUI: set up the controller → seams go through controller.ask → render App → runJob → unmount. */
 export async function runTui(opts: RunTuiOpts): Promise<JobResult> {
   const controller = new TuiController();
-  const read: LineReader = (q) => controller.ask(q);
+  const read: LineReader = (q, opts) => controller.ask(q, opts);
   const deps = await opts.buildDeps(read);
   const instance = render(<App controller={controller} />);
   try {
@@ -42,7 +42,7 @@ export interface RunTuiReplOpts {
 /** TUI REPL: task input → live job → report → loop. Ctrl+C exits; job errors are isolated. */
 export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const controller = new TuiController();
-  const read: LineReader = (q) => controller.ask(q);
+  const read: LineReader = (q, opts) => controller.ask(q, opts);
   const deps0 = await opts.buildDeps(read);
   // Coach model → always shown under the input; refiner model → shown only in the "refining… (model)" line.
   const coachModel = deps0.roleRegistry.peekModel("coach") || opts.model;
