@@ -28,6 +28,13 @@ describe("MemoryStore", () => {
     expect(await store().add("   ")).toEqual({ ok: false, error: "empty memory" });
   });
 
+  it("dedupes identical facts (so auto-remember doesn't pile up)", async () => {
+    const s = store();
+    expect((await s.add("use pnpm")).ok).toBe(true);
+    expect(await s.add("use pnpm")).toEqual({ ok: false, error: "already remembered" });
+    expect(s.all()).toHaveLength(1);
+  });
+
   it("scopes memory per project", async () => {
     await store("/proj/a").add("only in a");
     expect(await store("/proj/b").load()).toEqual([]);

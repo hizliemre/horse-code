@@ -47,6 +47,10 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     (language ? ` Respond in ${language}.` : "") +
     ` When it helps, end your reply with a <nextsteps> block: 2-4 short, concrete follow-up actions the` +
     ` user might pick next, one per line prefixed with "- ". Omit the block when there is no useful next step.` +
+    ` If — and only if — the user states a DURABLE preference, decision, or project fact worth recalling in` +
+    ` future sessions (e.g. "always use pnpm", "the API base is X", "we target Node 22"), also emit a` +
+    ` <remember> block with 1-3 short, self-contained facts, one per line prefixed with "- ". Never remember` +
+    ` transient, trivial, or one-off things.` +
     pinBlock;
   // Compact the in-context history when it exceeds the budget (summarize the old region, keep recent turns).
   const compacted = await compactHistory(history, {

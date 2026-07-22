@@ -56,6 +56,7 @@ export class MemoryStore {
     await this.load();
     const t = text.trim();
     if (!t) return { ok: false, error: "empty memory" };
+    if (this.cache!.some((e) => e.text === t)) return { ok: false, error: "already remembered" };
     const anchors = deriveAnchors(t);
     const entry: MemoryEntry = { id: `m${this.now()}`, text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now() };
     this.cache!.push(entry);

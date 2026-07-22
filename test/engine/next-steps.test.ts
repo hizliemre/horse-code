@@ -1,5 +1,27 @@
 import { describe, it, expect } from "vitest";
-import { parseNextSteps } from "../../src/engine/next-steps.js";
+import { parseNextSteps, extractListBlock } from "../../src/engine/next-steps.js";
+
+describe("extractListBlock", () => {
+  it("extracts an arbitrary tag's list items and strips the block", () => {
+    const raw = "Reply.\n<remember>\n- always use pnpm\n- target Node 22\n</remember>";
+    const out = extractListBlock(raw, "remember");
+    expect(out.text).toBe("Reply.");
+    expect(out.items).toEqual(["always use pnpm", "target Node 22"]);
+  });
+
+  it("chains: nextsteps then remember, each block stripped independently", () => {
+    const raw = "Answer.\n<nextsteps>\n- do X\n</nextsteps>\n<remember>\n- fact A\n</remember>";
+    const ns = extractListBlock(raw, "nextsteps");
+    const rm = extractListBlock(ns.text, "remember");
+    expect(ns.items).toEqual(["do X"]);
+    expect(rm.items).toEqual(["fact A"]);
+    expect(rm.text).toBe("Answer.");
+  });
+
+  it("missing tag → text unchanged, no items", () => {
+    expect(extractListBlock("just text", "remember")).toEqual({ text: "just text", items: [] });
+  });
+});
 
 describe("parseNextSteps", () => {
   it("returns the text unchanged with no steps when there is no block", () => {
