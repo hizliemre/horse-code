@@ -11,6 +11,7 @@ import type { TaskCycleDeps } from "./task-types.js";
 // past this budget (the coach model is large, so this rarely fires in short sessions).
 const COMPACT_MAX_TOKENS = 100_000;
 const COMPACT_KEEP_RECENT = 8; // recent turns kept verbatim after the summary
+const COMPACT_RESUMMARIZE_TOKENS = 4_000; // re-fold the delta into the summary only after it grows this much
 
 /** One cheap-model call that compresses the ancient region of a conversation, preserving key facts. */
 async function summarizeConversation(deps: TaskCycleDeps, conversation: string): Promise<string> {
@@ -53,11 +54,18 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     ` transient, trivial, or one-off things.` +
     pinBlock;
   // Compact the in-context history when it exceeds the budget (summarize the old region, keep recent turns).
-  const compacted = await compactHistory(history, {
-    maxTokens: COMPACT_MAX_TOKENS,
-    keepRecent: COMPACT_KEEP_RECENT,
-    summarize: (conversation) => summarizeConversation(deps, conversation),
-  });
+  // The summary is cached across turns → a summarizer call fires only when the delta grows past the threshold.
+  const { messages: compacted, cache } = await compactHistory(
+    history,
+    {
+      maxTokens: COMPACT_MAX_TOKENS,
+      keepRecent: COMPACT_KEEP_RECENT,
+      reSummarizeTokens: COMPACT_RESUMMARIZE_TOKENS,
+      summarize: (conversation) => summarizeConversation(deps, conversation),
+    },
+    deps.compactionState?.value,
+  );
+  if (deps.compactionState) deps.compactionState.value = cache;
   // Cross-session memory: surface facts relevant to this prompt, gated by how full the context already is.
   const memories = deps.memory?.() ?? [];
   const load = historyTokens(compacted) / COMPACT_MAX_TOKENS;

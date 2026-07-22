@@ -68,6 +68,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
     pins: () => pinStore.list(), // context pins → coach system prompt
     memory: () => memStore.all(), // cross-session memory → retrieved + injected into relevant turns
+    compactionState: {}, // holds the compaction summary cache across turns (invalidated on /clear or /resume by fingerprint)
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
