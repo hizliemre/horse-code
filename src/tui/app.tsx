@@ -7,10 +7,13 @@ import type { JobDeps, JobResult } from "../engine/job.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { homedir } from "node:os";
+import { basename } from "node:path";
 import { TuiController } from "./controller.js";
 import { App } from "./components.js";
 import { REQUIRED_ROLES } from "../prompts.js";
 import { SessionStore } from "../session/store.js";
+import { TerminalTitle } from "./terminal-title.js";
+import { phaseLabel } from "./labels.js";
 
 export interface RunTuiOpts {
   buildDeps: (read: LineReader) => Promise<JobDeps>;
@@ -74,6 +77,16 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // manual line-window (bypasses an Ink overflow bug). On exit (including Ctrl+C) the alt-screen
   // is closed and stdout.write is restored to its original.
   const origWrite = process.stdout.write.bind(process.stdout);
+  // Terminal tab/window title (OSC-0): spinner + active phase while a job runs, project name when idle.
+  const title = new TerminalTitle((s) => { origWrite(s); }, {
+    idle: `horse-code — ${basename(process.cwd())}`,
+    enabled: process.env.HORSECODE_NO_TITLE !== "1",
+  });
+  controller.subscribe(() => {
+    const st = controller.getState();
+    if (st.meta?.running) title.working(phaseLabel(st.phase).replace(/…$/, "") || "working"); // strip ellipsis; the spinner implies activity
+    else title.idle();
+  });
   const patched = ((chunk: unknown, ...rest: unknown[]): boolean =>
     typeof chunk === "string"
       ? (origWrite as (c: string, ...r: unknown[]) => boolean)("\x1b[?2026h" + chunk + "\x1b[?2026l", ...rest)
@@ -82,6 +95,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const restore = (): void => {
     if (restored) return;
     restored = true;
+    title.stop(); // stop the spinner, reset the tab title
     process.stdout.write = origWrite;
     // first pop the kitty protocol, then close the alt-screen + restore the cursor.
     try { origWrite("\x1b[<u\x1b[?1049l\x1b[?25h"); } catch { /* swallow */ }

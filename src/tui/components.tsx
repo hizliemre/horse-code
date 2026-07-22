@@ -14,6 +14,7 @@ import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
 import { readClipboardImage } from "./clipboard.js";
+import { GLYPHS as ICONS } from "./glyphs.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -207,7 +208,7 @@ export function RunningAgents({ agents, cols }: { agents: RunningAgent[]; cols: 
         const dur = fmtDuration(Date.now() - a.startedAt);
         return (
           <Text key={a.id} wrap="truncate-end">
-            <Text color="cyan">{"  ● "}</Text>
+            <Text color="cyan">{`  ${ICONS.msgBullet} `}</Text>
             {a.title}
             <Text dimColor>{`  · ${dur}${a.model ? ` · ${a.model}` : ""}`}</Text>
           </Text>
@@ -334,12 +335,12 @@ export const Message = memo(function Message({ role, text, cols }: { role: "user
   const w = Math.max(20, cols - 3);
   return role === "user" ? (
     <Box marginTop={1}>
-      <Text color="gray">{"› "}</Text>
+      <Text color="gray">{`${ICONS.userBullet} `}</Text>
       <Box width={w}><Text color="gray">{text}</Text></Box>
     </Box>
   ) : (
     <Box marginTop={1}>
-      <Text color="green">{"● "}</Text>
+      <Text color="green">{`${ICONS.msgBullet} `}</Text>
       <Box width={w} flexDirection="column"><Markdown text={text} /></Box>
     </Box>
   );
@@ -782,7 +783,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           />
         </Box>
         )}
-        {state.attachments > 0 ? <Text color="#ff9a2e">{`  📎 ${state.attachments} image${state.attachments === 1 ? "" : "s"} staged — Enter to send`}</Text> : null}
+        {state.attachments > 0 ? <Text color="#ff9a2e">{`  ${ICONS.attach} ${state.attachments} image${state.attachments === 1 ? "" : "s"} staged — Enter to send`}</Text> : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}

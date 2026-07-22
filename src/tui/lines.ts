@@ -1,4 +1,5 @@
 import { parseInline } from "./markdown.js";
+import { GLYPHS } from "./glyphs.js";
 
 // The styled segments of a line (for the fullscreen viewport, content is flattened into a plain line array).
 export interface StyledSeg {
@@ -82,10 +83,10 @@ export function flattenMarkdown(text: string, width: number): StyledLine[] {
       i++;
       while (i < src.length && !src[i].trim().startsWith("```")) { code.push(src[i]); i++; }
       i++;
-      if (lang) out.push([{ text: `╭─ ${lang}`, color: "magenta", dim: true }]);
+      if (lang) out.push([{ text: `${GLYPHS.fence} ${lang}`, color: "magenta", dim: true }]);
       const gutter = String(Math.max(1, code.length)).length;
       code.forEach((c, idx) => {
-        out.push([{ text: `${String(idx + 1).padStart(gutter, " ")} │ `, dim: true }, ...codeSegs(c)]);
+        out.push([{ text: `${String(idx + 1).padStart(gutter, " ")} ${GLYPHS.gutter} `, dim: true }, ...codeSegs(c)]);
       });
       continue;
     }
@@ -95,7 +96,7 @@ export function flattenMarkdown(text: string, width: number): StyledLine[] {
     const li = line.match(/^(\s*)[-*+]\s+(.*)/);
     if (li) {
       const wrapped = wrapSegs(inlineSegs(li[2]), Math.max(4, width - 2));
-      wrapped.forEach((wl, k) => out.push([{ text: k === 0 ? `${li[1]}• ` : "  " }, ...wl]));
+      wrapped.forEach((wl, k) => out.push([{ text: k === 0 ? `${li[1]}${GLYPHS.listBullet} ` : "  " }, ...wl]));
       i++;
       continue;
     }
@@ -110,7 +111,7 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
   const width = Math.max(20, cols - 2);
   const verb = a.tool === "edit" ? "Update" : "Write";
   const header: StyledLine = [
-    { text: "● ", color: "#1a9fd8" },
+    { text: `${GLYPHS.msgBullet} `, color: "#1a9fd8" },
     { text: `${verb}(${a.target})`, bold: true },
     { text: `  · ${a.lines} line${a.lines === 1 ? "" : "s"}`, dim: true },
   ];
@@ -127,17 +128,17 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
   if (isDiff) {
     // Removed (old) lines first, then added (new) lines — each numbered in its own file's line space.
     removed.forEach((l, i) => body.push([
-      { text: `  ${gut(start + i)} │ `, dim: true },
+      { text: `  ${gut(start + i)} ${GLYPHS.gutter} `, dim: true },
       { text: `- ${trunc(l)}`, color: "red" },
     ]));
     added.forEach((l, i) => body.push([
-      { text: `  ${gut(start + i)} │ `, dim: true },
+      { text: `  ${gut(start + i)} ${GLYPHS.gutter} `, dim: true },
       { text: `+ ${trunc(l)}`, color: "green" },
     ]));
   } else {
     // write (or a pure-insertion edit): plain numbered content.
     added.forEach((l, i) => body.push([
-      { text: `  ${gut(start + i)} │ `, dim: true },
+      { text: `  ${gut(start + i)} ${GLYPHS.gutter} `, dim: true },
       { text: trunc(l), dim: true },
     ]));
   }
@@ -149,7 +150,7 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
 /** Converts a message into hanging-indent styled lines (bullet on the first line, continuation indented). */
 export function flattenMessage(role: "user" | "assistant", text: string, cols: number): StyledLine[] {
   const width = Math.max(20, cols - 2);
-  const bullet: StyledSeg = role === "user" ? { text: "› ", color: "gray" } : { text: "● ", color: "green" };
+  const bullet: StyledSeg = role === "user" ? { text: `${GLYPHS.userBullet} `, color: "gray" } : { text: `${GLYPHS.msgBullet} `, color: "green" };
   const body =
     role === "user"
       ? wrapSegs([{ text, color: "gray" }], width)
