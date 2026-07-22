@@ -108,7 +108,6 @@ export function flattenMarkdown(text: string, width: number): StyledLine[] {
 /** A file write/edit rendered inline in the chat flow (Claude Code-style): header + a preview of the content. */
 export function flattenTool(a: import("../core/types.js").ToolActivity, cols: number): StyledLine[] {
   const width = Math.max(20, cols - 2);
-  const trunc = (s: string): string => (s.length > width - 4 ? `${s.slice(0, width - 5)}…` : s);
   const verb = a.tool === "edit" ? "Update" : "Write";
   const header: StyledLine = [
     { text: "● ", color: "#1a9fd8" },
@@ -117,8 +116,15 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
   ];
   const preview = a.preview ?? [];
   const shown = preview.slice(0, 12);
-  const body: StyledLine[] = shown.map((l) => [{ text: "    " }, { text: trunc(l), dim: true }]);
-  if (preview.length > 12) body.push([{ text: `    … +${preview.length - 12} more`, dim: true }]);
+  const start = a.startLine ?? 1;
+  const gutter = String(start + shown.length - 1).length; // width of the largest line number shown
+  const avail = Math.max(8, width - (gutter + 5)); // "  <n> │ " prefix eats gutter+5 cols
+  const trunc = (s: string): string => (s.length > avail ? `${s.slice(0, avail - 1)}…` : s);
+  const body: StyledLine[] = shown.map((l, i) => [
+    { text: `  ${String(start + i).padStart(gutter, " ")} │ `, dim: true }, // line-number gutter
+    { text: trunc(l), dim: true },
+  ]);
+  if (preview.length > 12) body.push([{ text: `  ${" ".repeat(gutter)} … +${preview.length - 12} more`, dim: true }]);
   return [header, ...body, []]; // trailing blank so blocks don't render flush together
 }
 

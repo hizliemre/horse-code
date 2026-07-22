@@ -32,6 +32,7 @@ export interface ToolActivity {
   target: string;    // the file path (relative to cwd)
   lines: number;     // lines written / changed
   preview?: string[]; // first lines of the written / changed content (shown under the header)
+  startLine?: number; // 1-based line number the preview begins at (write → 1; edit → where the change starts)
 }
 
 export interface ToolContext {

@@ -52,14 +52,18 @@ describe("lines flatten", () => {
     expect(out.length).toBeGreaterThan(0);
   });
 
-  it("flattenTool renders a Claude-Code-style file block: verb(path) · N lines + preview", () => {
-    const w = flattenTool({ tool: "write", target: "specs/001-x/spec.md", lines: 152, preview: ["# Spec", "line2"] }, 90);
+  it("flattenTool renders a Claude-Code-style file block: verb(path) · N lines + numbered preview", () => {
+    const w = flattenTool({ tool: "write", target: "specs/001-x/spec.md", lines: 152, preview: ["# Spec", "line2"], startLine: 1 }, 90);
     const wText = w.map((l) => l.map((s) => s.text).join("")).join("\n");
     expect(wText).toContain("Write(specs/001-x/spec.md)");
     expect(wText).toContain("152 lines");
     expect(wText).toContain("# Spec");
-    const e = flattenTool({ tool: "edit", target: "plan.md", lines: 1 }, 90);
-    expect(e.map((l) => l.map((s) => s.text).join("")).join("\n")).toContain("Update(plan.md)");
+    expect(wText).toContain("1 │ # Spec"); // line-number gutter, starting at 1
+    expect(wText).toContain("2 │ line2");
+    const e = flattenTool({ tool: "edit", target: "plan.md", lines: 1, preview: ["patched"], startLine: 42 }, 90);
+    const eText = e.map((l) => l.map((s) => s.text).join("")).join("\n");
+    expect(eText).toContain("Update(plan.md)");
+    expect(eText).toContain("42 │ patched"); // edit gutter starts at the changed line
   });
 
   it("flattenSplash includes the tagline, version, and greeting under the wordmark", () => {
