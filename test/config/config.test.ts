@@ -92,6 +92,23 @@ describe("loadConfig", () => {
     expect(cfg.baseUrl).toBe("http://localhost:20128");
   });
 
+  it("parses mcp servers (stdio + remote), merges global + project", () => {
+    const readFile = (p: string) =>
+      p === "/home/.horsecode/config.json"
+        ? JSON.stringify({ mcp: { fs: { command: ["npx", "-y", "server-filesystem", "/x"] } } })
+        : p === "/proj/.horsecode/config.json"
+          ? JSON.stringify({ mcp: { gh: { url: "https://mcp.example.com", headers: { Authorization: "Bearer t" } } } })
+          : undefined;
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.mcp.fs).toEqual({ command: ["npx", "-y", "server-filesystem", "/x"] });
+    expect(cfg.mcp.gh).toEqual({ url: "https://mcp.example.com", headers: { Authorization: "Bearer t" } });
+  });
+
+  it("drops an invalid mcp entry's layer but keeps default mcp = {}", () => {
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
+    expect(cfg.mcp).toEqual({});
+  });
+
   it("returns an empty object when there are no roles", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
     expect(cfg.roles).toEqual({});

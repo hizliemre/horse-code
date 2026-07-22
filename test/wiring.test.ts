@@ -27,6 +27,7 @@ function baseConfig(over: Partial<ResolvedConfig> = {}): ResolvedConfig {
     allowlist: [],
     roles: {},
     specKit: DEFAULT_CONFIG.specKit,
+    mcp: {},
     ...over,
   };
 }

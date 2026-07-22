@@ -139,10 +139,9 @@ describe("Ink components", () => {
     };
     await waitFrame("> ");
     stdin.write("/");
-    await waitFrame("/exit"); // palette lists every command
+    await waitFrame("/model"); // palette opens, windowed around the selection (top → /model visible)
     const f = clean(lastFrame());
     expect(f).toContain("/model");
-    expect(f).toContain("/clear");
     expect(f).toContain("Enter run"); // hint line
     stdin.write("cl"); // filter → only /clear
     // wait for the filter to actually apply (/model gone) — "/clear" alone is ambiguous since its

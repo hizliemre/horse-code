@@ -32,4 +32,11 @@ describe("ToolRegistry", () => {
       properties: { path: { type: "string" } },
     });
   });
+
+  it("schemas() sends rawSchema verbatim when present (MCP tools)", () => {
+    const raw = { type: "object", properties: { q: { type: "string" } }, required: ["q"] };
+    const reg = new ToolRegistry();
+    reg.register({ ...fakeTool, name: "mcp__x__search", rawSchema: raw, parameters: z.record(z.string(), z.unknown()) });
+    expect(reg.schemas()[0].parameters).toBe(raw); // verbatim, not derived from zod
+  });
 });

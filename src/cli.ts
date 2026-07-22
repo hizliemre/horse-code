@@ -135,6 +135,7 @@ export async function main(argv: string[]): Promise<void> {
         formatResult: renderResult,
         model: config.model,
         listModels,
+        mcp: config.mcp,
       });
       return;
     }

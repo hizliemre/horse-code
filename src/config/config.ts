@@ -13,6 +13,11 @@ export interface CouncilorConfig {
   models: string[];
 }
 
+/** An MCP server to connect at startup: local (stdio subprocess) or remote (http/sse URL). */
+export type McpServerSpec =
+  | { command: string[]; env?: Record<string, string> } // stdio: spawn a local server
+  | { url: string; headers?: Record<string, string> }; // remote: streamable-http / SSE
+
 export interface ResolvedConfig {
   apiKey?: string;
   baseUrl: string;
@@ -22,6 +27,7 @@ export interface ResolvedConfig {
   roles: Record<string, RoleConfig>;
   council?: { councilors: CouncilorConfig[] };
   specKit: { version: string };
+  mcp: Record<string, McpServerSpec>;
 }
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
@@ -31,6 +37,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   allowlist: [],
   roles: {},
   specKit: { version: "v0.13.2" },
+  mcp: {},
 };
 
 // Fields that can be read from files (all optional).
@@ -59,6 +66,15 @@ const fileSchema = z
       })
       .optional(),
     specKit: z.object({ version: z.string() }).optional(),
+    mcp: z
+      .record(
+        z.string(),
+        z.union([
+          z.object({ command: z.array(z.string()).min(1), env: z.record(z.string(), z.string()).optional() }),
+          z.object({ url: z.string(), headers: z.record(z.string(), z.string()).optional() }),
+        ]),
+      )
+      .optional(),
   })
   .partial();
 
@@ -99,6 +115,9 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // roles: shallow merge of global + project (same-named role is overridden by project).
   merged.roles = { ...(global.roles ?? {}), ...(projectSafe.roles ?? {}) };
+
+  // mcp: shallow merge of global + project (same-named server overridden by project).
+  merged.mcp = { ...(global.mcp ?? {}), ...(projectSafe.mcp ?? {}) };
 
   // specKit: "most specific wins" instead of merging (use project's if present).
   merged.specKit = projectSafe.specKit ?? global.specKit ?? DEFAULT_CONFIG.specKit;

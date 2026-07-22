@@ -27,6 +27,8 @@ export interface TaskCycleDeps {
   rememberFact?: (fact: string) => void;
   /** Mutable holder for the compaction summary cache (persists across coach turns within a session). */
   compactionState?: { value?: import("./compaction.js").CompactionCache };
+  /** Tools discovered from connected MCP servers → added to the coach's toolset (getter: filled once connected). */
+  mcpTools?: () => import("../core/types.js").Tool[];
 }
 
 export type ImplementerRole = "coder" | "designer";

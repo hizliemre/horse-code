@@ -75,7 +75,7 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     provider: deps.provider,
     model,
     systemPrompt: systemPrompt + context,
-    tools: readOnlyRegistry(deps, { remember: true }),
+    tools: readOnlyRegistry(deps, { remember: true, mcp: true }),
     remember: deps.rememberFact,
     messages: [...compacted, ...memoryMsg, { role: "user", content: prompt, ...(images?.length ? { images } : {}) }],
     permission: deps.permission,

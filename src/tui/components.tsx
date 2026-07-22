@@ -247,12 +247,24 @@ export function SendModePicker({ text, cols, onSelect, onEscape }: {
   );
 }
 
-/** Slash-command palette shown above the input when the draft starts with "/". */
+export const SLASH_PALETTE_ROWS = 8; // max command rows shown at once (windows around the selection)
+
+/** Rows a slash palette occupies: border(2) + up to SLASH_PALETTE_ROWS command rows + hint(1). */
+export function paletteHeight(count: number): number {
+  return Math.min(count, SLASH_PALETTE_ROWS) + 3;
+}
+
+/** Slash-command palette shown above the input when the draft starts with "/". Windows around the selection. */
 export function SlashPalette({ commands, selected, cols }: { commands: SlashCommand[]; selected: number; cols: number }): React.ReactElement {
   const w = Math.max(24, cols - 2);
+  // Scroll a window of SLASH_PALETTE_ROWS commands so the selection stays visible (long command lists).
+  const start = Math.max(0, Math.min(selected - Math.floor(SLASH_PALETTE_ROWS / 2), Math.max(0, commands.length - SLASH_PALETTE_ROWS)));
+  const win = commands.slice(start, start + SLASH_PALETTE_ROWS);
+  const windowed = commands.length > SLASH_PALETTE_ROWS;
   return (
     <Box flexDirection="column" width={w} borderStyle="round" borderColor="cyan" paddingX={1}>
-      {commands.map((c, i) => {
+      {win.map((c, k) => {
+        const i = start + k;
         const isSel = i === selected;
         return (
           <Text key={c.name} wrap="truncate-end">
@@ -261,7 +273,7 @@ export function SlashPalette({ commands, selected, cols }: { commands: SlashComm
           </Text>
         );
       })}
-      <Text dimColor wrap="truncate-end">{"↑/↓ select · Enter run · → complete · Esc cancel"}</Text>
+      <Text dimColor wrap="truncate-end">{`↑/↓ select · Enter run · → complete · Esc cancel${windowed ? ` · ${selected + 1}/${commands.length}` : ""}`}</Text>
     </Box>
   );
 }
@@ -581,7 +593,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -599,6 +611,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listMemories?: () => { text: string }[]; // /memories
   addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string }; superseded: string[] } | { ok: false; error: string }>; // /remember
   removeMemory?: (n: number) => Promise<string | undefined>; // /forget N
+  listMcp?: () => { name: string; ok: boolean; toolCount: number; error?: string }[]; // /mcp
   cancelJob?: () => void; // abort the running job (Steer send-mode)
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
@@ -792,6 +805,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (!n) { doMemories(); return; }
     removeMemory(n).then((r) => controller.note(r ? `Forgot: ${r}` : `No memory #${n}.`));
   };
+  // /mcp → show connected MCP servers + tool counts.
+  const doMcp = (): void => {
+    const servers = listMcp?.() ?? [];
+    if (servers.length === 0) { controller.note("No MCP servers configured (add an `mcp` block to config.json)."); return; }
+    const rows = servers.map((s) => s.ok ? `- ✅ **${s.name}** — ${s.toolCount} tools` : `- ❌ **${s.name}** — ${s.error ?? "not connected"}`);
+    controller.note(`**MCP servers:**\n${rows.join("\n")}`);
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
@@ -804,6 +824,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/memories") doMemories();
     else if (c.name === "/remember") doRemember("");
     else if (c.name === "/forget") doForget("");
+    else if (c.name === "/mcp") doMcp();
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -994,7 +1015,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const queuedH = state.queued > 0 ? 1 : 0;
     // Live-agents panel under the input: 1 header line + one row per running sub-agent.
     const agentsH = state.runningAgents.length > 0 ? 1 + state.runningAgents.length : 0;
-    const paletteH = slashOpen ? slashCmds.length + 3 : 0; // border(2) + command rows + hint(1)
+    const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
     const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
     const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH;

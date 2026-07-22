@@ -21,7 +21,8 @@ export class ToolRegistry {
     return this.list().map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: z.toJSONSchema(t.parameters, { target: "draft-7" }),
+      // MCP tools already carry a JSON Schema; everyone else derives it from their zod parameters.
+      parameters: t.rawSchema ?? z.toJSONSchema(t.parameters, { target: "draft-7" }),
     }));
   }
 }

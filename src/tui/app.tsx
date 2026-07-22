@@ -7,6 +7,8 @@ import type { JobDeps, JobResult } from "../engine/job.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { firewallProvider } from "../providers/firewall.js";
+import { connectAllMcp, type McpBundle } from "../mcp/registry.js";
+import type { McpServerSpec } from "../config/config.js";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { TuiController } from "./controller.js";
@@ -47,6 +49,7 @@ export interface RunTuiReplOpts {
   formatResult: (res: JobResult) => string;
   model?: string; // configured default model → shown in the metrics line when a call reports no model
   listModels: () => Promise<string[]>; // omniroute model list for the /model picker
+  mcp?: Record<string, McpServerSpec>; // MCP servers to connect at startup (tools → coach)
 }
 
 /** TUI REPL: task input → live job → report → loop. Ctrl+C exits; job errors are isolated. */
@@ -71,6 +74,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     pins: () => pinStore.list(), // context pins → coach system prompt
     memory: () => memStore.all(), // cross-session memory → retrieved + injected into relevant turns
     reinforceMemory: (id) => { void memStore.reinforce(id); }, // bump memories the coach actually cited
+    mcpTools: () => mcpHolder.bundle?.tools ?? [], // MCP tools (filled once the servers connect)
     rememberFact: (fact) => { // remember_fact tool → persist a fact learned mid-turn (from a tool result)
       void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 remembered: ${fact}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`); });
     },
@@ -99,6 +103,17 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const listMemories = (): MemoryEntry[] => memStore.all();
   const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> => memStore.add(text);
   const removeMemory = (n: number): Promise<string | undefined> => memStore.remove(n);
+  // MCP servers → connect in the background; tools reach the coach once connected (a note reports status).
+  const mcpHolder: { bundle?: McpBundle } = {};
+  if (opts.mcp && Object.keys(opts.mcp).length) {
+    void connectAllMcp(opts.mcp).then((b) => {
+      mcpHolder.bundle = b;
+      const ok = b.status.filter((s) => s.ok);
+      if (ok.length) controller.note(`MCP connected: ${ok.map((s) => `${s.name} (${s.toolCount} tools)`).join(", ")}`);
+      for (const f of b.status.filter((s) => !s.ok)) controller.note(`MCP ${f.name} failed: ${f.error}`);
+    }, (e) => controller.note(`MCP connect error: ${e instanceof Error ? e.message : String(e)}`));
+  }
+  const listMcp = (): { name: string; ok: boolean; toolCount: number; error?: string }[] => mcpHolder.bundle?.status ?? [];
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
   // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
@@ -125,6 +140,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     if (restored) return;
     restored = true;
     title.stop(); // stop the spinner, reset the tab title
+    void mcpHolder.bundle?.closeAll(); // shut down MCP servers
     process.stdout.write = origWrite;
     // pop bracketed paste + the kitty protocol, then close the alt-screen + restore the cursor.
     try { origWrite("\x1b[?2004l\x1b[<u\x1b[?1049l\x1b[?25h"); } catch { /* swallow */ }
@@ -167,6 +183,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
+      listMcp={listMcp}
       cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,
   );
