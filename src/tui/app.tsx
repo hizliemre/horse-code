@@ -13,6 +13,8 @@ import { App } from "./components.js";
 import { REQUIRED_ROLES } from "../prompts.js";
 import { SessionStore } from "../session/store.js";
 import { PinStore } from "../session/pins.js";
+import { MemoryStore } from "../session/memory.js";
+import type { MemoryEntry } from "../engine/memory-retrieval.js";
 import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
 
@@ -65,6 +67,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     onActivity: controller.pushActivity,
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
     pins: () => pinStore.list(), // context pins → coach system prompt
+    memory: () => memStore.all(), // cross-session memory → retrieved + injected into relevant turns
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
@@ -83,6 +86,12 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const listPins = (): string[] => pinStore.list();
   const addPin = (text: string): Promise<{ ok: true; pin: string } | { ok: false; error: string }> => pinStore.add(text);
   const removePin = (n: number): Promise<string | undefined> => pinStore.remove(n);
+  // Cross-session memory (per project) → relevant facts retrieved + injected into the coach turn.
+  const memStore = new MemoryStore({ home: homedir(), cwd: process.cwd() });
+  await memStore.load();
+  const listMemories = (): MemoryEntry[] => memStore.all();
+  const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry } | { ok: false; error: string }> => memStore.add(text);
+  const removeMemory = (n: number): Promise<string | undefined> => memStore.remove(n);
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
   // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
@@ -150,6 +159,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={(role, m) => deps0.roleRegistry.setRoleModel(role, m)} listRoles={listRoles}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
+      listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
       cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,
   );

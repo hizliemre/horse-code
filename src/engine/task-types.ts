@@ -19,6 +19,8 @@ export interface TaskCycleDeps {
   inbox?: () => string | undefined;
   /** Context pins: short user facts injected into the system prompt every turn (survive compaction). */
   pins?: () => string[];
+  /** Cross-session memory snapshot: durable facts, retrieved lexically + injected into relevant turns. */
+  memory?: () => import("./memory-retrieval.js").MemoryEntry[];
 }
 
 export type ImplementerRole = "coder" | "designer";

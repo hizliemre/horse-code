@@ -53,6 +53,29 @@ describe("runCoachChat", () => {
     expect(names).not.toContain("shell");
   });
 
+  it("injects a relevant cross-session memory as a turn-context message", async () => {
+    const p = new MockProvider([textTurn("ok")]);
+    const d = {
+      ...deps(p),
+      memory: () => [{ id: "m1", text: "the parser lives in src/parser.ts", anchors: ["src/parser.ts"], tags: ["parser"], createdAt: 1 }],
+    };
+    await runCoachChat(d, "fix the bug in src/parser.ts", dir);
+    const texts = p.requests[0].messages.map((m) => m.content).join("\n");
+    expect(texts).toContain("Relevant notes from earlier sessions");
+    expect(texts).toContain("the parser lives in src/parser.ts");
+  });
+
+  it("does not inject memory when nothing is relevant to the prompt", async () => {
+    const p = new MockProvider([textTurn("ok")]);
+    const d = {
+      ...deps(p),
+      memory: () => [{ id: "m1", text: "unrelated note about cats", anchors: [], tags: ["cats"], createdAt: 1 }],
+    };
+    await runCoachChat(d, "how do I center a div", dir);
+    const texts = p.requests[0].messages.map((m) => m.content).join("\n");
+    expect(texts).not.toContain("Relevant notes from earlier sessions");
+  });
+
   it("injects context pins into the system prompt", async () => {
     const p = new MockProvider([textTurn("ok")]);
     const d = { ...deps(p), pins: () => ["use pnpm", "target Node 22"] };

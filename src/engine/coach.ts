@@ -2,7 +2,8 @@ import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import type { Message, Provider } from "../core/types.js";
 import { ToolRegistry } from "../tools/registry.js";
-import { compactHistory } from "./compaction.js";
+import { compactHistory, historyTokens } from "./compaction.js";
+import { selectMemories, renderMemoryHints } from "./memory-retrieval.js";
 import { readOnlyRegistry } from "./reviewer.js";
 import type { TaskCycleDeps } from "./task-types.js";
 
@@ -53,12 +54,17 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     keepRecent: COMPACT_KEEP_RECENT,
     summarize: (conversation) => summarizeConversation(deps, conversation),
   });
+  // Cross-session memory: surface facts relevant to this prompt, gated by how full the context already is.
+  const memories = deps.memory?.() ?? [];
+  const load = historyTokens(compacted) / COMPACT_MAX_TOKENS;
+  const hits = memories.length ? selectMemories(memories, prompt, { load }) : [];
+  const memoryMsg: Message[] = hits.length ? [{ role: "user", content: renderMemoryHints(hits) }] : [];
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     model,
     systemPrompt: systemPrompt + context,
     tools: readOnlyRegistry(deps),
-    messages: [...compacted, { role: "user", content: prompt, ...(images?.length ? { images } : {}) }],
+    messages: [...compacted, ...memoryMsg, { role: "user", content: prompt, ...(images?.length ? { images } : {}) }],
     permission: deps.permission,
     approve: deps.approve,
     cwd,

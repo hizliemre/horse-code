@@ -581,7 +581,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -596,6 +596,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listPins?: () => string[]; // /pins
   addPin?: (text: string) => Promise<{ ok: true; pin: string } | { ok: false; error: string }>; // /pin <text>
   removePin?: (n: number) => Promise<string | undefined>; // /pin rm N
+  listMemories?: () => { text: string }[]; // /memories
+  addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string } } | { ok: false; error: string }>; // /remember
+  removeMemory?: (n: number) => Promise<string | undefined>; // /forget N
   cancelJob?: () => void; // abort the running job (Steer send-mode)
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
@@ -768,6 +771,25 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (!arg.trim()) { doPins(); return; }
     addPin(arg.trim()).then((r) => controller.note(r.ok ? `Pinned: ${r.pin}` : `Couldn't pin: ${r.error}`));
   };
+  // /memories → list remembered facts.
+  const doMemories = (): void => {
+    const mem = listMemories?.() ?? [];
+    if (mem.length === 0) { controller.note("No memories yet — `/remember <text>` to add one."); return; }
+    controller.note(`**Memories** (this project):\n${mem.map((m, i) => `${i + 1}. ${m.text}`).join("\n")}\n\n_\`/forget N\` to remove._`);
+  };
+  // /remember <text> → store a cross-session fact.
+  const doRemember = (text: string): void => {
+    if (!addMemory) { controller.note("Memory is not available."); return; }
+    if (!text.trim()) { controller.note("Usage: `/remember <text>`"); return; }
+    addMemory(text.trim()).then((r) => controller.note(r.ok ? `Remembered: ${r.entry.text}` : `Couldn't remember: ${r.error}`));
+  };
+  // /forget N → remove a remembered fact.
+  const doForget = (arg: string): void => {
+    if (!removeMemory) { controller.note("Memory is not available."); return; }
+    const n = /^\d+$/.test(arg.trim()) ? parseInt(arg.trim(), 10) : 0;
+    if (!n) { doMemories(); return; }
+    removeMemory(n).then((r) => controller.note(r ? `Forgot: ${r}` : `No memory #${n}.`));
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
@@ -777,6 +799,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/next") doNext();
     else if (c.name === "/pins") doPins();
     else if (c.name === "/pin") doPin("");
+    else if (c.name === "/memories") doMemories();
+    else if (c.name === "/remember") doRemember("");
+    else if (c.name === "/forget") doForget("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -1038,6 +1063,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (cmd.startsWith("/next ")) { setScroll(0); setDraft(""); setDraftCursor(0); doNext(trimmed.slice("/next".length).trim()); return; }
               // /pin <text> | /pin rm N (argument form).
               if (cmd.startsWith("/pin ")) { setScroll(0); setDraft(""); setDraftCursor(0); doPin(trimmed.slice("/pin".length).trim()); return; }
+              // /remember <text> · /forget N (argument forms).
+              if (cmd.startsWith("/remember ")) { setScroll(0); setDraft(""); setDraftCursor(0); doRemember(trimmed.slice("/remember".length).trim()); return; }
+              if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); doForget(trimmed.slice("/forget".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
               if (trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);
