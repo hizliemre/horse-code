@@ -13,7 +13,9 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
   // The refined prompt is always English; tell the coach the real model + the user's original language so
   // "which model are you?" is answered truthfully and the reply comes back in the language the user used.
   const context = `\n\nContext: this session is powered by the "${model}" model.` +
-    (language ? ` Respond in ${language}.` : "");
+    (language ? ` Respond in ${language}.` : "") +
+    ` When it helps, end your reply with a <nextsteps> block: 2-4 short, concrete follow-up actions the` +
+    ` user might pick next, one per line prefixed with "- ". Omit the block when there is no useful next step.`;
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     model,

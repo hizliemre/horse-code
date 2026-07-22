@@ -166,6 +166,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
           images: images.length ? images : undefined,
         });
         controller.endRun(opts.formatResult(res), res.refinedPrompt);
+        if (res.kind === "chat" && res.nextSteps?.length) controller.setNextSteps(res.nextSteps); // coach follow-ups → /next
       } catch (e) {
         controller.endRun(jobAbort.signal.aborted ? "cancelled" : `error: ${e instanceof Error ? e.message : String(e)}`);
       }

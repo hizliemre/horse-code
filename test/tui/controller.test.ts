@@ -312,6 +312,14 @@ describe("TuiController", () => {
     ]);
   });
 
+  it("setNextSteps stores follow-ups; beginRun clears them (stale suggestions gone on a new turn)", () => {
+    const c = new TuiController();
+    c.setNextSteps(["add a test", "write docs"]);
+    expect(c.getState().nextSteps).toEqual(["add a test", "write docs"]);
+    c.beginRun();
+    expect(c.getState().nextSteps).toEqual([]);
+  });
+
   it("loadTranscript replaces the transcript with a resumed session's messages (used by /resume)", () => {
     const c = new TuiController();
     c.awaitTask(); c.submitTask("stale"); c.beginRun(); c.endRun("stale answer");

@@ -41,11 +41,12 @@ export interface TuiState {
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
   attachments: number; // count of pasted images staged for the next prompt (shown under the input)
+  nextSteps: string[]; // coach-suggested follow-ups (run with /next N); cleared when a new turn starts
 }
 
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
-  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [], attachments: 0 };
+  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [], attachments: 0, nextSteps: [] };
   private pendingResolve?: (s: string) => void;
   private taskResolve?: (t: string) => void;
   private queue: string[] = []; // prompts submitted while running → drained by awaitTask
@@ -214,9 +215,15 @@ export class TuiController {
     this.agentStarts.clear();
     this.state = {
       ...this.state,
-      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [],
+      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [], nextSteps: [],
       meta: { model: "", promptTokens: 0, completionTokens: 0, startedAt: this.now(), running: true },
     };
+    this.notify();
+  }
+
+  /** Store the coach's suggested follow-ups (rendered under the input; run with /next N). */
+  setNextSteps(steps: string[]): void {
+    this.state = { ...this.state, nextSteps: steps };
     this.notify();
   }
 
@@ -295,7 +302,7 @@ export class TuiController {
 
   /** Clear the conversation transcript + the last turn's metrics (used by /clear). */
   clearTranscript(): void {
-    this.state = { ...this.state, transcript: [], meta: undefined };
+    this.state = { ...this.state, transcript: [], meta: undefined, nextSteps: [] };
     this.notify();
   }
 

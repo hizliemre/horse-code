@@ -700,12 +700,27 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       () => controller.note("Could not read the clipboard."),
     );
   };
+  // /next [N] → run the N-th coach-suggested follow-up (no arg = list them).
+  const doNext = (arg?: string): void => {
+    const steps = state.nextSteps;
+    if (steps.length === 0) { controller.note("No next-step suggestions right now."); return; }
+    if (!arg) {
+      controller.note(`**Next steps:**\n${steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n_Type \`/next N\` to run one._`);
+      return;
+    }
+    const n = /^\d+$/.test(arg.trim()) ? parseInt(arg.trim(), 10) : 0;
+    const step = steps[n - 1];
+    if (!step) { controller.note(`No suggestion #${n} — type \`/next\` to list them.`); return; }
+    historyRef.current = [...historyRef.current, step];
+    controller.submitTask(step);
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
     else if (c.name === "/roles") controller.note(rolesReport());
     else if (c.name === "/sessions") doSessions();
     else if (c.name === "/resume") doResume();
+    else if (c.name === "/next") doNext();
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -898,7 +913,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const agentsH = state.runningAgents.length > 0 ? 1 + state.runningAgents.length : 0;
     const paletteH = slashOpen ? slashCmds.length + 3 : 0; // border(2) + command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
-    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH;
+    const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
+    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -961,6 +977,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
               // /resume N (argument form) → resume the N-th session.
               if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); doResume(trimmed.slice("/resume".length).trim()); return; }
+              // /next N (argument form) → run the N-th suggested follow-up.
+              if (cmd.startsWith("/next ")) { setScroll(0); setDraft(""); setDraftCursor(0); doNext(trimmed.slice("/next".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
               if (trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);
@@ -978,6 +996,12 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         </Box>
         )}
         {state.attachments > 0 ? <Text color="#ff9a2e">{`  ${ICONS.attach} ${state.attachments} image${state.attachments === 1 ? "" : "s"} staged — Enter to send`}</Text> : null}
+        {state.nextSteps.length > 0 ? (
+          <Box flexDirection="column">
+            <Text color="#ff9a2e" wrap="truncate-end">{"  Suggested next steps — /next N:"}</Text>
+            {state.nextSteps.map((s, i) => <Text key={i} dimColor wrap="truncate-end">{`    ${i + 1}. ${s}`}</Text>)}
+          </Box>
+        ) : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
