@@ -114,17 +114,35 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
     { text: `${verb}(${a.target})`, bold: true },
     { text: `  · ${a.lines} line${a.lines === 1 ? "" : "s"}`, dim: true },
   ];
-  const preview = a.preview ?? [];
-  const shown = preview.slice(0, 12);
+  const added = (a.preview ?? []).slice(0, 12);
+  const removed = (a.removed ?? []).slice(0, 12);
   const start = a.startLine ?? 1;
-  const gutter = String(start + shown.length - 1).length; // width of the largest line number shown
-  const avail = Math.max(8, width - (gutter + 5)); // "  <n> │ " prefix eats gutter+5 cols
+  const isDiff = a.tool === "edit" && removed.length > 0;
+  // Gutter fits the largest line number across both sides of the diff.
+  const gutter = String(start + Math.max(added.length, removed.length) - 1).length;
+  const avail = Math.max(8, width - (gutter + 7)); // "  <n> │ ± " prefix
   const trunc = (s: string): string => (s.length > avail ? `${s.slice(0, avail - 1)}…` : s);
-  const body: StyledLine[] = shown.map((l, i) => [
-    { text: `  ${String(start + i).padStart(gutter, " ")} │ `, dim: true }, // line-number gutter
-    { text: trunc(l), dim: true },
-  ]);
-  if (preview.length > 12) body.push([{ text: `  ${" ".repeat(gutter)} … +${preview.length - 12} more`, dim: true }]);
+  const gut = (n: number | null): string => (n === null ? " ".repeat(gutter) : String(n).padStart(gutter, " "));
+  const body: StyledLine[] = [];
+  if (isDiff) {
+    // Removed (old) lines first, then added (new) lines — each numbered in its own file's line space.
+    removed.forEach((l, i) => body.push([
+      { text: `  ${gut(start + i)} │ `, dim: true },
+      { text: `- ${trunc(l)}`, color: "red" },
+    ]));
+    added.forEach((l, i) => body.push([
+      { text: `  ${gut(start + i)} │ `, dim: true },
+      { text: `+ ${trunc(l)}`, color: "green" },
+    ]));
+  } else {
+    // write (or a pure-insertion edit): plain numbered content.
+    added.forEach((l, i) => body.push([
+      { text: `  ${gut(start + i)} │ `, dim: true },
+      { text: trunc(l), dim: true },
+    ]));
+  }
+  const extra = Math.max((a.preview ?? []).length, (a.removed ?? []).length) - 12;
+  if (extra > 0) body.push([{ text: `  ${" ".repeat(gutter)} … +${extra} more`, dim: true }]);
   return [header, ...body, []]; // trailing blank so blocks don't render flush together
 }
 

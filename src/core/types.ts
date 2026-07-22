@@ -31,8 +31,9 @@ export interface ToolActivity {
   tool: string;      // "write" | "edit"
   target: string;    // the file path (relative to cwd)
   lines: number;     // lines written / changed
-  preview?: string[]; // first lines of the written / changed content (shown under the header)
+  preview?: string[]; // first lines of the written / changed content (shown under the header; for an edit, the ADDED lines)
   startLine?: number; // 1-based line number the preview begins at (write → 1; edit → where the change starts)
+  removed?: string[]; // edit only: the REPLACED (old) lines → rendered as a - / + diff against `preview`
 }
 
 export interface ToolContext {

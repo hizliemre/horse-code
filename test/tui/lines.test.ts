@@ -60,10 +60,16 @@ describe("lines flatten", () => {
     expect(wText).toContain("# Spec");
     expect(wText).toContain("1 │ # Spec"); // line-number gutter, starting at 1
     expect(wText).toContain("2 │ line2");
-    const e = flattenTool({ tool: "edit", target: "plan.md", lines: 1, preview: ["patched"], startLine: 42 }, 90);
+    const e = flattenTool({ tool: "edit", target: "plan.md", lines: 1, preview: ["new line"], removed: ["old line"], startLine: 42 }, 90);
     const eText = e.map((l) => l.map((s) => s.text).join("")).join("\n");
     expect(eText).toContain("Update(plan.md)");
-    expect(eText).toContain("42 │ patched"); // edit gutter starts at the changed line
+    expect(eText).toContain("42 │ - old line"); // removed line, red, numbered at the change
+    expect(eText).toContain("42 │ + new line"); // added line, green
+    // removed segments are red, added are green
+    const redSeg = e.flat().find((s) => s.text.includes("- old line"));
+    const greenSeg = e.flat().find((s) => s.text.includes("+ new line"));
+    expect(redSeg?.color).toBe("red");
+    expect(greenSeg?.color).toBe("green");
   });
 
   it("flattenSplash includes the tagline, version, and greeting under the wordmark", () => {
