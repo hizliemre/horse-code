@@ -262,6 +262,33 @@ describe("TuiController", () => {
     ]);
   });
 
+  it("addAttachment stages images (count in state); submit hands them to the turn and clears the count", () => {
+    const c = new TuiController();
+    c.awaitTask();
+    c.addAttachment("data:image/png;base64,AAA");
+    c.addAttachment("data:image/png;base64,BBB");
+    expect(c.getState().attachments).toBe(2);
+    c.submitTask("here it is");
+    expect(c.getState().attachments).toBe(0); // staging cleared
+    expect(c.takeAttachments()).toEqual(["data:image/png;base64,AAA", "data:image/png;base64,BBB"]);
+    expect(c.takeAttachments()).toEqual([]); // drained once
+  });
+
+  it("clearAttachments discards staged images", () => {
+    const c = new TuiController();
+    c.addAttachment("data:image/png;base64,AAA");
+    c.clearAttachments();
+    expect(c.getState().attachments).toBe(0);
+  });
+
+  it("a queued submit (while running) does not carry images", () => {
+    const c = new TuiController();
+    c.addAttachment("data:image/png;base64,AAA");
+    c.submitTask("queued while busy"); // no awaitTask consumer → queued
+    expect(c.getState().attachments).toBe(0);
+    expect(c.takeAttachments()).toEqual([]); // images dropped for queued prompts
+  });
+
   it("messages() returns only conversation messages, excluding inline tool items", () => {
     const c = new TuiController();
     c.awaitTask(); c.submitTask("do X"); c.beginRun();

@@ -13,6 +13,7 @@ import { flattenSplash, flattenMessage, flattenMarkdown, flattenTool } from "./l
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
+import { readClipboardImage } from "./clipboard.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -237,7 +238,7 @@ const NUMPAD: Record<string, string> = {
   "\x1bOn": ".", "\x1bOo": "/", "\x1bOj": "*", "\x1bOk": "+", "\x1bOm": "-",
 };
 
-export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false }: {
+export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage }: {
   value: string;
   cursor: number;
   onChange: (value: string, cursor: number) => void;
@@ -245,6 +246,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   width?: number;
   paletteOpen?: boolean; // when the slash palette is open, → is a "complete" gesture owned by App, not a cursor move
   jobRunning?: boolean;  // while a job runs, Ctrl+C is handled by App (cancel the job), not here (clear/exit)
+  onPasteImage?: () => void; // Alt+V → grab an image off the clipboard (App reads it + stages it)
 }): React.ReactElement {
   // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
@@ -253,6 +255,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   const onSubmitRef = useRef(onSubmit); onSubmitRef.current = onSubmit;
   const paletteRef = useRef(paletteOpen); paletteRef.current = paletteOpen;
   const runningRef = useRef(jobRunning); runningRef.current = jobRunning;
+  const onPasteImageRef = useRef(onPasteImage); onPasteImageRef.current = onPasteImage;
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   // Raw stdin: Enter(CR) submits; LF/kitty-CSI-u newline; left/right arrow moves the cursor; insert/delete
   // in the middle; Ctrl+C clears if non-empty, exits if empty. Up/down/PgUp go to App's useInput (scroll).
@@ -272,6 +275,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
       if (RIGHT.has(s)) { if (paletteRef.current) return; change(v, Math.min(v.length, c + 1)); return; }
       if (HOME.has(s)) { change(v, 0); return; }
       if (END.has(s)) { change(v, v.length); return; }
+      if (s === "\x1bv" || s === "\x1bV") { onPasteImageRef.current?.(); return; } // Alt+V → paste clipboard image
       if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit (app-keypad SS3)
       const np = NUMPAD[s];
       if (np) { change(v.slice(0, c) + np + v.slice(c), c + np.length); return; } // numpad char (app-keypad SS3)
@@ -534,6 +538,16 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       });
     }, (e) => controller.note(`resume error: ${e instanceof Error ? e.message : String(e)}`));
   };
+  // Alt+V → pull an image off the clipboard and stage it for the next prompt (coach sees it via vision).
+  const pasteImage = (): void => {
+    readClipboardImage().then(
+      (uri) => {
+        if (uri) controller.addAttachment(uri);
+        else controller.note("No image on the clipboard — copy a screenshot first, then press Alt+V.");
+      },
+      () => controller.note("Could not read the clipboard."),
+    );
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
@@ -740,6 +754,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             width={cw}
             paletteOpen={slashOpen}
             jobRunning={running}
+            onPasteImage={pasteImage}
             onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); setSlashSel(0); }}
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
@@ -767,6 +782,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           />
         </Box>
         )}
+        {state.attachments > 0 ? <Text color="#ff9a2e">{`  📎 ${state.attachments} image${state.attachments === 1 ? "" : "s"} staged — Enter to send`}</Text> : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}

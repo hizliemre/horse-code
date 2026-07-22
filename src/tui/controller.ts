@@ -40,14 +40,17 @@ export interface TuiState {
   picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
+  attachments: number; // count of pasted images staged for the next prompt (shown under the input)
 }
 
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
-  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [] };
+  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [], attachments: 0 };
   private pendingResolve?: (s: string) => void;
   private taskResolve?: (t: string) => void;
   private queue: string[] = []; // prompts submitted while running → drained by awaitTask
+  private pendingAttachments: string[] = []; // pasted image data URIs staged for the next submit
+  private turnAttachments: string[] = []; // snapshot handed to the running job (drained by takeAttachments)
   private listeners = new Set<() => void>();
   private agentStarts = new Map<string, number>(); // card id → when it entered IN-PROGRESS (our clock)
   private now: () => number;
@@ -150,15 +153,42 @@ export class TuiController {
     if (this.taskResolve) {
       const resolve = this.taskResolve;
       this.taskResolve = undefined;
-      this.state = { ...this.state, transcript: [...this.state.transcript, { role: "user", text: task }] };
+      // Hand the staged images to this turn; clear the staging area.
+      this.turnAttachments = this.pendingAttachments;
+      this.pendingAttachments = [];
+      this.state = { ...this.state, transcript: [...this.state.transcript, { role: "user", text: task }], attachments: 0 };
       this.notify();
       resolve(task);
       return;
     }
-    // No consumer waiting → a job is running: queue it to run after the current one.
+    // No consumer waiting → a job is running: queue it to run after the current one. (Images are not
+    // carried on queued prompts; drop the staging area so the count doesn't linger.)
     this.queue.push(task);
-    this.state = { ...this.state, queued: this.queue.length };
+    this.pendingAttachments = [];
+    this.state = { ...this.state, queued: this.queue.length, attachments: 0 };
     this.notify();
+  }
+
+  /** Stage a pasted image (base64 data URI) for the next prompt. */
+  addAttachment(dataUri: string): void {
+    this.pendingAttachments = [...this.pendingAttachments, dataUri];
+    this.state = { ...this.state, attachments: this.pendingAttachments.length };
+    this.notify();
+  }
+
+  /** Discard the staged images (Esc / cleared input). */
+  clearAttachments(): void {
+    if (this.pendingAttachments.length === 0) return;
+    this.pendingAttachments = [];
+    this.state = { ...this.state, attachments: 0 };
+    this.notify();
+  }
+
+  /** The images attached to the just-submitted turn (drained once, handed to the job). */
+  takeAttachments(): string[] {
+    const a = this.turnAttachments;
+    this.turnAttachments = [];
+    return a;
   }
 
   beginRun(): void {

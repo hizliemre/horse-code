@@ -31,6 +31,23 @@ describe("toOpenAIMessages", () => {
       { role: "user", content: "hello" },
     ]);
   });
+
+  it("maps a user message with images to multimodal content parts (text first, then image_url)", () => {
+    const url = "data:image/png;base64,AAAA";
+    expect(toOpenAIMessages([{ role: "user", content: "look", images: [url] }])).toEqual([
+      { role: "user", content: [
+        { type: "text", text: "look" },
+        { type: "image_url", image_url: { url } },
+      ] },
+    ]);
+  });
+
+  it("omits the text part when a user image message has empty content", () => {
+    const url = "data:image/png;base64,BBBB";
+    expect(toOpenAIMessages([{ role: "user", content: "", images: [url] }])).toEqual([
+      { role: "user", content: [{ type: "image_url", image_url: { url } }] },
+    ]);
+  });
 });
 
 describe("toOpenAITools", () => {

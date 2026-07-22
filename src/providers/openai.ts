@@ -16,6 +16,15 @@ export function toOpenAIMessages(messages: Message[]): unknown[] {
     if (m.role === "tool") {
       return { role: "tool", tool_call_id: m.toolCallId, content: m.content };
     }
+    // Images → OpenAI multimodal content parts (text first, then each image as image_url data URI).
+    if (m.images?.length) {
+      const parts: unknown[] = [];
+      if (m.content) parts.push({ type: "text", text: m.content });
+      for (const url of m.images) parts.push({ type: "image_url", image_url: { url } });
+      const withImg: Record<string, unknown> = { role: m.role, content: parts };
+      if (m.name) withImg.name = m.name;
+      return withImg;
+    }
     const base: Record<string, unknown> = { role: m.role, content: m.content };
     if (m.name) base.name = m.name;
     return base;

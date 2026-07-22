@@ -58,7 +58,7 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
  */
 export async function runJob(
   deps: JobDeps,
-  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void; history?: Message[] },
+  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void; history?: Message[]; images?: string[] },
 ): Promise<JobResult> {
   // don't let onEvent errors crash the engine: the observer is called synchronously (deep inside board mutations).
   const onEvent = opts.onEvent;
@@ -74,7 +74,7 @@ export async function runJob(
   };
   try {
     emit({ kind: "phase", phase: "upstream" });
-    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit);
+    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images);
 
     if (up.kind === "chat") {
       // The "chat" phase is emitted inside runUpstream (right before the coach runs) so the UI shows the

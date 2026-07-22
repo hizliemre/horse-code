@@ -8,7 +8,7 @@ import type { TaskCycleDeps } from "./task-types.js";
  * Coach chat: answers the prompt using read-only repo tools (read/grep/glob + skill); returns the final text.
  * `history` is the previous conversation turns (user/assistant) → multi-turn session consistency (the conversation progresses).
  */
-export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: string, history: Message[] = [], language?: string): Promise<string> {
+export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: string, history: Message[] = [], language?: string, images?: string[]): Promise<string> {
   const { model, systemPrompt } = deps.roleRegistry.resolve("coach");
   // The refined prompt is always English; tell the coach the real model + the user's original language so
   // "which model are you?" is answered truthfully and the reply comes back in the language the user used.
@@ -19,7 +19,7 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     model,
     systemPrompt: systemPrompt + context,
     tools: readOnlyRegistry(deps),
-    messages: [...history, { role: "user", content: prompt }],
+    messages: [...history, { role: "user", content: prompt, ...(images?.length ? { images } : {}) }],
     permission: deps.permission,
     approve: deps.approve,
     cwd,

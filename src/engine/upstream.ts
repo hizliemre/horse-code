@@ -31,6 +31,7 @@ export async function runUpstream(
   maxRounds: number,
   history: Message[] = [],
   emit: (ev: ProgressEvent) => void = () => {},
+  images?: string[], // pasted images → attached to the coach's chat turn (vision)
 ): Promise<UpstreamResult> {
   // The refiner sees the history → follow-ups are refined in context (horse-code's feature applies everywhere).
   // Refiner + chat run WITHOUT a worktree (read-only / classify); the worktree is opened lazily below,
@@ -44,7 +45,7 @@ export async function runUpstream(
     // coach-waiting status ("zottiring…") while the coach runs, not the refine status.
     emit({ kind: "phase", phase: "chat" });
     // Chat: no worktree — the coach reads the repo in place (cwd ".") + history → a contextual response.
-    const response = await runCoachChat(deps, r.refinedPrompt, ".", history, r.language);
+    const response = await runCoachChat(deps, r.refinedPrompt, ".", history, r.language, images);
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response };
   }
 

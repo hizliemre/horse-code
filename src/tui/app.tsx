@@ -130,6 +130,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const history = controller.getState().transcript.slice(0, -1)
         .filter((m): m is { role: "user" | "assistant"; text: string } => !("kind" in m))
         .map((m) => ({ role: m.role, content: m.text }));
+      const images = controller.takeAttachments(); // images pasted (Alt+V) before this submit
       controller.beginRun();
       // Fresh abort controller per job → Ctrl+C aborts THIS job's signal; the next job gets a clean one.
       jobAbort = new AbortController();
@@ -142,6 +143,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
           askUser: makeAskUser(read),
           onEvent: controller.onEvent,
           history,
+          images: images.length ? images : undefined,
         });
         controller.endRun(opts.formatResult(res), res.refinedPrompt);
       } catch (e) {

@@ -15,6 +15,7 @@ export interface Message {
   toolCalls?: ToolCall[]; // on assistant messages
   toolCallId?: string; // on messages where role === "tool"
   name?: string; // tool name (role === "tool")
+  images?: string[]; // user messages: base64 data URIs (data:image/png;base64,…) → sent as image parts
 }
 
 // --- Tools ---
