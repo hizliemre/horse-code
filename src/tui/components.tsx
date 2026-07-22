@@ -17,6 +17,7 @@ import { readClipboardImage } from "./clipboard.js";
 import { GLYPHS as ICONS } from "./glyphs.js";
 import { helpSections } from "./help.js";
 import { wordLeft, wordRight, lineStart, lineEnd } from "./input-edit.js";
+import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -164,6 +165,28 @@ export function HelpOverlay({ cols }: { cols: number }): React.ReactElement {
         </Box>
       ))}
       <Text dimColor>{"\n  Esc / q / ? to close"}</Text>
+    </Box>
+  );
+}
+
+/** @-file fuzzy picker shown above the input when the draft has an active "@query" token. */
+export function FilePicker({ matches, selected, query, cols }: { matches: string[]; selected: number; query: string; cols: number }): React.ReactElement {
+  const w = Math.max(24, cols - 2);
+  return (
+    <Box flexDirection="column" width={w} borderStyle="round" borderColor="cyan" paddingX={1}>
+      {matches.length === 0 ? (
+        <Text dimColor wrap="truncate-end">{`@${query} — no matching files`}</Text>
+      ) : (
+        matches.map((path, i) => {
+          const isSel = i === selected;
+          return (
+            <Text key={path} wrap="truncate-end">
+              <Text color={isSel ? "cyan" : undefined} inverse={isSel}>{`${isSel ? "› " : "  "}${path}`}</Text>
+            </Text>
+          );
+        })
+      )}
+      <Text dimColor wrap="truncate-end">↑/↓ select · →/Tab/Enter insert · Esc cancel</Text>
     </Box>
   );
 }
@@ -547,10 +570,28 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   // Esc on a choice question dismisses the selector → fall back to free-text; reset per new question.
   const [choiceDismissed, setChoiceDismissed] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false); // "?" overlay (keyboard + commands cheat-sheet)
+  const [atSel, setAtSel] = useState(0); // @-file picker selection
+  const [atDismissed, setAtDismissed] = useState(false); // Esc dismisses the @-picker until the token changes
+  const filesRef = useRef<string[] | null>(null); // project file list, loaded once when the @-picker first opens
+  const [, setFilesTick] = useState(0); // bump to re-render after the file list loads
   const slashCmds = matchCommands(draft);
   const slashOpen = (state.mode ?? "running") === "input" && !state.pending && draft.startsWith("/") && slashCmds.length > 0;
   const slashIdx = Math.min(slashSel, Math.max(0, slashCmds.length - 1));
   const completeSlash = (): void => { const c = slashCmds[slashIdx]; if (c) { setDraft(c.name); setDraftCursor(c.name.length); } };
+  // @-file picker: active when the draft has an "@query" token at the cursor (and no other overlay owns input).
+  const at = (state.mode ?? "running") === "input" && !state.pending && !slashOpen && !helpOpen && !atDismissed
+    ? atToken(draft, draftCursor) : null;
+  const atMatches = at && filesRef.current ? rankFiles(filesRef.current, at.query, 8) : [];
+  const atOpen = !!at && filesRef.current !== null; // shown once the project file list has loaded
+  const atIdx = Math.min(atSel, Math.max(0, atMatches.length - 1));
+  const insertAtFile = (path: string): void => {
+    if (!at) return;
+    const before = draft.slice(0, at.start);
+    const ins = `${path} `;
+    setDraft(before + ins + draft.slice(draftCursor));
+    setDraftCursor((before + ins).length);
+    setAtSel(0);
+  };
   const rolesReport = (): string => {
     const rows = (listRoles?.() ?? []).map((r) => `- \`${r.name}\` → ${r.model || "—"}`);
     return `**Roles & models:**\n${rows.join("\n")}\n\n_Type \`/roles setmodel\` (or \`/model\`) to change the session model._`;
@@ -601,6 +642,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const tlen = state.transcript.length;
   useEffect(() => { setScroll(0); }, [tlen]);
   useEffect(() => { setChoiceDismissed(false); }, [state.pending?.question]); // new question → show the selector again
+  // @-file picker: load the project file list once when the picker first opens; reset selection/dismissal.
+  const atActive = !!at;
+  useEffect(() => {
+    if (atActive && filesRef.current === null) {
+      listProjectFiles(process.cwd()).then(
+        (f) => { filesRef.current = f; setFilesTick((x) => x + 1); },
+        () => { filesRef.current = []; setFilesTick((x) => x + 1); },
+      );
+    }
+    if (!atActive) setAtDismissed(false); // token gone → re-arm the picker for the next "@"
+  }, [atActive]);
+  useEffect(() => { setAtSel(0); }, [at?.query]);
   // When the picker opens (loading), fetch the model list once and hand it to the controller.
   useEffect(() => {
     if (state.mode === "picker" && state.picker?.loading && listModels) {
@@ -636,6 +689,14 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       if (RIGHT.has(s) || s === "\t") { completeSlash(); return; }
       const kk = parseKittyKey(s);
       if (s === "\x1b" || kk?.type === "escape") { setDraft(""); setDraftCursor(0); return; }
+    }
+    // @-file picker owns ↑/↓ (select), →/Tab (insert), Esc (dismiss) while it's open.
+    if (atOpen) {
+      if (up) { setAtSel((n) => Math.max(0, n - 1)); return; }
+      if (down) { setAtSel((n) => Math.min(atMatches.length - 1, n + 1)); return; }
+      if (RIGHT.has(s) || s === "\t") { const p = atMatches[atIdx]; if (p) insertAtFile(p); return; }
+      const kk = parseKittyKey(s);
+      if (s === "\x1b" || kk?.type === "escape") { setAtDismissed(true); return; }
     }
     // In input mode ↑/↓ is command history; transcript scrolls via PgUp/PgDn. In job mode ↑/↓ scrolls.
     if (isInput && up) { historyPrev(); return; }
@@ -762,7 +823,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     // Live-agents panel under the input: 1 header line + one row per running sub-agent.
     const agentsH = state.runningAgents.length > 0 ? 1 + state.runningAgents.length : 0;
     const paletteH = slashOpen ? slashCmds.length + 3 : 0; // border(2) + command rows + hint(1)
-    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH;
+    const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
+    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -782,6 +844,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           </Box>
         ) : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
+        {atOpen ? <FilePicker matches={atMatches} selected={atIdx} query={at?.query ?? ""} cols={size.cols} /> : null}
         {helpOpen ? (
           <Box marginTop={inputMarginTop}><HelpOverlay cols={size.cols} /></Box>
         ) : choiceActive ? (
@@ -800,7 +863,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             value={draft}
             cursor={draftCursor}
             width={cw}
-            paletteOpen={slashOpen}
+            paletteOpen={slashOpen || atOpen}
             jobRunning={running}
             onPasteImage={pasteImage}
             onHelp={() => setHelpOpen(true)}
@@ -808,6 +871,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
               if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); controller.answer(t); return; }
+              // @-file picker open → Enter inserts the highlighted path instead of submitting.
+              if (atOpen) { const p = atMatches[atIdx]; if (p) { insertAtFile(p); return; } }
               // Slash palette open → Enter runs the highlighted command instead of submitting a prompt.
               if (slashOpen) { const c = slashCmds[slashIdx]; if (c) { runSlash(c); return; } }
               const trimmed = t.trim();

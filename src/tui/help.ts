@@ -23,6 +23,7 @@ export function helpSections(): HelpSection[] {
         { keys: "Ctrl+W", desc: "Delete the word before the cursor" },
         { keys: "Ctrl+U / Ctrl+K", desc: "Kill to line start / end" },
         { keys: "Alt+V", desc: "Paste an image from the clipboard" },
+        { keys: "@", desc: "Fuzzy-find a project file into the prompt" },
       ],
     },
     {
