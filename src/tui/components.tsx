@@ -16,6 +16,7 @@ import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands
 import { readClipboardImage } from "./clipboard.js";
 import { GLYPHS as ICONS } from "./glyphs.js";
 import { helpSections } from "./help.js";
+import { wordLeft, wordRight, lineStart, lineEnd } from "./input-edit.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -264,6 +265,7 @@ const NUMPAD: Record<string, string> = {
   "\x1bOn": ".", "\x1bOo": "/", "\x1bOj": "*", "\x1bOk": "+", "\x1bOm": "-",
 };
 
+
 export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage, onHelp }: {
   value: string;
   cursor: number;
@@ -303,6 +305,14 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
       if (RIGHT.has(s)) { if (paletteRef.current) return; change(v, Math.min(v.length, c + 1)); return; }
       if (HOME.has(s)) { change(v, 0); return; }
       if (END.has(s)) { change(v, v.length); return; }
+      // Readline editing (emacs bindings): line motion, word motion, kill-word / kill-line.
+      if (s === "\x01") { change(v, lineStart(v, c)); return; }                              // Ctrl+A → line start
+      if (s === "\x05") { change(v, lineEnd(v, c)); return; }                                // Ctrl+E → line end
+      if (s === "\x17") { const t = wordLeft(v, c); change(v.slice(0, t) + v.slice(c), t); return; } // Ctrl+W → delete word back
+      if (s === "\x15") { const ls = lineStart(v, c); change(v.slice(0, ls) + v.slice(c), ls); return; } // Ctrl+U → kill to line start
+      if (s === "\x0b") { const le = lineEnd(v, c); change(v.slice(0, c) + v.slice(le), c); return; }    // Ctrl+K → kill to line end
+      if (s === "\x1b[1;5D" || s === "\x1bb") { change(v, wordLeft(v, c)); return; }          // Ctrl+← / Alt+B → word left
+      if (s === "\x1b[1;5C" || s === "\x1bf") { change(v, wordRight(v, c)); return; }         // Ctrl+→ / Alt+F → word right
       if (s === "\x1bv" || s === "\x1bV") { onPasteImageRef.current?.(); return; } // Alt+V → paste clipboard image
       if (s === "?" && v.length === 0) { onHelpRef.current?.(); return; } // "?" on an empty input → help overlay
       if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit (app-keypad SS3)
