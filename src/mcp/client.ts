@@ -19,7 +19,7 @@ export interface McpConnection {
 }
 
 /** Flattens an MCP tool-result content array into text the model can read. */
-function renderContent(content: unknown): string {
+export function renderContent(content: unknown): string {
   if (!Array.isArray(content)) return typeof content === "string" ? content : JSON.stringify(content);
   return content
     .map((c) => {
