@@ -89,7 +89,11 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const onCtrlC = (chunk: Buffer | string): void => {
     const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
     if (s !== "\x03" && s !== "\x1b[99;5u") return;
-    if ((controller.getState().mode ?? "running") === "input") return; // InputLine handles it
+    const st = controller.getState();
+    const mode = st.mode ?? "running";
+    // A cancellable panel (model picker, choice selector) owns Ctrl+C → it cancels like Esc, never quits.
+    // Input mode: InputLine handles Ctrl+C (clear/exit).
+    if (mode === "input" || mode === "picker" || st.pending?.options?.length) return;
     const now = Date.now();
     if (now - lastCtrlC < 200) { restore(); process.exit(0); } // double-tap within 200ms → force quit
     lastCtrlC = now;

@@ -25,20 +25,11 @@ describe("slash commands", () => {
     expect(helpText()).toContain("/exit");
   });
 
-  it("registers the spec-kit phase commands in the palette", () => {
+  it("does NOT surface the internal spec-kit phase commands (they confuse users)", () => {
     const names = COMMANDS.map((c) => c.name);
-    expect(names).toEqual(
-      expect.arrayContaining(["/constitution", "/specify", "/clarify", "/plan", "/tasks"]),
-    );
-  });
-
-  it("matchCommands('/cl') includes /clarify", () => {
-    expect(matchCommands("/cl").map((c) => c.name)).toContain("/clarify");
-  });
-
-  it("helpText includes the spec-kit phase commands", () => {
-    const text = helpText();
-    expect(text).toContain("/constitution");
-    expect(text).toContain("/tasks");
+    for (const internal of ["/constitution", "/specify", "/clarify", "/plan", "/tasks"]) {
+      expect(names).not.toContain(internal);
+    }
+    expect(matchCommands("/")).toEqual(COMMANDS); // only the 4 session commands
   });
 });

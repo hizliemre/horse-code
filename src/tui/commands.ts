@@ -5,16 +5,13 @@ export interface SlashCommand {
   desc: string;
 }
 
+// Only horse-code's own session commands belong here. The spec-kit phase commands (/specify, /plan, …)
+// are internal pipeline steps, NOT user commands — surfacing them in the palette only confuses users.
 export const COMMANDS: SlashCommand[] = [
   { name: "/model", desc: "Switch the model for this session" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },
-  { name: "/constitution", desc: "Create or update the project constitution" },
-  { name: "/specify", desc: "Write the spec for the current feature" },
-  { name: "/clarify", desc: "Clarify the spec via Q&A" },
-  { name: "/plan", desc: "Write the implementation plan" },
-  { name: "/tasks", desc: "Break the plan into tasks" },
 ];
 
 /** Commands whose name starts with the (trimmed, lowercased) draft — empty unless the draft starts with "/". */

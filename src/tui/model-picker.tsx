@@ -35,7 +35,8 @@ export function ModelPicker({ models, current, loading, error, cols, onSelect, o
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       const st = stRef.current, cb = cbRef.current;
       const kk = parseKittyKey(s); // kitty CSI-u (iTerm2 with the protocol) → numpad chars, Enter, Esc
-      if (s === "\x1b" || kk?.type === "escape") { cb.onCancel(); return; } // Esc (legacy or kitty)
+      // Esc — and Ctrl+C, treated as Esc inside the picker so it cancels instead of quitting the app.
+      if (s === "\x1b" || s === "\x03" || s === "\x1b[99;5u" || kk?.type === "escape") { cb.onCancel(); return; }
       if (st.loading || st.error) return; // only Esc works while loading / on error
       if (s === "\x1b[A" || s === "\x1bOA") { setSelected((n) => Math.max(0, n - 1)); return; }
       if (s === "\x1b[B" || s === "\x1bOB") { setSelected((n) => Math.min(st.filtered.length - 1, n + 1)); return; }

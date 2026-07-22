@@ -75,11 +75,12 @@ export function choiceHeight(optionCount: number): number {
  * keys move, space toggles a checkbox (multiSelect) or picks (single), Enter submits. The answer is the
  * selected option text(s) joined by "; ".
  */
-export function ChoiceInput({ options, multiSelect, cols, onSubmit }: {
+export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: {
   options: string[];
   multiSelect: boolean;
   cols: number;
   onSubmit: (answer: string) => void;
+  onEscape?: () => void; // Esc → dismiss the selector (App falls back to a free-text answer)
 }): React.ReactElement {
   const [cursor, setCursor] = useState(0);
   const [checked, setChecked] = useState<Set<number>>(new Set());
@@ -87,8 +88,8 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit }: {
   // reading render-derived state in the handler would go stale). setState only drives the visual.
   const cursorRef = useRef(0);
   const checkedRef = useRef<Set<number>>(new Set());
-  const cfg = useRef({ options, multiSelect, onSubmit });
-  cfg.current = { options, multiSelect, onSubmit };
+  const cfg = useRef({ options, multiSelect, onSubmit, onEscape });
+  cfg.current = { options, multiSelect, onSubmit, onEscape };
 
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   useEffect(() => {
@@ -96,7 +97,10 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit }: {
     if (isRawModeSupported && setRawMode) setRawMode(true);
     const onData = (chunk: Buffer | string): void => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      const { options: opts, multiSelect: multi, onSubmit: submitCb } = cfg.current;
+      const { options: opts, multiSelect: multi, onSubmit: submitCb, onEscape: escCb } = cfg.current;
+      const kkEsc = parseKittyKey(s);
+      // Esc (and Ctrl+C — treated as Esc inside a panel) → dismiss to free-text, never exit the app.
+      if (s === "\x1b" || s === "\x03" || s === "\x1b[99;5u" || kkEsc?.type === "escape") { escCb?.(); return; }
       const submit = (): void => {
         const picks = multi
           ? (checkedRef.current.size ? [...checkedRef.current].sort((a, b) => a - b).map((i) => opts[i]) : [opts[cursorRef.current]])
@@ -132,7 +136,7 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit }: {
           </Text>
         );
       })}
-      <Text dimColor wrap="truncate-end">{multiSelect ? "↑/↓ move · space toggle · Enter submit" : "↑/↓ move · space/Enter select"}</Text>
+      <Text dimColor wrap="truncate-end">{(multiSelect ? "↑/↓ move · space toggle · Enter submit" : "↑/↓ move · space/Enter select") + " · Esc to type"}</Text>
     </Box>
   );
 }
@@ -508,6 +512,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   };
   // Slash-command palette: open when the input-mode draft starts with "/" and matches ≥1 command.
   const [slashSel, setSlashSel] = useState(0);
+  // Esc on a choice question dismisses the selector → fall back to free-text; reset per new question.
+  const [choiceDismissed, setChoiceDismissed] = useState(false);
   const slashCmds = matchCommands(draft);
   const slashOpen = (state.mode ?? "running") === "input" && !state.pending && draft.startsWith("/") && slashCmds.length > 0;
   const slashIdx = Math.min(slashSel, Math.max(0, slashCmds.length - 1));
@@ -518,16 +524,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
-    else if (
-      c.name === "/constitution" ||
-      c.name === "/specify" ||
-      c.name === "/clarify" ||
-      c.name === "/plan" ||
-      c.name === "/tasks"
-    ) controller.submitTask(c.name);
   };
   const tlen = state.transcript.length;
   useEffect(() => { setScroll(0); }, [tlen]);
+  useEffect(() => { setChoiceDismissed(false); }, [state.pending?.question]); // new question → show the selector again
   // When the picker opens (loading), fetch the model list once and hand it to the controller.
   useEffect(() => {
     if (state.mode === "picker" && state.picker?.loading && listModels) {
@@ -660,7 +660,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     // A pending choice question replaces the free-text input with a ChoiceInput selector.
     const choiceOptions = state.pending?.options ?? [];
-    const choiceActive = choiceOptions.length > 0;
+    const choiceActive = choiceOptions.length > 0 && !choiceDismissed; // Esc dismisses → free-text fallback
     const inputBoxH = choiceActive
       ? inputMarginTop + choiceHeight(choiceOptions.length)
       : 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
@@ -698,6 +698,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               multiSelect={!!state.pending?.multiSelect}
               cols={size.cols}
               onSubmit={(ans) => { setScroll(0); controller.answer(ans); }}
+              onEscape={() => setChoiceDismissed(true)}
             />
           </Box>
         ) : (

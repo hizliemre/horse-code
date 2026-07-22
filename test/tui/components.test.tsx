@@ -192,6 +192,23 @@ describe("Ink components", () => {
     unmount();
   });
 
+  it("ChoiceInput: Esc and Ctrl+C both dismiss (onEscape), never submit", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    for (const key of ["\x1b", "\x03"]) {
+      let escaped = false; let submitted = false;
+      const { stdin, lastFrame, unmount } = render(
+        <ChoiceInput options={["a", "b"]} multiSelect cols={60} onSubmit={() => { submitted = true; }} onEscape={() => { escaped = true; }} />,
+      );
+      for (let i = 0; i < 200 && !strip(lastFrame()).includes("[ ] a"); i++) await sleep(15);
+      await sleep(50);
+      stdin.write(key);
+      for (let i = 0; i < 200 && !escaped; i++) await sleep(15);
+      expect(escaped).toBe(true);
+      expect(submitted).toBe(false);
+      unmount();
+    }
+  });
+
   it("ChoiceInput (single): arrow + Enter picks one option", async () => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     let answer: string | undefined;
