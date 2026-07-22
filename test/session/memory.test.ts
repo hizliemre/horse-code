@@ -35,6 +35,25 @@ describe("MemoryStore", () => {
     expect(s.all()).toHaveLength(1);
   });
 
+  it("a superseding fact replaces the stale same-topic one (reported in `superseded`)", async () => {
+    const s = store();
+    await s.add("the api base url is https://old.example.com");
+    const r = await s.add("the api base url is https://new.example.com");
+    expect(r.ok && r.superseded).toContain("the api base url is https://old.example.com");
+    expect(s.all().map((e) => e.text)).toEqual(["the api base url is https://new.example.com"]);
+  });
+
+  it("reinforce bumps a memory's use count and persists it", async () => {
+    const s = store();
+    const r = await s.add("prefer pnpm");
+    const id = r.ok ? r.entry.id : "";
+    await s.reinforce(id);
+    await s.reinforce(id);
+    expect(s.all().find((e) => e.id === id)?.uses).toBe(2);
+    const reopened = store();
+    expect((await reopened.load()).find((e) => e.id === id)?.uses).toBe(2);
+  });
+
   it("scopes memory per project", async () => {
     await store("/proj/a").add("only in a");
     expect(await store("/proj/b").load()).toEqual([]);

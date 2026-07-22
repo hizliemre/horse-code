@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints,
+  supersedes, memoryReferenced,
   type MemoryEntry,
 } from "../../src/engine/memory-retrieval.js";
 
@@ -63,6 +64,36 @@ describe("selectMemories", () => {
     expect(hits.map((e) => e.id)).toContain("a"); // anchor match
     expect(hits.map((e) => e.id)).not.toContain("c"); // no match
     expect(selectMemories(entries, "update config/app.json", { load: 0.97 })).toEqual([]); // budget 0
+  });
+});
+
+describe("supersedes", () => {
+  it("a newer same-topic fact supersedes an older one (strong tag overlap)", () => {
+    const oldF = entry("1", "the api base url is https://old.example.com");
+    const newF = entry("2", "the api base url is https://new.example.com");
+    expect(supersedes(newF, oldF)).toBe(true);
+  });
+  it("does not supersede unrelated facts that merely share a file anchor", () => {
+    const a = entry("1", "prefer pnpm in src/app.ts");
+    const b = entry("2", "run the linter before commit in src/app.ts");
+    expect(supersedes(b, a)).toBe(false);
+  });
+});
+
+describe("memoryReferenced", () => {
+  it("true when the reply cites the memory's anchor or ≥2 tags", () => {
+    const e = entry("1", "the parser lives in src/parser.ts");
+    expect(memoryReferenced(e, "I updated src/parser.ts as noted")).toBe(true);
+    expect(memoryReferenced(e, "here is an unrelated answer")).toBe(false);
+  });
+});
+
+describe("selectMemories reinforcement tiebreak", () => {
+  it("prefers the more-used memory when scores tie", () => {
+    const a: MemoryEntry = { ...entry("a", "deploy pipeline runs on push"), uses: 5 };
+    const b: MemoryEntry = { ...entry("b", "deploy pipeline caches deps"), uses: 0 };
+    const hits = selectMemories([b, a], "the deploy pipeline", { load: 0.1, max: 1 });
+    expect(hits[0].id).toBe("a"); // same score → higher uses wins
   });
 });
 

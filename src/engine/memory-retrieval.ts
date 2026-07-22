@@ -25,11 +25,11 @@ export function deriveAnchors(text: string): string[] {
 
 /** Informative tag terms: content words minus stopwords and anything already captured as an anchor. */
 export function deriveTags(text: string, anchors: string[]): string[] {
-  const anchorSet = new Set(anchors);
   const tags = new Set<string>();
   for (const m of text.toLowerCase().matchAll(WORD_RE)) {
     const w = m[0];
-    if (STOPWORDS.has(w) || anchorSet.has(w)) continue;
+    if (STOPWORDS.has(w)) continue;
+    if (anchors.some((a) => a.includes(w))) continue; // skip path/identifier fragments already in an anchor
     tags.add(w);
   }
   return [...tags];
@@ -41,6 +41,7 @@ export interface MemoryEntry {
   anchors: string[];
   tags: string[];
   createdAt: number;
+  uses?: number; // reinforcement count — bumped when the model actually cites this memory
 }
 
 /** Lexical relevance of a memory to a query (0 = irrelevant). Anchor hit dominates; tags corroborate. */
@@ -74,9 +75,29 @@ export function selectMemories(
   return entries
     .map((e) => ({ e, score: scoreMemory(query, e) }))
     .filter((x) => x.score >= threshold)
-    .sort((a, b) => b.score - a.score || b.e.createdAt - a.e.createdAt)
+    // ties broken by reinforcement (frequently-cited memories rank higher), then recency.
+    .sort((a, b) => b.score - a.score || (b.e.uses ?? 0) - (a.e.uses ?? 0) || b.e.createdAt - a.e.createdAt)
     .slice(0, budget)
     .map((x) => x.e);
+}
+
+/** True when a reply actually references a memory (anchor hit or ≥2 tag hits) → used for reinforcement. */
+export function memoryReferenced(entry: MemoryEntry, replyText: string): boolean {
+  return scoreMemory(replyText, entry) >= 0.88;
+}
+
+/**
+ * True when `next` supersedes `prev` — i.e. they are about the same thing, so the newer fact replaces the
+ * older (prevents contradictory facts from accumulating). Same-topic = strong tag overlap, or a shared
+ * anchor with corroboration.
+ */
+export function supersedes(next: MemoryEntry, prev: MemoryEntry): boolean {
+  const sharedTags = next.tags.filter((t) => prev.tags.includes(t)).length;
+  const sharedAnchor = next.anchors.some((a) => prev.anchors.includes(a));
+  const minTags = Math.min(next.tags.length, prev.tags.length);
+  if (minTags >= 2 && sharedTags >= Math.ceil(minTags * 0.6)) return true; // same-topic tags
+  if (sharedAnchor && sharedTags >= 1) return true; // same anchor + at least one corroborating tag
+  return false;
 }
 
 /** Renders selected memories as a compact hint block for injection into the request. */

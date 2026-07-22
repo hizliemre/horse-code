@@ -1,7 +1,7 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
-import { deriveAnchors, deriveTags, type MemoryEntry } from "../engine/memory-retrieval.js";
+import { deriveAnchors, deriveTags, supersedes, type MemoryEntry } from "../engine/memory-retrieval.js";
 
 export interface MemoryStoreOpts {
   home: string;
@@ -51,17 +51,31 @@ export class MemoryStore {
     await writeFile(this.file, (this.cache ?? []).map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
   }
 
-  /** Remember a fact (anchors/tags auto-derived). Returns the new entry, or an error string. */
-  async add(text: string): Promise<{ ok: true; entry: MemoryEntry } | { ok: false; error: string }> {
+  /**
+   * Remember a fact (anchors/tags auto-derived). A new fact that supersedes existing same-topic facts
+   * replaces them (returned in `superseded`) so contradictions don't accumulate.
+   */
+  async add(text: string): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> {
     await this.load();
     const t = text.trim();
     if (!t) return { ok: false, error: "empty memory" };
     if (this.cache!.some((e) => e.text === t)) return { ok: false, error: "already remembered" };
     const anchors = deriveAnchors(t);
-    const entry: MemoryEntry = { id: `m${this.now()}`, text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now() };
-    this.cache!.push(entry);
+    const entry: MemoryEntry = { id: `m${this.now()}`, text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now(), uses: 0 };
+    const superseded = this.cache!.filter((e) => supersedes(entry, e)).map((e) => e.text);
+    this.cache = this.cache!.filter((e) => !supersedes(entry, e)); // drop the stale same-topic facts
+    this.cache.push(entry);
     await this.persist();
-    return { ok: true, entry };
+    return { ok: true, entry, superseded };
+  }
+
+  /** Reinforce a memory the model actually cited (bumps its use count → ranks higher on future ties). */
+  async reinforce(id: string): Promise<void> {
+    await this.load();
+    const e = this.cache!.find((m) => m.id === id);
+    if (!e) return;
+    e.uses = (e.uses ?? 0) + 1;
+    await this.persist();
   }
 
   /** Forget the 1-based N-th memory. Returns the removed entry text, or undefined if out of range. */

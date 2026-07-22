@@ -597,7 +597,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   addPin?: (text: string) => Promise<{ ok: true; pin: string } | { ok: false; error: string }>; // /pin <text>
   removePin?: (n: number) => Promise<string | undefined>; // /pin rm N
   listMemories?: () => { text: string }[]; // /memories
-  addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string } } | { ok: false; error: string }>; // /remember
+  addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string }; superseded: string[] } | { ok: false; error: string }>; // /remember
   removeMemory?: (n: number) => Promise<string | undefined>; // /forget N
   cancelJob?: () => void; // abort the running job (Steer send-mode)
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
@@ -781,7 +781,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const doRemember = (text: string): void => {
     if (!addMemory) { controller.note("Memory is not available."); return; }
     if (!text.trim()) { controller.note("Usage: `/remember <text>`"); return; }
-    addMemory(text.trim()).then((r) => controller.note(r.ok ? `Remembered: ${r.entry.text}` : `Couldn't remember: ${r.error}`));
+    addMemory(text.trim()).then((r) => controller.note(
+      r.ok ? `Remembered: ${r.entry.text}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}` : `Couldn't remember: ${r.error}`,
+    ));
   };
   // /forget N → remove a remembered fact.
   const doForget = (arg: string): void => {

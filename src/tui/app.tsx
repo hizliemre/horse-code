@@ -70,6 +70,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
     pins: () => pinStore.list(), // context pins → coach system prompt
     memory: () => memStore.all(), // cross-session memory → retrieved + injected into relevant turns
+    reinforceMemory: (id) => { void memStore.reinforce(id); }, // bump memories the coach actually cited
     compactionState: {}, // holds the compaction summary cache across turns (invalidated on /clear or /resume by fingerprint)
   };
   // /model picker → live-swap every role's model on the running session (no config write).
@@ -93,7 +94,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const memStore = new MemoryStore({ home: homedir(), cwd: process.cwd() });
   await memStore.load();
   const listMemories = (): MemoryEntry[] => memStore.all();
-  const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry } | { ok: false; error: string }> => memStore.add(text);
+  const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> => memStore.add(text);
   const removeMemory = (n: number): Promise<string | undefined> => memStore.remove(n);
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
@@ -194,7 +195,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
           if (res.nextSteps?.length) controller.setNextSteps(res.nextSteps); // coach follow-ups → /next
           // Auto-remember: durable facts the coach flagged (<remember>) → memory store (deduped), with feedback.
           for (const fact of res.remembered ?? []) {
-            void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 remembered: ${fact}`); });
+            void memStore.add(fact).then((r) => {
+              if (r.ok) controller.note(`🧠 remembered: ${fact}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`);
+            });
           }
         }
       } catch (e) {

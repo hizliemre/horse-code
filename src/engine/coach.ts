@@ -3,7 +3,7 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import type { Message, Provider } from "../core/types.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { compactHistory, historyTokens } from "./compaction.js";
-import { selectMemories, renderMemoryHints } from "./memory-retrieval.js";
+import { selectMemories, renderMemoryHints, memoryReferenced } from "./memory-retrieval.js";
 import { readOnlyRegistry } from "./reviewer.js";
 import type { TaskCycleDeps } from "./task-types.js";
 
@@ -84,5 +84,7 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     inbox: deps.inbox, // "by-the-way" notes typed mid-run are folded into the coach's turn
   };
   const msg = await runToCompletion(opts);
+  // Reinforcement: bump the memories the reply actually cited so they rank higher on future ties.
+  if (deps.reinforceMemory) for (const h of hits) if (memoryReferenced(h, msg.content)) deps.reinforceMemory(h.id);
   return msg.content;
 }
