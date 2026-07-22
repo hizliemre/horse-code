@@ -56,4 +56,16 @@ describe("write_file", () => {
       expect(existsSync(join(dir, "alt", "ic.txt"))).toBe(true);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
+
+  it("reports live activity (path + line count) via ctx.onActivity on success", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-act-"));
+    try {
+      const acts: unknown[] = [];
+      await writeFileTool.run(
+        { path: "a/spec.md", content: "l1\nl2\nl3\n" },
+        { cwd: dir, signal: new AbortController().signal, onActivity: (a) => acts.push(a) },
+      );
+      expect(acts).toEqual([{ tool: "write", target: "a/spec.md", lines: 4 }]);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
 });

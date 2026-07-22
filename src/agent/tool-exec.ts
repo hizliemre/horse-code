@@ -14,6 +14,7 @@ export interface ToolExecDeps {
   approve: (req: PermissionRequest) => Promise<boolean>;
   cwd: string;
   signal: AbortSignal;
+  onActivity?: (a: import("../core/types.js").ToolActivity) => void; // live file-write/edit activity → UI
 }
 
 interface Plan {
@@ -95,7 +96,7 @@ export async function* executeToolCalls(
   const autoPlans = plans.filter((p) => p.kind === "run");
   for (const p of autoPlans) yield { type: "tool.request", toolCall: p.call };
   const autoResults = await Promise.all(
-    autoPlans.map((p) => p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal })),
+    autoPlans.map((p) => p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity })),
   );
   for (let k = 0; k < autoPlans.length; k++) {
     const p = autoPlans[k];
@@ -115,7 +116,7 @@ export async function* executeToolCalls(
     };
     const ok = await deps.approve(p.req!);
     const result = ok
-      ? await p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal })
+      ? await p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity })
       : errResult(p.call.name, "user denied");
     results[p.index] = { id: p.call.id, name: p.call.name, result };
     yield { type: "tool.result", toolCallId: p.call.id, result };

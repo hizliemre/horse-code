@@ -1,5 +1,6 @@
 import type { BoardCardView, ProgressEvent } from "../engine/progress.js";
 import type { AskOpts } from "../engine/review.js";
+import type { ToolActivity } from "../core/types.js";
 import type { UsageSample } from "../providers/meter.js";
 
 /** Per-turn metrics shown under the input (active model + accumulated tokens + duration). */
@@ -32,11 +33,12 @@ export interface TuiState {
   picker?: { models: string[]; loading: boolean; error?: string };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
+  activity: ToolActivity[]; // recent file writes/edits (newest first) → live activity strip
 }
 
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
-  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [] };
+  private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [], activity: [] };
   private pendingResolve?: (s: string) => void;
   private taskResolve?: (t: string) => void;
   private queue: string[] = []; // prompts submitted while running → drained by awaitTask
@@ -98,6 +100,12 @@ export class TuiController {
     this.notify();
   };
 
+  // arrow-bound: wired to deps.onActivity → the write/edit tools push here as they touch files.
+  pushActivity = (a: ToolActivity): void => {
+    this.state = { ...this.state, activity: [a, ...this.state.activity].slice(0, 5) }; // newest first, cap 5
+    this.notify();
+  };
+
   // arrow-bound: passed as LineReader → reused with makeAskUser/makeApprove/makeAskHuman.
   // opts.options → the UI renders a checkbox/radio selector instead of the free-text input.
   ask = (question: string, opts?: AskOpts): Promise<string> =>
@@ -151,7 +159,7 @@ export class TuiController {
     this.agentStarts.clear();
     this.state = {
       ...this.state,
-      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [],
+      mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [], activity: [],
       meta: { model: "", promptTokens: 0, completionTokens: 0, startedAt: this.now(), running: true },
     };
     this.notify();
@@ -168,7 +176,7 @@ export class TuiController {
       ? { ...m, running: false, durationMs: m.startedAt !== undefined ? this.now() - m.startedAt : m.durationMs }
       : undefined;
     this.agentStarts.clear();
-    this.state = { ...this.state, mode: "input", transcript: t, meta, runningAgents: [] };
+    this.state = { ...this.state, mode: "input", transcript: t, meta, runningAgents: [], activity: [] };
     this.notify();
   }
 

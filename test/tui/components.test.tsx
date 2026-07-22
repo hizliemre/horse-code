@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, ChoiceInput } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, ChoiceInput, ActivityStrip } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
@@ -202,6 +202,16 @@ describe("Ink components", () => {
     for (let i = 0; i < 200 && answer === undefined; i++) await sleep(15);
     expect(answer).toBe("two");
     unmount();
+  });
+
+  it("ActivityStrip renders each recent file write/edit with its path + line count", () => {
+    const f = strip(render(<ActivityStrip activity={[
+      { tool: "write", target: "specs/001-x/spec.md", lines: 45 },
+      { tool: "edit", target: "specs/001-x/plan.md", lines: 12 },
+    ]} cols={80} />).lastFrame());
+    expect(f).toContain("write specs/001-x/spec.md · 45L");
+    expect(f).toContain("edit specs/001-x/plan.md · 12L");
+    expect(f).toContain("●");
   });
 
   it("RunningAgents shows the count header + each agent's task, live duration, and model", () => {

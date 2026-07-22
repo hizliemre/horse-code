@@ -30,6 +30,7 @@ export async function runImplementer(
     approve: deps.approve,
     cwd,
     signal: deps.signal,
+    onActivity: deps.onActivity,
   };
   await runToCompletion(opts);
 }

@@ -1,4 +1,4 @@
-import type { Provider } from "../core/types.js";
+import type { Provider, ToolActivity } from "../core/types.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { RoleRegistry } from "../agent/roles.js";
 import type { SkillRegistry } from "../skills/registry.js";
@@ -13,6 +13,8 @@ export interface TaskCycleDeps {
   signal: AbortSignal;
   /** Memoized, lazy loader for the spec-kit templates — only invoked by the feature/bugfix pipeline, never by chat. */
   specKit: () => Promise<SpecKitTemplates>;
+  /** Live file-write/edit activity sink (wired to the TUI); undefined in headless/one-shot runs. */
+  onActivity?: (a: ToolActivity) => void;
 }
 
 export type ImplementerRole = "coder" | "designer";

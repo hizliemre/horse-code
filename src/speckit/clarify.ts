@@ -38,6 +38,7 @@ export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 
       approve: p.deps.approve,
       cwd: p.workdir,
       signal: p.deps.signal,
+      onActivity: p.deps.onActivity,
     };
     const step = await runStructuredRole(opts, ClarifyStepSchema);
     if (!step.nextQuestion) return;

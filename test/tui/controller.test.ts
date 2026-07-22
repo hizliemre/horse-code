@@ -185,6 +185,15 @@ describe("TuiController", () => {
     expect(new TuiController().getState().currentModel).toBe("");
   });
 
+  it("pushActivity keeps the 5 most recent file activities, newest first; beginRun/endRun clear them", () => {
+    const c = new TuiController();
+    c.beginRun();
+    for (let i = 0; i < 7; i++) c.pushActivity({ tool: "write", target: `f${i}.md`, lines: i });
+    expect(c.getState().activity.map((a) => a.target)).toEqual(["f6.md", "f5.md", "f4.md", "f3.md", "f2.md"]);
+    c.endRun("done");
+    expect(c.getState().activity).toEqual([]);
+  });
+
   it("ask with options sets pending.options + multiSelect (choice question); answer resolves it", async () => {
     const c = new TuiController();
     const p = c.ask("pick principles", { options: ["A", "B", "C"], multiSelect: true });

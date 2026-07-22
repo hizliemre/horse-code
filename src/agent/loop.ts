@@ -16,6 +16,7 @@ export interface RoleAgentOptions {
   cwd: string;
   signal: AbortSignal;
   maxTurns?: number;
+  onActivity?: (a: import("../core/types.js").ToolActivity) => void; // live file-write/edit activity → UI
 }
 
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
@@ -74,6 +75,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       approve: opts.approve,
       cwd: opts.cwd,
       signal: opts.signal,
+      onActivity: opts.onActivity,
     });
     for (const r of results) {
       working.push({ role: "tool", toolCallId: r.id, name: r.name, content: r.result.content });

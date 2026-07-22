@@ -8,6 +8,7 @@ import { donePhrase } from "./labels.js";
 import { fmtDuration } from "./format.js";
 import { Markdown } from "./markdown.js";
 import type { TurnMeta, RunningAgent } from "./controller.js";
+import type { ToolActivity } from "../core/types.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage, flattenMarkdown } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
@@ -208,6 +209,24 @@ export function RunningAgents({ agents, cols }: { agents: RunningAgent[]; cols: 
           </Text>
         );
       })}
+    </Box>
+  );
+}
+
+/**
+ * Live file-activity strip (WrongStack-style) shown under the input while a job runs: one row per recent
+ * write/edit — "● write specs/001-x/spec.md · 45L". Hard-truncated to width so it never bleeds scrollback.
+ */
+export function ActivityStrip({ activity, cols }: { activity: ToolActivity[]; cols: number }): React.ReactElement {
+  const width = Math.max(20, cols - 2);
+  return (
+    <Box flexDirection="column" width={width}>
+      {activity.map((a, i) => (
+        <Text key={i} wrap="truncate">
+          <Text color="cyan">{"  ● "}</Text>
+          <Text dimColor>{`${a.tool} ${a.target} · ${a.lines}L`}</Text>
+        </Text>
+      ))}
     </Box>
   );
 }
@@ -650,8 +669,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const queuedH = state.queued > 0 ? 1 : 0;
     // Live-agents panel under the input: 1 header line + one row per running sub-agent.
     const agentsH = state.runningAgents.length > 0 ? 1 + state.runningAgents.length : 0;
+    const activityH = state.activity.length; // one row per recent file write/edit
     const paletteH = slashOpen ? slashCmds.length + 3 : 0; // border(2) + command rows + hint(1)
-    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH;
+    const bottomH = statusH + paletteH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + activityH;
     const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
@@ -703,6 +723,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         )}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
+        {state.activity.length > 0 ? <ActivityStrip activity={state.activity} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}
       </Box>

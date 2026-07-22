@@ -29,6 +29,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     approve: p.deps.approve,
     cwd: p.workdir,
     signal: p.deps.signal,
+    onActivity: p.deps.onActivity,
   };
   await runToCompletion(opts);
 }

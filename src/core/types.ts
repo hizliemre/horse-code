@@ -26,9 +26,17 @@ export interface ToolResult {
   isError: boolean;
 }
 
+/** A file-touching tool's activity, surfaced live in the UI (WrongStack-style: name + target + line count). */
+export interface ToolActivity {
+  tool: string;   // "write" | "edit"
+  target: string; // the file path (relative to cwd)
+  lines: number;  // lines written / changed
+}
+
 export interface ToolContext {
   cwd: string;
   signal: AbortSignal;
+  onActivity?: (a: ToolActivity) => void; // optional live-activity sink (file writes/edits)
 }
 
 export interface PermissionDescriptor {

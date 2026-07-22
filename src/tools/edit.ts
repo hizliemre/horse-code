@@ -57,6 +57,7 @@ export const editFileTool: Tool = {
       : content.replace(a.oldString, a.newString);
     try {
       await writeFile(target, next, "utf8");
+      ctx.onActivity?.({ tool: "edit", target: a.path, lines: a.newString ? a.newString.split("\n").length : 0 });
       return { content: `Edited: ${a.path}`, isError: false };
     } catch (e) {
       return {
