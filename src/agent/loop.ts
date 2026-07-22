@@ -4,6 +4,7 @@ import type {
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { executeToolCalls } from "./tool-exec.js";
+import { shieldToolOutput } from "../core/prompt-guard.js";
 
 export interface RoleAgentOptions {
   provider: Provider;
@@ -84,7 +85,8 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       onActivity: opts.onActivity,
     });
     for (const r of results) {
-      working.push({ role: "tool", toolCallId: r.id, name: r.name, content: r.result.content });
+      // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.
+      working.push({ role: "tool", toolCallId: r.id, name: r.name, content: shieldToolOutput(r.result.content) });
     }
     // loop goes back to the top → LLM sees the tool results
   }

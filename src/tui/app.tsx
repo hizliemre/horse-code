@@ -6,6 +6,7 @@ import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
+import { firewallProvider } from "../providers/firewall.js";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { TuiController } from "./controller.js";
@@ -63,7 +64,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // onActivity → the write/edit tools stream file activity into the live strip.
   const deps: JobDeps = {
     ...deps0,
-    provider: meterProvider(deps0.provider, controller.onUsage),
+    provider: firewallProvider(meterProvider(deps0.provider, controller.onUsage)), // redact secrets from every outgoing prompt
+
     onActivity: controller.pushActivity,
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
     pins: () => pinStore.list(), // context pins → coach system prompt
