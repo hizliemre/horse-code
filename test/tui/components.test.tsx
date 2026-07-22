@@ -192,6 +192,14 @@ describe("Ink components", () => {
     expect(f).not.toContain("[question]");
   });
 
+  it("PendingQuestion renders the body as markdown (bold, no raw ** asterisks)", () => {
+    const { lastFrame } = render(<PendingQuestion text={"\n[question] 1. **What is the project name?**\n2. **Type?**"} cols={90} />);
+    const raw = lastFrame() ?? "";
+    expect(strip(raw)).toContain("What is the project name?");
+    expect(strip(raw)).not.toContain("**"); // markdown rendered, not literal
+    expect(raw).toContain("\x1b[1m"); // bold ANSI present
+  });
+
   it("App: while a question is pending, the 'refining' status is hidden and the question renders cleanly", () => {
     const c = new TuiController();
     c.awaitTask(); c.submitTask("x"); c.beginRun();

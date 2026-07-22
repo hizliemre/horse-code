@@ -9,7 +9,7 @@ import { fmtDuration } from "./format.js";
 import { Markdown } from "./markdown.js";
 import type { TurnMeta, RunningAgent } from "./controller.js";
 import type { StyledLine } from "./lines.js";
-import { flattenSplash, flattenMessage } from "./lines.js";
+import { flattenSplash, flattenMessage, flattenMarkdown } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { parseKittyKey } from "./keys.js";
 import { matchCommands, helpText, type SlashCommand } from "./commands.js";
@@ -30,14 +30,30 @@ const PENDING_STYLE = {
   human: { icon: "◆", label: "Review", color: "cyan" as const },
 };
 
-/** Renders a pending question/permission/review prompt: a colored icon + label header, then the body text. */
+/** Width of the pending-question body (shared by the renderer + the fullscreen height math → same wrap → same line count). */
+export function pendingWidth(cols: number): number {
+  return Math.max(20, cols - 2);
+}
+
+/**
+ * Renders a pending question/permission/review prompt: a colored icon + label header, then the body
+ * rendered as markdown (bold/lists/code) — the body often contains a markdown-formatted numbered list.
+ */
 export function PendingQuestion({ text, cols }: { text: string; cols: number }): React.ReactElement {
   const { kind, body } = parsePending(text);
   const s = PENDING_STYLE[kind];
+  const width = pendingWidth(cols);
+  const lines = flattenMarkdown(body, width);
   return (
-    <Box flexDirection="column" width={Math.max(20, cols - 2)}>
+    <Box flexDirection="column" width={width}>
       <Text color={s.color} bold>{`${s.icon} ${s.label}`}</Text>
-      <Text>{body}</Text>
+      {lines.map((line, i) => (
+        <Text key={i}>
+          {line.length === 0 ? " " : line.map((seg, j) => (
+            <Text key={j} color={seg.color} backgroundColor={seg.backgroundColor} bold={seg.bold} italic={seg.italic} dimColor={seg.dim}>{seg.text}</Text>
+          ))}
+        </Text>
+      ))}
     </Box>
   );
 }
@@ -535,9 +551,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const boardLines = showStatus && state.cards.length
       ? 1 + Math.max(...COLUMNS.map((col) => state.cards.filter((c) => c.column === col).length))
       : 0;
-    // Pending prompt: 1 header line + the body's wrapped lines (it can be a multi-line numbered list).
+    // Pending prompt: 1 header line + the markdown-flattened body lines (same width as PendingQuestion → same count).
     const pendingLines = state.pending
-      ? 1 + parsePending(state.pending.question).body.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / cw)), 0)
+      ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingWidth(size.cols)).length
       : 0;
     const statusH = (progressLine || doneLine ? 1 : 0) + boardLines + pendingLines; // progress/done(1) + board + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
