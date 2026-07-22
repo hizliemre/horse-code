@@ -15,6 +15,7 @@ import { parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
 import { readClipboardImage } from "./clipboard.js";
 import { GLYPHS as ICONS } from "./glyphs.js";
+import { helpSections } from "./help.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -142,6 +143,30 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
   );
 }
 
+/** Full-width help overlay (opened with "?" on an empty input): grouped keybindings + slash commands. */
+export function HelpOverlay({ cols }: { cols: number }): React.ReactElement {
+  const w = Math.max(30, cols - 2);
+  const sections = helpSections();
+  const keyW = Math.min(20, Math.max(...sections.flatMap((s) => s.entries.map((e) => e.keys.length))) + 1);
+  return (
+    <Box flexDirection="column" width={w} borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan" bold>Keyboard &amp; commands</Text>
+      {sections.map((sec) => (
+        <Box key={sec.title} flexDirection="column" marginTop={1}>
+          <Text color="#ff9a2e">{sec.title}</Text>
+          {sec.entries.map((e) => (
+            <Text key={e.keys} wrap="truncate-end">
+              <Text color="cyan">{`  ${e.keys.padEnd(keyW)}`}</Text>
+              <Text dimColor>{e.desc}</Text>
+            </Text>
+          ))}
+        </Box>
+      ))}
+      <Text dimColor>{"\n  Esc / q / ? to close"}</Text>
+    </Box>
+  );
+}
+
 /** Slash-command palette shown above the input when the draft starts with "/". */
 export function SlashPalette({ commands, selected, cols }: { commands: SlashCommand[]; selected: number; cols: number }): React.ReactElement {
   const w = Math.max(24, cols - 2);
@@ -239,7 +264,7 @@ const NUMPAD: Record<string, string> = {
   "\x1bOn": ".", "\x1bOo": "/", "\x1bOj": "*", "\x1bOk": "+", "\x1bOm": "-",
 };
 
-export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage }: {
+export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage, onHelp }: {
   value: string;
   cursor: number;
   onChange: (value: string, cursor: number) => void;
@@ -248,6 +273,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   paletteOpen?: boolean; // when the slash palette is open, → is a "complete" gesture owned by App, not a cursor move
   jobRunning?: boolean;  // while a job runs, Ctrl+C is handled by App (cancel the job), not here (clear/exit)
   onPasteImage?: () => void; // Alt+V → grab an image off the clipboard (App reads it + stages it)
+  onHelp?: () => void; // "?" on an empty input → open the help overlay
 }): React.ReactElement {
   // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
@@ -257,6 +283,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   const paletteRef = useRef(paletteOpen); paletteRef.current = paletteOpen;
   const runningRef = useRef(jobRunning); runningRef.current = jobRunning;
   const onPasteImageRef = useRef(onPasteImage); onPasteImageRef.current = onPasteImage;
+  const onHelpRef = useRef(onHelp); onHelpRef.current = onHelp;
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   // Raw stdin: Enter(CR) submits; LF/kitty-CSI-u newline; left/right arrow moves the cursor; insert/delete
   // in the middle; Ctrl+C clears if non-empty, exits if empty. Up/down/PgUp go to App's useInput (scroll).
@@ -277,6 +304,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
       if (HOME.has(s)) { change(v, 0); return; }
       if (END.has(s)) { change(v, v.length); return; }
       if (s === "\x1bv" || s === "\x1bV") { onPasteImageRef.current?.(); return; } // Alt+V → paste clipboard image
+      if (s === "?" && v.length === 0) { onHelpRef.current?.(); return; } // "?" on an empty input → help overlay
       if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit (app-keypad SS3)
       const np = NUMPAD[s];
       if (np) { change(v.slice(0, c) + np + v.slice(c), c + np.length); return; } // numpad char (app-keypad SS3)
@@ -508,6 +536,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const [slashSel, setSlashSel] = useState(0);
   // Esc on a choice question dismisses the selector → fall back to free-text; reset per new question.
   const [choiceDismissed, setChoiceDismissed] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false); // "?" overlay (keyboard + commands cheat-sheet)
   const slashCmds = matchCommands(draft);
   const slashOpen = (state.mode ?? "running") === "input" && !state.pending && draft.startsWith("/") && slashCmds.length > 0;
   const slashIdx = Math.min(slashSel, Math.max(0, slashCmds.length - 1));
@@ -581,6 +610,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const { stdin: rootStdin } = useStdin();
   const keyRef = useRef<(s: string) => void>(() => {});
   keyRef.current = (s: string): void => {
+    // Help overlay owns stdin while open: Esc / q / ? closes it, everything else is swallowed.
+    if (helpOpen) { if (s === "\x1b" || s === "q" || s === "?") setHelpOpen(false); return; }
     if (!fullscreen || state.mode === "picker") return;
     if (state.pending?.options?.length) return; // ChoiceInput owns stdin while a choice is pending
     const isInput = (state.mode ?? "running") === "input";
@@ -708,9 +739,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     // A pending choice question replaces the free-text input with a ChoiceInput selector.
     const choiceOptions = state.pending?.options ?? [];
     const choiceActive = choiceOptions.length > 0 && !choiceDismissed; // Esc dismisses → free-text fallback
-    const inputBoxH = choiceActive
-      ? inputMarginTop + choiceHeight(choiceOptions.length)
-      : 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
+    // Help overlay height: border(2) + title(1) + per-section (marginTop 1 + title 1 + entries) + footer(2).
+    const helpH = 2 + 1 + helpSections().reduce((a, s) => a + 2 + s.entries.length, 0) + 2;
+    const inputBoxH = helpOpen
+      ? inputMarginTop + helpH
+      : choiceActive
+        ? inputMarginTop + choiceHeight(choiceOptions.length)
+        : 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
     const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
     const queuedH = state.queued > 0 ? 1 : 0;
@@ -737,7 +772,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           </Box>
         ) : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
-        {choiceActive ? (
+        {helpOpen ? (
+          <Box marginTop={inputMarginTop}><HelpOverlay cols={size.cols} /></Box>
+        ) : choiceActive ? (
           <Box marginTop={inputMarginTop}>
             <ChoiceInput
               options={choiceOptions}
@@ -756,6 +793,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             paletteOpen={slashOpen}
             jobRunning={running}
             onPasteImage={pasteImage}
+            onHelp={() => setHelpOpen(true)}
             onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); setSlashSel(0); }}
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
