@@ -13,7 +13,7 @@ import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage, flattenMarkdown } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { parseKittyKey } from "./keys.js";
-import { matchCommands, helpText, type SlashCommand } from "./commands.js";
+import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -733,13 +733,21 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
               if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); controller.answer(t); return; }
-              // Slash palette open → Enter runs the selected command instead of submitting a prompt.
+              // Slash palette open → Enter runs the highlighted command instead of submitting a prompt.
               if (slashOpen) { const c = slashCmds[slashIdx]; if (c) { runSlash(c); return; } }
-              // /roles subcommands (no palette match for the arg form): show the table / reopen the picker.
-              const cmd = t.trim().toLowerCase();
-              if (cmd === "/roles") { setScroll(0); setDraft(""); setDraftCursor(0); controller.note(rolesReport()); return; }
+              const trimmed = t.trim();
+              const cmd = trimmed.toLowerCase();
+              // A fully-typed known command (palette closed) → run it.
+              const known = COMMANDS.find((c) => c.name === cmd);
+              if (known) { runSlash(known); return; }
               if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
-              if (t.trim()) historyRef.current = [...historyRef.current, t];
+              // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
+              if (trimmed.startsWith("/")) {
+                setScroll(0); setDraft(""); setDraftCursor(0);
+                controller.note(`Unknown command: \`${trimmed}\` — type \`/\` to see the available commands.`);
+                return;
+              }
+              if (trimmed) historyRef.current = [...historyRef.current, t];
               histIdxRef.current = -1; stashRef.current = "";
               setScroll(0); setDraft(""); setDraftCursor(0); controller.submitTask(t);
             }}

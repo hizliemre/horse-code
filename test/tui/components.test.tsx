@@ -284,6 +284,24 @@ describe("Ink components", () => {
     expect(f).not.toContain("[question]");
   });
 
+  it("App: an unknown slash command warns and is NOT sent to the LLM", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const c = new TuiController();
+    let submitted = 0;
+    const orig = c.submitTask.bind(c);
+    c.submitTask = (t: string): void => { submitted++; orig(t); };
+    c.awaitTask();
+    const { stdin, lastFrame, unmount } = render(<App controller={c} fullscreen model="m" />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("> "); i++) await sleep(15);
+    stdin.write("/foobar");
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("> /foobar"); i++) await sleep(15);
+    stdin.write("\r");
+    for (let i = 0; i < 200 && c.getState().transcript.length === 0; i++) await sleep(15);
+    expect(submitted).toBe(0); // never reached the LLM
+    expect(c.getState().transcript.at(-1)?.text).toContain("Unknown command");
+    unmount();
+  });
+
   it("App: /roles setmodel opens the model picker", async () => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     const c = new TuiController();
