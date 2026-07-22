@@ -159,6 +159,19 @@ describe("Ink components", () => {
     unmount();
   });
 
+  it("InputLine: while a job runs, Ctrl+C is deferred (no clear/exit — App cancels the job instead)", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let val = "hello"; let cur = 5; let cleared = false;
+    const onChange = (v: string): void => { val = v; if (v === "") cleared = true; };
+    const { stdin, rerender, unmount } = render(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={() => {}} jobRunning />);
+    await sleep(15);
+    stdin.write("\x03"); await sleep(15); // Ctrl+C while running → deferred, must NOT clear the input
+    rerender(<InputLine value={val} cursor={cur} onChange={onChange} onSubmit={() => {}} jobRunning />);
+    expect(cleared).toBe(false);
+    expect(val).toBe("hello");
+    unmount();
+  });
+
   it("ChoiceInput (multiSelect): space toggles checkboxes, Enter submits the checked options joined", async () => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     let answer: string | undefined;

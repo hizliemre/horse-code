@@ -80,14 +80,19 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   origWrite("\x1b[?1049h\x1b[H\x1b[>1u\x1b>");
   process.stdout.write = patched;
   process.once("exit", restore);
+  // Per-job AbortController → Ctrl+C cancels the running job (aborts the in-flight request); a second
+  // Ctrl+C within 200ms force-quits. In input mode InputLine handles Ctrl+C (clear if non-empty / exit if empty).
+  let jobAbort: AbortController | undefined;
+  let lastCtrlC = 0;
   // Under the kitty protocol, Ctrl+C no longer arrives as \x03 but as \x1b[99;5u → Ink's exitOnCtrlC can't see it.
-  // In input mode InputLine handles it (clear if non-empty / exit if empty); while a job is running the global handler exits.
   const onCtrlC = (chunk: Buffer | string): void => {
     const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
     if (s !== "\x03" && s !== "\x1b[99;5u") return;
     if ((controller.getState().mode ?? "running") === "input") return; // InputLine handles it
-    restore();
-    process.exit(0);
+    const now = Date.now();
+    if (now - lastCtrlC < 200) { restore(); process.exit(0); } // double-tap within 200ms → force quit
+    lastCtrlC = now;
+    jobAbort?.abort(); // cancel the running job → it throws → endRun → back to input
   };
   process.stdin.on("data", onCtrlC);
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
@@ -102,6 +107,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       // Conversation history: the transcript's last item is this prompt → exclude it (previous turns go to the coach).
       const history = controller.getState().transcript.slice(0, -1).map((m) => ({ role: m.role, content: m.text }));
       controller.beginRun();
+      // Fresh abort controller per job → Ctrl+C aborts THIS job's signal; the next job gets a clean one.
+      jobAbort = new AbortController();
+      deps.signal = jobAbort.signal;
       try {
         const res = await runJob(deps, {
           ...opts.jobBase,
@@ -113,7 +121,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         });
         controller.endRun(opts.formatResult(res), res.refinedPrompt);
       } catch (e) {
-        controller.endRun(`error: ${e instanceof Error ? e.message : String(e)}`);
+        controller.endRun(jobAbort.signal.aborted ? "cancelled" : `error: ${e instanceof Error ? e.message : String(e)}`);
       }
       taskPromise = controller.awaitTask(); // input-mode for the next task
     }

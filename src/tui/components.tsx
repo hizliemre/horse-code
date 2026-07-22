@@ -30,9 +30,13 @@ const PENDING_STYLE = {
   human: { icon: "◆", label: "Review", color: "cyan" as const },
 };
 
-/** Width of the pending-question body (shared by the renderer + the fullscreen height math → same wrap → same line count). */
+/** Width of the pending-question box (shared by the renderer + the fullscreen height math → same wrap → same line count). */
 export function pendingWidth(cols: number): number {
   return Math.max(20, cols - 2);
+}
+/** Body wrap width: the box width minus the 2-space hanging indent under the header. */
+export function pendingBodyWidth(cols: number): number {
+  return Math.max(16, pendingWidth(cols) - 2);
 }
 
 /**
@@ -43,17 +47,19 @@ export function PendingQuestion({ text, cols }: { text: string; cols: number }):
   const { kind, body } = parsePending(text);
   const s = PENDING_STYLE[kind];
   const width = pendingWidth(cols);
-  const lines = flattenMarkdown(body, width);
+  const lines = flattenMarkdown(body, pendingBodyWidth(cols));
   return (
     <Box flexDirection="column" width={width}>
       <Text color={s.color} bold>{`${s.icon} ${s.label}`}</Text>
-      {lines.map((line, i) => (
-        <Text key={i}>
-          {line.length === 0 ? " " : line.map((seg, j) => (
-            <Text key={j} color={seg.color} backgroundColor={seg.backgroundColor} bold={seg.bold} italic={seg.italic} dimColor={seg.dim}>{seg.text}</Text>
-          ))}
-        </Text>
-      ))}
+      <Box flexDirection="column" paddingLeft={2}>
+        {lines.map((line, i) => (
+          <Text key={i}>
+            {line.length === 0 ? " " : line.map((seg, j) => (
+              <Text key={j} color={seg.color} backgroundColor={seg.backgroundColor} bold={seg.bold} italic={seg.italic} dimColor={seg.dim}>{seg.text}</Text>
+            ))}
+          </Text>
+        ))}
+      </Box>
     </Box>
   );
 }
@@ -223,13 +229,14 @@ const NUMPAD: Record<string, string> = {
   "\x1bOn": ".", "\x1bOo": "/", "\x1bOj": "*", "\x1bOk": "+", "\x1bOm": "-",
 };
 
-export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false }: {
+export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false }: {
   value: string;
   cursor: number;
   onChange: (value: string, cursor: number) => void;
   onSubmit: (value: string) => void;
   width?: number;
   paletteOpen?: boolean; // when the slash palette is open, → is a "complete" gesture owned by App, not a cursor move
+  jobRunning?: boolean;  // while a job runs, Ctrl+C is handled by App (cancel the job), not here (clear/exit)
 }): React.ReactElement {
   // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
@@ -237,6 +244,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   const onChangeRef = useRef(onChange); onChangeRef.current = onChange;
   const onSubmitRef = useRef(onSubmit); onSubmitRef.current = onSubmit;
   const paletteRef = useRef(paletteOpen); paletteRef.current = paletteOpen;
+  const runningRef = useRef(jobRunning); runningRef.current = jobRunning;
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   // Raw stdin: Enter(CR) submits; LF/kitty-CSI-u newline; left/right arrow moves the cursor; insert/delete
   // in the middle; Ctrl+C clears if non-empty, exits if empty. Up/down/PgUp go to App's useInput (scroll).
@@ -246,7 +254,8 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
     const onData = (chunk: Buffer | string): void => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
       const v = valRef.current, c = curRef.current, change = onChangeRef.current;
-      if (s === "\x03" || s === "\x1b[99;5u") { if (v.length > 0) change("", 0); else process.exit(0); return; }
+      // Ctrl+C: while a job runs, defer to App (cancel the job / double-tap to quit); otherwise clear if non-empty, exit if empty.
+      if (s === "\x03" || s === "\x1b[99;5u") { if (runningRef.current) return; if (v.length > 0) change("", 0); else process.exit(0); return; }
       if (s === "\r") { onSubmitRef.current(v); return; }
       if (NEWLINE_SEQS.has(s)) { change(v.slice(0, c) + "\n" + v.slice(c), c + 1); return; }
       if (s === "\x7f" || s === "\x08") { if (c > 0) change(v.slice(0, c - 1) + v.slice(c), c - 1); return; }
@@ -626,7 +635,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       : 0;
     // Pending prompt: 1 header line + the markdown-flattened body lines (same width as PendingQuestion → same count).
     const pendingLines = state.pending
-      ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingWidth(size.cols)).length
+      ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingBodyWidth(size.cols)).length
       : 0;
     const statusH = (progressLine || doneLine ? 1 : 0) + boardLines + pendingLines; // progress/done(1) + board + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
@@ -678,6 +687,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             cursor={draftCursor}
             width={cw}
             paletteOpen={slashOpen}
+            jobRunning={running}
             onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); setSlashSel(0); }}
             onSubmit={(t) => {
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
