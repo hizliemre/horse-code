@@ -84,7 +84,12 @@ export async function runJob(
     }
     if (up.kind === "rejected") {
       emit({ kind: "phase", phase: "rejected", detail: up.stage });
-      if (session) await deps.manager.closeSession(session);
+      // Don't discard the rejected draft: commit it to its branch (so the work survives) and tell the user
+      // how to inspect it, instead of silently deleting the worktree + branch.
+      if (session) {
+        const branch = await deps.manager.preserveSession(session, `hc: rejected ${up.stage} draft`);
+        emit({ kind: "note", text: `📄 The rejected ${up.stage} draft is preserved on branch \`${branch}\`. Inspect it with \`git worktree add ../hc-${up.stage} ${branch}\` (or \`git show ${branch}:<path>\`).` });
+      }
       return { kind: "rejected", stage: up.stage, refinedPrompt: up.refinedPrompt };
     }
 

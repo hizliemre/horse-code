@@ -81,6 +81,23 @@ describe("WorktreeManager.openSession", () => {
   });
 });
 
+describe("WorktreeManager.preserveSession (rejection)", () => {
+  it("commits the draft to the branch + removes the worktree dir but KEEPS the branch (recoverable)", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "reject-me");
+    await writeFile(join(s.baseWorktree, "spec.md"), "# rejected draft", "utf8"); // uncommitted draft
+    const branch = await wm.preserveSession(s, "hc: rejected spec draft");
+    expect(branch).toBe("hc/reject-me/base");
+    expect(existsSync(s.baseWorktree)).toBe(false); // worktree dir removed
+    expect(await branchExists(repo, "hc/reject-me/base")).toBe(true); // branch survives → draft recoverable
+    // the draft is committed on the branch, not lost
+    const shown = await defaultGitRunner(["show", `${branch}:spec.md`], repo);
+    expect(shown.stdout).toContain("# rejected draft");
+  });
+});
+
 describe("WorktreeManager.deriveTask", () => {
   it("creates a worktree derived from base + hc/<slug>/t/<task> branch", async () => {
     repo = await initTmpRepo();

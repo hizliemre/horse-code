@@ -200,13 +200,20 @@ describe("runReviewLoop", () => {
     expect(neg.approved).toBe(false);
   });
 
-  it("escalation prompt localizes to the user's language (Turkish) + accepts Turkish 'onayla'", async () => {
+  it("escalation is a localized selectable choice; Turkish 'devam' → approved", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    let asked = "";
-    const out = await runReviewLoop(rdeps(p), dir, "spec.md", noRevise, async (q) => { asked = q; return "onayla"; }, 1, () => {}, "Turkish");
+    const mk = () => reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    let asked = "", opts: string[] | undefined;
+    const out = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async (q, o) => { asked = q; opts = o?.options; return "devam"; }, 1, () => {}, "Turkish");
     expect(asked).toMatch(/revizyon turunda onaylanmadı/); // Turkish escalation
-    expect(out.approved).toBe(true); // "onayla" counts as approval
+    expect(opts).toEqual(["Devam et (mevcut haliyle onayla)", "Durdur"]); // selectable options, localized
+    expect(out.approved).toBe(true); // "devam" (continue) counts as proceed
+    // selecting the approve option verbatim also approves
+    const out2 = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => "Devam et (mevcut haliyle onayla)", 1, () => {}, "Turkish");
+    expect(out2.approved).toBe(true);
+    // "Durdur" does NOT approve
+    const out3 = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => "Durdur", 1, () => {}, "Turkish");
+    expect(out3.approved).toBe(false);
   });
 
   it("throws if cancelled", async () => {

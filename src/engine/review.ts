@@ -136,11 +136,12 @@ export async function runReviewLoop(
     await revise(feedback);
   }
   // Escalation to the human — localized to the user's language (this string is code-generated, not from an LLM,
-  // so the "respond in <language>" rule wouldn't otherwise reach it).
-  const q = language === "Turkish"
-    ? `${maxRounds} revizyon turunda onaylanmadı. Onaylayalım mı, duralım mı? (onayla / durdur)`
-    : `Not approved after ${maxRounds} revision rounds. Approve / stop?`;
-  const answer = await askUser(q);
-  // Exact match so a negation ("I don't approve") isn't counted as approval by substring; accept EN + TR.
-  return { approved: /^\s*(approve|yes|onayla|onay|evet)\s*$/i.test(answer.trim()) };
+  // so the "respond in <language>" rule wouldn't reach it). Presented as a SELECTABLE choice so a free-text
+  // answer like "devam" (continue) can't be misread as a rejection.
+  const [q, approveLabel, stopLabel] = language === "Turkish"
+    ? [`${maxRounds} revizyon turunda onaylanmadı. Ne yapmak istersin?`, "Devam et (mevcut haliyle onayla)", "Durdur"]
+    : [`Not approved after ${maxRounds} revision rounds. What now?`, "Approve (proceed as-is)", "Stop"];
+  const answer = await askUser(q, { options: [approveLabel, stopLabel] });
+  // Accept the approve option exactly, or a free-typed approval in EN/TR ("continue"/"devam" mean proceed).
+  return { approved: answer.trim() === approveLabel || /^\s*(approve|yes|continue|onayla|onay|evet|devam(\s*et)?)\s*$/i.test(answer.trim()) };
 }
