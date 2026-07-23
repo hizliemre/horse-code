@@ -12,6 +12,22 @@ describe("TuiController", () => {
     expect(notified).toBe(1);
   });
 
+  it("narrates spec-kit authoring phases into the chat flow (deduped), skips non-authoring phases", () => {
+    const c = new TuiController();
+    c.beginRun();
+    c.onEvent({ kind: "phase", phase: "constitution" });
+    c.onEvent({ kind: "phase", phase: "constitution" }); // duplicate → not re-narrated
+    c.onEvent({ kind: "phase", phase: "specify" });
+    c.onEvent({ kind: "phase", phase: "waves" }); // not an authoring phase → no note
+    const notes = c.getState().transcript
+      .filter((m): m is { role: "user" | "assistant"; text: string } => "role" in m)
+      .map((m) => m.text);
+    expect(notes.filter((t) => t.toLowerCase().includes("constitution"))).toHaveLength(1); // deduped
+    expect(notes.some((t) => t.includes("questions"))).toBe(true); // heads-up that it may ask
+    expect(notes.some((t) => t.toLowerCase().includes("spec"))).toBe(true);
+    expect(notes).toHaveLength(2); // constitution + specify only (waves not narrated)
+  });
+
   it("onEvent board → updates state.cards", () => {
     const c = new TuiController();
     c.onEvent({ kind: "board", cards: [{ id: "a", title: "A", column: "TODO" }] });

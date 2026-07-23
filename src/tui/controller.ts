@@ -2,6 +2,7 @@ import type { BoardCardView, ProgressEvent } from "../engine/progress.js";
 import type { AskOpts } from "../engine/review.js";
 import type { ToolActivity } from "../core/types.js";
 import type { UsageSample } from "../providers/meter.js";
+import { phaseNarration } from "./labels.js";
 
 /** Per-turn metrics shown under the input (active model + accumulated tokens + duration). */
 export interface TurnMeta {
@@ -56,6 +57,7 @@ export class TuiController {
   private inbox: string[] = []; // "by-the-way" notes typed mid-run → folded into the running coach turn
   private listeners = new Set<() => void>();
   private agentStarts = new Map<string, number>(); // card id → when it entered IN-PROGRESS (our clock)
+  private lastNarrated?: string; // last spec-kit phase narrated into the flow (dedup)
   private now: () => number;
 
   constructor(now: () => number = () => Date.now()) {
@@ -77,7 +79,17 @@ export class TuiController {
 
   // arrow-bound: passed to runJob as onEvent (preserves this)
   onEvent = (ev: ProgressEvent): void => {
-    if (ev.kind === "phase") this.state = { ...this.state, phase: ev.phase, detail: ev.detail };
+    if (ev.kind === "phase") {
+      let transcript = this.state.transcript;
+      // Narrate the spec-kit authoring phases into the chat flow (persistent progress + a heads-up that
+      // the interactive steps may ask questions) — the transient shimmer alone reads as "stuck".
+      const narration = phaseNarration(ev.phase);
+      if (narration && this.lastNarrated !== ev.phase) {
+        this.lastNarrated = ev.phase;
+        transcript = [...transcript, { role: "assistant", text: narration }];
+      }
+      this.state = { ...this.state, phase: ev.phase, detail: ev.detail, transcript };
+    }
     else if (ev.kind === "board") this.state = { ...this.state, cards: ev.cards, runningAgents: this.deriveAgents(ev.cards) };
     // refined: swap the raw prompt for the refined one live (the coach/pipeline only ever sees the refine),
     // so the transcript shows what was actually handed downstream. endRun does the same as a fallback.
@@ -215,6 +227,7 @@ export class TuiController {
 
   beginRun(): void {
     this.agentStarts.clear();
+    this.lastNarrated = undefined; // re-narrate phases for the new turn
     this.state = {
       ...this.state,
       mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [], nextSteps: [],
