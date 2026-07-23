@@ -48,22 +48,39 @@ describe("capabilityScore", () => {
 });
 
 describe("adjustRoleModels", () => {
-  const models = ["cc/claude-opus-4-8", "cc/claude-sonnet-5", "opencode-go/deepseek-v4-flash", "provider/gpt-5-mini"];
-  it("gives strong roles the most capable model, others the best fast model", () => {
-    const out = adjustRoleModels(["analyst", "planner", "coach", "refiner", "project-manager"], models);
-    const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
-    expect(map.analyst).toBe("cc/claude-opus-4-8");
-    expect(map.planner).toBe("cc/claude-opus-4-8");
-    expect(map.coach).toBe("cc/claude-opus-4-8");
-    expect(map.refiner).toBe("opencode-go/deepseek-v4-flash"); // best fast model (flash ranks over mini? equal → first)
-    expect(map["project-manager"]).not.toBe("cc/claude-opus-4-8"); // non-strong → fast
+  it("spreads strong roles across providers (each a top model of a different source), not all on one", () => {
+    const models = [
+      "antigravity/opus-x", "antigravity/sonnet-x",
+      "claude/opus-4-8", "codex/gpt-5", "opencode-go/deepseek-v4",
+    ];
+    const out = adjustRoleModels(["analyst", "planner", "coach", "judge"], models);
+    const providers = out.map((r) => r.model.split("/")[0]);
+    // 4 strong roles → 4 distinct providers (no single source hogs them all)
+    expect(new Set(providers).size).toBe(4);
+    expect(providers.filter((p) => p === "antigravity")).toHaveLength(1); // antigravity gets one, not all
   });
 
-  it("falls back to the best model for fast roles when no fast model exists", () => {
+  it("strong roles get capable (non-fast) models; fast roles get fast models", () => {
+    const models = ["a/opus", "b/sonnet", "c/flash", "d/mini"];
+    const out = adjustRoleModels(["analyst", "planner", "refiner", "team-lead"], models);
+    const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
+    expect(["a/opus", "b/sonnet"]).toContain(map.analyst);
+    expect(["a/opus", "b/sonnet"]).toContain(map.planner);
+    expect(map.analyst).not.toBe(map.planner); // spread, not the same model twice
+    expect(["c/flash", "d/mini"]).toContain(map.refiner);
+    expect(["c/flash", "d/mini"]).toContain(map["team-lead"]);
+  });
+
+  it("round-robins (wraps) when there are more roles than models in a tier", () => {
+    const out = adjustRoleModels(["analyst", "planner", "coach"], ["a/opus", "b/sonnet"]);
+    const strong = out.map((r) => r.model);
+    expect(strong).toEqual(["a/opus", "b/sonnet", "a/opus"]); // wraps back around
+  });
+
+  it("falls back to the capable pool for fast roles when no fast model exists", () => {
     const out = adjustRoleModels(["refiner", "analyst"], ["a/opus", "b/sonnet"]);
     const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
-    expect(map.refiner).toBe("a/opus"); // no fast model → best
-    expect(map.analyst).toBe("a/opus");
+    expect(["a/opus", "b/sonnet"]).toContain(map.refiner); // no fast model → uses capable pool
   });
 
   it("empty model list → no assignments", () => {

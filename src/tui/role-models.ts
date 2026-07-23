@@ -55,13 +55,48 @@ export function capabilityScore(model: string): number {
   return 60; // unknown → assume mid
 }
 
+/** The source/provider of a model id (segment before the first "/"). */
+const providerOf = (model: string): string => model.split("/")[0];
+
 /**
- * Auto-assigns a fitting model to each role: strong roles get the most capable model available; the rest
- * get the best fast/cheap model (falling back to the most capable if no fast model exists).
+ * Orders models to spread load across sources: each provider's models are sorted best-first, then the
+ * providers are interleaved (strongest provider first). Round-robin over this list hands consecutive roles
+ * different providers — so no single source (e.g. antigravity) gets every role.
+ */
+function interleaveByProvider(models: string[]): string[] {
+  const groups = new Map<string, string[]>();
+  for (const m of models) {
+    const p = providerOf(m);
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p)!.push(m);
+  }
+  for (const list of groups.values()) list.sort((a, b) => capabilityScore(b) - capabilityScore(a));
+  const ordered = [...groups.values()].sort((a, b) => capabilityScore(b[0]) - capabilityScore(a[0]));
+  const out: string[] = [];
+  for (let added = true; added; ) {
+    added = false;
+    for (const list of ordered) { const m = list.shift(); if (m) { out.push(m); added = true; } }
+  }
+  return out;
+}
+
+/**
+ * Auto-assigns a fitting model to each role AND spreads roles across sources. Strong roles round-robin over
+ * the capable models (provider-interleaved → each a top model of a different source); the rest round-robin
+ * over the fast/cheap models. Falls back to the strong pool when no fast model exists (and vice versa).
  */
 export function adjustRoleModels(roles: string[], models: string[]): { role: string; model: string }[] {
   if (models.length === 0) return [];
-  const best = [...models].sort((a, b) => capabilityScore(b) - capabilityScore(a))[0];
-  const fast = models.filter((m) => WEAK_RE.test(m)).sort((a, b) => capabilityScore(b) - capabilityScore(a))[0] ?? best;
-  return roles.map((role) => ({ role, model: STRONG_ROLES.has(role) ? best : fast }));
+  const isFast = (m: string): boolean => WEAK_RE.test(m);
+  const strong = interleaveByProvider(models.filter((m) => !isFast(m)));
+  const fastOnly = models.filter(isFast);
+  const fast = interleaveByProvider(fastOnly);
+  const strongPool = strong.length ? strong : fast; // no capable models → use the fast ones
+  const fastPool = fast.length ? fast : strong; // no fast models → use the capable ones
+  let si = 0, fi = 0;
+  return roles.map((role) =>
+    STRONG_ROLES.has(role)
+      ? { role, model: strongPool[si++ % strongPool.length] }
+      : { role, model: fastPool[fi++ % fastPool.length] },
+  );
 }
