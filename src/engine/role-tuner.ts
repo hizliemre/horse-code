@@ -82,7 +82,7 @@ export async function tuneRoleModels(opts: {
   const tuner = mostCapable(models);
   if (!models.length || !tuner) return { reasoning: "No models available to assign.", chains: heuristic, tuner };
 
-  const profiles = roles.map((r) => `- ${r}: ${ROLE_PROFILES[r] ?? "(a support role)"}`).join("\n");
+  const profiles = roles.map((r) => `- ${r}: ${ROLE_PROFILES[r] ?? "(a review role — critiques the spec/plan from a specific angle; wants a strong model)"}`).join("\n");
   const systemPrompt =
     `You assign LLM models to the agent roles of a coding assistant. Each role gets a fallback CHAIN: a primary ` +
     `model plus two fallbacks (3 total), tried in order when a source is rate-limited or exhausted.\n\n` +

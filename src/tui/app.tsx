@@ -73,6 +73,15 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const chain = deps0.roleRegistry.chain(r);
       return { name: r, model: chain[0] ?? "", models: chain };
     });
+  // Every assignable role: the main roles + the review councilors (which live in a SEPARATE registry). Both
+  // bootstrap and /roles adjust must cover all of these — otherwise a councilor stays on the invalid "default".
+  const REQ = REQUIRED_ROLES as readonly string[];
+  const councilorNames = deps0.councilors.map((c) => c.name);
+  const tunableRoles = (): string[] => [...REQUIRED_ROLES, ...councilorNames];
+  const peekRole = (role: string): string =>
+    (REQ.includes(role) ? deps0.roleRegistry : deps0.councilRegistry).peekModel(role);
+  const applyChain = (role: string, chain: string[]): void =>
+    (REQ.includes(role) ? deps0.roleRegistry : deps0.councilRegistry).setRoleModel(role, chain);
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.
   const deps: JobDeps = {
@@ -100,14 +109,14 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     try { models = await opts.listModels(); }
     catch (e) { controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`); return; }
     if (!models.length) { controller.note("No models available to assign."); return; }
-    const roleNames = listRoles().map((r) => r.name);
+    const roleNames = tunableRoles(); // main roles + review councilors (both must be covered)
     const tuner = mostCapable(models);
     controller.note(`🤖 \`${tuner}\` is assigning models to all ${roleNames.length} roles — reasoning over cost, capability & source diversity:`);
     const append = controller.streamNote(""); // reasoning streams here live
     controller.startBusy("tuning", tuner); // status line: shimmer + live timer + token spend
     try {
       const { chains } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames, onReason: append });
-      for (const { role, models: ch } of chains) deps0.roleRegistry.setRoleModel(role, ch);
+      for (const { role, models: ch } of chains) applyChain(role, ch);
       controller.endBusy();
       const rows = chains.map(({ role, models: ch }) => [`- \`${role}\` → ${ch[0] ?? "—"}`, ...ch.slice(1).map((m) => `    ↳ ${m}`)].join("\n"));
       controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any chain._`);
@@ -117,9 +126,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
-  // On a clean config every role resolves to the "default" placeholder (not a real model → every call fails).
+  // On a clean config every role (main + councilors) resolves to the "default" placeholder → every call fails.
   const rolesUnconfigured = (): boolean =>
-    REQUIRED_ROLES.every((r) => { const m = deps0.roleRegistry.peekModel(r); return !m || m === "default"; });
+    tunableRoles().every((r) => { const m = peekRole(r); return !m || m === "default"; });
   // First-run bootstrap: once sources are known, if no real models are set, apply the FAST heuristic chains
   // (session-only, config untouched) so the app works immediately. The user can `/roles adjust` to tune with reasoning.
   const bootstrapRoles = async (): Promise<void> => {
@@ -127,9 +136,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     let models: string[];
     try { models = await opts.listModels(); } catch { return; }
     if (!models.length) return;
-    const adj = adjustRoleModels([...REQUIRED_ROLES], models);
+    const adj = adjustRoleModels(tunableRoles(), models);
     if (!adj.length) return;
-    for (const { role, models: ch } of adj) deps0.roleRegistry.setRoleModel(role, ch);
+    for (const { role, models: ch } of adj) applyChain(role, ch);
     controller.note("Bootstrapped role models from your sources — run `/roles adjust` to tune them with an LLM.");
   };
   // Session persistence (per project) → the transcript is saved after every turn so a session can be resumed.

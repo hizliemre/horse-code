@@ -35,6 +35,10 @@ export const ROLE_PROFILES: Record<string, string> = {
   designer: "Builds UI — high volume → a capable coding/design model, not the flagship.",
   "senior-designer": "Senior UI reviewer — more capable than the designer.",
   "code-reviewer": "Reviews diffs — moderate volume → a solid capable model.",
+  // Review council — each critiques the spec/plan from one angle; low volume, quality-critical → strong models.
+  security: "Reviews the spec/plan for security holes — low volume, high stakes → a strong model.",
+  architecture: "Reviews the spec/plan for architectural soundness — low volume → a strong model.",
+  testability: "Reviews the spec/plan for testability — low volume → a strong model.",
 };
 const ROLE_ADVICE = ROLE_PROFILES; // picker note reuses the profiles
 
