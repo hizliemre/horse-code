@@ -92,11 +92,24 @@ export class TuiController {
       this.state = { ...this.state, phase: ev.phase, detail: ev.detail, transcript };
     }
     else if (ev.kind === "board") this.state = { ...this.state, cards: ev.cards, runningAgents: this.deriveAgents(ev.cards) };
+    // agents: ad-hoc sub-agents not backed by the board (the review council) → shown in the live-agents panel.
+    else if (ev.kind === "agents") this.state = { ...this.state, runningAgents: this.setAgents(ev.agents) };
     // refined: swap the raw prompt for the refined one live (the coach/pipeline only ever sees the refine),
     // so the transcript shows what was actually handed downstream. endRun does the same as a fallback.
     else this.state = { ...this.state, transcript: replaceLastUser(this.state.transcript, ev.refinedPrompt) };
     this.notify();
   };
+
+  /** Reconciles ad-hoc sub-agents (not board-backed, e.g. the review council) with stable start times. */
+  private setAgents(agents: { id: string; title: string; model: string }[]): RunningAgent[] {
+    const live = new Set(agents.map((a) => a.id));
+    for (const id of this.agentStarts.keys()) if (!live.has(id)) this.agentStarts.delete(id);
+    return agents.map((a) => {
+      let startedAt = this.agentStarts.get(a.id);
+      if (startedAt === undefined) { startedAt = this.now(); this.agentStarts.set(a.id, startedAt); }
+      return { id: a.id, title: a.title, model: a.model, startedAt };
+    });
+  }
 
   /** Reconciles the running-agent list from the board: IN-PROGRESS cards, each with a stable start time. */
   private deriveAgents(cards: BoardCardView[]): RunningAgent[] {

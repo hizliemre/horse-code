@@ -90,6 +90,17 @@ describe("runCouncil", () => {
     expect(byName.arch.recommendation).toBe("approve");
   });
 
+  it("emits councilors as live sub-agents, then clears the panel when done", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: { "security": '{"concerns":[],"recommendation":"approve"}', "architectural": '{"concerns":[],"recommendation":"approve"}' } });
+    const events: { kind: string; agents?: { title: string }[] }[] = [];
+    await runCouncil(rdeps(p), dir, "spec.md", (ev) => events.push(ev as never));
+    const agentEvents = events.filter((e) => e.kind === "agents");
+    expect(agentEvents.length).toBe(2); // one to show, one to clear
+    expect(agentEvents[0].agents?.map((a) => a.title)).toEqual(expect.arrayContaining([expect.stringContaining("council:")]));
+    expect(agentEvents[1].agents).toEqual([]); // cleared on finish
+  });
+
   it("councilor toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const { MockProvider } = await import("../../src/providers/mock.js");

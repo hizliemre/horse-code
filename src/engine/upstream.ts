@@ -34,6 +34,14 @@ export async function runUpstream(
   emit: (ev: ProgressEvent) => void = () => {},
   images?: string[], // pasted images → attached to the coach's chat turn (vision)
 ): Promise<UpstreamResult> {
+  // Each spec-kit phase is driven by a specific role — surface it (+ its model) in the status detail so the
+  // user sees WHO is working (e.g. "Writing spec… — analyst · cc/opus-4-8"), not just the persistent coach badge.
+  const PHASE_ROLE: Record<string, string> = { constitution: "analyst", specify: "analyst", clarify: "analyst", plan: "planner", tasks: "project-manager" };
+  const emitPhase = (phase: string): void => {
+    const role = PHASE_ROLE[phase];
+    const model = role ? deps.roleRegistry.peekModel(role) : "";
+    emit({ kind: "phase", phase, detail: role ? `${role} · ${model}` : undefined });
+  };
   // The refiner sees the history → follow-ups are refined in context (horse-code's feature applies everywhere).
   // Refiner + chat run WITHOUT a worktree (read-only / classify); the worktree is opened lazily below,
   // only for the feature/bugfix pipeline — so a plain chat never creates a worktree.
@@ -62,7 +70,7 @@ export async function runUpstream(
 
   // Constitution: establish project principles once — only if this worktree has none yet.
   if (!existsSync(constitutionPath(workdir))) {
-    emit({ kind: "phase", phase: "constitution" });
+    emitPhase("constitution");
     await runConstitution(p);
   }
 
@@ -70,36 +78,38 @@ export async function runUpstream(
   const paths = scaffoldFeature(workdir, slug);
 
   // Specify → council/judge review loop (revise = re-run specify with feedback).
-  emit({ kind: "phase", phase: "specify" });
+  emitPhase("specify");
   await runSpecify(p, paths, r.refinedPrompt);
   const specRel = relative(workdir, paths.spec);
   const specOut = await runReviewLoop(
     deps, workdir, specRel,
     (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
     askUser, maxRounds,
+    emit,
   );
   if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
   // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
   if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
 
   // Clarify: structured Q&A loop that tightens the spec before planning (capped inside runClarify).
-  emit({ kind: "phase", phase: "clarify" });
+  emitPhase("clarify");
   await runClarify(p, paths);
 
   // Plan → council/judge review loop (revise = re-run plan with feedback).
-  emit({ kind: "phase", phase: "plan" });
+  emitPhase("plan");
   await runPlan(p, paths);
   const planRel = relative(workdir, paths.plan);
   const planOut = await runReviewLoop(
     deps, workdir, planRel,
     (fb) => runPlan(p, paths, fb),
     askUser, maxRounds,
+    emit,
   );
   if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
   if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
 
   // Tasks: break the approved plan into the actionable task list handed downstream to the project-manager.
-  emit({ kind: "phase", phase: "tasks" });
+  emitPhase("tasks");
   await runTasks(p, paths);
 
   return {

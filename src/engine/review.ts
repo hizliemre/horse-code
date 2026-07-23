@@ -5,6 +5,7 @@ import { RoleRegistry } from "../agent/roles.js";
 import { readOnlyRegistry } from "./reviewer.js";
 import type { TaskCycleDeps } from "./task-types.js";
 import type { CouncilorConfig, RoleConfig } from "../config/config.js";
+import type { ProgressEvent } from "./progress.js";
 
 export interface ReviewDeps extends TaskCycleDeps {
   councilRegistry: RoleRegistry;
@@ -44,20 +45,28 @@ export function buildCouncilRegistry(councilors: CouncilorConfig[]): RoleRegistr
 }
 
 /** Runs the councilors in parallel; each one reviews the document read-only and produces a named assessment. */
-export async function runCouncil(deps: ReviewDeps, workdir: string, docPath: string): Promise<Assessment[]> {
-  return Promise.all(
-    deps.councilors.map(async (c) => {
-      const resolved = deps.councilRegistry.resolve(c.name);
-      const opts: RoleAgentOptions = {
-        provider: deps.provider, ...resolved,
-        tools: readOnlyRegistry(deps),
-        messages: [{ role: "user", content: `Review the "${docPath}" document and evaluate it from this perspective.` }],
-        permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
-      };
-      const r = await runStructuredRole(opts, AssessmentSchema);
-      return { name: c.name, concerns: r.concerns, recommendation: r.recommendation };
-    }),
-  );
+export async function runCouncil(
+  deps: ReviewDeps, workdir: string, docPath: string, emit: (ev: ProgressEvent) => void = () => {},
+): Promise<Assessment[]> {
+  // Surface each councilor as a live sub-agent (they run in parallel) so the user sees the review happening.
+  emit({ kind: "agents", agents: deps.councilors.map((c) => ({ id: `council:${c.name}`, title: `council: ${c.name}`, model: deps.councilRegistry.peekModel(c.name) })) });
+  try {
+    return await Promise.all(
+      deps.councilors.map(async (c) => {
+        const resolved = deps.councilRegistry.resolve(c.name);
+        const opts: RoleAgentOptions = {
+          provider: deps.provider, ...resolved,
+          tools: readOnlyRegistry(deps),
+          messages: [{ role: "user", content: `Review the "${docPath}" document and evaluate it from this perspective.` }],
+          permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+        };
+        const r = await runStructuredRole(opts, AssessmentSchema);
+        return { name: c.name, concerns: r.concerns, recommendation: r.recommendation };
+      }),
+    );
+  } finally {
+    emit({ kind: "agents", agents: [] }); // clear the live-agents panel when the council finishes
+  }
 }
 
 /** Judge synthesizes the council's evaluations into a single decision (pass/revise/ask-human). */
@@ -86,9 +95,10 @@ export async function runReviewLoop(
   revise: (feedback: string[]) => Promise<void>,
   askUser: AskUser,
   maxRounds: number,
+  emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<ReviewOutcome> {
   for (let round = 0; round < maxRounds; round++) {
-    const assessments = await runCouncil(deps, workdir, docPath);
+    const assessments = await runCouncil(deps, workdir, docPath, emit);
     const d = await runJudge(deps, workdir, docPath, assessments);
     if (d.decision === "pass") return { approved: true };
     let feedback = d.feedback;

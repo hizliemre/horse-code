@@ -10,7 +10,10 @@ export interface BoardCardView {
 export type ProgressEvent =
   | { kind: "phase"; phase: string; detail?: string }
   | { kind: "board"; cards: BoardCardView[] }
-  | { kind: "refined"; refinedPrompt: string };
+  | { kind: "refined"; refinedPrompt: string }
+  // Ad-hoc live sub-agents not backed by a board card (e.g. the review council running in parallel).
+  // An empty list clears the panel.
+  | { kind: "agents"; agents: { id: string; title: string; model: string }[] };
 
 /** Instant card view of the board (id/title/column/model). */
 export function snapshotBoard(board: Board): BoardCardView[] {

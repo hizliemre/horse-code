@@ -67,21 +67,21 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Getters (not snapshots): re-read on every render so the line reflects live /roles adjust · setmodel changes.
   const coachModel = (): string => deps0.roleRegistry.peekModel("coach") || opts.model || "";
   const refinerModel = (): string => deps0.roleRegistry.peekModel("refiner") || opts.model || "";
-  // /roles → each role + its full model chain (primary + fallbacks); `model` = chain head, reflects /model.
-  const listRoles = (): { name: string; model: string; models: string[] }[] =>
-    REQUIRED_ROLES.map((r) => {
-      const chain = deps0.roleRegistry.chain(r);
-      return { name: r, model: chain[0] ?? "", models: chain };
-    });
   // Every assignable role: the main roles + the review councilors (which live in a SEPARATE registry). Both
   // bootstrap and /roles adjust must cover all of these — otherwise a councilor stays on the invalid "default".
   const REQ = REQUIRED_ROLES as readonly string[];
   const councilorNames = deps0.councilors.map((c) => c.name);
   const tunableRoles = (): string[] => [...REQUIRED_ROLES, ...councilorNames];
-  const peekRole = (role: string): string =>
-    (REQ.includes(role) ? deps0.roleRegistry : deps0.councilRegistry).peekModel(role);
-  const applyChain = (role: string, chain: string[]): void =>
-    (REQ.includes(role) ? deps0.roleRegistry : deps0.councilRegistry).setRoleModel(role, chain);
+  const regFor = (role: string) => (REQ.includes(role) ? deps0.roleRegistry : deps0.councilRegistry);
+  const peekRole = (role: string): string => regFor(role).peekModel(role);
+  const applyChain = (role: string, chain: string[]): void => regFor(role).setRoleModel(role, chain);
+  // /roles → each role + its full model chain (primary + fallbacks). `council` flags review councilors so the
+  // UI can group them. `model` = chain head, reflects /model.
+  const listRoles = (): { name: string; model: string; models: string[]; council?: boolean }[] =>
+    tunableRoles().map((r) => {
+      const chain = regFor(r).chain(r);
+      return { name: r, model: chain[0] ?? "", models: chain, council: !REQ.includes(r) };
+    });
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.
   const deps: JobDeps = {
@@ -249,7 +249,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={(role, models) => deps0.roleRegistry.setRoleModel(role, models)} listRoles={listRoles} adjustRoles={adjustRoles}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChain} listRoles={listRoles} adjustRoles={adjustRoles}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}

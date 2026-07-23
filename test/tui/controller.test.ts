@@ -218,6 +218,20 @@ describe("TuiController", () => {
     expect(text).toContain("↳ c/three");
   });
 
+  it("'agents' event → live sub-agents panel (council), empty list clears it", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "agents", agents: [
+      { id: "council:security", title: "council: security", model: "cc/opus" },
+      { id: "council:architecture", title: "council: architecture", model: "cx/gpt-5.6" },
+    ] });
+    const agents = c.getState().runningAgents;
+    expect(agents.map((a) => a.title)).toEqual(["council: security", "council: architecture"]);
+    expect(agents[0].model).toBe("cc/opus");
+    expect(agents[0].startedAt).toBeTypeOf("number");
+    c.onEvent({ kind: "agents", agents: [] }); // council done
+    expect(c.getState().runningAgents).toEqual([]);
+  });
+
   it("mode picker: openModePicker → applyMode confirms + closes", () => {
     const c = new TuiController();
     c.openModePicker(["ask", "acceptEdits", "auto"], "Current: acceptEdits");

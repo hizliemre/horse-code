@@ -603,7 +603,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listModels?: () => Promise<string[]>;
   setModel?: (m: string) => void;
   setRoleModel?: (role: string, models: string[]) => void; // per-role fallback chain (/roles setmodel, adjust)
-  listRoles?: () => { name: string; model: string; models: string[] }[]; // /roles → role → chain table
+  listRoles?: () => { name: string; model: string; models: string[]; council?: boolean }[]; // /roles → role → chain table
   adjustRoles?: () => Promise<void>; // /roles adjust → LLM-tuned assignment (streams rationale + applies chains)
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
@@ -731,8 +731,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     return [`- \`${name}\` → ${chain[0]}`, ...chain.slice(1).map((m) => `    ↳ ${m}`)].join("\n");
   };
   const rolesReport = (): string => {
-    const rows = (listRoles?.() ?? []).map((r) => chainRows(r.name, r.models?.length ? r.models : r.model ? [r.model] : []));
-    return `**Roles & fallback chains:**\n${rows.join("\n")}\n\n_\`/roles adjust\` auto-assigns 3-model chains · \`/roles setmodel\` builds one manually._`;
+    const all = listRoles?.() ?? [];
+    const line = (r: { name: string; model: string; models: string[] }) => chainRows(r.name, r.models?.length ? r.models : r.model ? [r.model] : []);
+    const main = all.filter((r) => !r.council).map(line);
+    const council = all.filter((r) => r.council).map(line);
+    const sections = [`**Roles & fallback chains:**\n${main.join("\n")}`];
+    if (council.length) sections.push(`**Review council** (critiques the spec/plan):\n${council.join("\n")}`);
+    return `${sections.join("\n\n")}\n\n_\`/roles adjust\` auto-assigns 3-model chains · \`/roles setmodel\` builds one manually._`;
   };
   // /roles adjust → prefer the LLM-tuned assignment (reasons in chat); fall back to the local heuristic.
   const doRolesAdjust = (): void => {
