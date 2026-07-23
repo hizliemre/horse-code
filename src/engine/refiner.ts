@@ -14,7 +14,7 @@ export interface RefinerOutput {
   title: string;
 }
 export const RefinerSchema = z.object({
-  refinedPrompt: z.string(),
+  refinedPrompt: z.string().describe("The refined instruction, ALWAYS in English — translate from the user's language if needed; never output the user's original language here."),
   intent: z.enum(["chat", "feature", "bugfix"]),
   // The natural language the user wrote in (English name, e.g. "Turkish") → the coach replies in it.
   language: z.string().default("English"),
