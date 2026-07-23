@@ -212,10 +212,10 @@ describe("TuiController", () => {
     expect(c.getState().mode).toBe("input");
     expect(c.getState().picker).toBeUndefined();
     const text = (c.getState().transcript.at(-1) as { text?: string } | undefined)?.text ?? "";
-    expect(text).toContain("`coder`");
-    expect(text).toContain("▸ a/one"); // primary
-    expect(text).toContain("↳ b/two"); // fallback, stacked
+    expect(text).toContain("`coder` → a/one"); // primary, inline after the arrow
+    expect(text).toContain("↳ b/two"); // fallbacks side by side on the same line
     expect(text).toContain("↳ c/three");
+    expect(text).not.toContain("\n"); // single line (side by side, not stacked)
   });
 
   it("'agents' event → live sub-agents panel (council), empty list clears it", () => {

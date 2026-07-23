@@ -118,7 +118,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const { chains } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames, onReason: append });
       for (const { role, models: ch } of chains) applyChain(role, ch);
       controller.endBusy();
-      const rows = chains.map(({ role, models: ch }) => [`- \`${role}\` → ${ch[0] ?? "—"}`, ...ch.slice(1).map((m) => `    ↳ ${m}`)].join("\n"));
+      const rows = chains.map(({ role, models: ch }) => `- \`${role}\` → ${ch[0] ?? "—"}${ch.slice(1).map((m) => `  ↳ ${m}`).join("")}`);
       controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any chain._`);
       return;
     } catch (e) {

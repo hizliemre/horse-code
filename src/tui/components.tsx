@@ -725,10 +725,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     setSendModeText(null);
     if (t) { setDraft(t); setDraftCursor(t.length); } // Esc → back to editing the message
   };
-  // Render a role's chain: primary on the role line, fallbacks stacked under it.
+  // Render a role's chain inline (side by side): `role` → primary ↳ fb1 ↳ fb2.
   const chainRows = (name: string, chain: string[]): string => {
     if (!chain.length) return `- \`${name}\` → —`;
-    return [`- \`${name}\` → ${chain[0]}`, ...chain.slice(1).map((m) => `    ↳ ${m}`)].join("\n");
+    return `- \`${name}\` → ${chain[0]}${chain.slice(1).map((m) => `  ↳ ${m}`).join("")}`;
   };
   const rolesReport = (): string => {
     const all = listRoles?.() ?? [];

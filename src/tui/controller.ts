@@ -369,14 +369,14 @@ export class TuiController {
     this.notify();
   }
 
-  /** Applies a model chain to a single role (per-role) and confirms it in the transcript, stacked. */
+  /** Applies a model chain to a single role (per-role) and confirms it in the transcript, inline. */
   applyRoleModel(role: string, models: string | string[]): void {
     const chain = typeof models === "string" ? [models] : models;
-    const body = chain.map((m, i) => (i === 0 ? `▸ ${m}` : `  ↳ ${m}`)).join("\n");
+    const body = chain.length ? `${chain[0]}${chain.slice(1).map((m) => `  ↳ ${m}`).join("")}` : "—";
     this.state = {
       ...this.state,
       mode: "input", picker: undefined,
-      transcript: [...this.state.transcript, { role: "assistant", text: `\`${role}\`\n${body}` }],
+      transcript: [...this.state.transcript, { role: "assistant", text: `\`${role}\` → ${body}` }],
     };
     this.notify();
   }
