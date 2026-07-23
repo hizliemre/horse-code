@@ -3,8 +3,9 @@ import { readErrorMessage, isRetryableStatus, isCapabilityError, OmniRouteProvid
 import type { FetchLike } from "../../src/providers/omniroute.js";
 
 describe("isRetryableStatus", () => {
-  it("429 and 5xx are retryable (source exhausted / upstream down); 4xx auth/validation are not", () => {
+  it("429, 404 (model not found) and 5xx are retryable; 400/401/403 auth/validation are not", () => {
     expect(isRetryableStatus(429)).toBe(true);
+    expect(isRetryableStatus(404)).toBe(true); // model unavailable on this subscription → a fallback may serve it
     expect(isRetryableStatus(500)).toBe(true);
     expect(isRetryableStatus(502)).toBe(true);
     expect(isRetryableStatus(400)).toBe(false);

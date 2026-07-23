@@ -64,12 +64,14 @@ export async function readErrorMessage(res: Response): Promise<string> {
 }
 
 /**
- * A response status a fallback model might survive: 429 (source rate-limited / subscription exhausted) or
- * any 5xx (upstream down/overloaded). Auth/validation errors (400/401/403) are the caller's fault — no
- * fallback will fix them, so they stay non-retryable.
+ * A response status a fallback model might survive: 429 (source rate-limited / subscription exhausted),
+ * 404 (the requested MODEL isn't available on this subscription — every request here is a model chat
+ * completion, so a 404 means model-not-found, not a bad route), or any 5xx (upstream down/overloaded).
+ * Auth/validation errors (400/401/403) are the caller's fault — no fallback will fix them, so they stay
+ * non-retryable.
  */
 export function isRetryableStatus(status: number): boolean {
-  return status === 429 || status >= 500;
+  return status === 429 || status === 404 || status >= 500;
 }
 
 /**
