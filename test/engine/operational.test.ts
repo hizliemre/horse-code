@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { commitStep, runOperational } from "../../src/engine/operational.js";
+import { commitStep, commitFile, runOperational } from "../../src/engine/operational.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -55,6 +55,20 @@ describe("commitStep", () => {
     expect(log.stdout.trim()).toBe("docs(spec): add feature specification");
     // working tree is clean now
     expect((await g(["status", "--porcelain"])).stdout.trim()).toBe("");
+  });
+
+  it("commitFile commits only the given file (per-write), leaving other changes untouched", async () => {
+    repo = await initTmpRepo();
+    const g = (args: string[]) => defaultGitRunner(args, repo!);
+    await writeFile(join(repo, "a.md"), "# A", "utf8");
+    await writeFile(join(repo, "b.md"), "# B", "utf8"); // a second, unrelated change
+    const p = new MockProvider([submit("docs: add a.md")]);
+    const msg = await commitFile(deps(p), repo, "a.md");
+    expect(msg).toBe("docs: add a.md");
+    // only a.md was committed; b.md is still uncommitted
+    expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("docs: add a.md");
+    expect((await g(["status", "--porcelain"])).stdout).toContain("b.md");
+    expect((await g(["status", "--porcelain"])).stdout).not.toContain("a.md");
   });
 
   it("falls back to a deterministic message when the operational agent errors (still commits)", async () => {

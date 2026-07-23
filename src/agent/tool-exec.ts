@@ -16,7 +16,10 @@ export interface ToolExecDeps {
   signal: AbortSignal;
   onActivity?: (a: import("../core/types.js").ToolActivity) => void; // live file-write/edit activity → UI
   remember?: (fact: string) => void; // remember_fact tool → persist a durable fact
+  onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit (sequential)
 }
+
+const WRITE_TOOLS = new Set(["write_file", "edit_file"]); // tools whose success should trigger a per-file commit
 
 interface Plan {
   index: number;
@@ -121,6 +124,18 @@ export async function* executeToolCalls(
       : errResult(p.call.name, "user denied");
     results[p.index] = { id: p.call.id, name: p.call.name, result };
     yield { type: "tool.result", toolCallId: p.call.id, result };
+  }
+
+  // Per-file auto-commit: after all tools ran, commit each successful write/edit — SEQUENTIALLY, since git
+  // isn't parallel-safe (the auto batch above may have run several writes at once).
+  if (deps.onWrite) {
+    for (const p of plans) {
+      if (p.kind !== "run" && p.kind !== "ask") continue;
+      if (!WRITE_TOOLS.has(p.call.name)) continue;
+      if (results[p.index]?.result.isError) continue; // denied / failed write → nothing to commit
+      const path = typeof p.args?.path === "string" ? p.args.path : undefined;
+      if (path) await deps.onWrite(path);
+    }
   }
 
   return results;

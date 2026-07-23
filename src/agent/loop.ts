@@ -24,6 +24,7 @@ export interface RoleAgentOptions {
   onExhausted?: (model: string) => void; // a model hit a retryable error → mark it spent for the session
   onFallback?: (from: string, to: string, reason: string) => void; // fell from one model to the next → UI note
   onLiveActivity?: (label: string) => void; // live "writing <file> · N chars" while a tool call is generated
+  onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit
 }
 
 /** 1394 → "1.4k"; keeps the live activity line compact. */
@@ -128,6 +129,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       signal: opts.signal,
       onActivity: opts.onActivity,
       remember: opts.remember,
+      onWrite: opts.onWrite,
     });
     for (const r of results) {
       // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.

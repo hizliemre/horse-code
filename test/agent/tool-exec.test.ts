@@ -55,6 +55,30 @@ const deps = (over: Partial<Parameters<typeof executeToolCalls>[1]>) => ({
   ...over,
 });
 
+const writeFile: Tool = { name: "write_file", description: "w", permissionLevel: "write", parameters: z.object({ path: z.string() }), describe: (a) => ({ allowKey: String(a.path), preview: "w" }), run: async () => ({ content: "ok", isError: false }) };
+const editFile: Tool = { name: "edit_file", description: "e", permissionLevel: "write", parameters: z.object({ path: z.string() }), describe: (a) => ({ allowKey: String(a.path), preview: "e" }), run: async () => ({ content: "ok", isError: false }) };
+const failWrite: Tool = { name: "write_file", description: "w", permissionLevel: "write", parameters: z.object({ path: z.string() }), describe: (a) => ({ allowKey: String(a.path), preview: "w" }), run: async () => ({ content: "disk full", isError: true }) };
+
+describe("executeToolCalls onWrite (per-file commit hook)", () => {
+  it("fires sequentially after each successful write_file/edit_file, with the path", async () => {
+    const written: string[] = [];
+    await drainGen(executeToolCalls(
+      [call("1", "write_file", { path: "a.ts" }), call("2", "edit_file", { path: "b.ts" }), call("3", "echo", { t: "x" })],
+      deps({ tools: registry(safeEcho, writeFile, editFile), onWrite: async (p) => { written.push(p); } }),
+    ));
+    expect(written).toEqual(["a.ts", "b.ts"]); // both writes committed, echo ignored
+  });
+
+  it("does NOT fire for a failed write", async () => {
+    const written: string[] = [];
+    await drainGen(executeToolCalls(
+      [call("1", "write_file", { path: "a.ts" })],
+      deps({ tools: registry(failWrite), onWrite: async (p) => { written.push(p); } }),
+    ));
+    expect(written).toEqual([]); // isError result → no commit
+  });
+});
+
 describe("executeToolCalls", () => {
   it("safe tool runs automatically, result returned in call order", async () => {
     const { result } = await drainGen(executeToolCalls([call("1", "echo", { t: "hi" })], deps({})));

@@ -2,6 +2,7 @@ import { relative } from "node:path";
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { writerRegistry, buildAskUserTool } from "../engine/writer-registry.js";
+import { commitFile } from "../engine/operational.js";
 import type { TaskCycleDeps } from "../engine/task-types.js";
 import type { AskUser } from "../engine/review.js";
 import type { SpecKitTemplates } from "./templates.js";
@@ -34,6 +35,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     signal: p.deps.signal,
     onActivity: p.deps.onActivity,
     onLiveActivity: p.deps.onLiveActivity,
+    onWrite: (path) => commitFile(p.deps, p.workdir, path).then(() => {}), // per-write conventional commit
   };
   await runToCompletion(opts);
 }

@@ -28,6 +28,29 @@ export async function runOperational(deps: TaskCycleDeps, diff: string, context:
 }
 
 /**
+ * Auto-commit a SINGLE file the agent just wrote/edited, with an operational message derived from that file's
+ * diff. Used for per-write commits — called sequentially (git isn't parallel-safe) after each write tool.
+ */
+export async function commitFile(
+  deps: TaskCycleDeps, workdir: string, path: string, git: GitRunner = defaultGitRunner,
+): Promise<string | undefined> {
+  await git(["add", "--", path], workdir);
+  const staged = await git(["diff", "--cached", "--quiet", "--", path], workdir);
+  if (staged.code === 0) return undefined; // this file didn't actually change
+  const diff = await git(["diff", "--cached", "--", path], workdir);
+  let message: string;
+  try {
+    message = await runOperational(deps, diff.stdout, `wrote ${path}`);
+  } catch {
+    message = `chore: update ${path}`; // operational agent failed → deterministic fallback
+  }
+  const res = await git(["commit", "-m", message, "--", path], workdir);
+  if (res.code !== 0) return undefined;
+  deps.onLiveActivity?.(`committed · ${message}`);
+  return message;
+}
+
+/**
  * Auto-commit the current state of a git worktree with an operational (Conventional Commits) message.
  * No-op when there's nothing to commit. Returns the message committed, or undefined if nothing changed.
  * Git failures are swallowed (a commit hiccup must never crash the pipeline) but surfaced via onActivity.

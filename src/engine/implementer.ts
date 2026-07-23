@@ -2,6 +2,7 @@ import type { Card } from "../board/board.js";
 import { runToCompletion, type RoleAgentOptions } from "../agent/loop.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
+import { commitFile } from "./operational.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 
 /** Runs the implementer role with worktree-scoped tools + a new-vs-returning message. */
@@ -31,6 +32,7 @@ export async function runImplementer(
     signal: deps.signal,
     onActivity: deps.onActivity,
     onLiveActivity: deps.onLiveActivity,
+    onWrite: (path) => commitFile(deps, cwd, path).then(() => {}), // per-write conventional commit in the task worktree
   };
   await runToCompletion(opts);
 }
