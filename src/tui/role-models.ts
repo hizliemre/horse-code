@@ -14,7 +14,7 @@ const WEAK_RE = /\b(flash|mini|nano|haiku|lite|small|turbo|fast|\d{1,2}b)\b/i;
 //  fast     — classify/route/coordinate: a cheap, fast model.
 const FLAGSHIP_ROLES = ["judge", "principal-coder"];
 const STRONG_ROLES = ["analyst", "planner", "architect", "senior-coder", "senior-designer"];
-const MID_ROLES = ["coach", "coder", "designer", "code-reviewer"];
+const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational"];
 const FAST_ROLES = ["refiner", "router", "project-manager", "team-lead"];
 const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]); // want a non-fast model
 
@@ -35,6 +35,7 @@ export const ROLE_PROFILES: Record<string, string> = {
   designer: "Builds UI — high volume → a capable coding/design model, not the flagship.",
   "senior-designer": "Senior UI reviewer — more capable than the designer.",
   "code-reviewer": "Reviews diffs — moderate volume → a solid capable model.",
+  operational: "Handles version control: writes conventional commit messages and (later) drives merges/conflicts — high volume → a capable, efficient model.",
   // Review council — each critiques the spec/plan from one angle; low volume, quality-critical → strong models.
   security: "Council lens: security holes, auth, input validation — low volume, high stakes → a strong model.",
   architecture: "Council lens: architectural soundness, boundaries — low volume → a strong model.",

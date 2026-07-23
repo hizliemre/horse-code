@@ -63,6 +63,7 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       if (sys.includes("COMMAND:clarify")) { yield* submit('{"nextQuestion":null}'); return; }
       if (sys.includes("COMMAND:plan")) { yield* writeOnce("# plan"); return; }
       if (sys.includes("COMMAND:tasks")) { yield* writeOnce("# tasks"); return; }
+      if (sys.includes("Conventional Commits")) { yield* submit('{"message":"chore: test step"}'); return; }
       if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
@@ -83,6 +84,7 @@ export function udeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
     planner: { models: ["m"], systemPrompt: "P-planner" },
     "project-manager": { models: ["m"], systemPrompt: "P-pm" },
     judge: { models: ["m"], systemPrompt: "P-judge" },
+    operational: { models: ["m"], systemPrompt: "Write Conventional Commits messages." },
   };
   const councilors: CouncilorConfig[] = [{ name: "sec", perspective: "security", models: ["m"] }];
   return {

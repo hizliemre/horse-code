@@ -60,6 +60,7 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       if (sys.includes("P-pm")) { yield* submit('{"tasks":[{"id":"t1","title":"task-a","deps":[]}]}'); return; }
       if (sys.includes("P-router")) { yield* submit('{"role":"coder"}'); return; }
       if (sys.includes("P-reviewer")) { yield* submit('{"verdict":"pass","notes":[]}'); return; }
+      if (sys.includes("Conventional Commits")) { yield* submit(`{"message":"chore: test step"}`); return; }
       if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
@@ -101,6 +102,7 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
     planner: { models: ["m"], systemPrompt: "P-planner" },
     "project-manager": { models: ["m"], systemPrompt: "P-pm" },
     judge: { models: ["m"], systemPrompt: "P-judge" },
+    operational: { models: ["m"], systemPrompt: "Write Conventional Commits messages." },
     router: { models: ["m"], systemPrompt: "P-router" },
     coder: { models: ["m"], systemPrompt: "P-coder" },
     "senior-coder": { models: ["m"], systemPrompt: "P-senior-coder" },

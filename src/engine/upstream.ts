@@ -6,6 +6,7 @@ import { runRefiner, routeIntent, type Intent } from "./refiner.js";
 import { runCoachChat } from "./coach.js";
 import { extractListBlock } from "./next-steps.js";
 import { runReviewLoop } from "./review.js";
+import { commitStep } from "./operational.js";
 import type { ProgressEvent } from "./progress.js";
 import { constitutionPath, nextFeatureSlug, scaffoldFeature } from "../speckit/layout.js";
 import type { PhaseDeps } from "../speckit/phases.js";
@@ -73,6 +74,7 @@ export async function runUpstream(
   if (!existsSync(constitutionPath(workdir))) {
     emitPhase("constitution");
     await runConstitution(p);
+    await commitStep(deps, workdir, "establish the project constitution");
   }
 
   const slug = nextFeatureSlug(workdir, r.title);
@@ -92,10 +94,12 @@ export async function runUpstream(
   if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
   // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
   if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
+  await commitStep(deps, workdir, "add the feature specification");
 
   // Clarify: structured Q&A loop that tightens the spec before planning (capped inside runClarify).
   emitPhase("clarify");
   await runClarify(p, paths);
+  await commitStep(deps, workdir, "clarify the feature specification");
 
   // Plan → council/judge review loop (revise = re-run plan with feedback).
   emitPhase("plan");
@@ -110,10 +114,12 @@ export async function runUpstream(
   );
   if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
   if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
+  await commitStep(deps, workdir, "add the implementation plan");
 
   // Tasks: break the approved plan into the actionable task list handed downstream to the project-manager.
   emitPhase("tasks");
   await runTasks(p, paths);
+  await commitStep(deps, workdir, "break the plan into tasks");
 
   return {
     intent: r.intent,

@@ -3,7 +3,7 @@ import type { CouncilorConfig } from "./config/config.js";
 export const REQUIRED_ROLES = [
   "refiner", "coach", "analyst", "planner", "judge", "project-manager", "team-lead",
   "router", "coder", "designer", "senior-coder", "senior-designer", "architect", "code-reviewer",
-  "principal-coder",
+  "principal-coder", "operational",
 ] as const;
 
 export const DEFAULT_PROMPTS: Record<string, string> = {
@@ -35,6 +35,8 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "Review the worktree changes of the task in REVIEW (correctness, tests, quality). Return {verdict: pass|fail, notes} via submit — your decision is final.",
   "principal-coder":
     "Holistically review all changes in the PR (base worktree). If sufficient, approve; otherwise request-changes with concrete comments. In the final decision round, give accept or ask-human (a question to ask the user).",
+  operational:
+    "You handle version control for the project. Given a git diff of work just completed, write a single Conventional Commits message: `type(scope): subject`. Types: feat, fix, docs, refactor, test, chore, style, perf, build, ci. Choose the scope from the touched area (e.g. spec, plan, tasks, or a module name) or omit it. The subject is imperative, lowercase, ≤72 chars, no trailing period. Add a short body only if the change genuinely needs explanation. Commit messages are always in English. Return {message} via submit.",
 };
 
 // The review council: independent lenses that each critique the spec/plan from one angle (run in parallel).
