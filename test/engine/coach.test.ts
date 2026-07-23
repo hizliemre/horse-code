@@ -86,6 +86,23 @@ describe("runCoachChat", () => {
     expect(system).toContain("- target Node 22");
   });
 
+  it("ALWAYS injects rules (kind 'rule') into the system prompt, regardless of relevance", async () => {
+    const p = new MockProvider([textTurn("ok")]);
+    const d = {
+      ...deps(p),
+      memory: () => [
+        { id: "r1", text: "always answer the user in Turkish", anchors: [], tags: ["lang"], createdAt: 1, kind: "rule" as const },
+        { id: "m1", text: "unrelated note about cats", anchors: [], tags: ["cats"], createdAt: 1, kind: "fact" as const },
+      ],
+    };
+    await runCoachChat(d, "build a widget", dir); // prompt unrelated to the rule → still injected
+    const system = p.requests[0].messages.find((m) => m.role === "system")?.content ?? "";
+    expect(system).toContain("User rules (ALWAYS honor these)");
+    expect(system).toContain("- always answer the user in Turkish");
+    const allText = p.requests[0].messages.map((m) => m.content).join("\n");
+    expect(allText).not.toContain("cats"); // the unrelated FACT is not injected (relevance-gated), but the rule is
+  });
+
   it("injects the model + the user's language into the system prompt when language is given", async () => {
     const p = new MockProvider([textTurn("cevabım")]);
     await runCoachChat(deps(p), "which model are you?", dir, [], "Turkish");

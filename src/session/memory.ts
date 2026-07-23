@@ -63,7 +63,7 @@ export class MemoryStore {
    * Remember a fact (anchors/tags auto-derived). A new fact that supersedes existing same-topic facts
    * replaces them (returned in `superseded`) so contradictions don't accumulate.
    */
-  async add(text: string, kind: "fact" | "lesson" = "fact"): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> {
+  async add(text: string, kind: "fact" | "lesson" | "rule" = "fact"): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> {
     return this.serialize(async () => {
       await this.load();
       const t = text.trim();

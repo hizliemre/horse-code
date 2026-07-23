@@ -42,7 +42,9 @@ export interface MemoryEntry {
   tags: string[];
   createdAt: number;
   uses?: number; // reinforcement count — bumped when the model actually cites this memory
-  kind?: "fact" | "lesson"; // default "fact"; a "lesson" (learned from a correction/failure) weighs higher
+  // default "fact"; a "lesson" (from a correction/failure) weighs higher; a "rule" is a durable behavioral
+  // directive (language/style/convention) that is ALWAYS injected (like a pin), not selected by relevance.
+  kind?: "fact" | "lesson" | "rule";
 }
 
 /** Retrieval bonus for lessons — missing a lesson costs more than missing a preference. */

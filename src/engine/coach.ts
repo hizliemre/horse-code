@@ -48,10 +48,12 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     (language ? ` Respond in ${language}.` : "") +
     ` When it helps, end your reply with a <nextsteps> block: 2-4 short, concrete follow-up actions the` +
     ` user might pick next, one per line prefixed with "- ". Omit the block when there is no useful next step.` +
-    ` If — and only if — the user states a DURABLE preference, decision, or project fact worth recalling in` +
-    ` future sessions (e.g. "always use pnpm", "the API base is X", "we target Node 22"), also emit a` +
-    ` <remember> block with 1-3 short, self-contained facts, one per line prefixed with "- ". Never remember` +
-    ` transient, trivial, or one-off things.` +
+    ` If the user states a durable BEHAVIORAL RULE about HOW you should work — language, style, conventions,` +
+    ` or an "always/never" directive (e.g. "always answer in Turkish", "keep code comments in English",` +
+    ` "always use pnpm") — emit a <rule> block with 1-3 short rules, one per line prefixed with "- ".` +
+    ` Separately, if the user states a durable FACT worth recalling (an endpoint, version, or decision — e.g.` +
+    ` "the API base is X", "we target Node 22"), emit a <remember> block with 1-3 short facts, one per line` +
+    ` prefixed with "- ". Never remember transient, trivial, or one-off things.` +
     ` Separately, if the user corrects you, points out a mistake, or an approach fails and is then fixed,` +
     ` emit a <lesson> block: 1-2 short lessons, each stating what went wrong AND the correct approach, one` +
     ` per line prefixed with "- ". Only for genuine corrections or failures — not routine answers.` +
@@ -69,16 +71,20 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     deps.compactionState?.value,
   );
   if (deps.compactionState) deps.compactionState.value = cache;
-  // Cross-session memory: surface facts relevant to this prompt, gated by how full the context already is.
+  // Cross-session memory. Rules (durable behavioral directives) are ALWAYS injected like pins; facts/lessons
+  // are surfaced by relevance, gated by how full the context already is.
   const memories = deps.memory?.() ?? [];
+  const rules = memories.filter((m) => m.kind === "rule");
+  const ruleBlock = rules.length ? `\n\nUser rules (ALWAYS honor these):\n${rules.map((r) => `- ${r.text}`).join("\n")}` : "";
+  const selectable = memories.filter((m) => m.kind !== "rule");
   const load = historyTokens(compacted) / COMPACT_MAX_TOKENS;
-  const hits = memories.length ? selectMemories(memories, prompt, { load }) : [];
+  const hits = selectable.length ? selectMemories(selectable, prompt, { load }) : [];
   const memoryMsg: Message[] = hits.length ? [{ role: "user", content: renderMemoryHints(hits) }] : [];
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     model,
     fallbacks,
-    systemPrompt: systemPrompt + context,
+    systemPrompt: systemPrompt + context + ruleBlock,
     onExhausted,
     onFallback,
     tools: readOnlyRegistry(deps, { remember: true, mcp: true }),

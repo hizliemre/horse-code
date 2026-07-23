@@ -95,7 +95,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     reinforceMemory: (id) => { void memStore.reinforce(id); }, // bump memories the coach actually cited
     mcpTools: () => mcpHolder.bundle?.tools ?? [], // MCP tools (filled once the servers connect)
     rememberFact: (fact) => { // remember_fact tool → persist a fact learned mid-turn (from a tool result)
-      void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 remembered: ${fact}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`); });
+      void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 **Remembered** — ${fact}${r.superseded.length ? ` _(replaced: ${r.superseded.join("; ")})_` : ""}`); });
     },
     compactionState: {}, // holds the compaction summary cache across turns (invalidated on /clear or /resume by fingerprint)
   };
@@ -285,17 +285,18 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         controller.endRun(opts.formatResult(res), res.refinedPrompt);
         if (res.kind === "chat") {
           if (res.nextSteps?.length) controller.setNextSteps(res.nextSteps); // coach follow-ups → /next
+          const sup = (s: string[]) => (s.length ? ` _(replaced: ${s.join("; ")})_` : "");
+          // Auto-rules: durable behavioral directives the coach flagged (<rule>) → always-honored memory.
+          for (const rule of res.rules ?? []) {
+            void memStore.add(rule, "rule").then((r) => { if (r.ok) controller.note(`📌 **Rule saved** — ${rule}${sup(r.superseded)}`); });
+          }
           // Auto-remember: durable facts the coach flagged (<remember>) → memory store (deduped), with feedback.
           for (const fact of res.remembered ?? []) {
-            void memStore.add(fact).then((r) => {
-              if (r.ok) controller.note(`🧠 remembered: ${fact}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`);
-            });
+            void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 **Remembered** — ${fact}${sup(r.superseded)}`); });
           }
           // Auto-lessons: learnings the coach flagged from a correction/failure → memory (kind "lesson").
           for (const lesson of res.lessons ?? []) {
-            void memStore.add(lesson, "lesson").then((r) => {
-              if (r.ok) controller.note(`📖 lesson: ${lesson}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`);
-            });
+            void memStore.add(lesson, "lesson").then((r) => { if (r.ok) controller.note(`📖 **Lesson learned** — ${lesson}${sup(r.superseded)}`); });
           }
         }
       } catch (e) {

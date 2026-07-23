@@ -66,6 +66,18 @@ describe("MemoryStore", () => {
     expect(s.all()[0].kind).toBe("lesson");
   });
 
+  it("stores a rule with kind 'rule'; a rule supersedes a same-topic rule but not a fact", async () => {
+    const s = store();
+    await s.add("always answer in English", "rule");
+    const r = await s.add("always answer in Turkish", "rule");
+    expect(r.ok && r.superseded).toContain("always answer in English");
+    expect(s.all()).toHaveLength(1);
+    expect(s.all()[0].kind).toBe("rule");
+    const r2 = await s.add("the api base is https://x.example.com", "fact"); // different topic/kind → coexists
+    expect(r2.ok).toBe(true);
+    expect(s.all()).toHaveLength(2);
+  });
+
   it("a fact does not supersede a same-topic lesson (different kinds coexist)", async () => {
     const s = store();
     await s.add("the api base is old.com", "lesson");

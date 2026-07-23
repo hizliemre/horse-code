@@ -15,7 +15,7 @@ import { runClarify } from "../speckit/clarify.js";
 export { buildAskUserTool } from "./writer-registry.js";
 
 export type UpstreamResult =
-  | { intent: Intent; refinedPrompt: string; kind: "chat"; response: string; nextSteps: string[]; remembered: string[]; lessons: string[] }
+  | { intent: Intent; refinedPrompt: string; kind: "chat"; response: string; nextSteps: string[]; rules: string[]; remembered: string[]; lessons: string[] }
   | { intent: Intent; refinedPrompt: string; kind: "approved"; specPath: string; planPath: string; tasksPath: string }
   | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" };
 
@@ -56,9 +56,10 @@ export async function runUpstream(
     // Chat: no worktree — the coach reads the repo in place (cwd ".") + history → a contextual response.
     const raw = await runCoachChat(deps, r.refinedPrompt, ".", history, r.language, images);
     const ns = extractListBlock(raw, "nextsteps"); // suggested follow-ups
-    const rm = extractListBlock(ns.text, "remember"); // durable facts to persist to memory
+    const ru = extractListBlock(ns.text, "rule"); // durable behavioral rules → always-honored memory
+    const rm = extractListBlock(ru.text, "remember"); // durable facts to persist to memory
     const ls = extractListBlock(rm.text, "lesson"); // lessons learned from a correction/failure
-    return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response: ls.text, nextSteps: ns.items, remembered: rm.items, lessons: ls.items };
+    return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response: ls.text, nextSteps: ns.items, rules: ru.items, remembered: rm.items, lessons: ls.items };
   }
 
   // Feature/bugfix → open the worktree now; name it from the refiner's short English title (not the raw
