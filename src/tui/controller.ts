@@ -387,23 +387,18 @@ export class TuiController {
   }
 
   /**
-   * Begin a live-updating assistant note and return an appender. Each call to the appender adds streamed text
-   * to THAT note (re-rendering it in place) — used to show an LLM reasoning live (e.g. /roles adjust).
+   * Return an appender that live-updates a single assistant note. The note is created LAZILY on the first
+   * append (so a slow LLM doesn't leave an empty bubble sitting there); if no delta ever arrives, no note is
+   * added at all. Used to stream an LLM reasoning live (e.g. /roles adjust).
    */
   streamNote(initial = ""): (delta: string) => void {
-    const idx = this.state.transcript.length;
+    let idx = -1;
     let acc = initial;
-    this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: acc }] };
-    this.notify();
     return (delta: string): void => {
       acc += delta;
-      const t = [...this.state.transcript];
-      const item = t[idx];
-      if (item && "role" in item) {
-        t[idx] = { role: "assistant", text: acc };
-        this.state = { ...this.state, transcript: t };
-        this.notify();
-      }
+      if (idx < 0) { idx = this.state.transcript.length; this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: acc }] }; } // create on first delta
+      else { const t = [...this.state.transcript]; if (t[idx] && "role" in t[idx]) t[idx] = { role: "assistant", text: acc }; this.state = { ...this.state, transcript: t }; }
+      this.notify();
     };
   }
 

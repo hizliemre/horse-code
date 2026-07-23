@@ -355,6 +355,18 @@ describe("TuiController", () => {
     ]);
   });
 
+  it("streamNote is lazy: no empty bubble until the first delta arrives", () => {
+    const c = new TuiController();
+    c.note("header");
+    const append = c.streamNote(""); // no delta yet → nothing added
+    expect(c.getState().transcript).toEqual([{ role: "assistant", text: "header" }]);
+    append("first token");
+    expect(c.getState().transcript).toEqual([
+      { role: "assistant", text: "header" },
+      { role: "assistant", text: "first token" },
+    ]);
+  });
+
   it("addAttachment stages images (count in state); submit hands them to the turn and clears the count", () => {
     const c = new TuiController();
     c.awaitTask();
