@@ -22,7 +22,7 @@ const ctx = (): ToolContext => ({ cwd: ".", signal: new AbortController().signal
 // Content-based provider scripting the spec-kit pipeline: it keys off the systemPrompt (refiner / coach /
 // council perspective / judge) and, for the spec-kit phases, off the spec-kit command text ("COMMAND:<phase>"
 // injected by fakeSpecKit). Captures every request for assertions.
-export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean } = {}): Provider & { requests: ChatRequest[] } {
+export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean; councilRec?: "approve" | "revise" } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
   return {
@@ -63,7 +63,7 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       if (sys.includes("COMMAND:clarify")) { yield* submit('{"nextQuestion":null}'); return; }
       if (sys.includes("COMMAND:plan")) { yield* writeOnce("# plan"); return; }
       if (sys.includes("COMMAND:tasks")) { yield* writeOnce("# tasks"); return; }
-      if (sys.includes("perspective")) { yield* submit('{"concerns":[],"recommendation":"approve"}'); return; }
+      if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
         yield* submit(arr[judgeCall] ?? arr[arr.length - 1]);
@@ -182,7 +182,7 @@ describe("runUpstream", () => {
   });
 
   it("if the spec isn't approved → rejected(spec)", async () => {
-    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const p = upstreamProvider({ intent: "feature", councilRec: "revise", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("spec");
@@ -190,7 +190,7 @@ describe("runUpstream", () => {
 
   it("if the spec is approved but the plan isn't → rejected(plan)", async () => {
     // Spec review passes; plan review returns revise and never approves → the plan-stage review loop rejects.
-    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"revise","feedback":["b"],"question":""}'] });
+    const p = upstreamProvider({ intent: "feature", councilRec: "revise", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"revise","feedback":["b"],"question":""}'] });
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("plan");

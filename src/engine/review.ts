@@ -99,6 +99,10 @@ export async function runJudge(
  * §6 review loop: council → judge; pass→approved, revise→revise(feedback)→retry,
  * ask-human→askUser→feedback→revise→retry. Once maxRounds is exhausted, a final human decision (approve/stop).
  */
+/** A strong council majority (this share of "approve") passes without troubling the judge — one reviewer's
+ *  nitpick shouldn't block an otherwise-approved doc, which matters a lot with a large (15-lens) council. */
+const CONSENSUS_THRESHOLD = 0.7;
+
 export async function runReviewLoop(
   deps: ReviewDeps,
   workdir: string,
@@ -107,11 +111,19 @@ export async function runReviewLoop(
   askUser: AskUser,
   maxRounds: number,
   emit: (ev: ProgressEvent) => void = () => {},
+  language?: string, // the user's language (from the refiner) → localize the human-facing escalation prompt
 ): Promise<ReviewOutcome> {
   const label = /plan/i.test(docPath) ? "plan" : "spec";
   for (let round = 0; round < maxRounds; round++) {
     emit({ kind: "note", text: `**Reviewing the ${label}** (round ${round + 1}) — ${deps.councilors.length} council members evaluating in parallel…` });
     const assessments = await runCouncil(deps, workdir, docPath, emit);
+    // Consensus vote first: if a strong majority approves, pass — don't let a minority's nitpicks force a revise.
+    const approve = assessments.filter((a) => a.recommendation === "approve").length;
+    if (assessments.length && approve / assessments.length >= CONSENSUS_THRESHOLD) {
+      emit({ kind: "note", text: `✅ Council consensus — ${approve}/${assessments.length} approve. The ${label} passed.` });
+      return { approved: true };
+    }
+    // Contested → the judge synthesizes the decision.
     const d = await runJudge(deps, workdir, docPath, assessments, emit);
     if (d.decision === "pass") { emit({ kind: "note", text: `✅ The ${label} passed review.` }); return { approved: true }; }
     let feedback = d.feedback;
@@ -123,7 +135,12 @@ export async function runReviewLoop(
     emit({ kind: "note", text: `↻ Revising the ${label} with the feedback…` });
     await revise(feedback);
   }
-  const answer = await askUser(`Not approved after ${maxRounds} revision rounds. Approve / stop?`);
-  // Word-boundary exact match: don't count negations like "I don't approve" as approval by substring.
-  return { approved: /^\s*(approve|yes)\s*$/i.test(answer) };
+  // Escalation to the human — localized to the user's language (this string is code-generated, not from an LLM,
+  // so the "respond in <language>" rule wouldn't otherwise reach it).
+  const q = language === "Turkish"
+    ? `${maxRounds} revizyon turunda onaylanmadı. Onaylayalım mı, duralım mı? (onayla / durdur)`
+    : `Not approved after ${maxRounds} revision rounds. Approve / stop?`;
+  const answer = await askUser(q);
+  // Exact match so a negation ("I don't approve") isn't counted as approval by substring; accept EN + TR.
+  return { approved: /^\s*(approve|yes|onayla|onay|evet)\s*$/i.test(answer.trim()) };
 }

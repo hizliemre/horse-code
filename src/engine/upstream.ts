@@ -87,6 +87,7 @@ export async function runUpstream(
     (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
     askUser, maxRounds,
     emit,
+    r.language,
   );
   if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
   // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
@@ -105,6 +106,7 @@ export async function runUpstream(
     (fb) => runPlan(p, paths, fb),
     askUser, maxRounds,
     emit,
+    r.language,
   );
   if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
   if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);

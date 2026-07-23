@@ -144,19 +144,31 @@ describe("runJudge", () => {
 
 describe("runReviewLoop", () => {
   const noRevise = async () => {};
+  // Both councilors recommend "revise" → 0% approve < 70% consensus → the judge is consulted.
+  const noConsensus = { security: '{"concerns":["x"],"recommendation":"revise"}', arch: '{"concerns":["y"],"recommendation":"revise"}' };
 
-  it("pass on the first round → approved, revise not called", async () => {
+  it("council consensus (≥70% approve) → approved WITHOUT troubling the judge", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    // default assessments = both approve → 100% ≥ 70% → passes on the vote; the judge (would-be revise) never runs
+    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["ignored"],"question":""}'] });
     let revised = 0;
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async () => { revised++; }, async () => "x", 3);
     expect(out.approved).toBe(true);
     expect(revised).toBe(0);
   });
 
-  it("revise → revise(feedback) → second round pass → approved", async () => {
+  it("no consensus → judge decides pass → approved, revise not called", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["no tests"],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    let revised = 0;
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", async () => { revised++; }, async () => "x", 3);
+    expect(out.approved).toBe(true);
+    expect(revised).toBe(0);
+  });
+
+  it("no consensus → revise(feedback) → second round pass → approved", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["no tests"],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
     const feedbacks: string[][] = [];
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async () => "x", 3);
     expect(out.approved).toBe(true);
@@ -165,7 +177,7 @@ describe("runReviewLoop", () => {
 
   it("ask-human → askUser is called, the answer lands in the next revise feedback → pass", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ judge: ['{"decision":"ask-human","feedback":["unclear"],"question":"X or Y?"}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"ask-human","feedback":["unclear"],"question":"X or Y?"}', '{"decision":"pass","feedback":[],"question":""}'] });
     const feedbacks: string[][] = [];
     let asked = "";
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async (q) => { asked = q; return "X"; }, 3);
@@ -176,16 +188,25 @@ describe("runReviewLoop", () => {
 
   it("maxRounds exhausted → final askUser 'approve' → approved; 'stop' → not", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p1 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const p1 = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
     const ok = await runReviewLoop(rdeps(p1), dir, "spec.md", noRevise, async () => "approve", 2);
     expect(ok.approved).toBe(true);
-    const p2 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const p2 = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
     const stop = await runReviewLoop(rdeps(p2), dir, "spec.md", noRevise, async () => "stop", 2);
     expect(stop.approved).toBe(false);
     // negation "I don't approve" (contains "approve") is NOT wrongly counted as approval
-    const p3 = reviewProvider({ judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const p3 = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
     const neg = await runReviewLoop(rdeps(p3), dir, "spec.md", noRevise, async () => "I don't approve", 2);
     expect(neg.approved).toBe(false);
+  });
+
+  it("escalation prompt localizes to the user's language (Turkish) + accepts Turkish 'onayla'", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    let asked = "";
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", noRevise, async (q) => { asked = q; return "onayla"; }, 1, () => {}, "Turkish");
+    expect(asked).toMatch(/revizyon turunda onaylanmadı/); // Turkish escalation
+    expect(out.approved).toBe(true); // "onayla" counts as approval
   });
 
   it("throws if cancelled", async () => {

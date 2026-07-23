@@ -19,7 +19,7 @@ import type { ProgressEvent } from "../../src/engine/progress.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 // End-to-end provider that responds to all roles based on systemPrompt.
-function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[] } = {}): Provider & { requests: ChatRequest[] } {
+function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[]; councilRec?: "approve" | "revise" } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
   let principalCall = 0;
@@ -60,7 +60,7 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       if (sys.includes("P-pm")) { yield* submit('{"tasks":[{"id":"t1","title":"task-a","deps":[]}]}'); return; }
       if (sys.includes("P-router")) { yield* submit('{"role":"coder"}'); return; }
       if (sys.includes("P-reviewer")) { yield* submit('{"verdict":"pass","notes":[]}'); return; }
-      if (sys.includes("perspective")) { yield* submit('{"concerns":[],"recommendation":"approve"}'); return; }
+      if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
         yield* submit(arr[judgeCall] ?? arr[arr.length - 1]);
@@ -145,7 +145,7 @@ describe("runJob", () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
-      const p = jobProvider({ intent: "feature", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+      const p = jobProvider({ intent: "feature", councilRec: "revise", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
       const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "stop", maxRounds: 1 });
       expect(res.kind).toBe("rejected");
       if (res.kind === "rejected") expect(res.stage).toBe("spec");
