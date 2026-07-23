@@ -50,6 +50,8 @@ export interface RunTuiReplOpts {
   model?: string; // configured default model → shown in the metrics line when a call reports no model
   listModels: () => Promise<string[]>; // omniroute model list for the /model picker
   mcp?: Record<string, McpServerSpec>; // MCP servers to connect at startup (tools → coach)
+  refreshSources?: () => Promise<string[]>; // probe omniroute → your connected model sources (cached)
+  sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // current source allowlist
 }
 
 /** TUI REPL: task input → live job → report → loop. Ctrl+C exits; job errors are isolated. */
@@ -114,6 +116,15 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     }, (e) => controller.note(`MCP connect error: ${e instanceof Error ? e.message : String(e)}`));
   }
   const listMcp = (): { name: string; ok: boolean; toolCount: number; error?: string }[] => mcpHolder.bundle?.status ?? [];
+  // First run (no explicit config allowlist, no cache) → auto-discover the user's connected model sources
+  // in the background so /model, /roles setmodel, and /roles adjust only offer their real subscriptions.
+  if (opts.sourcesInfo && opts.refreshSources && opts.sourcesInfo().needsDiscovery) {
+    controller.note("Discovering your connected model sources (probing omniroute)…");
+    void opts.refreshSources().then(
+      (found) => controller.note(found.length ? `Model sources: ${found.join(", ")} (cached).` : "No connected sources found — showing all models."),
+      (e) => controller.note(`Source discovery failed: ${e instanceof Error ? e.message : String(e)}`),
+    );
+  }
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
   // 2026h…2026l makes the terminal apply the frame atomically → flicker goes away (on terminals
@@ -184,6 +195,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
       listMcp={listMcp}
+      sourcesInfo={opts.sourcesInfo} refreshSources={opts.refreshSources}
       permMode={() => deps0.permission.mode} setPermMode={(m) => deps0.permission.setMode(m)}
       cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,

@@ -594,7 +594,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -613,6 +613,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string }; superseded: string[] } | { ok: false; error: string }>; // /remember
   removeMemory?: (n: number) => Promise<string | undefined>; // /forget N
   listMcp?: () => { name: string; ok: boolean; toolCount: number; error?: string }[]; // /mcp
+  sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // /sources
+  refreshSources?: () => Promise<string[]>; // /sources refresh → re-probe connected sources
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -828,6 +830,23 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const rows = servers.map((s) => s.ok ? `- ✅ **${s.name}** — ${s.toolCount} tools` : `- ❌ **${s.name}** — ${s.error ?? "not connected"}`);
     controller.note(`**MCP servers:**\n${rows.join("\n")}`);
   };
+  // /sources [refresh] → show the connected model sources; refresh re-probes omniroute.
+  const doSources = (arg: string): void => {
+    const info = sourcesInfo?.();
+    if (arg.trim().toLowerCase() === "refresh") {
+      if (!refreshSources) { controller.note("Source discovery is not available."); return; }
+      controller.note("Re-detecting your connected model sources (probing omniroute)…");
+      refreshSources().then(
+        (found) => controller.note(found.length ? `Model sources: ${found.join(", ")} (cached).` : "No connected sources found — showing all."),
+        (e) => controller.note(`Discovery failed: ${e instanceof Error ? e.message : String(e)}`),
+      );
+      return;
+    }
+    if (!info) { controller.note("Source info is not available."); return; }
+    const how = info.manual ? "from config `modelSources`" : info.sources.length ? "auto-detected (cached)" : "not detected yet — all sources shown";
+    const list = info.sources.length ? info.sources.map((s) => `- ${s}`).join("\n") : "- (all)";
+    controller.note(`**Model sources** (${how}):\n${list}\n\n_\`/sources refresh\` to re-probe your connected subscriptions._`);
+  };
   // /mode [ask|acceptEdits|auto] → show or set the permission mode.
   const MODE_DESC: Record<string, string> = {
     ask: "prompt for every file write and command",
@@ -856,6 +875,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/remember") doRemember("");
     else if (c.name === "/forget") doForget("");
     else if (c.name === "/mcp") doMcp();
+    else if (c.name === "/sources") doSources("");
     else if (c.name === "/mode") doMode("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
@@ -1128,6 +1148,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /remember <text> · /forget N (argument forms).
               if (cmd.startsWith("/remember ")) { setScroll(0); setDraft(""); setDraftCursor(0); doRemember(trimmed.slice("/remember".length).trim()); return; }
               if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); doForget(trimmed.slice("/forget".length).trim()); return; }
+              // /sources refresh (argument form).
+              if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
               if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.

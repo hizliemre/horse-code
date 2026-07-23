@@ -6,11 +6,15 @@ import type { FetchLike } from "./omniroute.js";
  * "-free" suffix in the id, or a free-tier provider (e.g. veo-free). We exclude these — they're typically
  * unofficial reverse-proxy sources (rate-limited, unreliable) rather than the user's paid subscriptions.
  */
+// Known free/anonymous scrape sources that don't self-mark (no 🆓/-free) — e.g. DuckDuckGo's anonymous AI.
+const KNOWN_FREE_PROVIDER = /^(ddgw|duckduckgo|veoaifree)/i;
+
 export function isFreeModel(id: string, name?: string): boolean {
   const n = name ?? "";
   if (/🆓/.test(n) || /\bfree\b/i.test(n)) return true;
   if (/-free\b/i.test(id)) return true;
-  return /free/i.test(id.split("/")[0]); // provider segment like "veo-free"
+  const provider = id.split("/")[0];
+  return /free/i.test(provider) || KNOWN_FREE_PROVIDER.test(provider); // "veo-free", "ddgw", …
 }
 
 export async function listOmniRouteModels(opts: {

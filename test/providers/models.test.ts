@@ -63,11 +63,12 @@ describe("listOmniRouteModels", () => {
 });
 
 describe("isFreeModel", () => {
-  it("flags 🆓 / 'free' in the name, -free ids, and free-tier providers", () => {
+  it("flags 🆓 / 'free' in the name, -free ids, free-tier + known-anonymous providers", () => {
     expect(isFreeModel("tllm/GPT_5_4", "GPT-5.4 (The Old LLM 🆓)")).toBe(true);
     expect(isFreeModel("oc/deepseek-v4-flash-free")).toBe(true);
     expect(isFreeModel("veo-free/veo")).toBe(true);
     expect(isFreeModel("x/y", "Some Free Model")).toBe(true);
+    expect(isFreeModel("ddgw/gpt-4o-mini", "GPT-4o Mini")).toBe(true); // DuckDuckGo anonymous scrape
   });
   it("keeps paid/official models", () => {
     expect(isFreeModel("cc/claude-opus-4-8", "Claude Opus 4.8")).toBe(false);

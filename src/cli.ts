@@ -128,7 +128,21 @@ export async function main(argv: string[]): Promise<void> {
   if (!args.prompt) {
     if (useTui) {
       const { runTuiRepl } = await import("./tui/app.js");
-      const listModels = () => listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: config.modelSources });
+      const { fetchCatalog, makeProbe, discoverSources } = await import("./providers/discover.js");
+      const { loadSourceCache, saveSourceCache } = await import("./session/source-cache.js");
+      // Effective model sources: an explicit config allowlist wins; otherwise the auto-discovered set
+      // (cached per omniroute). Empty = show all (until discovery fills it in).
+      const manualSources = config.modelSources.length > 0;
+      const sourcesRef = { current: manualSources ? config.modelSources : (loadSourceCache(home, config.baseUrl) ?? []) };
+      const listModels = () => listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: sourcesRef.current });
+      const refreshSources = async (): Promise<string[]> => {
+        const catalog = await fetchCatalog({ baseUrl: config.baseUrl, apiKey: config.apiKey });
+        const found = await discoverSources({ catalog, probe: makeProbe({ baseUrl: config.baseUrl, apiKey: config.apiKey }) });
+        sourcesRef.current = found;
+        saveSourceCache(home, config.baseUrl, found);
+        return found;
+      };
+      const sourcesInfo = () => ({ sources: sourcesRef.current, manual: manualSources, needsDiscovery: !manualSources && sourcesRef.current.length === 0 });
       await runTuiRepl({
         buildDeps,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
@@ -136,6 +150,8 @@ export async function main(argv: string[]): Promise<void> {
         model: config.model,
         listModels,
         mcp: config.mcp,
+        refreshSources,
+        sourcesInfo,
       });
       return;
     }
