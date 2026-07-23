@@ -219,6 +219,12 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
               if (r.ok) controller.note(`🧠 remembered: ${fact}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`);
             });
           }
+          // Auto-lessons: learnings the coach flagged from a correction/failure → memory (kind "lesson").
+          for (const lesson of res.lessons ?? []) {
+            void memStore.add(lesson, "lesson").then((r) => {
+              if (r.ok) controller.note(`📖 lesson: ${lesson}${r.superseded.length ? ` (replaced: ${r.superseded.join("; ")})` : ""}`);
+            });
+          }
         }
       } catch (e) {
         controller.endRun(jobAbort.signal.aborted ? "cancelled" : `error: ${e instanceof Error ? e.message : String(e)}`);

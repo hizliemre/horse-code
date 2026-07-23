@@ -42,7 +42,13 @@ export interface MemoryEntry {
   tags: string[];
   createdAt: number;
   uses?: number; // reinforcement count — bumped when the model actually cites this memory
+  kind?: "fact" | "lesson"; // default "fact"; a "lesson" (learned from a correction/failure) weighs higher
 }
+
+/** Retrieval bonus for lessons — missing a lesson costs more than missing a preference. */
+const LESSON_BONUS = 0.05;
+const effectiveScore = (query: string, e: MemoryEntry): number =>
+  scoreMemory(query, e) + (e.kind === "lesson" ? LESSON_BONUS : 0);
 
 /** Lexical relevance of a memory to a query (0 = irrelevant). Anchor hit dominates; tags corroborate. */
 export function scoreMemory(query: string, entry: MemoryEntry): number {
@@ -73,7 +79,7 @@ export function selectMemories(
   if (budget === 0) return [];
   const threshold = opts.threshold ?? 0.6;
   return entries
-    .map((e) => ({ e, score: scoreMemory(query, e) }))
+    .map((e) => ({ e, score: effectiveScore(query, e) })) // lessons get a small bonus over equal-scored facts
     .filter((x) => x.score >= threshold)
     // ties broken by reinforcement (frequently-cited memories rank higher), then recency.
     .sort((a, b) => b.score - a.score || (b.e.uses ?? 0) - (a.e.uses ?? 0) || b.e.createdAt - a.e.createdAt)

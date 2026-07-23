@@ -97,6 +97,15 @@ describe("selectMemories reinforcement tiebreak", () => {
   });
 });
 
+describe("selectMemories lesson weighting", () => {
+  it("a lesson outranks an equal-scored fact", () => {
+    const f: MemoryEntry = { ...entry("f", "use the staging deploy pipeline"), kind: "fact" };
+    const l: MemoryEntry = { ...entry("l", "the staging deploy pipeline needs a flag"), kind: "lesson" };
+    const hits = selectMemories([f, l], "run the staging deploy", { load: 0.1, max: 2 });
+    expect(hits[0].id).toBe("l"); // lesson gets the bonus → ranks first
+  });
+});
+
 describe("renderMemoryHints", () => {
   it("renders a bulleted hint block", () => {
     const out = renderMemoryHints([entry("a", "use pnpm"), entry("b", "node 22")]);

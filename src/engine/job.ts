@@ -22,7 +22,7 @@ export interface JobDeps extends ReviewDeps {
 }
 
 export type JobResult =
-  | { kind: "chat"; response: string; refinedPrompt?: string; nextSteps?: string[]; remembered?: string[] }
+  | { kind: "chat"; response: string; refinedPrompt?: string; nextSteps?: string[]; remembered?: string[]; lessons?: string[] }
   | { kind: "rejected"; stage: "spec" | "plan"; refinedPrompt?: string }
   | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession; refinedPrompt?: string };
 
@@ -80,7 +80,7 @@ export async function runJob(
       // The "chat" phase is emitted inside runUpstream (right before the coach runs) so the UI shows the
       // coach-waiting status while the coach actually works — no re-emit here.
       // No worktree was opened for a chat turn — nothing to close.
-      return { kind: "chat", response: up.response, refinedPrompt: up.refinedPrompt, nextSteps: up.nextSteps, remembered: up.remembered };
+      return { kind: "chat", response: up.response, refinedPrompt: up.refinedPrompt, nextSteps: up.nextSteps, remembered: up.remembered, lessons: up.lessons };
     }
     if (up.kind === "rejected") {
       emit({ kind: "phase", phase: "rejected", detail: up.stage });

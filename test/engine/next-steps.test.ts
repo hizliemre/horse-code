@@ -21,6 +21,13 @@ describe("extractListBlock", () => {
   it("missing tag → text unchanged, no items", () => {
     expect(extractListBlock("just text", "remember")).toEqual({ text: "just text", items: [] });
   });
+
+  it("extracts a <lesson> block (correction/failure learnings)", () => {
+    const raw = "Fixed.\n<lesson>\n- don't mutate props directly; clone first\n</lesson>";
+    const out = extractListBlock(raw, "lesson");
+    expect(out.text).toBe("Fixed.");
+    expect(out.items).toEqual(["don't mutate props directly; clone first"]);
+  });
 });
 
 describe("parseNextSteps", () => {

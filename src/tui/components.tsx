@@ -608,7 +608,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listPins?: () => string[]; // /pins
   addPin?: (text: string) => Promise<{ ok: true; pin: string } | { ok: false; error: string }>; // /pin <text>
   removePin?: (n: number) => Promise<string | undefined>; // /pin rm N
-  listMemories?: () => { text: string }[]; // /memories
+  listMemories?: () => { text: string; kind?: "fact" | "lesson" }[]; // /memories
   addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string }; superseded: string[] } | { ok: false; error: string }>; // /remember
   removeMemory?: (n: number) => Promise<string | undefined>; // /forget N
   listMcp?: () => { name: string; ok: boolean; toolCount: number; error?: string }[]; // /mcp
@@ -788,7 +788,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const doMemories = (): void => {
     const mem = listMemories?.() ?? [];
     if (mem.length === 0) { controller.note("No memories yet — `/remember <text>` to add one."); return; }
-    controller.note(`**Memories** (this project):\n${mem.map((m, i) => `${i + 1}. ${m.text}`).join("\n")}\n\n_\`/forget N\` to remove._`);
+    const rows = mem.map((m, i) => `${i + 1}. ${m.kind === "lesson" ? "📖 " : ""}${m.text}`);
+    controller.note(`**Memories** (this project):\n${rows.join("\n")}\n\n_📖 = lesson · \`/forget N\` to remove._`);
   };
   // /remember <text> → store a cross-session fact.
   const doRemember = (text: string): void => {

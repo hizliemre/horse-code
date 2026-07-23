@@ -52,6 +52,9 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     ` future sessions (e.g. "always use pnpm", "the API base is X", "we target Node 22"), also emit a` +
     ` <remember> block with 1-3 short, self-contained facts, one per line prefixed with "- ". Never remember` +
     ` transient, trivial, or one-off things.` +
+    ` Separately, if the user corrects you, points out a mistake, or an approach fails and is then fixed,` +
+    ` emit a <lesson> block: 1-2 short lessons, each stating what went wrong AND the correct approach, one` +
+    ` per line prefixed with "- ". Only for genuine corrections or failures — not routine answers.` +
     pinBlock;
   // Compact the in-context history when it exceeds the budget (summarize the old region, keep recent turns).
   // The summary is cached across turns → a summarizer call fires only when the delta grows past the threshold.

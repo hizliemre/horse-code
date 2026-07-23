@@ -57,6 +57,23 @@ describe("MemoryStore", () => {
     expect(await reopened.load()).toHaveLength(10); // all 10 survived on disk
   });
 
+  it("stores a lesson with kind 'lesson'; a lesson supersedes a same-topic lesson", async () => {
+    const s = store();
+    await s.add("the api base is old.com", "lesson");
+    const r = await s.add("the api base is new.com", "lesson");
+    expect(r.ok && r.superseded).toContain("the api base is old.com");
+    expect(s.all()).toHaveLength(1);
+    expect(s.all()[0].kind).toBe("lesson");
+  });
+
+  it("a fact does not supersede a same-topic lesson (different kinds coexist)", async () => {
+    const s = store();
+    await s.add("the api base is old.com", "lesson");
+    const r = await s.add("the api base is new.com", "fact"); // same topic, different kind
+    expect(r.ok && r.superseded).toEqual([]); // the lesson is not replaced by a fact
+    expect(s.all()).toHaveLength(2);
+  });
+
   it("reinforce bumps a memory's use count and persists it", async () => {
     const s = store();
     const r = await s.add("prefer pnpm");
