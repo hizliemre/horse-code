@@ -94,6 +94,8 @@ export class TuiController {
     else if (ev.kind === "board") this.state = { ...this.state, cards: ev.cards, runningAgents: this.deriveAgents(ev.cards) };
     // agents: ad-hoc sub-agents not backed by the board (the review council) → shown in the live-agents panel.
     else if (ev.kind === "agents") this.state = { ...this.state, runningAgents: this.setAgents(ev.agents) };
+    // note: a live transcript line from deep in the pipeline (council findings, judge decision).
+    else if (ev.kind === "note") this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: ev.text }] };
     // refined: swap the raw prompt for the refined one live (the coach/pipeline only ever sees the refine),
     // so the transcript shows what was actually handed downstream. endRun does the same as a fallback.
     else this.state = { ...this.state, transcript: replaceLastUser(this.state.transcript, ev.refinedPrompt) };

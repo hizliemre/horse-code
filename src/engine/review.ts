@@ -61,6 +61,10 @@ export async function runCouncil(
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
         };
         const r = await runStructuredRole(opts, AssessmentSchema);
+        // Surface each councilor's finding live as it lands — the review reads like a real discussion.
+        emit({ kind: "note", text: r.recommendation === "approve"
+          ? `● \`${c.name}\` reviewed — ✓ no concerns`
+          : `● \`${c.name}\` reviewed — ⚠ ${r.concerns.join("; ") || "requests changes"}` });
         return { name: c.name, concerns: r.concerns, recommendation: r.recommendation };
       }),
     );
@@ -71,7 +75,7 @@ export async function runCouncil(
 
 /** Judge synthesizes the council's evaluations into a single decision (pass/revise/ask-human). */
 export async function runJudge(
-  deps: ReviewDeps, workdir: string, docPath: string, assessments: Assessment[],
+  deps: ReviewDeps, workdir: string, docPath: string, assessments: Assessment[], emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<JudgeDecision> {
   const resolved = deps.roleRegistry.resolve("judge");
   const summary = assessments.map((a) => `- ${a.name} (${a.recommendation}): ${a.concerns.join("; ")}`).join("\n");
@@ -81,7 +85,12 @@ export async function runJudge(
     messages: [{ role: "user", content: `The "${docPath}" document and council evaluations:\n${summary}\nSynthesize and decide.` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
-  return runStructuredRole(opts, JudgeSchema);
+  const d = await runStructuredRole(opts, JudgeSchema);
+  const j = `⚖️ **Judge** (${resolved.model})`;
+  emit({ kind: "note", text: d.decision === "pass" ? `${j} → **pass** — approved`
+    : d.decision === "revise" ? `${j} → **revise**: ${d.feedback.join("; ") || "addressing council concerns"}`
+    : `${j} → **ask-human** — the council couldn't settle it` });
+  return d;
 }
 
 /**
@@ -97,15 +106,19 @@ export async function runReviewLoop(
   maxRounds: number,
   emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<ReviewOutcome> {
+  const label = /plan/i.test(docPath) ? "plan" : "spec";
   for (let round = 0; round < maxRounds; round++) {
+    emit({ kind: "note", text: `**Reviewing the ${label}** (round ${round + 1}) — ${deps.councilors.length} council members evaluating in parallel…` });
     const assessments = await runCouncil(deps, workdir, docPath, emit);
-    const d = await runJudge(deps, workdir, docPath, assessments);
-    if (d.decision === "pass") return { approved: true };
+    const d = await runJudge(deps, workdir, docPath, assessments, emit);
+    if (d.decision === "pass") { emit({ kind: "note", text: `✅ The ${label} passed review.` }); return { approved: true }; }
     let feedback = d.feedback;
     if (d.decision === "ask-human") {
+      emit({ kind: "note", text: `❓ Judge needs your input: ${d.question}` });
       const answer = await askUser(d.question);
       feedback = [...feedback, `Human answer: ${answer}`];
     }
+    emit({ kind: "note", text: `↻ Revising the ${label} with the feedback…` });
     await revise(feedback);
   }
   const answer = await askUser(`Not approved after ${maxRounds} revision rounds. Approve / stop?`);

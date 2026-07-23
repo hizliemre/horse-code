@@ -231,6 +231,16 @@ describe("TuiController", () => {
     expect(text).not.toContain("\n"); // single line (side by side, not stacked)
   });
 
+  it("'note' event → appends a live transcript line (council/judge narration)", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "note", text: "● `security` reviewed — ✓ no concerns" });
+    c.onEvent({ kind: "note", text: "⚖️ **Judge** → **pass**" });
+    expect(c.getState().transcript).toEqual([
+      { role: "assistant", text: "● `security` reviewed — ✓ no concerns" },
+      { role: "assistant", text: "⚖️ **Judge** → **pass**" },
+    ]);
+  });
+
   it("'agents' event → live sub-agents panel (council), empty list clears it", () => {
     const c = new TuiController();
     c.onEvent({ kind: "agents", agents: [

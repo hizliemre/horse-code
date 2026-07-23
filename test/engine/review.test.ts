@@ -101,6 +101,18 @@ describe("runCouncil", () => {
     expect(agentEvents[1].agents).toEqual([]); // cleared on finish
   });
 
+  it("narrates each councilor's finding live (approve ✓ / revise ⚠)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: {
+      "security": '{"concerns":["secret leak"],"recommendation":"revise"}',
+      "architectural": '{"concerns":[],"recommendation":"approve"}',
+    } });
+    const notes: string[] = [];
+    await runCouncil(rdeps(p), dir, "spec.md", (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
+    expect(notes.some((n) => /`security`.*⚠.*secret leak/.test(n))).toBe(true); // concern surfaced
+    expect(notes.some((n) => /`arch`.*✓/.test(n))).toBe(true); // approval surfaced
+  });
+
   it("councilor toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const { MockProvider } = await import("../../src/providers/mock.js");

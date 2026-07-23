@@ -13,7 +13,9 @@ export type ProgressEvent =
   | { kind: "refined"; refinedPrompt: string }
   // Ad-hoc live sub-agents not backed by a board card (e.g. the review council running in parallel).
   // An empty list clears the panel.
-  | { kind: "agents"; agents: { id: string; title: string; model: string }[] };
+  | { kind: "agents"; agents: { id: string; title: string; model: string }[] }
+  // A transcript note pushed live from deep in the pipeline (e.g. each councilor's finding, the judge's call).
+  | { kind: "note"; text: string };
 
 /** Instant card view of the board (id/title/column/model). */
 export function snapshotBoard(board: Board): BoardCardView[] {
