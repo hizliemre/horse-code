@@ -158,6 +158,19 @@ describe("TuiController", () => {
     expect(meta.running).toBe(true);
   });
 
+  it("onUsage ignores stray samples after the turn ends (aborted parallel work can't inflate the done line)", () => {
+    const c = new TuiController();
+    c.beginRun();
+    c.onUsage({ model: "m", promptTokens: 100, completionTokens: 50 });
+    c.endRun("report"); // turn done → meta.running = false
+    const before = c.getState().meta!;
+    c.onUsage({ model: "m", promptTokens: 999, completionTokens: 999 }); // late sample from a winding-down councilor
+    const after = c.getState().meta!;
+    expect(after.promptTokens).toBe(before.promptTokens); // unchanged
+    expect(after.completionTokens).toBe(before.completionTokens);
+    expect(after.calls).toBe(before.calls);
+  });
+
   it("beginRun resets meta + starts the clock; endRun freezes duration", () => {
     let t = 1000;
     const c = new TuiController(() => t);

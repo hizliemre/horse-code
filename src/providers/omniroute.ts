@@ -72,6 +72,15 @@ export function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }
 
+/**
+ * A 400 that reflects THIS model/subscription's capability limits rather than a malformed request — e.g.
+ * "long context beta not available for this subscription", context-window overflow, or an unsupported feature.
+ * A fallback model on a different subscription may well accept the same request, so treat these as retryable.
+ */
+export function isCapabilityError(message: string): boolean {
+  return /long[- ]context|not (yet )?available for this subscription|context[- ](length|window)|too many tokens|maximum context|unsupported|not supported/i.test(message);
+}
+
 export class OmniRouteProvider implements Provider {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
@@ -111,7 +120,8 @@ export class OmniRouteProvider implements Provider {
     }
 
     if (!res.ok) {
-      yield { type: "error", message: await readErrorMessage(res), retryable: isRetryableStatus(res.status) };
+      const message = await readErrorMessage(res);
+      yield { type: "error", message, retryable: isRetryableStatus(res.status) || isCapabilityError(message) };
       return;
     }
     const stream = res.body;

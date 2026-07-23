@@ -299,7 +299,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
           }
         }
       } catch (e) {
-        controller.endRun(jobAbort.signal.aborted ? "cancelled" : `error: ${e instanceof Error ? e.message : String(e)}`);
+        const msg = jobAbort.signal.aborted ? "cancelled" : `error: ${e instanceof Error ? e.message : String(e)}`;
+        jobAbort.abort(); // stop any in-flight parallel work (e.g. sibling councilors) so it can't keep spending after "done"
+        controller.endRun(msg);
       }
       // Persist the conversation after every turn → the session can be resumed later (best-effort).
       void store.save(controller.messages()).catch(() => { /* persistence is non-fatal */ });

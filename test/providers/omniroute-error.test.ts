@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readErrorMessage, isRetryableStatus, OmniRouteProvider } from "../../src/providers/omniroute.js";
+import { readErrorMessage, isRetryableStatus, isCapabilityError, OmniRouteProvider } from "../../src/providers/omniroute.js";
 import type { FetchLike } from "../../src/providers/omniroute.js";
 
 describe("isRetryableStatus", () => {
@@ -10,6 +10,15 @@ describe("isRetryableStatus", () => {
     expect(isRetryableStatus(400)).toBe(false);
     expect(isRetryableStatus(401)).toBe(false);
     expect(isRetryableStatus(403)).toBe(false);
+  });
+});
+
+describe("isCapabilityError", () => {
+  it("flags model/subscription capability limits (a fallback may serve them)", () => {
+    expect(isCapabilityError("The long context beta is not yet available for this subscription.")).toBe(true);
+    expect(isCapabilityError("context length exceeded")).toBe(true);
+    expect(isCapabilityError("this feature is not supported")).toBe(true);
+    expect(isCapabilityError("invalid request: empty messages")).toBe(false);
   });
 });
 
@@ -26,6 +35,16 @@ describe("OmniRouteProvider error events carry `retryable`", () => {
   });
   it("a 401 response → non-retryable error", async () => {
     const fetch: FetchLike = async () => new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
+    const events = await drain(new OmniRouteProvider({ baseUrl: "http://x", fetch }));
+    expect(events.at(-1)).toMatchObject({ type: "error", retryable: false });
+  });
+  it("a capability 400 (long-context beta) → retryable so a fallback model can serve it", async () => {
+    const fetch: FetchLike = async () => new Response(JSON.stringify({ error: { message: "The long context beta is not yet available for this subscription." } }), { status: 400 });
+    const events = await drain(new OmniRouteProvider({ baseUrl: "http://x", fetch }));
+    expect(events.at(-1)).toMatchObject({ type: "error", retryable: true });
+  });
+  it("a plain 400 (bad request) stays non-retryable", async () => {
+    const fetch: FetchLike = async () => new Response(JSON.stringify({ error: { message: "invalid 'messages': empty" } }), { status: 400 });
     const events = await drain(new OmniRouteProvider({ baseUrl: "http://x", fetch }));
     expect(events.at(-1)).toMatchObject({ type: "error", retryable: false });
   });

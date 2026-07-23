@@ -125,7 +125,10 @@ export class TuiController {
 
   // arrow-bound: passed to meterProvider → accumulates the running turn's tokens + latest active model.
   onUsage = (s: UsageSample): void => {
-    const m = this.state.meta ?? { model: "", promptTokens: 0, completionTokens: 0, calls: 0, running: true };
+    const m = this.state.meta;
+    // Only count usage while a turn is actually running. Late samples from aborted parallel work (e.g. sibling
+    // councilors still winding down after an error) must NOT keep inflating the frozen "done" line.
+    if (!m || !m.running) return;
     this.state = {
       ...this.state,
       meta: {
