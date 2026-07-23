@@ -5,7 +5,7 @@ import { makeAskUser } from "../terminal.js";
 import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
 import { tuneRoleModels } from "../engine/role-tuner.js";
-import { mostCapable } from "./role-models.js";
+import { mostCapable, adjustRoleModels } from "./role-models.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { firewallProvider } from "../providers/firewall.js";
@@ -117,6 +117,21 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
+  // On a clean config every role resolves to the "default" placeholder (not a real model → every call fails).
+  const rolesUnconfigured = (): boolean =>
+    REQUIRED_ROLES.every((r) => { const m = deps0.roleRegistry.peekModel(r); return !m || m === "default"; });
+  // First-run bootstrap: once sources are known, if no real models are set, apply the FAST heuristic chains
+  // (session-only, config untouched) so the app works immediately. The user can `/roles adjust` to tune with reasoning.
+  const bootstrapRoles = async (): Promise<void> => {
+    if (!rolesUnconfigured()) return; // real role models already configured/assigned → leave them
+    let models: string[];
+    try { models = await opts.listModels(); } catch { return; }
+    if (!models.length) return;
+    const adj = adjustRoleModels([...REQUIRED_ROLES], models);
+    if (!adj.length) return;
+    for (const { role, models: ch } of adj) deps0.roleRegistry.setRoleModel(role, ch);
+    controller.note("Bootstrapped role models from your sources — run `/roles adjust` to tune them with an LLM.");
+  };
   // Session persistence (per project) → the transcript is saved after every turn so a session can be resumed.
   const store = new SessionStore({ home: homedir(), cwd: process.cwd() });
   const listSessions = (): Promise<{ id: string; title: string; updatedAt: number; count: number }[]> =>
@@ -154,9 +169,11 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   if (opts.sourcesInfo && opts.refreshSources && opts.sourcesInfo().needsDiscovery) {
     controller.note("Discovering your connected model sources (probing omniroute)…");
     void opts.refreshSources().then(
-      (found) => controller.note(found.length ? `Model sources: ${found.join(", ")} (cached).` : "No connected sources found — showing all models."),
-      (e) => controller.note(`Source discovery failed: ${e instanceof Error ? e.message : String(e)}`),
+      (found) => { controller.note(found.length ? `Model sources: ${found.join(", ")} (cached).` : "No connected sources found — showing all models."); void bootstrapRoles(); },
+      (e) => { controller.note(`Source discovery failed: ${e instanceof Error ? e.message : String(e)}`); void bootstrapRoles(); }, // still bootstrap (shows all models)
     );
+  } else {
+    void bootstrapRoles(); // sources already cached/manual → bootstrap role models now
   }
   // Fullscreen (Claude Code model): alt-screen buffer + synchronized output (DECSET 2026).
   // Ink rewrites the whole screen on every frame → normally flickers; wrapping each write with
