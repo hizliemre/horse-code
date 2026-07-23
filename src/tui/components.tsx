@@ -594,7 +594,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -613,6 +613,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string }; superseded: string[] } | { ok: false; error: string }>; // /remember
   removeMemory?: (n: number) => Promise<string | undefined>; // /forget N
   listMcp?: () => { name: string; ok: boolean; toolCount: number; error?: string }[]; // /mcp
+  permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
+  setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
   onExit?: () => void; // /exit → restore the terminal and quit (wired by runTuiRepl)
 }): React.ReactElement {
@@ -814,6 +816,21 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const rows = servers.map((s) => s.ok ? `- ✅ **${s.name}** — ${s.toolCount} tools` : `- ❌ **${s.name}** — ${s.error ?? "not connected"}`);
     controller.note(`**MCP servers:**\n${rows.join("\n")}`);
   };
+  // /mode [ask|acceptEdits|auto] → show or set the permission mode.
+  const MODE_DESC: Record<string, string> = {
+    ask: "prompt for every file write and command",
+    acceptEdits: "auto-approve file writes/edits, prompt for commands",
+    auto: "auto-approve everything except dangerous commands",
+  };
+  const doMode = (arg: string): void => {
+    const cur = permMode?.() ?? "ask";
+    const a = arg.trim().toLowerCase();
+    if (!a) { controller.note(`Permission mode: **${cur}** — ${MODE_DESC[cur]}.\n\n_\`/mode ask|acceptEdits|auto\` to change._`); return; }
+    const m = a === "ask" ? "ask" : a === "acceptedits" ? "acceptEdits" : a === "auto" ? "auto" : undefined;
+    if (!m) { controller.note(`Unknown mode \`${arg.trim()}\` — use ask, acceptEdits, or auto.`); return; }
+    setPermMode?.(m);
+    controller.note(`Permission mode → **${m}** — ${MODE_DESC[m]}.`);
+  };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
     if (c.name === "/model") controller.openPicker();
@@ -827,6 +844,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/remember") doRemember("");
     else if (c.name === "/forget") doForget("");
     else if (c.name === "/mcp") doMcp();
+    else if (c.name === "/mode") doMode("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -1097,6 +1115,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /remember <text> · /forget N (argument forms).
               if (cmd.startsWith("/remember ")) { setScroll(0); setDraft(""); setDraftCursor(0); doRemember(trimmed.slice("/remember".length).trim()); return; }
               if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); doForget(trimmed.slice("/forget".length).trim()); return; }
+              // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
+              if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
               if (trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);

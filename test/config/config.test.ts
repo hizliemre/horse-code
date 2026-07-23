@@ -7,7 +7,7 @@ describe("loadConfig", () => {
   it("returns defaults when no source is present", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: noFiles });
     expect(cfg.baseUrl).toBe(DEFAULT_CONFIG.baseUrl);
-    expect(cfg.mode).toBe("ask");
+    expect(cfg.mode).toBe("acceptEdits"); // default: auto-approve file writes, still ask for commands
     expect(cfg.apiKey).toBeUndefined();
     expect(cfg.allowlist).toEqual([]);
   });
@@ -56,7 +56,7 @@ describe("loadConfig", () => {
     const readFile = (p: string) =>
       p === "/proj/.horsecode/config.json" ? "{ malformed json" : undefined;
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
-    expect(cfg.mode).toBe("ask"); // fell back to default
+    expect(cfg.mode).toBe("acceptEdits"); // fell back to default
   });
 
   it("project apiKey is fully ignored when global is absent (result undefined)", () => {

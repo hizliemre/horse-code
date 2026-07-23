@@ -19,6 +19,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/memories", desc: "List remembered facts (/forget N to remove)" },
   { name: "/forget", desc: "Forget a remembered fact (/forget N)" },
   { name: "/mcp", desc: "Show connected MCP servers and their tools" },
+  { name: "/mode", desc: "Permission mode (/mode ask|acceptEdits|auto)" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },

@@ -14,7 +14,7 @@ describe("slash commands", () => {
 
   it("filters by prefix (case-insensitive) and trims", () => {
     expect(matchCommands("/clea").map((c) => c.name)).toEqual(["/clear"]);
-    expect(matchCommands("  /MO  ").map((c) => c.name)).toEqual(["/model"]);
+    expect(matchCommands("  /MOD  ").map((c) => c.name).sort()).toEqual(["/mode", "/model"]); // both match /mod
     expect(matchCommands("/xyz")).toEqual([]);
   });
 

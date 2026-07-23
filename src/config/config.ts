@@ -33,7 +33,9 @@ export interface ResolvedConfig {
 export const DEFAULT_CONFIG: ResolvedConfig = {
   baseUrl: "http://localhost:20128",
   model: "default",
-  mode: "ask",
+  // acceptEdits: auto-approve file writes/edits (the pipeline builds in an isolated worktree → reviewed as a
+  // PR), still prompt for shell/exec. Keeps the automated build flowing without an approval per file.
+  mode: "acceptEdits",
   allowlist: [],
   roles: {},
   specKit: { version: "v0.13.2" },

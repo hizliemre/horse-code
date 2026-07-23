@@ -184,6 +184,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
       listMcp={listMcp}
+      permMode={() => deps0.permission.mode} setPermMode={(m) => deps0.permission.setMode(m)}
       cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,
   );
