@@ -15,6 +15,8 @@ export interface TaskCycleDeps {
   specKit: () => Promise<SpecKitTemplates>;
   /** Live file-write/edit activity sink (wired to the TUI); undefined in headless/one-shot runs. */
   onActivity?: (a: ToolActivity) => void;
+  /** Live "writing <file> · N chars" progress while a tool call is still being generated (long writes). */
+  onLiveActivity?: (label: string) => void;
   /** "By-the-way" note source: the coach loop polls it each turn to fold in mid-run guidance. */
   inbox?: () => string | undefined;
   /** Context pins: short user facts injected into the system prompt every turn (survive compaction). */

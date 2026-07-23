@@ -134,6 +134,18 @@ describe("runToCompletion", () => {
   });
 });
 
+describe("runRoleAgent live activity", () => {
+  it("forwards tool-progress as a 'writing <file> · N chars' label", async () => {
+    const p = new MockProvider([[
+      { type: "tool-progress", name: "write_file", chars: 1394, path: "specs/x/constitution.md" },
+      { type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" },
+    ]]);
+    const labels: string[] = [];
+    await drain(runRoleAgent(opts(p, { onLiveActivity: (l) => labels.push(l) })));
+    expect(labels).toContain("writing constitution.md · 1.4k chars"); // basename + humanized size
+  });
+});
+
 describe("runRoleAgent fallback chain", () => {
   it("retryable error on the primary → falls back to the next model and succeeds", async () => {
     const p = new MockProvider([

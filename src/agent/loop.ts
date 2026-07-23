@@ -23,6 +23,12 @@ export interface RoleAgentOptions {
   remember?: (fact: string) => void; // remember_fact tool → persist a durable fact
   onExhausted?: (model: string) => void; // a model hit a retryable error → mark it spent for the session
   onFallback?: (from: string, to: string, reason: string) => void; // fell from one model to the next → UI note
+  onLiveActivity?: (label: string) => void; // live "writing <file> · N chars" while a tool call is generated
+}
+
+/** 1394 → "1.4k"; keeps the live activity line compact. */
+function fmtChars(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k chars` : `${n} chars`;
 }
 
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
@@ -75,6 +81,10 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
           yield { type: "message.delta", text: ev.text };
         } else if (ev.type === "tool-call") {
           toolCalls.push(ev.toolCall);
+        } else if (ev.type === "tool-progress") {
+          // Model is still generating this tool call's args → surface live progress (e.g. writing a big file).
+          const file = ev.path ? ev.path.split("/").pop() : undefined;
+          opts.onLiveActivity?.(file ? `writing ${file} · ${fmtChars(ev.chars)}` : `${ev.name} · ${fmtChars(ev.chars)}`);
         } else if (ev.type === "usage") {
           yield { type: "usage", promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
         } else if (ev.type === "error") {

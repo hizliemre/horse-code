@@ -89,6 +89,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     provider: firewallProvider(meterProvider(deps0.provider, controller.onUsage)), // redact secrets from every outgoing prompt
 
     onActivity: controller.pushActivity,
+    onLiveActivity: controller.setLiveActivity, // live "writing <file> · N chars" during long tool generations
+
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
     pins: () => pinStore.list(), // context pins → coach system prompt
     memory: () => memStore.all(), // cross-session memory → retrieved + injected into relevant turns

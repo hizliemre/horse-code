@@ -43,6 +43,7 @@ export interface TuiState {
   picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model" | "mode"; role?: string; note?: string; picked?: string[]; slots?: number };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
+  liveActivity?: string; // transient "writing <file> · N chars" while a tool call is being generated
   attachments: number; // count of pasted images staged for the next prompt (shown under the input)
   nextSteps: string[]; // coach-suggested follow-ups (run with /next N); cleared when a new turn starts
 }
@@ -89,7 +90,7 @@ export class TuiController {
         this.lastNarrated = ev.phase;
         transcript = [...transcript, { role: "assistant", text: narration }];
       }
-      this.state = { ...this.state, phase: ev.phase, detail: ev.detail, transcript };
+      this.state = { ...this.state, phase: ev.phase, detail: ev.detail, transcript, liveActivity: undefined };
     }
     else if (ev.kind === "board") this.state = { ...this.state, cards: ev.cards, runningAgents: this.deriveAgents(ev.cards) };
     // agents: ad-hoc sub-agents not backed by the board (the review council) → shown in the live-agents panel.
@@ -146,7 +147,14 @@ export class TuiController {
 
   // arrow-bound: wired to deps.onActivity → write/edit tools push here → inline in the chat flow.
   pushActivity = (a: ToolActivity): void => {
-    this.state = { ...this.state, transcript: [...this.state.transcript, { kind: "tool", activity: a }] };
+    // The tool actually ran → its inline block replaces the transient "writing…" progress line.
+    this.state = { ...this.state, liveActivity: undefined, transcript: [...this.state.transcript, { kind: "tool", activity: a }] };
+    this.notify();
+  };
+
+  // arrow-bound: wired to deps.onLiveActivity → live "writing <file> · N chars" while a tool call is generated.
+  setLiveActivity = (label: string): void => {
+    this.state = { ...this.state, liveActivity: label || undefined };
     this.notify();
   };
 
@@ -303,7 +311,7 @@ export class TuiController {
       ? { ...m, running: false, durationMs: m.startedAt !== undefined ? this.now() - m.startedAt : m.durationMs }
       : undefined;
     this.agentStarts.clear();
-    this.state = { ...this.state, mode: "input", transcript: t, meta, runningAgents: [] };
+    this.state = { ...this.state, mode: "input", transcript: t, meta, runningAgents: [], liveActivity: undefined };
     this.notify();
   }
 

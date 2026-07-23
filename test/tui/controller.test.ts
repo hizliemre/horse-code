@@ -231,6 +231,16 @@ describe("TuiController", () => {
     expect(text).not.toContain("\n"); // single line (side by side, not stacked)
   });
 
+  it("setLiveActivity shows a transient line; a real tool activity clears it", () => {
+    const c = new TuiController();
+    c.setLiveActivity("writing constitution.md · 1.2k chars");
+    expect(c.getState().liveActivity).toBe("writing constitution.md · 1.2k chars");
+    c.pushActivity({ kind: "write", path: "constitution.md", lines: 42 } as never); // tool ran → clears live line
+    expect(c.getState().liveActivity).toBeUndefined();
+    c.setLiveActivity(""); // empty clears
+    expect(c.getState().liveActivity).toBeUndefined();
+  });
+
   it("'note' event → appends a live transcript line (council/judge narration)", () => {
     const c = new TuiController();
     c.onEvent({ kind: "note", text: "● `security` reviewed — ✓ no concerns" });

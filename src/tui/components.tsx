@@ -1093,7 +1093,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const pendingLines = state.pending
       ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingBodyWidth(size.cols)).length
       : 0;
-    const statusH = (progressLine || doneLine ? 1 : 0) + boardLines + pendingLines; // progress/done(1) + board + pending
+    const liveH = progressLine && state.liveActivity ? 1 : 0; // the transient "writing…" line
+    const statusH = (progressLine || doneLine ? 1 : 0) + liveH + boardLines + pendingLines; // progress/done(1) + live + board + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     // A pending choice question replaces the free-text input with a ChoiceInput selector.
     const choiceOptions = state.pending?.options ?? [];
@@ -1129,6 +1130,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         {showStatus ? (
           <Box flexDirection="column">
             {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} /></Box> : null}
+            {progressLine && state.liveActivity ? <Box paddingLeft={2}><Text color="#1a9fd8" wrap="truncate-end">{`  ✎ ${state.liveActivity}`}</Text></Box> : null}
             {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
             {boardLines ? <Board cards={state.cards} /> : null}
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}

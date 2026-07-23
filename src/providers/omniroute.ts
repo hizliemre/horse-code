@@ -81,6 +81,11 @@ export function isCapabilityError(message: string): boolean {
   return /long[- ]context|not (yet )?available for this subscription|context[- ](length|window)|too many tokens|maximum context|unsupported|not supported/i.test(message);
 }
 
+/** Best-effort extraction of a "path" field from partial tool-call JSON args (for live write progress). */
+function pathOf(args: string): string | undefined {
+  return args.match(/"path"\s*:\s*"([^"\\]+)"/)?.[1];
+}
+
 export class OmniRouteProvider implements Provider {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
@@ -131,6 +136,7 @@ export class OmniRouteProvider implements Provider {
     }
 
     const toolCalls = new Map<number, ToolCallAccumulator>();
+    const lastProgress = new Map<number, number>(); // per tool-call: last arg length we emitted progress for
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
     let usage: { promptTokens: number; completionTokens: number } | undefined;
     // omniroute appends the REAL billed token counts as trailing SSE comments (":
@@ -178,6 +184,11 @@ export class OmniRouteProvider implements Provider {
             if (tc.function?.name) acc.name = tc.function.name;
             if (tc.function?.arguments) acc.arguments += tc.function.arguments;
             toolCalls.set(idx, acc);
+            // Live progress every ~64 chars so the UI can show the file growing instead of a silent wait.
+            if (acc.name && acc.arguments.length - (lastProgress.get(idx) ?? 0) >= 64) {
+              lastProgress.set(idx, acc.arguments.length);
+              yield { type: "tool-progress", name: acc.name, chars: acc.arguments.length, path: pathOf(acc.arguments) };
+            }
           }
         }
 
