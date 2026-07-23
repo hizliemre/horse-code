@@ -91,6 +91,11 @@ export function capabilityScore(model: string): number {
   return 50; // unknown → assume mid
 }
 
+/** The most capable model in a list (used to pick who does the LLM role-tuning reasoning). */
+export function mostCapable(models: string[]): string {
+  return [...models].sort((a, b) => capabilityScore(b) - capabilityScore(a))[0] ?? "";
+}
+
 /** Which heft band a model sits in — drives which tier of role it's assigned to. */
 export function modelBand(model: string): "flagship" | "strong" | "mid" | "fast" {
   if (WEAK_RE.test(model)) return "fast";

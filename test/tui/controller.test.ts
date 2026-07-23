@@ -303,6 +303,18 @@ describe("TuiController", () => {
     ]);
   });
 
+  it("streamNote updates one note in place as text is appended", () => {
+    const c = new TuiController();
+    c.note("header");
+    const append = c.streamNote("");
+    append("Coach ");
+    append("gets sonnet.");
+    expect(c.getState().transcript).toEqual([
+      { role: "assistant", text: "header" },
+      { role: "assistant", text: "Coach gets sonnet." }, // grew in place, not appended as new items
+    ]);
+  });
+
   it("addAttachment stages images (count in state); submit hands them to the turn and clears the count", () => {
     const c = new TuiController();
     c.awaitTask();

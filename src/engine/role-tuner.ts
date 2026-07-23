@@ -1,18 +1,5 @@
-import { z } from "zod";
-import type { Provider } from "../core/types.js";
-import { runStructuredRole } from "../agent/structured.js";
-import { ToolRegistry } from "../tools/registry.js";
-import { PermissionEngine } from "../permission/engine.js";
-import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore } from "../tui/role-models.js";
-
-/** The LLM's answer: a short rationale plus a primary+fallbacks chain per role. */
-const AssignmentSchema = z.object({
-  reasoning: z.string().describe("A few sentences on the KEY assignment choices (which model on judge/coach/coder and why)."),
-  assignments: z.array(z.object({
-    role: z.string(),
-    models: z.array(z.string()).describe("Exactly 3 model ids from the catalog: primary first, then two fallbacks."),
-  })),
-});
+import type { ChatRequest, Provider } from "../core/types.js";
+import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable } from "../tui/role-models.js";
 
 export interface TunedRoles {
   reasoning: string;
@@ -37,6 +24,25 @@ function describeCatalog(models: string[]): string {
   return lines.join("\n");
 }
 
+/** Pulls the assignments array out of the model's reply — a ```json fence if present, else the last {...} span. */
+function parseAssignments(text: string): { role: string; models: string[] }[] {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidates = [fenced?.[1], text.match(/\{[\s\S]*\}/)?.[0]].filter((c): c is string => !!c);
+  for (const c of candidates) {
+    try {
+      const obj = JSON.parse(c) as { assignments?: unknown };
+      const arr = Array.isArray(obj.assignments) ? obj.assignments : Array.isArray(obj) ? obj : undefined;
+      if (Array.isArray(arr)) {
+        return arr
+          .filter((a): a is { role: string; models: string[] } =>
+            !!a && typeof (a as { role?: unknown }).role === "string" && Array.isArray((a as { models?: unknown }).models))
+          .map((a) => ({ role: a.role, models: a.models.filter((m): m is string => typeof m === "string") }));
+      }
+    } catch { /* try the next candidate */ }
+  }
+  return [];
+}
+
 /** Keeps only real model ids, dedupes, pads each role's chain to 3 from the heuristic (never invents). */
 function validateChains(
   assignments: { role: string; models: string[] }[],
@@ -59,25 +65,27 @@ function validateChains(
 }
 
 /**
- * Assigns a model chain to every role by having a capable model REASON over the role profiles + the discovered
- * catalog (cost/capability/source diversity), then validates its picks against the real catalog — falling back
- * to the deterministic heuristic for anything invalid or on error. The rationale is returned for display in chat.
+ * Assigns a model chain to every role by having the most capable model REASON over the role profiles + the
+ * discovered catalog (cost/capability/source diversity). The rationale STREAMS live via `onReason` (the JSON
+ * block is hidden from the stream); its picks are validated against the real catalog, falling back to the
+ * deterministic heuristic for anything invalid or on error.
  */
 export async function tuneRoleModels(opts: {
   provider: Provider;
   models: string[];
   roles: string[];
   signal?: AbortSignal;
+  onReason?: (delta: string) => void; // streamed reasoning text (JSON block excluded)
 }): Promise<TunedRoles> {
   const { provider, models, roles } = opts;
   const heuristic = adjustRoleModels(roles, models);
-  const tuner = [...models].sort((a, b) => capabilityScore(b) - capabilityScore(a))[0] ?? "";
+  const tuner = mostCapable(models);
   if (!models.length || !tuner) return { reasoning: "No models available to assign.", chains: heuristic, tuner };
 
   const profiles = roles.map((r) => `- ${r}: ${ROLE_PROFILES[r] ?? "(a support role)"}`).join("\n");
   const systemPrompt =
-    `You are assigning LLM models to the agent roles of a coding assistant. Each role gets a fallback CHAIN: a ` +
-    `primary model plus two fallbacks (3 total), tried in order when a source is rate-limited or exhausted.\n\n` +
+    `You assign LLM models to the agent roles of a coding assistant. Each role gets a fallback CHAIN: a primary ` +
+    `model plus two fallbacks (3 total), tried in order when a source is rate-limited or exhausted.\n\n` +
     `Rules:\n` +
     `1. Use ONLY exact model ids from the catalog below — never invent one.\n` +
     `2. Every role gets EXACTLY 3 DISTINCT models: primary, fallback 1, fallback 2.\n` +
@@ -90,23 +98,38 @@ export async function tuneRoleModels(opts: {
     `7. Fast/coordination roles (refiner, router, project-manager, team-lead) get cheap [fast] models.\n\n` +
     `Roles (with their workload profile):\n${profiles}\n\n` +
     `Available models, grouped by source (subscription), each tagged with its heft band:\n${describeCatalog(models)}\n\n` +
-    `Think it through briefly, then call submit with your reasoning and the per-role assignments.`;
+    `First explain your key choices in a few short sentences (which model on judge/coach/coder and why). ` +
+    `THEN, on a new line, output ONLY a fenced \`\`\`json block: {"assignments":[{"role":"<role>","models":["<primary>","<fb1>","<fb2>"]}, …]} covering every role.`;
 
   try {
-    const result = await runStructuredRole({
-      provider,
+    const req: ChatRequest = {
       model: tuner,
-      systemPrompt,
-      tools: new ToolRegistry(),
-      messages: [{ role: "user", content: "Assign a 3-model chain to every role, then submit." }],
-      permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
-      approve: async () => true,
-      cwd: ".",
-      signal: opts.signal ?? new AbortController().signal,
-    }, AssignmentSchema);
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "Assign a 3-model chain to every role. Reason briefly, then give the JSON." },
+      ],
+      tools: [],
+    };
+    const stripThink = (s: string): string => s.replace(/<\/?think>/gi, ""); // drop stray thinking-mode tags
+    let full = "";
+    let cut = -1; // once the JSON block starts, stop forwarding text to the live reasoning stream
+    for await (const ev of provider.chat(req, opts.signal ?? new AbortController().signal)) {
+      if (ev.type === "text-delta") {
+        const start = full.length;
+        full += ev.text;
+        if (cut < 0) {
+          const j = full.search(/```|\n\s*\{/); // JSON block marker
+          if (j >= 0) { if (j > start) opts.onReason?.(stripThink(full.slice(start, j))); cut = j; }
+          else opts.onReason?.(stripThink(ev.text));
+        }
+      } else if (ev.type === "error") {
+        throw new Error(ev.message);
+      }
+    }
+    const reasoning = stripThink(cut >= 0 ? full.slice(0, cut) : full).trim();
     return {
-      reasoning: result.reasoning.trim() || "(no rationale given)",
-      chains: validateChains(result.assignments, roles, models, heuristic),
+      reasoning: reasoning || "(no rationale given)",
+      chains: validateChains(parseAssignments(full), roles, models, heuristic),
       tuner,
     };
   } catch (e) {

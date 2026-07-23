@@ -334,6 +334,27 @@ export class TuiController {
     this.notify();
   }
 
+  /**
+   * Begin a live-updating assistant note and return an appender. Each call to the appender adds streamed text
+   * to THAT note (re-rendering it in place) — used to show an LLM reasoning live (e.g. /roles adjust).
+   */
+  streamNote(initial = ""): (delta: string) => void {
+    const idx = this.state.transcript.length;
+    let acc = initial;
+    this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: acc }] };
+    this.notify();
+    return (delta: string): void => {
+      acc += delta;
+      const t = [...this.state.transcript];
+      const item = t[idx];
+      if (item && "role" in item) {
+        t[idx] = { role: "assistant", text: acc };
+        this.state = { ...this.state, transcript: t };
+        this.notify();
+      }
+    };
+  }
+
   /** Append an assistant-style note to the transcript (used by /help). */
   note(text: string): void {
     this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text }] };
