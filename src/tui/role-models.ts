@@ -36,9 +36,21 @@ export const ROLE_PROFILES: Record<string, string> = {
   "senior-designer": "Senior UI reviewer — more capable than the designer.",
   "code-reviewer": "Reviews diffs — moderate volume → a solid capable model.",
   // Review council — each critiques the spec/plan from one angle; low volume, quality-critical → strong models.
-  security: "Reviews the spec/plan for security holes — low volume, high stakes → a strong model.",
-  architecture: "Reviews the spec/plan for architectural soundness — low volume → a strong model.",
-  testability: "Reviews the spec/plan for testability — low volume → a strong model.",
+  security: "Council lens: security holes, auth, input validation — low volume, high stakes → a strong model.",
+  architecture: "Council lens: architectural soundness, boundaries — low volume → a strong model.",
+  testability: "Council lens: testability, isolation, edge-case coverage — low volume → a strong model.",
+  correctness: "Council lens: logical correctness, boundary conditions, invariants → a strong model.",
+  performance: "Council lens: complexity, hot paths, scalability → a strong model.",
+  "error-handling": "Council lens: failure modes, recovery, partial-failure behavior → a strong model.",
+  concurrency: "Council lens: races, deadlocks, atomicity, ordering → a strong model.",
+  "data-integrity": "Council lens: data modeling, consistency, migrations, transactions → a strong model.",
+  "api-design": "Council lens: interface/contract design, compatibility, ergonomics → a strong model.",
+  maintainability: "Council lens: readability, coupling/cohesion, tech-debt → a strong model.",
+  simplicity: "Council lens: YAGNI, over-engineering, scope creep → a capable model.",
+  completeness: "Council lens: requirement coverage, missing cases, spec gaps → a strong model.",
+  observability: "Council lens: logging, metrics, tracing, debuggability → a capable model.",
+  dependencies: "Council lens: third-party deps, supply-chain, versioning, licensing → a capable model.",
+  accessibility: "Council lens: a11y, i18n, inclusive UX → a capable model.",
 };
 const ROLE_ADVICE = ROLE_PROFILES; // picker note reuses the profiles
 

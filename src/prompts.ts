@@ -37,8 +37,21 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "Holistically review all changes in the PR (base worktree). If sufficient, approve; otherwise request-changes with concrete comments. In the final decision round, give accept or ask-human (a question to ask the user).",
 };
 
+// The review council: independent lenses that each critique the spec/plan from one angle (run in parallel).
 export const DEFAULT_COUNCILORS: CouncilorConfig[] = [
-  { name: "security", perspective: "security vulnerabilities, secret leakage, input validation", models: [] },
-  { name: "architecture", perspective: "layer violations, dependency direction, consistency", models: [] },
-  { name: "testability", perspective: "testability, isolation, edge cases", models: [] },
+  { name: "security", perspective: "security vulnerabilities, secret leakage, authentication/authorization, input validation", models: [] },
+  { name: "architecture", perspective: "layer violations, dependency direction, module boundaries, overall consistency", models: [] },
+  { name: "testability", perspective: "testability, isolation, dependency injection, coverage of edge cases", models: [] },
+  { name: "correctness", perspective: "logical correctness, edge cases, off-by-one and boundary conditions, invariants", models: [] },
+  { name: "performance", perspective: "algorithmic complexity, hot paths, memory/allocation, scalability under load", models: [] },
+  { name: "error-handling", perspective: "failure modes, error propagation, recovery, retries, partial-failure behavior", models: [] },
+  { name: "concurrency", perspective: "race conditions, deadlocks, atomicity, ordering, shared-state safety", models: [] },
+  { name: "data-integrity", perspective: "data modeling, consistency, migrations, transactions, validation at boundaries", models: [] },
+  { name: "api-design", perspective: "interface/contract design, naming, backward compatibility, ergonomics", models: [] },
+  { name: "maintainability", perspective: "readability, DRY, coupling/cohesion, complexity, future tech-debt", models: [] },
+  { name: "simplicity", perspective: "YAGNI, over-engineering, unnecessary abstraction, scope creep", models: [] },
+  { name: "completeness", perspective: "requirement coverage, missing cases, unspecified behavior, spec gaps", models: [] },
+  { name: "observability", perspective: "logging, metrics, tracing, debuggability, actionable failure signals", models: [] },
+  { name: "dependencies", perspective: "third-party dependencies, supply-chain risk, versioning, licensing", models: [] },
+  { name: "accessibility", perspective: "accessibility (a11y), internationalization (i18n), inclusive UX", models: [] },
 ];
