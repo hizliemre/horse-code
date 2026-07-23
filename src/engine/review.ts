@@ -33,7 +33,9 @@ export interface ReviewOutcome { approved: boolean }
 function councilPrompt(perspective: string): string {
   return (
     `You are a review council member. Your perspective: ${perspective}. ` +
-    `Review the given document from this perspective; produce a reasoned concerns list and a recommendation (approve/revise).`
+    `Review the given document from this perspective; produce a reasoned concerns list and a recommendation (approve/revise). ` +
+    `Write your concerns in ENGLISH — they are a technical review artifact (documentation), not a conversation with the user, ` +
+    `so they stay English regardless of any conversational-language rule.`
   );
 }
 
