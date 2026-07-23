@@ -40,7 +40,7 @@ export interface TuiState {
   // stage "role": the list is role names (pick which role to set); "model": the list is models.
   // role set (+ stage "model") → build a fallback CHAIN: `picked` accumulates over `slots` model picks;
   // role undefined → session-wide (/model), a single pick.
-  picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string; note?: string; picked?: string[]; slots?: number };
+  picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model" | "mode"; role?: string; note?: string; picked?: string[]; slots?: number };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
   attachments: number; // count of pasted images staged for the next prompt (shown under the input)
@@ -298,6 +298,22 @@ export class TuiController {
   /** /roles setmodel step 1: pick which role to set (list of role names). */
   openRolePicker(roles: string[]): void {
     this.state = { ...this.state, mode: "picker", picker: { models: roles, loading: false, stage: "role" } };
+    this.notify();
+  }
+
+  /** /mode: pick the permission mode from the keyboard (list of modes; `note` describes each). */
+  openModePicker(modes: string[], note?: string): void {
+    this.state = { ...this.state, mode: "picker", picker: { models: modes, loading: false, stage: "mode", note } };
+    this.notify();
+  }
+
+  /** Applies a picked permission mode and confirms it in the transcript. */
+  applyMode(mode: string, desc: string): void {
+    this.state = {
+      ...this.state,
+      mode: "input", picker: undefined,
+      transcript: [...this.state.transcript, { role: "assistant", text: `Permission mode → **${mode}** — ${desc}.` }],
+    };
     this.notify();
   }
 

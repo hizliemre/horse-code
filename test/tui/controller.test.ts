@@ -218,6 +218,17 @@ describe("TuiController", () => {
     expect(text).toContain("↳ c/three");
   });
 
+  it("mode picker: openModePicker → applyMode confirms + closes", () => {
+    const c = new TuiController();
+    c.openModePicker(["ask", "acceptEdits", "auto"], "Current: acceptEdits");
+    expect(c.getState().mode).toBe("picker");
+    expect(c.getState().picker).toMatchObject({ models: ["ask", "acceptEdits", "auto"], stage: "mode", note: "Current: acceptEdits" });
+    c.applyMode("auto", "auto-approve everything except dangerous commands");
+    expect(c.getState().mode).toBe("input");
+    expect(c.getState().picker).toBeUndefined();
+    expect((c.getState().transcript.at(-1) as { text?: string } | undefined)?.text).toContain("Permission mode → **auto**");
+  });
+
   it("picker: setPickerError + cancelPicker", () => {
     const c = new TuiController();
     c.openPicker();

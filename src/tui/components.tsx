@@ -863,7 +863,12 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const doMode = (arg: string): void => {
     const cur = permMode?.() ?? "ask";
     const a = arg.trim().toLowerCase();
-    if (!a) { controller.note(`Permission mode: **${cur}** — ${MODE_DESC[cur]}.\n\n_\`/mode ask|acceptEdits|auto\` to change._`); return; }
+    // No arg → open a keyboard-navigable picker (↑/↓ + Enter). The note lists what each mode does.
+    if (!a) {
+      const note = `Current: ${cur}. ` + (["ask", "acceptEdits", "auto"] as const).map((m) => `${m} = ${MODE_DESC[m]}`).join(" · ");
+      controller.openModePicker(["ask", "acceptEdits", "auto"], note);
+      return;
+    }
     const m = a === "ask" ? "ask" : a === "acceptedits" ? "acceptEdits" : a === "auto" ? "auto" : undefined;
     if (!m) { controller.note(`Unknown mode \`${arg.trim()}\` — use ask, acceptEdits, or auto.`); return; }
     setPermMode?.(m);
@@ -1023,6 +1028,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             {(() => {
               const pk = state.picker;
               const isRole = pk?.stage === "role";
+              const isMode = pk?.stage === "mode";
               const roleModel = pk?.role ? (listRoles?.().find((r) => r.name === pk.role)?.model ?? "—") : undefined;
               const slot = (pk?.picked?.length ?? 0) + 1; // 1-based chain slot being picked
               const slots = pk?.slots ?? 1;
@@ -1030,17 +1036,24 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               const chainTitle = pk?.role
                 ? `${pk.role} — ${slotLabel} model (${slot}/${slots})${pk.picked?.length ? ` · so far: ${pk.picked.join(" → ")}` : ""}`
                 : "Select model";
+              const title = isMode ? "Select permission mode" : isRole ? "Select role" : chainTitle;
+              const current = isMode ? (permMode?.() ?? "") : isRole ? "" : (roleModel ?? (state.currentModel || model || "—"));
               return (
                 <ModelPicker
                   key={`${pk?.stage}:${pk?.role ?? "global"}:${slot}`} // remount per stage/slot → cursor/filter reset
                   models={pk?.models ?? []}
-                  current={isRole ? "" : (roleModel ?? (state.currentModel || model || "—"))}
+                  current={current}
                   loading={pk?.loading ?? false}
                   error={pk?.error}
                   cols={size.cols}
-                  title={isRole ? "Select role" : chainTitle}
+                  title={title}
                   note={pk?.note}
                   onSelect={(item) => {
+                    if (isMode) {                                                              // /mode: apply the picked mode
+                      const m = item as "ask" | "acceptEdits" | "auto";
+                      setPermMode?.(m); controller.applyMode(m, MODE_DESC[m] ?? "");
+                      return;
+                    }
                     if (isRole) { controller.chooseRole(item, 3); return; }                   // step 1 → chain slot 1 (3 models)
                     if (pk?.role) {                                                            // per-role: build the chain
                       const chain = [...(pk.picked ?? []), item];
