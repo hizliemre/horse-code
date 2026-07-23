@@ -72,6 +72,18 @@ describe("WorktreeManager.openSession", () => {
     expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).toBe(0); // bootstrap commit landed
   });
 
+  it("auto `git init`s a non-git directory (the user hasn't run git init)", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    repo = await mkdtemp(join(tmpdir(), "hc-nogit-")); // a PLAIN dir — not a git repo
+    expect((await defaultGitRunner(["rev-parse", "--is-inside-work-tree"], repo)).code).not.toBe(0);
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "fresh-task"); // must init + bootstrap + create the worktree
+    expect((await defaultGitRunner(["rev-parse", "--is-inside-work-tree"], repo)).stdout.trim()).toBe("true"); // now a repo
+    expect(existsSync(s.baseWorktree)).toBe(true);
+    expect(await branchExists(repo, "hc/fresh-task/base")).toBe(true);
+  });
+
   it("bases off HEAD when the requested branch doesn't exist in a repo that already has commits", async () => {
     repo = await initTmpRepo(); // has a commit on 'main'
     const wm = new WorktreeManager({ repoRoot: repo });

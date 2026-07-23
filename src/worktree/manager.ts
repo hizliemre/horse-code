@@ -46,12 +46,27 @@ export class WorktreeManager {
     return r.stdout;
   }
 
+  /** `git init` the repo if the directory isn't one yet (the user may not have run git init) + ensure an
+   *  identity so the first commit doesn't fail on a machine with no global git config. */
+  private async ensureRepo(): Promise<void> {
+    const inside = await this.git(["rev-parse", "--is-inside-work-tree"], this.repoRoot);
+    if (inside.code === 0 && inside.stdout.trim() === "true") return; // already a git repo
+    await this.run(["init", "-b", "main"], this.repoRoot); // not a repo → initialize one automatically
+    const email = await this.git(["config", "user.email"], this.repoRoot);
+    if (email.code !== 0 || !email.stdout.trim()) {
+      // no identity configured (global or local) → set a local fallback so commits succeed
+      await this.git(["config", "user.email", "horse-code@local"], this.repoRoot);
+      await this.git(["config", "user.name", "horse-code"], this.repoRoot);
+    }
+  }
+
   /**
-   * A worktree must branch off a commit. A freshly `git init`-ed repo has an unborn HEAD (no commits),
-   * so `git worktree add … <branch>` fails with "invalid reference". Bootstrap one empty commit so
-   * horse-code works in a brand-new repository.
+   * A worktree must branch off a commit. First ensure the directory IS a git repo (auto `git init` if not).
+   * A freshly `git init`-ed repo has an unborn HEAD (no commits), so `git worktree add … <branch>` fails with
+   * "invalid reference". Bootstrap one empty commit so horse-code works in a brand-new / non-git directory.
    */
   private async ensureBaseCommit(): Promise<void> {
+    await this.ensureRepo();
     const head = await this.git(["rev-parse", "--verify", "--quiet", "HEAD"], this.repoRoot);
     if (head.code === 0) return; // repo already has at least one commit
     await this.run(["commit", "--allow-empty", "-m", "hc: initial commit"], this.repoRoot);
