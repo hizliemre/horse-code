@@ -101,12 +101,20 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     if (!models.length) { controller.note("No models available to assign."); return; }
     const roleNames = listRoles().map((r) => r.name);
     const tuner = mostCapable(models);
-    controller.note(`🤖 \`${tuner}\` is assigning models to all ${roleNames.length} roles — reasoning over cost, capability & source diversity (~30s):`);
+    controller.note(`🤖 \`${tuner}\` is assigning models to all ${roleNames.length} roles — reasoning over cost, capability & source diversity:`);
     const append = controller.streamNote(""); // reasoning streams here live
-    const { chains } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames, onReason: append });
-    for (const { role, models: ch } of chains) deps0.roleRegistry.setRoleModel(role, ch);
-    const rows = chains.map(({ role, models: ch }) => [`- \`${role}\` → ${ch[0] ?? "—"}`, ...ch.slice(1).map((m) => `    ↳ ${m}`)].join("\n"));
-    controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any chain._`);
+    controller.startBusy("tuning", tuner); // status line: shimmer + live timer + token spend
+    try {
+      const { chains } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames, onReason: append });
+      for (const { role, models: ch } of chains) deps0.roleRegistry.setRoleModel(role, ch);
+      controller.endBusy();
+      const rows = chains.map(({ role, models: ch }) => [`- \`${role}\` → ${ch[0] ?? "—"}`, ...ch.slice(1).map((m) => `    ↳ ${m}`)].join("\n"));
+      controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any chain._`);
+      return;
+    } catch (e) {
+      controller.endBusy();
+      controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
   // Session persistence (per project) → the transcript is saved after every turn so a session can be resumed.
   const store = new SessionStore({ home: homedir(), cwd: process.cwd() });

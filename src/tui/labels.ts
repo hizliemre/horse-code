@@ -16,6 +16,7 @@ export const PHASE_LABELS: Record<string, string> = {
   revision: "Reviewing…",
   "revision-done": "Revision done",
   report: "Writing report…",
+  tuning: "Assigning role models…",
   done: "Done ✓",
 };
 
@@ -42,6 +43,7 @@ export function phaseNarration(phase: string): string | undefined {
 export const DONE_PHRASES: Record<string, string> = {
   upstream: "refined",
   chat: "zottired",
+  tuning: "assigned role models",
 };
 
 export function donePhrase(phase: string): string {

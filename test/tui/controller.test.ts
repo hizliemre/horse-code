@@ -303,6 +303,21 @@ describe("TuiController", () => {
     ]);
   });
 
+  it("startBusy → running with a live meter; onUsage accumulates; endBusy freezes the metrics", () => {
+    const c = new TuiController();
+    c.startBusy("tuning", "cc/claude-fable-5");
+    expect(c.getState().mode).toBe("running");
+    expect(c.getState().phase).toBe("tuning");
+    expect(c.getState().meta).toMatchObject({ model: "cc/claude-fable-5", running: true, calls: 0 });
+    expect(c.getState().meta?.startedAt).toBeTypeOf("number");
+    c.onUsage({ model: "cc/claude-fable-5", promptTokens: 1200, completionTokens: 340 });
+    expect(c.getState().meta).toMatchObject({ promptTokens: 1200, completionTokens: 340, calls: 1 });
+    c.endBusy();
+    expect(c.getState().mode).toBe("input");
+    expect(c.getState().meta?.running).toBe(false); // frozen → shows as a done line
+    expect(c.getState().meta?.durationMs).toBeTypeOf("number");
+  });
+
   it("streamNote updates one note in place as text is appended", () => {
     const c = new TuiController();
     c.note("header");

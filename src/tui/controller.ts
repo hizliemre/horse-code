@@ -245,6 +245,29 @@ export class TuiController {
     this.notify();
   }
 
+  /**
+   * Enter a lightweight "running" state for a non-job async activity (e.g. /roles adjust): the status line
+   * gets the shimmer + live elapsed timer, and onUsage accumulates token metrics into meta as calls arrive.
+   */
+  startBusy(phase: string, model = ""): void {
+    this.state = {
+      ...this.state,
+      mode: "running", phase, detail: undefined,
+      meta: { model, promptTokens: 0, completionTokens: 0, calls: 0, startedAt: this.now(), running: true },
+    };
+    this.notify();
+  }
+
+  /** Leave the busy state → freezes the metrics into a done line ("…for Xs · ↑ ↓ · N calls"). */
+  endBusy(): void {
+    const m = this.state.meta;
+    const meta: TurnMeta | undefined = m
+      ? { ...m, running: false, durationMs: m.startedAt !== undefined ? this.now() - m.startedAt : m.durationMs }
+      : undefined;
+    this.state = { ...this.state, mode: "input", meta };
+    this.notify();
+  }
+
   /** Store the coach's suggested follow-ups (rendered under the input; run with /next N). */
   setNextSteps(steps: string[]): void {
     this.state = { ...this.state, nextSteps: steps };
