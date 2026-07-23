@@ -38,8 +38,9 @@ export interface TuiState {
   queued: number; // prompts typed while a job is running, waiting to run next
   meta?: TurnMeta;
   // stage "role": the list is role names (pick which role to set); "model": the list is models.
-  // role set (+ stage "model") → the picked model is applied to THAT role; role undefined → session-wide (/model).
-  picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string; note?: string };
+  // role set (+ stage "model") → build a fallback CHAIN: `picked` accumulates over `slots` model picks;
+  // role undefined → session-wide (/model), a single pick.
+  picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string; note?: string; picked?: string[]; slots?: number };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
   attachments: number; // count of pasted images staged for the next prompt (shown under the input)
@@ -277,10 +278,24 @@ export class TuiController {
     this.notify();
   }
 
-  /** /roles setmodel step 2: a role was chosen → now pick a model for it (App fetches the model list). */
-  chooseRole(role: string): void {
-    this.state = { ...this.state, picker: { models: [], loading: true, stage: "model", role } };
+  /** /roles setmodel step 2: a role was chosen → build its fallback chain over `slots` model picks. */
+  chooseRole(role: string, slots = 3): void {
+    this.state = { ...this.state, picker: { models: [], loading: true, stage: "model", role, picked: [], slots } };
     this.notify();
+  }
+
+  /**
+   * Records a model pick for the current chain slot. Returns true when the chain is complete (the caller then
+   * applies it); false when more slots remain (advances to the next slot → App re-fetches, excluding picks).
+   */
+  addChainModel(model: string): boolean {
+    const p = this.state.picker;
+    if (!p || p.stage !== "model" || !p.role) return true;
+    const picked = [...(p.picked ?? []), model];
+    if (picked.length >= (p.slots ?? 1)) return true; // complete → caller finalizes
+    this.state = { ...this.state, picker: { ...p, picked, models: [], loading: true } };
+    this.notify();
+    return false;
   }
 
   setPickerModels(models: string[], note?: string): void {
@@ -302,12 +317,14 @@ export class TuiController {
     this.notify();
   }
 
-  /** Applies a model to a single role (per-role) and confirms it in the transcript. */
-  applyRoleModel(role: string, model: string): void {
+  /** Applies a model chain to a single role (per-role) and confirms it in the transcript, stacked. */
+  applyRoleModel(role: string, models: string | string[]): void {
+    const chain = typeof models === "string" ? [models] : models;
+    const body = chain.map((m, i) => (i === 0 ? `▸ ${m}` : `  ↳ ${m}`)).join("\n");
     this.state = {
       ...this.state,
       mode: "input", picker: undefined,
-      transcript: [...this.state.transcript, { role: "assistant", text: `\`${role}\` → ${model}` }],
+      transcript: [...this.state.transcript, { role: "assistant", text: `\`${role}\`\n${body}` }],
     };
     this.notify();
   }

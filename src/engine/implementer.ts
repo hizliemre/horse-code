@@ -11,7 +11,7 @@ export async function runImplementer(
   task: Card,
   cwd: string,
 ): Promise<void> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve(role);
+  const resolved = deps.roleRegistry.resolve(role);
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
 
@@ -22,8 +22,7 @@ export async function runImplementer(
 
   const opts: RoleAgentOptions = {
     provider: deps.provider,
-    model,
-    systemPrompt,
+    ...resolved,
     tools,
     messages: [{ role: "user", content }],
     permission: deps.permission,

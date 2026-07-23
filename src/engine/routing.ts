@@ -11,13 +11,12 @@ const RouteSchema = z.object({ role: z.enum(["coder", "designer"]) });
 /** Picks the implementer role from the task title. On failure → "coder"; signal.aborted → throws. */
 export async function routeTask(deps: TaskCycleDeps, task: Card): Promise<ImplementerRole> {
   try {
-    const { model, systemPrompt } = deps.roleRegistry.resolve("router");
+    const resolved = deps.roleRegistry.resolve("router");
     const tools = new ToolRegistry();
     tools.register(buildSkillTool(deps.skillRegistry));
     const opts: RoleAgentOptions = {
       provider: deps.provider,
-      model,
-      systemPrompt,
+      ...resolved,
       tools,
       messages: [
         { role: "user", content: `Task: "${task.title}". Is this UI/UX work (designer) or code work (coder)?` },

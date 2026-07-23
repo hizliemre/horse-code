@@ -27,9 +27,9 @@ export type JobResult =
   | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession; refinedPrompt?: string };
 
 function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("project-manager");
+  const resolved = deps.roleRegistry.resolve("project-manager");
   return {
-    provider: deps.provider, model, systemPrompt,
+    provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content: `Read the "${tasksPath}" task list and turn it into board tasks (id, title, deps).` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
@@ -37,13 +37,13 @@ function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOpt
 }
 
 async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Board): Promise<string> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("coach");
+  const resolved = deps.roleRegistry.resolve("coach");
   const summary = board
     .list()
     .map((c) => `- ${c.id} "${c.title}" [${c.column}]: ${c.stageHistory.map((s) => s.action).join(", ")}`)
     .join("\n");
   const opts: RoleAgentOptions = {
-    provider: deps.provider, model, systemPrompt,
+    provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content: `Work complete. Board state:\n${summary}\nGive the user a short final report (what happened in each task).` }],
     permission: deps.permission, approve: deps.approve, cwd: session.baseWorktree, signal: deps.signal,

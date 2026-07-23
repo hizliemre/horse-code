@@ -56,6 +56,27 @@ describe("listOmniRouteModels", () => {
     expect(ids).not.toContain("auto/best-coding"); // combo excluded
   });
 
+  it("collapses alias models (parent → canonical), keeping the canonical and real variants", async () => {
+    const fetch = fakeFetch({ data: [
+      { id: "cc/claude-opus-4-8", owned_by: "claude", parent: null },            // canonical → kept
+      { id: "claude/claude-opus-4-8", owned_by: "claude", parent: "cc/claude-opus-4-8" }, // alias → dropped
+      { id: "cx/gpt-5.6-sol", owned_by: "codex", parent: null },                 // canonical → kept
+      { id: "codex/gpt-5.6-sol", owned_by: "codex", parent: "cx/gpt-5.6-sol" },  // alias → dropped
+      { id: "no-think/cc/claude-opus-4-8", owned_by: "claude", parent: null },   // real variant → kept
+    ] });
+    const ids = await listOmniRouteModels({ baseUrl: "http://x", fetch });
+    expect(ids).toEqual(["cc/claude-opus-4-8", "cx/gpt-5.6-sol", "no-think/cc/claude-opus-4-8"]);
+    expect(ids).not.toContain("claude/claude-opus-4-8"); // alias hidden
+    expect(ids).not.toContain("codex/gpt-5.6-sol"); // alias hidden
+  });
+
+  it("keeps an alias when its canonical parent is absent (never drops to nothing)", async () => {
+    const fetch = fakeFetch({ data: [
+      { id: "claude/claude-opus-4-8", owned_by: "claude", parent: "cc/claude-opus-4-8" }, // parent not in list → kept
+    ] });
+    expect(await listOmniRouteModels({ baseUrl: "http://x", fetch })).toEqual(["claude/claude-opus-4-8"]);
+  });
+
   it("empty `sources` = no source filter (all non-free kept)", async () => {
     const fetch = fakeFetch({ data: [{ id: "aug/x", owned_by: "auggie" }, { id: "cc/y", owned_by: "claude" }] });
     expect(await listOmniRouteModels({ baseUrl: "http://x", fetch, sources: [] })).toEqual(["aug/x", "cc/y"]);

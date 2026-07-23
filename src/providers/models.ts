@@ -29,12 +29,18 @@ export async function listOmniRouteModels(opts: {
   const base = opts.baseUrl.replace(/\/$/, "");
   const res = await fetchFn(`${base}/api/v1/models`, { headers });
   if (!res.ok) throw new Error(`omniroute models ${res.status}`);
-  const body = (await res.json()) as { data?: { id?: unknown; name?: unknown; owned_by?: unknown }[] };
+  const body = (await res.json()) as { data?: { id?: unknown; name?: unknown; owned_by?: unknown; parent?: unknown }[] };
   const allow = opts.sources && opts.sources.length ? new Set(opts.sources) : undefined;
-  const ids = (body.data ?? [])
-    .filter((m): m is { id: string; name?: string; owned_by?: string } => typeof m.id === "string")
+  const kept = (body.data ?? [])
+    .filter((m): m is { id: string; name?: string; owned_by?: string; parent?: string | null } => typeof m.id === "string")
     .filter((m) => !isFreeModel(m.id, typeof m.name === "string" ? m.name : undefined)) // drop free/unofficial models
-    .filter((m) => !allow || (typeof m.owned_by === "string" && allow.has(m.owned_by))) // only allowed sources
+    .filter((m) => !allow || (typeof m.owned_by === "string" && allow.has(m.owned_by))); // only allowed sources
+  const keptIds = new Set(kept.map((m) => m.id));
+  // Collapse alias models (a non-null `parent` pointing at a canonical that's also present) — e.g. claude/X is
+  // an alias of cc/X, codex/X of cx/X. Keeps the canonical, drops the duplicate name. Real variants
+  // (no-think/*) have parent:null → kept.
+  const ids = kept
+    .filter((m) => !(typeof m.parent === "string" && keptIds.has(m.parent)))
     .map((m) => m.id);
   return [...new Set(ids)].sort();
 }

@@ -35,12 +35,12 @@ export type RevisionResult =
   | { status: "human"; rounds: number; answer: string };
 
 async function principalReview(deps: RevisionDeps, base: string, prDiff?: string) {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("principal-coder");
+  const resolved = deps.roleRegistry.resolve("principal-coder");
   const content = prDiff
     ? `PR review: review the following diff:\n${prDiff}\n(use the read tools to inspect the worktree if needed.) Give approve or request-changes + concrete comments.`
     : "PR review: review all changes in the base worktree holistically. Give approve or request-changes + concrete comments.";
   const opts: RoleAgentOptions = {
-    provider: deps.provider, model, systemPrompt,
+    provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
@@ -49,9 +49,9 @@ async function principalReview(deps: RevisionDeps, base: string, prDiff?: string
 }
 
 async function principalFinal(deps: RevisionDeps, base: string) {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("principal-coder");
+  const resolved = deps.roleRegistry.resolve("principal-coder");
   const opts: RoleAgentOptions = {
-    provider: deps.provider, model, systemPrompt,
+    provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content: "FINAL DECISION: Revision rounds are over and findings still remain. Give accept or ask-human (a question to ask the user)." }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
@@ -60,11 +60,11 @@ async function principalFinal(deps: RevisionDeps, base: string) {
 }
 
 async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<void> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("senior-coder");
+  const resolved = deps.roleRegistry.resolve("senior-coder");
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
   const opts: RoleAgentOptions = {
-    provider: deps.provider, model, systemPrompt, tools,
+    provider: deps.provider, ...resolved, tools,
     messages: [{ role: "user", content: `PR revision: address the following comments (fix them or justify as "by design"), work in the main worktree:\n${comments.map((c) => `- ${c}`).join("\n")}` }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };

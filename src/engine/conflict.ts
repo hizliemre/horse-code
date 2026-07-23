@@ -73,7 +73,7 @@ export async function runConflictCouncil(
       // 1. architect diagnosis (read-only)
       const arch = deps.roleRegistry.resolve("architect");
       const diagOpts: RoleAgentOptions = {
-        provider: deps.provider, model: arch.model, systemPrompt: arch.systemPrompt,
+        provider: deps.provider, ...arch,
         tools: readOnlyRegistry(deps),
         messages: [{ role: "user", content:
           `The base worktree has a merge conflict in the following files: ${conflicted.join(", ")}. ` +
@@ -86,7 +86,7 @@ export async function runConflictCouncil(
       // 2. senior-coder resolve (no shell)
       const sr = deps.roleRegistry.resolve("senior-coder");
       const resolveOpts: RoleAgentOptions = {
-        provider: deps.provider, model: sr.model, systemPrompt: sr.systemPrompt,
+        provider: deps.provider, ...sr,
         tools: resolverRegistry(deps),
         messages: [{ role: "user", content:
           `Resolve the merge conflicts in the following files in the base worktree (remove all conflict markers ` +

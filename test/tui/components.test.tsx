@@ -297,7 +297,7 @@ describe("Ink components", () => {
     c.awaitTask();
     const { stdin, lastFrame, unmount } = render(
       <App controller={c} fullscreen model="m" listModels={async () => ["a/one"]}
-        listRoles={() => [{ name: "coach", model: "cc/opus" }]} />,
+        listRoles={() => [{ name: "coach", model: "cc/opus", models: ["cc/opus"] }]} />,
     );
     for (let i = 0; i < 200 && !strip(lastFrame()).includes("> "); i++) await sleep(15);
     stdin.write("/roles setmodel");

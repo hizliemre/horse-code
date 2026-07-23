@@ -74,7 +74,7 @@ export type ChatEvent =
   | { type: "tool-call"; toolCall: ToolCall }
   | { type: "usage"; promptTokens: number; completionTokens: number }
   | { type: "done"; finishReason: "stop" | "tool_calls" | "length" }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; retryable?: boolean }; // retryable = transient (429/5xx/network) → a fallback model may succeed
 
 export interface Provider {
   chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent>;
@@ -94,7 +94,7 @@ export type AgentEvent =
       preview: string;
     }
   | { type: "usage"; promptTokens: number; completionTokens: number }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; retryable?: boolean }
   | { type: "abort" };
 
 // --- Type guards ---

@@ -133,3 +133,55 @@ describe("runToCompletion", () => {
     await expect(runToCompletion(opts(p, { signal: ac.signal }))).rejects.toThrow(/cancel/);
   });
 });
+
+describe("runRoleAgent fallback chain", () => {
+  it("retryable error on the primary → falls back to the next model and succeeds", async () => {
+    const p = new MockProvider([
+      [{ type: "error", message: "429 rate limited", retryable: true }], // primary "m" is exhausted
+      [{ type: "text-delta", text: "ok" }, { type: "done", finishReason: "stop" }], // fallback "f1" answers
+    ]);
+    const exhausted: string[] = [];
+    const falls: { from: string; to: string }[] = [];
+    const events = await drain(runRoleAgent(opts(p, {
+      fallbacks: ["f1"],
+      onExhausted: (m) => exhausted.push(m),
+      onFallback: (from, to) => falls.push({ from, to }),
+    })));
+    expect(p.requests.map((r) => r.model)).toEqual(["m", "f1"]); // tried primary, then fallback
+    expect(exhausted).toEqual(["m"]);
+    expect(falls).toEqual([{ from: "m", to: "f1" }]);
+    expect(events.at(-1)).toEqual({ type: "message.done", message: { role: "assistant", content: "ok" } });
+  });
+
+  it("walks the whole chain, then surfaces the error when nothing is left", async () => {
+    const p = new MockProvider([
+      [{ type: "error", message: "429", retryable: true }],
+      [{ type: "error", message: "503", retryable: true }],
+      [{ type: "error", message: "429 again", retryable: true }],
+    ]);
+    const exhausted: string[] = [];
+    const events = await drain(runRoleAgent(opts(p, { fallbacks: ["f1", "f2"], onExhausted: (m) => exhausted.push(m) })));
+    expect(p.requests.map((r) => r.model)).toEqual(["m", "f1", "f2"]);
+    expect(exhausted).toEqual(["m", "f1", "f2"]); // all three spent
+    expect(events.at(-1)).toEqual({ type: "error", message: "429 again", retryable: true });
+  });
+
+  it("a NON-retryable error does not fall back", async () => {
+    const p = new MockProvider([[{ type: "error", message: "401 unauthorized" }]]);
+    const exhausted: string[] = [];
+    const events = await drain(runRoleAgent(opts(p, { fallbacks: ["f1"], onExhausted: (m) => exhausted.push(m) })));
+    expect(p.requests.map((r) => r.model)).toEqual(["m"]); // no fallback attempted
+    expect(exhausted).toEqual([]); // not marked exhausted
+    expect(events.at(-1)).toEqual({ type: "error", message: "401 unauthorized", retryable: undefined });
+  });
+
+  it("does not fall back once text has already streamed (can't cleanly retry)", async () => {
+    const p = new MockProvider([
+      [{ type: "text-delta", text: "partial" }, { type: "error", message: "stream stalled", retryable: true }],
+    ]);
+    const events = await drain(runRoleAgent(opts(p, { fallbacks: ["f1"] })));
+    expect(p.requests.map((r) => r.model)).toEqual(["m"]); // no retry — output was already emitted
+    expect(events).toContainEqual({ type: "message.delta", text: "partial" });
+    expect(events.at(-1)).toEqual({ type: "error", message: "stream stalled", retryable: true });
+  });
+});

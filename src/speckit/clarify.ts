@@ -17,14 +17,18 @@ export const ClarifyStepSchema = z.object({
  */
 export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 5): Promise<void> {
   const specRel = relative(p.workdir, paths.spec);
-  // peekModel: clarify is driven by the spec-kit clarify command prompt; only the analyst MODEL is needed.
-  const model = p.deps.roleRegistry.peekModel("analyst");
+  // fallbackOpts: clarify is driven by the spec-kit clarify command prompt (own prompt), but wants the
+  // analyst's model chain + session-fallback on exhaustion.
+  const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts("analyst");
   const qa: string[] = [];
   for (let round = 0; round < maxRounds; round++) {
     const context = qa.length ? `\n\nAnswers so far:\n${qa.join("\n")}` : "";
     const opts: RoleAgentOptions = {
       provider: p.deps.provider,
       model,
+      fallbacks,
+      onExhausted,
+      onFallback,
       systemPrompt: `${p.templates.command("clarify")}\n\nAsk at most one question per turn.`,
       tools: writerRegistry(p.deps.skillRegistry),
       messages: [{

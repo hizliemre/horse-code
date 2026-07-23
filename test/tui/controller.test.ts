@@ -194,15 +194,28 @@ describe("TuiController", () => {
     expect(c.getState().mode).toBe("picker");
     expect(c.getState().picker).toEqual({ models: ["coach", "coder"], loading: false, stage: "role" });
 
-    c.chooseRole("coder"); // role chosen → model stage for that role (App fetches models)
-    expect(c.getState().picker).toEqual({ models: [], loading: true, stage: "model", role: "coder" });
-    c.setPickerModels(["a/one", "b/two"]);
-    expect(c.getState().picker).toMatchObject({ models: ["a/one", "b/two"], stage: "model", role: "coder" });
+    c.chooseRole("coder"); // role chosen → build a 3-model chain for it (App fetches models per slot)
+    expect(c.getState().picker).toMatchObject({ models: [], loading: true, stage: "model", role: "coder", picked: [], slots: 3 });
 
-    c.applyRoleModel("coder", "a/one");
+    // slot 1/3 (primary)
+    c.setPickerModels(["a/one", "b/two", "c/three"]);
+    expect(c.addChainModel("a/one")).toBe(false); // more slots remain
+    expect(c.getState().picker).toMatchObject({ picked: ["a/one"], loading: true });
+    // slot 2/3 (fallback 1) — App re-fetches excluding a/one
+    c.setPickerModels(["b/two", "c/three"]);
+    expect(c.addChainModel("b/two")).toBe(false);
+    // slot 3/3 (fallback 2)
+    c.setPickerModels(["c/three"]);
+    expect(c.addChainModel("c/three")).toBe(true); // chain complete → caller applies it
+
+    c.applyRoleModel("coder", ["a/one", "b/two", "c/three"]);
     expect(c.getState().mode).toBe("input");
     expect(c.getState().picker).toBeUndefined();
-    expect(((c.getState().transcript.at(-1) as { text?: string } | undefined)?.text)).toBe("`coder` → a/one"); // confirmation note
+    const text = (c.getState().transcript.at(-1) as { text?: string } | undefined)?.text ?? "";
+    expect(text).toContain("`coder`");
+    expect(text).toContain("▸ a/one"); // primary
+    expect(text).toContain("↳ b/two"); // fallback, stacked
+    expect(text).toContain("↳ c/three");
   });
 
   it("picker: setPickerError + cancelPicker", () => {

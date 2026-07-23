@@ -47,9 +47,9 @@ export function buildCouncilRegistry(councilors: CouncilorConfig[]): RoleRegistr
 export async function runCouncil(deps: ReviewDeps, workdir: string, docPath: string): Promise<Assessment[]> {
   return Promise.all(
     deps.councilors.map(async (c) => {
-      const { model, systemPrompt } = deps.councilRegistry.resolve(c.name);
+      const resolved = deps.councilRegistry.resolve(c.name);
       const opts: RoleAgentOptions = {
-        provider: deps.provider, model, systemPrompt,
+        provider: deps.provider, ...resolved,
         tools: readOnlyRegistry(deps),
         messages: [{ role: "user", content: `Review the "${docPath}" document and evaluate it from this perspective.` }],
         permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
@@ -64,10 +64,10 @@ export async function runCouncil(deps: ReviewDeps, workdir: string, docPath: str
 export async function runJudge(
   deps: ReviewDeps, workdir: string, docPath: string, assessments: Assessment[],
 ): Promise<JudgeDecision> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("judge");
+  const resolved = deps.roleRegistry.resolve("judge");
   const summary = assessments.map((a) => `- ${a.name} (${a.recommendation}): ${a.concerns.join("; ")}`).join("\n");
   const opts: RoleAgentOptions = {
-    provider: deps.provider, model, systemPrompt,
+    provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content: `The "${docPath}" document and council evaluations:\n${summary}\nSynthesize and decide.` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,

@@ -26,12 +26,11 @@ export async function runEscalationCouncil(
   const task = board.get(taskId)!;
 
   // 1. architect diagnosis (read-only, structured)
-  const { model, systemPrompt } = deps.roleRegistry.resolve("architect");
+  const resolved = deps.roleRegistry.resolve("architect");
   const history = task.stageHistory.map((s) => s.action).join(", ");
   const diagnoseOpts: RoleAgentOptions = {
     provider: deps.provider,
-    model,
-    systemPrompt,
+    ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [
       {

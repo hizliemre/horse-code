@@ -602,8 +602,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   refinerModel?: string; // the refiner's model — shown only in the "refining… (model)" status line
   listModels?: () => Promise<string[]>;
   setModel?: (m: string) => void;
-  setRoleModel?: (role: string, m: string) => void; // per-role model override (/roles setmodel)
-  listRoles?: () => { name: string; model: string }[]; // /roles → role → model table
+  setRoleModel?: (role: string, models: string[]) => void; // per-role fallback chain (/roles setmodel, adjust)
+  listRoles?: () => { name: string; model: string; models: string[] }[]; // /roles → role → chain table
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
   listPins?: () => string[]; // /pins
@@ -724,20 +724,25 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     setSendModeText(null);
     if (t) { setDraft(t); setDraftCursor(t.length); } // Esc → back to editing the message
   };
-  const rolesReport = (): string => {
-    const rows = (listRoles?.() ?? []).map((r) => `- \`${r.name}\` → ${r.model || "—"}`);
-    return `**Roles & models:**\n${rows.join("\n")}\n\n_\`/roles adjust\` auto-assigns fitting models · \`/roles setmodel\` picks one manually._`;
+  // Render a role's chain: primary on the role line, fallbacks stacked under it.
+  const chainRows = (name: string, chain: string[]): string => {
+    if (!chain.length) return `- \`${name}\` → —`;
+    return [`- \`${name}\` → ${chain[0]}`, ...chain.slice(1).map((m) => `    ↳ ${m}`)].join("\n");
   };
-  // /roles adjust → auto-assign a fitting model to every role (strong roles → capable, rest → fast).
+  const rolesReport = (): string => {
+    const rows = (listRoles?.() ?? []).map((r) => chainRows(r.name, r.models?.length ? r.models : r.model ? [r.model] : []));
+    return `**Roles & fallback chains:**\n${rows.join("\n")}\n\n_\`/roles adjust\` auto-assigns 3-model chains · \`/roles setmodel\` builds one manually._`;
+  };
+  // /roles adjust → auto-assign a fallback CHAIN (primary + 2 fallbacks) to every role, sources spread.
   const doRolesAdjust = (): void => {
     if (!listModels || !setRoleModel || !listRoles) { controller.note("Role adjust is not available."); return; }
     controller.note("Adjusting role models…");
     listModels().then((models) => {
       const adj = adjustRoleModels(listRoles().map((r) => r.name), models);
       if (adj.length === 0) { controller.note("No models available to assign."); return; }
-      for (const { role, model } of adj) setRoleModel(role, model);
-      const rows = adj.map(({ role, model }) => `- \`${role}\` → ${model}`);
-      controller.note(`**Roles adjusted** (strong roles → most capable, others → fast/cheap):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any of these._`);
+      for (const { role, models: chain } of adj) setRoleModel(role, chain);
+      const rows = adj.map(({ role, models: chain }) => chainRows(role, chain));
+      controller.note(`**Roles adjusted** (primary + 2 fallbacks · sources spread · falls back on exhaustion):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any chain._`);
     }, (e) => controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`));
   };
   // /sessions → list resumable sessions (newest first) as a numbered note.
@@ -896,15 +901,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (!atActive) setAtDismissed(false); // token gone → re-arm the picker for the next "@"
   }, [atActive]);
   useEffect(() => { setAtSel(0); }, [at?.query]);
-  // When the picker opens (loading), fetch the model list once and hand it to the controller.
+  // When the picker opens (loading), fetch the model list and hand it to the controller. Re-runs for each
+  // chain slot (picked grows) so already-chosen models are filtered out of the next slot's options.
+  const pickedCount = state.picker?.picked?.length ?? 0;
   useEffect(() => {
     if (state.mode === "picker" && state.picker?.loading && listModels) {
       let cancelled = false;
       const role = state.picker.role; // set only for /roles setmodel → filter models to fit the role
+      const picked = state.picker.picked ?? []; // chain models already chosen → excluded from this slot
       listModels().then(
         (models) => {
           if (cancelled) return;
-          const { models: shown, note } = role ? filterModelsForRole(role, models) : { models, note: undefined };
+          const { models: shown, note } = role ? filterModelsForRole(role, models, picked) : { models, note: undefined };
           controller.setPickerModels(shown, note);
         },
         (e) => { if (!cancelled) controller.setPickerError(e instanceof Error ? e.message : String(e)); },
@@ -912,7 +920,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       return () => { cancelled = true; };
     }
     return undefined;
-  }, [state.mode, state.picker?.loading, listModels, controller]);
+  }, [state.mode, state.picker?.loading, pickedCount, listModels, controller]);
   // Scroll / command-history keys via RAW stdin instead of Ink's useInput. Ink's parseKeypress can
   // yield an undefined `sequence` for some keys (e.g. numpad in application-keypad mode), then
   // `input.startsWith('')` throws and crashes the app. Parsing the few sequences we care about
@@ -1014,19 +1022,29 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               const pk = state.picker;
               const isRole = pk?.stage === "role";
               const roleModel = pk?.role ? (listRoles?.().find((r) => r.name === pk.role)?.model ?? "—") : undefined;
+              const slot = (pk?.picked?.length ?? 0) + 1; // 1-based chain slot being picked
+              const slots = pk?.slots ?? 1;
+              const slotLabel = slots > 1 ? (slot === 1 ? "primary" : `fallback ${slot - 1}`) : "";
+              const chainTitle = pk?.role
+                ? `${pk.role} — ${slotLabel} model (${slot}/${slots})${pk.picked?.length ? ` · so far: ${pk.picked.join(" → ")}` : ""}`
+                : "Select model";
               return (
                 <ModelPicker
-                  key={`${pk?.stage}:${pk?.role ?? "global"}`} // remount on stage change → cursor/filter reset (no stale selection)
+                  key={`${pk?.stage}:${pk?.role ?? "global"}:${slot}`} // remount per stage/slot → cursor/filter reset
                   models={pk?.models ?? []}
                   current={isRole ? "" : (roleModel ?? (state.currentModel || model || "—"))}
                   loading={pk?.loading ?? false}
                   error={pk?.error}
                   cols={size.cols}
-                  title={isRole ? "Select role" : (pk?.role ? `Model for ${pk.role}` : "Select model")}
+                  title={isRole ? "Select role" : chainTitle}
                   note={pk?.note}
                   onSelect={(item) => {
-                    if (isRole) { controller.chooseRole(item); return; }                    // step 1 → step 2
-                    if (pk?.role) { setRoleModel?.(pk.role, item); controller.applyRoleModel(pk.role, item); return; } // per-role
+                    if (isRole) { controller.chooseRole(item, 3); return; }                   // step 1 → chain slot 1 (3 models)
+                    if (pk?.role) {                                                            // per-role: build the chain
+                      const chain = [...(pk.picked ?? []), item];
+                      if (controller.addChainModel(item)) { setRoleModel?.(pk.role, chain); controller.applyRoleModel(pk.role, chain); }
+                      return;
+                    }
                     setModel?.(item); controller.applyModel(item);                            // session-wide (/model)
                   }}
                   onCancel={() => controller.cancelPicker()}

@@ -29,11 +29,10 @@ export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean
 
 /** Runs the code-reviewer role with read-only tools and returns a structured verdict. */
 export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string): Promise<Verdict> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("code-reviewer");
+  const resolved = deps.roleRegistry.resolve("code-reviewer");
   const opts: RoleAgentOptions = {
     provider: deps.provider,
-    model,
-    systemPrompt,
+    ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [
       { role: "user", content: `Review the worktree changes for task "${task.title}"; give a verdict (pass/fail + notes).` },

@@ -8,11 +8,21 @@ import type { AgentEvent } from "../../src/core/types.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 describe("RoleRegistry.resolve", () => {
-  it("round-robins across models (per role)", () => {
-    const reg = new RoleRegistry({ coder: { models: ["a", "b"], systemPrompt: "p" } });
-    expect(reg.resolve("coder").model).toBe("a");
-    expect(reg.resolve("coder").model).toBe("b");
-    expect(reg.resolve("coder").model).toBe("a");
+  it("returns the primary + fallback chain, strict priority (no round-robin)", () => {
+    const reg = new RoleRegistry({ coder: { models: ["a", "b", "c"], systemPrompt: "p" } });
+    const r = reg.resolve("coder");
+    expect(r.model).toBe("a"); // primary = chain head
+    expect(r.fallbacks).toEqual(["b", "c"]); // the rest are ordered fallbacks
+    expect(reg.resolve("coder").model).toBe("a"); // resolving again does NOT advance — primary stays primary
+  });
+
+  it("markExhausted skips spent models in the chain, and never strands", () => {
+    const reg = new RoleRegistry({ coder: { models: ["a", "b", "c"], systemPrompt: "p" } });
+    reg.markExhausted("a");
+    expect(reg.resolve("coder")).toMatchObject({ model: "b", fallbacks: ["c"] }); // a dropped
+    reg.markExhausted("b");
+    reg.markExhausted("c");
+    expect(reg.resolve("coder").model).toBe("a"); // whole chain spent → fall back to the raw chain
   });
 
   it("prompt priority: config > default", () => {
@@ -33,7 +43,7 @@ describe("RoleRegistry.resolve", () => {
 });
 
 describe("runRole", () => {
-  it("resolves and runs runRoleAgent (consumes round-robin)", async () => {
+  it("resolves and runs runRoleAgent with the primary model", async () => {
     const reg = new RoleRegistry({ coder: { models: ["m1", "m2"], systemPrompt: "sp" } });
     const provider = new MockProvider([
       [{ type: "text-delta", text: "ok" }, { type: "done", finishReason: "stop" }],
@@ -123,5 +133,13 @@ describe("RoleRegistry.setRoleModel", () => {
     expect(reg.resolve("refiner").model).toBe("special/refiner"); // explicit per-role applies even to refiner
     reg.setRoleModel("coder", "");
     expect(reg.peekModel("coder")).toBe("live/global"); // cleared → falls back to global override
+  });
+
+  it("accepts a multi-model chain; resolve exposes primary + fallbacks", () => {
+    const reg = new RoleRegistry({ coder: { models: ["m1"], systemPrompt: "p" } });
+    reg.setRoleModel("coder", ["x/primary", "y/fb1", "z/fb2"]);
+    const r = reg.resolve("coder");
+    expect(r.model).toBe("x/primary");
+    expect(r.fallbacks).toEqual(["y/fb1", "z/fb2"]);
   });
 });

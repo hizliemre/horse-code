@@ -63,6 +63,15 @@ export async function readErrorMessage(res: Response): Promise<string> {
   return `omniroute ${res.status}`;
 }
 
+/**
+ * A response status a fallback model might survive: 429 (source rate-limited / subscription exhausted) or
+ * any 5xx (upstream down/overloaded). Auth/validation errors (400/401/403) are the caller's fault — no
+ * fallback will fix them, so they stay non-retryable.
+ */
+export function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
 export class OmniRouteProvider implements Provider {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
@@ -96,12 +105,13 @@ export class OmniRouteProvider implements Provider {
         signal: combined,
       });
     } catch (e) {
-      yield { type: "error", message: e instanceof Error ? e.message : String(e) };
+      // Network/connection failure (DNS, refused, reset) — transient; a fallback may connect.
+      yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
       return;
     }
 
     if (!res.ok) {
-      yield { type: "error", message: await readErrorMessage(res) };
+      yield { type: "error", message: await readErrorMessage(res), retryable: isRetryableStatus(res.status) };
       return;
     }
     const stream = res.body;
@@ -164,7 +174,8 @@ export class OmniRouteProvider implements Provider {
         if (choice.finish_reason) finishReason = mapFinishReason(choice.finish_reason);
       }
     } catch (e) {
-      yield { type: "error", message: e instanceof Error ? e.message : String(e) };
+      // Mid-stream failure or idle-timeout stall — transient; a fallback may complete.
+      yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
       return;
     }
 

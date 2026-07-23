@@ -65,26 +65,53 @@ describe("adjustRoleModels", () => {
     "cx/gpt-5.6-sol-ultra", "cx/gpt-5.5-high",
     "antigravity/gemini-3.5-flash-high", "oc/deepseek-v4-flash",
   ];
+  const primary = (out: { role: string; models: string[] }[]): Record<string, string> =>
+    Object.fromEntries(out.map((r) => [r.role, r.models[0]]));
 
   it("judge gets the single most capable model (fable); analyst gets opus-4-8", () => {
     const out = adjustRoleModels(["judge", "analyst", "planner"], models);
-    const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
+    const map = primary(out);
     expect(map.judge).toMatch(/fable/);
     expect(map.analyst).toBe("cc/claude-opus-4-8");
   });
 
   it("uses codex somewhere (capable tier) and gives fast roles fast models", () => {
     const out = adjustRoleModels(["judge", "analyst", "planner", "coach", "architect", "coder", "designer", "refiner"], models);
-    const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
-    expect(out.some((r) => /codex|gpt-5/.test(r.model))).toBe(true); // codex is drawn into the capable roles
+    const map = primary(out);
+    expect(out.some((r) => /codex|gpt-5/.test(r.models[0]))).toBe(true); // codex is drawn into the coding roles
     expect(map.refiner).toMatch(/flash/); // fast role → fast model
     expect(map.judge).toMatch(/fable/); // most capable stays on judge
   });
 
+  it("assigns a 3-model chain (primary + 2 fallbacks) to every role", () => {
+    const out = adjustRoleModels(["judge", "analyst", "coder", "refiner"], models);
+    for (const r of out) {
+      expect(r.models.length).toBe(3);
+      expect(new Set(r.models).size).toBe(3); // no model repeats within a chain
+    }
+  });
+
+  it("chain fallbacks prefer different sources than the primary", () => {
+    const out = adjustRoleModels(["judge"], models);
+    const chain = out[0].models;
+    const src = (m: string) => (m.startsWith("cc/") || m.startsWith("claude/") ? "claude" : m.split("/")[0]);
+    expect(src(chain[0])).not.toBe(src(chain[1])); // primary and first fallback are on different sources
+  });
+
+  it("spreads coding-role primaries across sources instead of piling on one", () => {
+    // reasoning tier consumes the opuses → coding roles must not ALL land on codex
+    const out = adjustRoleModels(
+      ["judge", "analyst", "planner", "coach", "architect", "coder", "senior-coder", "principal-coder", "designer"],
+      models,
+    );
+    const coding = out.filter((r) => ["coder", "senior-coder", "principal-coder", "designer"].includes(r.role));
+    const sources = new Set(coding.map((r) => r.models[0].split("/")[0]));
+    expect(sources.size).toBeGreaterThan(1); // more than one source used across coding primaries
+  });
+
   it("dedupes the same model across providers (fable counted once)", () => {
-    // one reasoning role → fable; a second distinct model, not the other provider's fable
     const out = adjustRoleModels(["judge", "analyst"], ["a/claude-fable-5", "b/claude-fable-5", "c/claude-opus-4-8"]);
-    const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
+    const map = primary(out);
     expect(map.judge).toMatch(/fable/);
     expect(map.analyst).toMatch(/opus-4-8/); // not the duplicate fable
   });

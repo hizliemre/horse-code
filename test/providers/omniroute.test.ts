@@ -60,7 +60,7 @@ describe("OmniRouteProvider — text streaming + error", () => {
       new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
     const provider = new OmniRouteProvider({ apiKey: "bad", baseUrl: "http://localhost:20128", fetch });
     const events = await drain(provider.chat(req, new AbortController().signal));
-    expect(events).toEqual([{ type: "error", message: "Unauthorized" }]);
+    expect(events).toEqual([{ type: "error", message: "Unauthorized", retryable: false }]); // 401 → no fallback
   });
 
   it("converts a fetch rejection (abort/network) into a single error event", async () => {
@@ -69,7 +69,7 @@ describe("OmniRouteProvider — text streaming + error", () => {
     };
     const provider = new OmniRouteProvider({ baseUrl: "http://localhost:20128", fetch });
     const events = await drain(provider.chat(req, new AbortController().signal));
-    expect(events).toEqual([{ type: "error", message: "The operation was aborted." }]);
+    expect(events).toEqual([{ type: "error", message: "The operation was aborted.", retryable: true }]); // network → retryable
   });
 
   it("does not throw on a mid-stream error (abort/network drop), returns an error event instead", async () => {
@@ -95,7 +95,7 @@ describe("OmniRouteProvider — text streaming + error", () => {
     const events = await drain(provider.chat(req, new AbortController().signal));
     expect(events).toEqual([
       { type: "text-delta", text: "hi" },
-      { type: "error", message: "stream boom" },
+      { type: "error", message: "stream boom", retryable: true }, // mid-stream drop → retryable
     ]);
   });
 });

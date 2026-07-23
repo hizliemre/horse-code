@@ -82,7 +82,7 @@ function teamLeadOpts(deps: WaveEngineDeps, session: WorktreeSession): RoleAgent
   const tools = new ToolRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
   return {
-    provider: deps.provider, model: tl.model, systemPrompt: tl.systemPrompt,
+    provider: deps.provider, ...tl,
     tools, messages: [], permission: deps.permission, approve: deps.approve,
     cwd: session.baseWorktree, signal: deps.signal,
   };

@@ -28,13 +28,12 @@ export const RefinerSchema = z.object({
  * previous "you're Claude" turn gets refined toward Claude, not the project).
  */
 export async function runRefiner(deps: TaskCycleDeps, prompt: string, history: Message[] = []): Promise<RefinerOutput> {
-  const { model, systemPrompt } = deps.roleRegistry.resolve("refiner");
+  const resolved = deps.roleRegistry.resolve("refiner");
   const tools = new ToolRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
   const opts: RoleAgentOptions = {
     provider: deps.provider,
-    model,
-    systemPrompt,
+    ...resolved,
     tools,
     messages: [...history, { role: "user", content: prompt }],
     permission: deps.permission,
