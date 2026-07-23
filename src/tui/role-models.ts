@@ -43,3 +43,25 @@ export function filterModelsForRole(role: string, all: string[]): RoleModelFilte
 
   return { models: all }; // no preference for other roles → show everything
 }
+
+/** Rough capability score from the model id (higher = more capable). Used to auto-pick per role. */
+export function capabilityScore(model: string): number {
+  const s = model.toLowerCase();
+  if (WEAK_RE.test(s)) return 30; // fast/small variants first (gpt-5-mini, claude-haiku, deepseek-flash…)
+  if (/opus/.test(s)) return 100;
+  if (/gpt-5|\bo3\b|o1-pro/.test(s)) return 92;
+  if (/sonnet/.test(s)) return 85;
+  if (/gpt-4|gemini.*pro|deepseek/.test(s)) return 75;
+  return 60; // unknown → assume mid
+}
+
+/**
+ * Auto-assigns a fitting model to each role: strong roles get the most capable model available; the rest
+ * get the best fast/cheap model (falling back to the most capable if no fast model exists).
+ */
+export function adjustRoleModels(roles: string[], models: string[]): { role: string; model: string }[] {
+  if (models.length === 0) return [];
+  const best = [...models].sort((a, b) => capabilityScore(b) - capabilityScore(a))[0];
+  const fast = models.filter((m) => WEAK_RE.test(m)).sort((a, b) => capabilityScore(b) - capabilityScore(a))[0] ?? best;
+  return roles.map((role) => ({ role, model: STRONG_ROLES.has(role) ? best : fast }));
+}

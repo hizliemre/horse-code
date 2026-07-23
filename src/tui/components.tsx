@@ -11,7 +11,7 @@ import type { TurnMeta, RunningAgent } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage, flattenMarkdown, flattenTool } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
-import { filterModelsForRole } from "./role-models.js";
+import { filterModelsForRole, adjustRoleModels } from "./role-models.js";
 import { parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
 import { readClipboardImage } from "./clipboard.js";
@@ -724,7 +724,19 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   };
   const rolesReport = (): string => {
     const rows = (listRoles?.() ?? []).map((r) => `- \`${r.name}\` → ${r.model || "—"}`);
-    return `**Roles & models:**\n${rows.join("\n")}\n\n_Type \`/roles setmodel\` (or \`/model\`) to change the session model._`;
+    return `**Roles & models:**\n${rows.join("\n")}\n\n_\`/roles adjust\` auto-assigns fitting models · \`/roles setmodel\` picks one manually._`;
+  };
+  // /roles adjust → auto-assign a fitting model to every role (strong roles → capable, rest → fast).
+  const doRolesAdjust = (): void => {
+    if (!listModels || !setRoleModel || !listRoles) { controller.note("Role adjust is not available."); return; }
+    controller.note("Adjusting role models…");
+    listModels().then((models) => {
+      const adj = adjustRoleModels(listRoles().map((r) => r.name), models);
+      if (adj.length === 0) { controller.note("No models available to assign."); return; }
+      for (const { role, model } of adj) setRoleModel(role, model);
+      const rows = adj.map(({ role, model }) => `- \`${role}\` → ${model}`);
+      controller.note(`**Roles adjusted** (strong roles → most capable, others → fast/cheap):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any of these._`);
+    }, (e) => controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`));
   };
   // /sessions → list resumable sessions (newest first) as a numbered note.
   const doSessions = (): void => {
@@ -1106,6 +1118,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               const known = COMMANDS.find((c) => c.name === cmd);
               if (known) { runSlash(known); return; }
               if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
+              if (cmd === "/roles adjust") { setScroll(0); setDraft(""); setDraftCursor(0); doRolesAdjust(); return; }
               // /resume N (argument form) → resume the N-th session.
               if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); doResume(trimmed.slice("/resume".length).trim()); return; }
               // /next N (argument form) → run the N-th suggested follow-up.
