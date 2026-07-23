@@ -63,8 +63,10 @@ describe("commitStep", () => {
     await writeFile(join(repo, "a.md"), "# A", "utf8");
     await writeFile(join(repo, "b.md"), "# B", "utf8"); // a second, unrelated change
     const p = new MockProvider([submit("docs: add a.md")]);
-    const msg = await commitFile(deps(p), repo, "a.md");
+    const notes: string[] = [];
+    const msg = await commitFile({ ...deps(p), note: (t) => notes.push(t) }, repo, "a.md");
     expect(msg).toBe("docs: add a.md");
+    expect(notes).toContain("🔖 docs: add a.md"); // surfaced in the chat flow
     // only a.md was committed; b.md is still uncommitted
     expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("docs: add a.md");
     expect((await g(["status", "--porcelain"])).stdout).toContain("b.md");

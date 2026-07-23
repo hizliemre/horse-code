@@ -90,6 +90,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
 
     onActivity: controller.pushActivity,
     onLiveActivity: controller.setLiveActivity, // live "writing <file> · N chars" during long tool generations
+    note: (t) => controller.note(t), // persistent chat-flow notes from deep in the pipeline (auto-commits)
 
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
     pins: () => pinStore.list(), // context pins → coach system prompt

@@ -17,6 +17,8 @@ export interface TaskCycleDeps {
   onActivity?: (a: ToolActivity) => void;
   /** Live "writing <file> · N chars" progress while a tool call is still being generated (long writes). */
   onLiveActivity?: (label: string) => void;
+  /** Persistent chat-flow note sink (wired to the TUI) — e.g. each auto-commit surfaces here. */
+  note?: (text: string) => void;
   /** "By-the-way" note source: the coach loop polls it each turn to fold in mid-run guidance. */
   inbox?: () => string | undefined;
   /** Context pins: short user facts injected into the system prompt every turn (survive compaction). */

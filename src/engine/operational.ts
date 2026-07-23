@@ -46,7 +46,7 @@ export async function commitFile(
   }
   const res = await git(["commit", "-m", message, "--", path], workdir);
   if (res.code !== 0) return undefined;
-  deps.onLiveActivity?.(`committed · ${message}`);
+  deps.note?.(`🔖 ${message}`); // persistent chat-flow note so the user sees each auto-commit
   return message;
 }
 
@@ -70,6 +70,6 @@ export async function commitStep(
   }
   const res = await git(["commit", "-m", message], workdir);
   if (res.code !== 0) return undefined; // commit failed (e.g. hooks) → don't claim success
-  deps.onLiveActivity?.(`committed · ${message}`);
+  deps.note?.(`🔖 ${message}`); // persistent chat-flow note so the user sees each auto-commit
   return message;
 }
