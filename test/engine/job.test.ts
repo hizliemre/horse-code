@@ -255,7 +255,7 @@ describe("runJob", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("on an unexpected throw, session is cleaned up (no orphan worktree)", async () => {
+  it("on an unexpected throw, the worktree is KEPT for inspection (not deleted) + a note points to it", async () => {
     const repo = await initTmpRepo();
     const bare = await mkdtemp(join(tmpdir(), "hc-bare-"));
     try {
@@ -266,11 +266,14 @@ describe("runJob", () => {
       const origClose = mgr.closeSession.bind(mgr);
       mgr.closeSession = async (s) => { closed = true; return origClose(s); };
       mgr.commitMerge = async () => { throw new Error("boom"); }; // early throw after approval
+      const events: { kind: string; text?: string }[] = [];
       const p = jobProvider({ intent: "feature" });
       await expect(
-        runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 }),
+        runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e as never) }),
       ).rejects.toThrow("boom");
-      expect(closed).toBe(true); // catch called closeSession
+      expect(closed).toBe(false); // worktree is NOT deleted on error — kept for inspection
+      expect(existsSync(join(repo, ".horsecode", "worktrees"))).toBe(true); // the worktree dir survives
+      expect(events.some((e) => e.kind === "note" && /kept at/.test(e.text ?? ""))).toBe(true); // note points the user to it
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(bare, { recursive: true, force: true });

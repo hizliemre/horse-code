@@ -125,15 +125,14 @@ export class WorktreeManager {
   }
 
   /**
-   * Rejection path: commit whatever draft the worktree holds to its branch (so the work is NOT lost), then
-   * remove the worktree directory but KEEP the branch. Returns the branch so the caller can tell the user
-   * how to recover the draft. (closeSession, by contrast, deletes the branch too — for approved/merged work.)
+   * Rejection path: commit whatever draft the worktree holds to its branch (so the work is NOT lost) and
+   * KEEP both the worktree directory and the branch, so the user can inspect the produced files directly
+   * under .horsecode/worktrees/<slug>/base. Returns the worktree path. (closeSession, by contrast, deletes
+   * the worktree + branch — but nothing currently calls it on the happy path; worktrees are kept for inspection.)
    */
   async preserveSession(session: WorktreeSession, message: string): Promise<string> {
     await this.commitMerge(session, message); // stage + commit the spec/plan draft onto the branch
-    await rm(session.root, { recursive: true, force: true }); // drop the worktree dir (branch survives in git)
-    await this.git(["worktree", "prune"], this.repoRoot);
-    return session.baseBranch;
+    return session.baseWorktree; // keep the dir + branch → the user browses the files directly
   }
 
   async commitMerge(session: WorktreeSession, message?: string): Promise<void> {

@@ -87,8 +87,8 @@ export async function runJob(
       // Don't discard the rejected draft: commit it to its branch (so the work survives) and tell the user
       // how to inspect it, instead of silently deleting the worktree + branch.
       if (session) {
-        const branch = await deps.manager.preserveSession(session, `hc: rejected ${up.stage} draft`);
-        emit({ kind: "note", text: `📄 The rejected ${up.stage} draft is preserved on branch \`${branch}\`. Inspect it with \`git worktree add ../hc-${up.stage} ${branch}\` (or \`git show ${branch}:<path>\`).` });
+        const dir = await deps.manager.preserveSession(session, `hc: rejected ${up.stage} draft`);
+        emit({ kind: "note", text: `📄 The rejected ${up.stage} draft is kept at \`${dir}\` (branch \`${session.baseBranch}\`) — inspect the files there.` });
       }
       return { kind: "rejected", stage: up.stage, refinedPrompt: up.refinedPrompt };
     }
@@ -126,7 +126,9 @@ export async function runJob(
     emit({ kind: "phase", phase: "done" });
     return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {
-    if (session) await deps.manager.closeSession(session).catch(() => {}); // clean up orphan worktree; don't shadow the original
+    // Keep the worktree on error so the user can inspect whatever the pipeline produced before it failed
+    // (files are already committed per-write). Don't closeSession — that would delete them.
+    if (session) emit({ kind: "note", text: `📄 Work so far is kept at \`${session.baseWorktree}\` (branch \`${session.baseBranch}\`) — inspect the files there.` });
     throw e;
   }
 }
