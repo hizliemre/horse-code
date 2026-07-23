@@ -164,6 +164,10 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const rulesFromMemory = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
   deps0.roleRegistry.setRules(rulesFromMemory);
   deps0.councilRegistry.setRules(rulesFromMemory);
+  // Surface any rules carried over from previous sessions on launch, so the user knows what's in effect
+  // even when they don't (re)state them this session.
+  const carried = rulesFromMemory();
+  if (carried.length) controller.note(`📌 **Active rules** (${carried.length}): ${carried.join(" · ")}`);
   const listMemories = (): MemoryEntry[] => memStore.all();
   const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> => memStore.add(text);
   const removeMemory = (n: number): Promise<string | undefined> => memStore.remove(n);
@@ -291,13 +295,20 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         if (res.kind === "chat") {
           if (res.nextSteps?.length) controller.setNextSteps(res.nextSteps); // coach follow-ups → /next
           const sup = (s: string[]) => (s.length ? ` _(replaced: ${s.join("; ")})_` : "");
+          const dup = (r: { ok: false; error: string }) => r.error === "already remembered"; // already in memory
           // Auto-rules: durable behavioral directives the coach flagged (<rule>) → always-honored memory.
           for (const rule of res.rules ?? []) {
-            void memStore.add(rule, "rule").then((r) => { if (r.ok) controller.note(`📌 **Rule saved** — ${rule}${sup(r.superseded)}`); });
+            void memStore.add(rule, "rule").then((r) => {
+              if (r.ok) controller.note(`📌 **Rule saved** — ${rule}${sup(r.superseded)}`);
+              else if (dup(r)) controller.note(`📌 **Rule already active** — ${rule}`); // re-stated an existing rule
+            });
           }
           // Auto-remember: durable facts the coach flagged (<remember>) → memory store (deduped), with feedback.
           for (const fact of res.remembered ?? []) {
-            void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 **Remembered** — ${fact}${sup(r.superseded)}`); });
+            void memStore.add(fact).then((r) => {
+              if (r.ok) controller.note(`🧠 **Remembered** — ${fact}${sup(r.superseded)}`);
+              else if (dup(r)) controller.note(`🧠 **Already known** — ${fact}`);
+            });
           }
           // Auto-lessons: learnings the coach flagged from a correction/failure → memory (kind "lesson").
           for (const lesson of res.lessons ?? []) {
