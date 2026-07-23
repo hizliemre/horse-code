@@ -159,6 +159,11 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Cross-session memory (per project) → relevant facts retrieved + injected into the coach turn.
   const memStore = new MemoryStore({ home: homedir(), cwd: process.cwd() });
   await memStore.load();
+  // Durable rules (kind "rule") apply to EVERY role — appended to each role's system prompt (spec-kit phases,
+  // council, coach, implementers…), so e.g. "respond in Turkish" holds through the whole pipeline, not just chat.
+  const rulesFromMemory = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
+  deps0.roleRegistry.setRules(rulesFromMemory);
+  deps0.councilRegistry.setRules(rulesFromMemory);
   const listMemories = (): MemoryEntry[] => memStore.all();
   const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> => memStore.add(text);
   const removeMemory = (n: number): Promise<string | undefined> => memStore.remove(n);

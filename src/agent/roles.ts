@@ -18,6 +18,7 @@ export class RoleRegistry {
   private roleOverrides = new Map<string, string[]>(); // per-role model CHAIN override (highest priority)
   private readonly exhausted = new Set<string>(); // models spent this session (429/5xx) → skipped in chains
   private notify?: (msg: string) => void; // fallback UI note sink (wired once the controller exists)
+  private rulesProvider?: () => string[]; // durable behavioral rules → appended to EVERY role's prompt
 
   constructor(
     private roles: Record<string, RoleConfig>,
@@ -28,6 +29,18 @@ export class RoleRegistry {
   /** Wire the fallback-note sink (called after the controller exists). */
   setNotify(fn: (msg: string) => void): void {
     this.notify = fn;
+  }
+
+  /** Wire the durable-rules source (memory). Rules are appended to every role's system prompt (always honored). */
+  setRules(fn: () => string[]): void {
+    this.rulesProvider = fn;
+  }
+
+  /** The rule block to append to a role's prompt — empty when there are no rules. Public so prompt-supplying
+   *  callers (spec-kit phases build their own prompt) can append it too. */
+  ruleSuffix(): string {
+    const rules = this.rulesProvider?.() ?? [];
+    return rules.length ? `\n\nUser rules (ALWAYS honor these):\n${rules.map((r) => `- ${r}`).join("\n")}` : "";
   }
 
   /** Live-swap the model used by every role (session-only; clears on undefined/empty). */
@@ -99,7 +112,7 @@ export class RoleRegistry {
       }
     }
 
-    return { ...this.fallbackOpts(roleName), systemPrompt };
+    return { ...this.fallbackOpts(roleName), systemPrompt: systemPrompt + this.ruleSuffix() };
   }
 }
 

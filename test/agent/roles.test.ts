@@ -143,3 +143,18 @@ describe("RoleRegistry.setRoleModel", () => {
     expect(r.fallbacks).toEqual(["y/fb1", "z/fb2"]);
   });
 });
+
+describe("RoleRegistry.setRules", () => {
+  it("appends durable rules to EVERY role's resolved system prompt; ruleSuffix is empty with no rules", () => {
+    const reg = new RoleRegistry({ coder: { models: ["m"], systemPrompt: "BASE" }, analyst: { models: ["m"] } }, { analyst: "A" });
+    expect(reg.ruleSuffix()).toBe(""); // no rules yet
+    expect(reg.resolve("coder").systemPrompt).toBe("BASE");
+    reg.setRules(() => ["always answer in Turkish", "code comments in English"]);
+    for (const role of ["coder", "analyst"]) {
+      const sp = reg.resolve(role).systemPrompt;
+      expect(sp).toContain("User rules (ALWAYS honor these)");
+      expect(sp).toContain("- always answer in Turkish");
+      expect(sp).toContain("- code comments in English");
+    }
+  });
+});

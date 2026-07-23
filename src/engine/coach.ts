@@ -71,11 +71,9 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     deps.compactionState?.value,
   );
   if (deps.compactionState) deps.compactionState.value = cache;
-  // Cross-session memory. Rules (durable behavioral directives) are ALWAYS injected like pins; facts/lessons
-  // are surfaced by relevance, gated by how full the context already is.
+  // Cross-session memory. Rules (durable behavioral directives) are appended to EVERY role's prompt by the
+  // RoleRegistry (resolve() already added them to `systemPrompt`), so here we only surface facts/lessons by relevance.
   const memories = deps.memory?.() ?? [];
-  const rules = memories.filter((m) => m.kind === "rule");
-  const ruleBlock = rules.length ? `\n\nUser rules (ALWAYS honor these):\n${rules.map((r) => `- ${r.text}`).join("\n")}` : "";
   const selectable = memories.filter((m) => m.kind !== "rule");
   const load = historyTokens(compacted) / COMPACT_MAX_TOKENS;
   const hits = selectable.length ? selectMemories(selectable, prompt, { load }) : [];
@@ -84,7 +82,7 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     provider: deps.provider,
     model,
     fallbacks,
-    systemPrompt: systemPrompt + context + ruleBlock,
+    systemPrompt: systemPrompt + context,
     onExhausted,
     onFallback,
     tools: readOnlyRegistry(deps, { remember: true, mcp: true }),

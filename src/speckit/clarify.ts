@@ -29,7 +29,7 @@ export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 
       fallbacks,
       onExhausted,
       onFallback,
-      systemPrompt: `${p.templates.command("clarify")}\n\nAsk at most one question per turn.`,
+      systemPrompt: `${p.templates.command("clarify")}\n\nAsk at most one question per turn.${p.deps.roleRegistry.ruleSuffix()}`,
       tools: writerRegistry(p.deps.skillRegistry),
       messages: [{
         role: "user",

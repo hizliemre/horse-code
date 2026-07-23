@@ -25,7 +25,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     fallbacks,
     onExhausted,
     onFallback,
-    systemPrompt: `${command}\n\n${SKIP}`,
+    systemPrompt: `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`,
     tools,
     messages: [{ role: "user", content: message }],
     permission: p.deps.permission,
