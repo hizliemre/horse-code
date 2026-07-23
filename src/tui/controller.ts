@@ -142,8 +142,16 @@ export class TuiController {
 
   answer(text: string): void {
     const resolve = this.pendingResolve;
+    const question = this.state.pending?.question;
     this.pendingResolve = undefined;
-    this.state = { ...this.state, pending: undefined };
+    // Record the exchange in the chat flow so the interview history (question + the answer you gave) stays
+    // visible — otherwise each new question replaces the last and the Q&A is lost.
+    let transcript = this.state.transcript;
+    if (question !== undefined) {
+      const clean = question.replace(/^\s*\[(question|permission|human)\]\s*/, "").trim();
+      transcript = [...transcript, { role: "assistant", text: clean }, { role: "user", text }];
+    }
+    this.state = { ...this.state, pending: undefined, transcript };
     this.notify();
     resolve?.(text);
   }

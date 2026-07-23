@@ -237,6 +237,17 @@ describe("TuiController", () => {
     expect(c.getState().pending).toBeUndefined();
   });
 
+  it("answer records the Q&A into the chat flow (question as assistant, answer as user; tag stripped)", () => {
+    const c = new TuiController();
+    void c.ask("[question] What should Section 2 cover?");
+    c.answer("Data Storage");
+    expect(c.getState().transcript).toEqual([
+      { role: "assistant", text: "What should Section 2 cover?" }, // [question] tag stripped
+      { role: "user", text: "Data Storage" },
+    ]);
+    expect(c.getState().pending).toBeUndefined();
+  });
+
   it("board event → runningAgents: IN-PROGRESS cards only, with model + a stable start time", () => {
     let t = 1000;
     const c = new TuiController(() => t);
