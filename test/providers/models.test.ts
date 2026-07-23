@@ -41,6 +41,25 @@ describe("listOmniRouteModels", () => {
     const ids = await listOmniRouteModels({ baseUrl: "http://x", fetch });
     expect(ids).toEqual(["aug/claude-sonnet-4.6", "cc/claude-opus-4-8"]);
   });
+
+  it("with `sources`, keeps only models whose owned_by is an allowed subscription (drops combos/unofficial)", async () => {
+    const fetch = fakeFetch({ data: [
+      { id: "cc/claude-opus-4-8", name: "Opus", owned_by: "claude" },
+      { id: "cx/gpt-5.6-sol", name: "Codex", owned_by: "codex" },
+      { id: "aug/claude-sonnet-4.6", name: "Sonnet", owned_by: "auggie" }, // not a connected source
+      { id: "auto/best-coding", name: "Best Coding", owned_by: "combo" }, // omniroute combo
+      { id: "antigravity/gemini-3.5-pro", name: "Gemini", owned_by: "antigravity" },
+    ] });
+    const ids = await listOmniRouteModels({ baseUrl: "http://x", fetch, sources: ["antigravity", "claude", "codex", "opencode-go"] });
+    expect(ids).toEqual(["antigravity/gemini-3.5-pro", "cc/claude-opus-4-8", "cx/gpt-5.6-sol"]);
+    expect(ids).not.toContain("aug/claude-sonnet-4.6"); // auggie excluded
+    expect(ids).not.toContain("auto/best-coding"); // combo excluded
+  });
+
+  it("empty `sources` = no source filter (all non-free kept)", async () => {
+    const fetch = fakeFetch({ data: [{ id: "aug/x", owned_by: "auggie" }, { id: "cc/y", owned_by: "claude" }] });
+    expect(await listOmniRouteModels({ baseUrl: "http://x", fetch, sources: [] })).toEqual(["aug/x", "cc/y"]);
+  });
 });
 
 describe("isFreeModel", () => {

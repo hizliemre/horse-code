@@ -28,6 +28,9 @@ export interface ResolvedConfig {
   council?: { councilors: CouncilorConfig[] };
   specKit: { version: string };
   mcp: Record<string, McpServerSpec>;
+  /** Allowlist of model sources (omniroute `owned_by`) to show; empty = all (non-free). Only your connected
+   *  subscriptions, e.g. ["antigravity","claude","codex","opencode-go"] — excludes combos + unofficial sources. */
+  modelSources: string[];
 }
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
@@ -40,6 +43,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   roles: {},
   specKit: { version: "v0.13.2" },
   mcp: {},
+  modelSources: [],
 };
 
 // Fields that can be read from files (all optional).
@@ -68,6 +72,7 @@ const fileSchema = z
       })
       .optional(),
     specKit: z.object({ version: z.string() }).optional(),
+    modelSources: z.array(z.string()).optional(),
     mcp: z
       .record(
         z.string(),
@@ -120,6 +125,9 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // mcp: shallow merge of global + project (same-named server overridden by project).
   merged.mcp = { ...(global.mcp ?? {}), ...(projectSafe.mcp ?? {}) };
+
+  // modelSources: "most specific wins" (project's if present).
+  merged.modelSources = projectSafe.modelSources ?? global.modelSources ?? [];
 
   // specKit: "most specific wins" instead of merging (use project's if present).
   merged.specKit = projectSafe.specKit ?? global.specKit ?? DEFAULT_CONFIG.specKit;

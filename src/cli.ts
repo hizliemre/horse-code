@@ -128,7 +128,7 @@ export async function main(argv: string[]): Promise<void> {
   if (!args.prompt) {
     if (useTui) {
       const { runTuiRepl } = await import("./tui/app.js");
-      const listModels = () => listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey });
+      const listModels = () => listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: config.modelSources });
       await runTuiRepl({
         buildDeps,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },

@@ -28,6 +28,7 @@ function baseConfig(over: Partial<ResolvedConfig> = {}): ResolvedConfig {
     roles: {},
     specKit: DEFAULT_CONFIG.specKit,
     mcp: {},
+    modelSources: [],
     ...over,
   };
 }

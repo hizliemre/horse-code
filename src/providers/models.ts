@@ -17,6 +17,7 @@ export async function listOmniRouteModels(opts: {
   baseUrl: string;
   apiKey?: string;
   fetch?: FetchLike;
+  sources?: string[]; // allowlist of `owned_by` sources (your connected subscriptions); empty = all non-free
 }): Promise<string[]> {
   const fetchFn = opts.fetch ?? (globalThis.fetch as FetchLike);
   const headers: Record<string, string> = {};
@@ -24,10 +25,12 @@ export async function listOmniRouteModels(opts: {
   const base = opts.baseUrl.replace(/\/$/, "");
   const res = await fetchFn(`${base}/api/v1/models`, { headers });
   if (!res.ok) throw new Error(`omniroute models ${res.status}`);
-  const body = (await res.json()) as { data?: { id?: unknown; name?: unknown }[] };
+  const body = (await res.json()) as { data?: { id?: unknown; name?: unknown; owned_by?: unknown }[] };
+  const allow = opts.sources && opts.sources.length ? new Set(opts.sources) : undefined;
   const ids = (body.data ?? [])
-    .filter((m): m is { id: string; name?: string } => typeof m.id === "string")
+    .filter((m): m is { id: string; name?: string; owned_by?: string } => typeof m.id === "string")
     .filter((m) => !isFreeModel(m.id, typeof m.name === "string" ? m.name : undefined)) // drop free/unofficial models
+    .filter((m) => !allow || (typeof m.owned_by === "string" && allow.has(m.owned_by))) // only allowed sources
     .map((m) => m.id);
   return [...new Set(ids)].sort();
 }
