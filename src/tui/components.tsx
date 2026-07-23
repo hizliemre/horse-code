@@ -598,8 +598,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
-  coachModel?: string; // the coach's model — always shown in the metrics line under the input
-  refinerModel?: string; // the refiner's model — shown only in the "refining… (model)" status line
+  coachModel?: () => string; // the coach's model — always shown in the metrics line under the input (live getter)
+  refinerModel?: () => string; // the refiner's model — shown only in the "refining… (model)" status line (live getter)
   listModels?: () => Promise<string[]>;
   setModel?: (m: string) => void;
   setRoleModel?: (role: string, models: string[]) => void; // per-role fallback chain (/roles setmodel, adjust)
@@ -998,7 +998,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       </Box>
     ) : (
       <Box flexDirection="column">
-        <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} meta={state.meta} cols={size.cols} />
+        <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} />
         <Board cards={state.cards} />
         {state.pending ? <Prompt question={state.pending.question} onSubmit={(s) => controller.answer(s)} /> : null}
       </Box>
@@ -1122,7 +1122,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
         {showStatus ? (
           <Box flexDirection="column">
-            {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel} meta={state.meta} cols={size.cols} /></Box> : null}
+            {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} /></Box> : null}
             {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
             {boardLines ? <Board cards={state.cards} /> : null}
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
@@ -1211,7 +1211,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             {state.nextSteps.map((s, i) => <Text key={i} dimColor wrap="truncate-end">{`    ${i + 1}. ${s}`}</Text>)}
           </Box>
         ) : null}
-        {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel || model} /> : null}
+        {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel?.() || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}

@@ -64,8 +64,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Surface a chat note whenever a role falls back off an exhausted model (429/5xx).
   deps0.roleRegistry.setNotify((msg) => controller.note(msg));
   // Coach model → always shown under the input; refiner model → shown only in the "refining… (model)" line.
-  const coachModel = deps0.roleRegistry.peekModel("coach") || opts.model;
-  const refinerModel = deps0.roleRegistry.peekModel("refiner") || opts.model;
+  // Getters (not snapshots): re-read on every render so the line reflects live /roles adjust · setmodel changes.
+  const coachModel = (): string => deps0.roleRegistry.peekModel("coach") || opts.model || "";
+  const refinerModel = (): string => deps0.roleRegistry.peekModel("refiner") || opts.model || "";
   // /roles → each role + its full model chain (primary + fallbacks); `model` = chain head, reflects /model.
   const listRoles = (): { name: string; model: string; models: string[] }[] =>
     REQUIRED_ROLES.map((r) => {

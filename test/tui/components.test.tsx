@@ -130,7 +130,7 @@ describe("Ink components", () => {
     c.awaitTask();
     // seed a transcript so /clear has something to clear
     c.submitTask("earlier prompt"); c.endRun("earlier answer");
-    const { stdin, lastFrame, unmount } = render(<App controller={c} fullscreen model="m" coachModel="cc/opus" />);
+    const { stdin, lastFrame, unmount } = render(<App controller={c} fullscreen model="m" coachModel={() => "cc/opus"} />);
     const waitFrame = async (t: string): Promise<void> => {
       for (let i = 0; i < 200 && !clean(lastFrame()).includes(t); i++) await sleep(15);
     };
@@ -266,7 +266,7 @@ describe("Ink components", () => {
     c.awaitTask(); c.submitTask("x"); c.beginRun();
     c.onEvent({ kind: "phase", phase: "upstream" }); // would show "refining…" if not pending
     void c.ask("\n[question] Clarify the scope please");
-    const f = strip(render(<App controller={c} fullscreen model="m" coachModel="cc/opus" />).lastFrame());
+    const f = strip(render(<App controller={c} fullscreen model="m" coachModel={() => "cc/opus"} />).lastFrame());
     expect(f).toContain("? Question");
     expect(f).toContain("Clarify the scope please");
     expect(f).not.toContain("refining"); // the running status is hidden while blocked on the user
@@ -318,7 +318,7 @@ describe("Ink components", () => {
     t = 83_000; // 1m 23s elapsed
     c.awaitTask(); c.submitTask("y"); c.endRun("answer");
     const clean = (f: string | undefined) => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
-    const { lastFrame, unmount } = render(<App controller={c} fullscreen model="m" coachModel="cc/opus" />);
+    const { lastFrame, unmount } = render(<App controller={c} fullscreen model="m" coachModel={() => "cc/opus"} />);
     expect(clean(lastFrame())).toContain("zottired for 1m 23s");
     unmount();
   });
