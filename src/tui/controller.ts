@@ -39,7 +39,7 @@ export interface TuiState {
   meta?: TurnMeta;
   // stage "role": the list is role names (pick which role to set); "model": the list is models.
   // role set (+ stage "model") → the picked model is applied to THAT role; role undefined → session-wide (/model).
-  picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string };
+  picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model"; role?: string; note?: string };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
   attachments: number; // count of pasted images staged for the next prompt (shown under the input)
@@ -275,10 +275,10 @@ export class TuiController {
     this.notify();
   }
 
-  setPickerModels(models: string[]): void {
+  setPickerModels(models: string[], note?: string): void {
     const p = this.state.picker;
     if (!p) return;
-    this.state = { ...this.state, picker: { ...p, models, loading: false } };
+    this.state = { ...this.state, picker: { ...p, models, loading: false, note } };
     this.notify();
   }
 

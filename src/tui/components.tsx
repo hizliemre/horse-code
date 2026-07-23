@@ -11,6 +11,7 @@ import type { TurnMeta, RunningAgent } from "./controller.js";
 import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage, flattenMarkdown, flattenTool } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
+import { filterModelsForRole } from "./role-models.js";
 import { parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
 import { readClipboardImage } from "./clipboard.js";
@@ -849,8 +850,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   useEffect(() => {
     if (state.mode === "picker" && state.picker?.loading && listModels) {
       let cancelled = false;
+      const role = state.picker.role; // set only for /roles setmodel → filter models to fit the role
       listModels().then(
-        (models) => { if (!cancelled) controller.setPickerModels(models); },
+        (models) => {
+          if (cancelled) return;
+          const { models: shown, note } = role ? filterModelsForRole(role, models) : { models, note: undefined };
+          controller.setPickerModels(shown, note);
+        },
         (e) => { if (!cancelled) controller.setPickerError(e instanceof Error ? e.message : String(e)); },
       );
       return () => { cancelled = true; };
@@ -967,6 +973,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
                   error={pk?.error}
                   cols={size.cols}
                   title={isRole ? "Select role" : (pk?.role ? `Model for ${pk.role}` : "Select model")}
+                  note={pk?.note}
                   onSelect={(item) => {
                     if (isRole) { controller.chooseRole(item); return; }                    // step 1 → step 2
                     if (pk?.role) { setRoleModel?.(pk.role, item); controller.applyRoleModel(pk.role, item); return; } // per-role

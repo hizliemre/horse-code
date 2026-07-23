@@ -4,10 +4,10 @@ import { parseKittyKey } from "./keys.js";
 
 const VISIBLE = 8;
 // Total rows the picker occupies (for the fullscreen height reservation in App):
-// border(2) + header(1) + filter(1) + scroll-up(1) + VISIBLE + scroll-down(1) + hint(1).
-export const PICKER_HEIGHT = VISIBLE + 7;
+// border(2) + header(1) + filter(1) + note(1) + scroll-up(1) + VISIBLE + scroll-down(1) + hint(1).
+export const PICKER_HEIGHT = VISIBLE + 8;
 
-export function ModelPicker({ models, current, loading, error, cols, onSelect, onCancel, title = "Select model" }: {
+export function ModelPicker({ models, current, loading, error, cols, onSelect, onCancel, title = "Select model", note }: {
   models: string[];
   current: string;
   loading: boolean;
@@ -16,6 +16,7 @@ export function ModelPicker({ models, current, loading, error, cols, onSelect, o
   onSelect: (model: string) => void;
   onCancel: () => void;
   title?: string; // header label (e.g. "Select model" | "Select role")
+  note?: string; // role-specific guidance (e.g. "use a strong model — fast models hidden")
 }): React.ReactElement {
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState(0);
@@ -87,6 +88,7 @@ export function ModelPicker({ models, current, loading, error, cols, onSelect, o
         <Text color="cyan">{"filter: "}</Text>{filter}<Text inverse>{" "}</Text>
         <Text dimColor>{`   current: ${current}`}</Text>
       </Text>
+      <Text color="#ff9a2e" wrap="truncate-end">{note ? `  ${note}` : " "}</Text>
       <Text dimColor>{above > 0 ? `  ▲ ${above} more` : " "}</Text>
       {body}
       <Text dimColor>{below > 0 ? `  ▼ ${below} more` : " "}</Text>
