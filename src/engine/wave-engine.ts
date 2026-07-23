@@ -2,7 +2,7 @@ import type { Board } from "../board/board.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult, PRAdapter } from "../worktree/manager.js";
 import type { EscalationDeps } from "./escalation.js";
 import { runWaveTask } from "./wave-task.js";
-import { runConflictCouncil } from "./conflict.js";
+import { resolveMergeConflict } from "./conflict.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runTeamLead } from "./team-lead.js";
 import { ToolRegistry } from "../tools/registry.js";
@@ -31,7 +31,7 @@ export function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {
 
 /**
  * Single wave: skip tasks with a blocked dependency; run the rest in parallel with a shared mutex +
- * resolveConflict (runConflictCouncil inside the merge lock); classify the results.
+ * resolveConflict (resolveMergeConflict inside the merge lock); classify the results.
  */
 export async function runWave(
   deps: WaveEngineDeps,
@@ -51,7 +51,7 @@ export async function runWave(
     runnable.map(async (t) => {
       const resolveConflict = async (tw: TaskWorktree, files: string[]): Promise<MergeResult> => {
         try {
-          const r = await runConflictCouncil(deps, session, board, t, tw);
+          const r = await resolveMergeConflict(deps, session, board, t, tw);
           return r.status === "resolved" ? { status: "merged" } : { status: "conflict", files };
         } catch (e) {
           // abort → rethrow (base may be left mid-merge; cleanup is left to session teardown — G/H).

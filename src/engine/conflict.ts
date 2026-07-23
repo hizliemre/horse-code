@@ -5,9 +5,7 @@ import type { WorktreeManager, WorktreeSession, TaskWorktree } from "../worktree
 import type { EscalationDeps } from "./escalation.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
-import { runStructuredRole } from "../agent/structured.js";
-import { readOnlyRegistry, runReviewer } from "./reviewer.js";
-import { ArchitectPlanSchema } from "./council.js";
+import { runReviewer } from "./reviewer.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { readFileTool } from "../tools/read.js";
 import { writeFileTool } from "../tools/write.js";
@@ -48,56 +46,47 @@ async function hasConflictMarkers(baseWorktree: string, files: string[]): Promis
 }
 
 /**
- * Resolves a conflict in the mid-merge base worktree via council: architect diagnosis → senior-coder resolve
- * (no shell) → marker scan + code-reviewer → commitMerge. If unresolved after N rounds, abortMerge + ask a human.
+ * Resolves a conflict in the mid-merge base worktree with the OPERATIONAL agent (the project's version-control
+ * owner): it edits the conflicted files to remove markers + merge both sides → deterministic marker scan +
+ * code-reviewer → commitMerge. If unresolved after N rounds, abortMerge + ask a human. (The `git merge` itself
+ * stays deterministic; only the intelligent conflict resolution is delegated to the agent.)
  */
-export async function runConflictCouncil(
+export async function resolveMergeConflict(
   deps: ConflictDeps,
   session: WorktreeSession,
   board: Board,
   taskId: string,
   task: TaskWorktree,
 ): Promise<ConflictResult> {
-  if (!board.get(taskId)) throw new Error(`runConflictCouncil: unknown task: ${taskId}`);
+  if (!board.get(taskId)) throw new Error(`resolveMergeConflict: unknown task: ${taskId}`);
   const conflicted = await deps.manager.unmergedFiles(session);
   const rounds = Math.max(1, deps.rounds);
   const base = session.baseWorktree;
+  deps.note?.(`🔀 Merge conflict in ${conflicted.join(", ")} — operational resolving…`);
 
   for (;;) {
     for (let i = 0; i < rounds; i++) {
       const card = board.get(taskId)!;
       const notes = card.reviewNotes.length
-        ? `\nHints:\n${card.reviewNotes.map((n) => `- ${n}`).join("\n")}`
+        ? `\nHints from the last attempt:\n${card.reviewNotes.map((n) => `- ${n}`).join("\n")}`
         : "";
 
-      // 1. architect diagnosis (read-only)
-      const arch = deps.roleRegistry.resolve("architect");
-      const diagOpts: RoleAgentOptions = {
-        provider: deps.provider, ...arch,
-        tools: readOnlyRegistry(deps),
-        messages: [{ role: "user", content:
-          `The base worktree has a merge conflict in the following files: ${conflicted.join(", ")}. ` +
-          `Identify the root cause and produce a concrete resolution plan.${notes}` }],
-        permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
-      };
-      const plan = await runStructuredRole(diagOpts, ArchitectPlanSchema);
-      board.appendStage(taskId, { role: "architect", action: "conflict:diagnosed", note: plan.rootCause });
-
-      // 2. senior-coder resolve (no shell)
-      const sr = deps.roleRegistry.resolve("senior-coder");
+      // The operational agent diagnoses + resolves the conflict (file edits only — no shell).
+      const op = deps.roleRegistry.resolve("operational");
       const resolveOpts: RoleAgentOptions = {
-        provider: deps.provider, ...sr,
+        provider: deps.provider, ...op,
         tools: resolverRegistry(deps),
         messages: [{ role: "user", content:
-          `Resolve the merge conflicts in the following files in the base worktree (remove all conflict markers ` +
-          `— <<<<<<< / ======= / >>>>>>> — and merge the two changes consistently): ` +
-          `${conflicted.join(", ")}.\nPlan:\n${plan.plan.map((p) => `- ${p}`).join("\n")}${notes}` }],
+          `A git merge left conflicts in the base worktree. Resolve them: for EACH file, remove all conflict ` +
+          `markers (<<<<<<<, =======, >>>>>>>) and combine BOTH sides' changes so the intent of each is ` +
+          `preserved (don't just pick one side unless the changes are truly incompatible). ` +
+          `Conflicted files: ${conflicted.join(", ")}.${notes}` }],
         permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
       };
       await runToCompletion(resolveOpts);
-      board.appendStage(taskId, { role: "senior-coder", action: "conflict:resolved-attempt" });
+      board.appendStage(taskId, { role: "operational", action: "conflict:resolve-attempt" });
 
-      // 3. verify: deterministic marker scan + code-reviewer
+      // verify: deterministic marker scan + code-reviewer
       if (await hasConflictMarkers(base, conflicted)) {
         // reviewNotes = reason the last round failed (symmetric with the reviewer-fail branch: clear+set)
         board.clearReviewNotes(taskId);
@@ -106,8 +95,9 @@ export async function runConflictCouncil(
       }
       const v = await runReviewer(deps, board.get(taskId)!, base);
       if (v.verdict === "pass") {
-        await deps.manager.commitMerge(session, `hc: conflict resolution — ${card.title}`);
-        board.appendStage(taskId, { role: "code-reviewer", action: "conflict:merged" });
+        await deps.manager.commitMerge(session, `chore: resolve merge conflict — ${card.title}`);
+        board.appendStage(taskId, { role: "operational", action: "conflict:merged" });
+        deps.note?.(`🔖 chore: resolve merge conflict — ${card.title}`);
         return { status: "resolved" };
       }
       board.clearReviewNotes(taskId);
@@ -127,6 +117,7 @@ export async function runConflictCouncil(
     // accept/abandon → abort (no commit with markers/left incomplete)
     await deps.manager.abortMerge(session);
     board.appendStage(taskId, { role: "human", action: "conflict:aborted" });
+    deps.note?.(`⚠ Merge conflict could not be resolved after ${rounds} rounds — aborted.`);
     return { status: "unresolved", task };
   }
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runConflictCouncil } from "../../src/engine/conflict.js";
+import { resolveMergeConflict } from "../../src/engine/conflict.js";
 import type { ConflictDeps } from "../../src/engine/conflict.js";
 import type { AskHuman } from "../../src/engine/escalation.js";
 import { createMergeConflict } from "../worktree/helpers.js";
@@ -34,8 +34,7 @@ const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "ok" }, { type: "done
 interface COpts { rounds?: number; askHuman?: AskHuman; signal?: AbortSignal }
 function cdeps(provider: MockProvider, manager: ConflictDeps["manager"], opts: COpts = {}): ConflictDeps {
   const roles: Record<string, RoleConfig> = {
-    architect: { models: ["m"], systemPrompt: "P-architect" },
-    "senior-coder": { models: ["m"], systemPrompt: "P-senior-coder" },
+    operational: { models: ["m"], systemPrompt: "P-operational" },
     "code-reviewer": { models: ["m"], systemPrompt: "P-reviewer" },
   };
   return {
@@ -54,54 +53,51 @@ function cdeps(provider: MockProvider, manager: ConflictDeps["manager"], opts: C
 const hasContent = (p: MockProvider, needle: string): boolean =>
   p.requests.some((r) => r.messages.some((m) => typeof m.content === "string" && m.content.includes(needle)));
 
-describe("runConflictCouncil", () => {
-  it("resolved: architect → resolver(marker-free) → reviewer pass → commitMerge", async () => {
+describe("resolveMergeConflict", () => {
+  it("resolved: operational resolver(marker-free) → reviewer pass → commitMerge", async () => {
     const c = await createMergeConflict(); repo = c.repo;
     const board = new Board(); board.addCard({ id: "t1", title: "shared" });
     const p = new MockProvider([
-      submit('{"rootCause":"both sides changed shared.txt","plan":["merge them"]}'),
       writeTurn("shared.txt", "MERGED\n"), doneTurn,
       submit('{"verdict":"pass","notes":[]}'),
     ]);
-    const res = await runConflictCouncil(cdeps(p, c.mgr), c.session, board, "t1", c.task);
+    const res = await resolveMergeConflict(cdeps(p, c.mgr), c.session, board, "t1", c.task);
     expect(res.status).toBe("resolved");
     expect(await c.mgr.unmergedFiles(c.session)).toEqual([]);
     expect(await readFile(join(c.session.baseWorktree, "shared.txt"), "utf8")).toBe("MERGED\n");
     const actions = board.get("t1")!.stageHistory.map((s) => s.action);
-    expect(actions).toContain("conflict:diagnosed");
+    expect(actions).toContain("conflict:resolve-attempt"); // operational did the resolution
     expect(actions).toContain("conflict:merged");
+    const roles = board.get("t1")!.stageHistory.map((s) => s.role);
+    expect(roles).toContain("operational");
   });
 
   it("marker remains → fail → retry; second attempt marker-free → resolved", async () => {
     const c = await createMergeConflict(); repo = c.repo;
     const board = new Board(); board.addCard({ id: "t1", title: "shared" });
     const p = new MockProvider([
-      submit('{"rootCause":"x","plan":["y"]}'),
       writeTurn("shared.txt", "<<<<<<< HEAD\nAAA\n=======\nBBB\n>>>>>>>\n"), doneTurn,
-      submit('{"rootCause":"x2","plan":["y2"]}'),
       writeTurn("shared.txt", "MERGED\n"), doneTurn,
       submit('{"verdict":"pass","notes":[]}'),
     ]);
-    const res = await runConflictCouncil(cdeps(p, c.mgr, { rounds: 2 }), c.session, board, "t1", c.task);
+    const res = await resolveMergeConflict(cdeps(p, c.mgr, { rounds: 2 }), c.session, board, "t1", c.task);
     expect(res.status).toBe("resolved");
     expect(await readFile(join(c.session.baseWorktree, "shared.txt"), "utf8")).toBe("MERGED\n");
   });
 
-  it("reviewer fail → retry; hint carries over to the second architect → resolved", async () => {
+  it("reviewer fail → retry; hint carries over to the second operational attempt → resolved", async () => {
     const c = await createMergeConflict(); repo = c.repo;
     const board = new Board(); board.addCard({ id: "t1", title: "shared" });
     const p = new MockProvider([
-      submit('{"rootCause":"x","plan":["y"]}'),
       writeTurn("shared.txt", "M1\n"), doneTurn,
       submit('{"verdict":"fail","notes":["wrong-merge-ABC"]}'),
-      submit('{"rootCause":"x2","plan":["y2"]}'),
       writeTurn("shared.txt", "M2\n"), doneTurn,
       submit('{"verdict":"pass","notes":[]}'),
     ]);
-    const res = await runConflictCouncil(cdeps(p, c.mgr, { rounds: 2 }), c.session, board, "t1", c.task);
+    const res = await resolveMergeConflict(cdeps(p, c.mgr, { rounds: 2 }), c.session, board, "t1", c.task);
     expect(res.status).toBe("resolved");
     expect(await readFile(join(c.session.baseWorktree, "shared.txt"), "utf8")).toBe("M2\n");
-    expect(hasContent(p, "wrong-merge-ABC")).toBe(true);
+    expect(hasContent(p, "wrong-merge-ABC")).toBe(true); // the failure hint reached the operational retry
   });
 
   it("N exhausted → askHuman abandon → abortMerge → {unresolved}", async () => {
@@ -109,28 +105,25 @@ describe("runConflictCouncil", () => {
     const board = new Board(); board.addCard({ id: "t1", title: "shared" });
     const askHuman: AskHuman = async () => ({ action: "abandon" });
     const p = new MockProvider([
-      submit('{"rootCause":"x","plan":["y"]}'),
       writeTurn("shared.txt", "<<<<<<< stays\n"), doneTurn,
     ]);
-    const res = await runConflictCouncil(cdeps(p, c.mgr, { rounds: 1, askHuman }), c.session, board, "t1", c.task);
+    const res = await resolveMergeConflict(cdeps(p, c.mgr, { rounds: 1, askHuman }), c.session, board, "t1", c.task);
     expect(res.status).toBe("unresolved");
     expect(await c.mgr.unmergedFiles(c.session)).toEqual([]); // abortMerge → back to pre-merge state
     expect(board.get("t1")!.stageHistory.map((s) => s.action)).toContain("conflict:aborted");
   });
 
-  it("N exhausted → askHuman retry(hint) → resolved on the second round; hint carries over to architect", async () => {
+  it("N exhausted → askHuman retry(hint) → resolved on the second round; hint carries over to operational", async () => {
     const c = await createMergeConflict(); repo = c.repo;
     const board = new Board(); board.addCard({ id: "t1", title: "shared" });
     let asked = 0;
     const askHuman: AskHuman = async () => { asked++; return { action: "retry", notes: ["human-hint-XYZ"] }; };
     const p = new MockProvider([
-      submit('{"rootCause":"x","plan":["y"]}'),
       writeTurn("shared.txt", "<<<<<<< stays\n"), doneTurn,
-      submit('{"rootCause":"x2","plan":["y2"]}'),
       writeTurn("shared.txt", "MERGED\n"), doneTurn,
       submit('{"verdict":"pass","notes":[]}'),
     ]);
-    const res = await runConflictCouncil(cdeps(p, c.mgr, { rounds: 1, askHuman }), c.session, board, "t1", c.task);
+    const res = await resolveMergeConflict(cdeps(p, c.mgr, { rounds: 1, askHuman }), c.session, board, "t1", c.task);
     expect(res.status).toBe("resolved");
     expect(asked).toBe(1);
     expect(hasContent(p, "human-hint-XYZ")).toBe(true);
@@ -140,9 +133,9 @@ describe("runConflictCouncil", () => {
     const c = await createMergeConflict(); repo = c.repo;
     const ac = new AbortController(); ac.abort();
     const board = new Board(); board.addCard({ id: "t1", title: "shared" });
-    const p = new MockProvider([submit('{"rootCause":"x","plan":["y"]}')]);
+    const p = new MockProvider([writeTurn("shared.txt", "x\n"), doneTurn]);
     await expect(
-      runConflictCouncil(cdeps(p, c.mgr, { signal: ac.signal }), c.session, board, "t1", c.task),
+      resolveMergeConflict(cdeps(p, c.mgr, { signal: ac.signal }), c.session, board, "t1", c.task),
     ).rejects.toThrow();
   });
 
@@ -150,7 +143,7 @@ describe("runConflictCouncil", () => {
     const c = await createMergeConflict(); repo = c.repo;
     const p = new MockProvider([]);
     await expect(
-      runConflictCouncil(cdeps(p, c.mgr), c.session, new Board(), "missing", c.task),
+      resolveMergeConflict(cdeps(p, c.mgr), c.session, new Board(), "missing", c.task),
     ).rejects.toThrow(/unknown task/);
   });
 });
