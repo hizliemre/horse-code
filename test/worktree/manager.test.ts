@@ -38,6 +38,20 @@ describe("WorktreeManager.openSession", () => {
     expect(b.jobSlug).toBe("job-2");
   });
 
+  it("branch lingers but the worktree dir is gone → deduped (no 'branch already exists' crash)", async () => {
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const a = await wm.openSession("main", "job");
+    expect(a.jobSlug).toBe("job");
+    // Remove the worktree dir but KEEP the branch (simulates a cleaned .horsecode/worktrees).
+    await defaultGitRunner(["worktree", "remove", "--force", a.baseWorktree], repo);
+    expect(existsSync(a.baseWorktree)).toBe(false);
+    expect(await branchExists(repo, "hc/job/base")).toBe(true); // branch still lingering
+    const b = await wm.openSession("main", "job"); // must skip the lingering branch, not crash
+    expect(b.jobSlug).toBe("job-2");
+    expect(await branchExists(repo, "hc/job-2/base")).toBe(true);
+  });
+
   it("fresh repo, branch-name mismatch (real 'master', asked for 'main') → bootstraps + bases off HEAD", async () => {
     // Reproduces the reported crash: `git init` leaves an unborn 'master' HEAD, horse-code guesses 'main',
     // and `git worktree add … main` fails with "invalid reference: main". openSession must recover.

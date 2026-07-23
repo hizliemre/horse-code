@@ -74,7 +74,12 @@ export class WorktreeManager {
     await mkdir(worktreesDir, { recursive: true });
     await writeFile(join(worktreesDir, ".gitignore"), "*\n", "utf8");
 
-    const jobSlug = uniqueSlug(toSlug(jobName), (s) => existsSync(join(worktreesDir, s)));
+    // Make the slug unique against BOTH the worktree directory AND existing hc/ branches: a prior run's
+    // worktree dir may be gone while its branch `hc/<slug>/base` still lingers in git, which would make
+    // `git worktree add -b` fail with "a branch named … already exists".
+    const listed = await this.git(["for-each-ref", "--format=%(refname:short)", "refs/heads/hc/"], this.repoRoot);
+    const branches = new Set(listed.stdout.split("\n").map((s) => s.trim()).filter(Boolean));
+    const jobSlug = uniqueSlug(toSlug(jobName), (s) => existsSync(join(worktreesDir, s)) || branches.has(`hc/${s}/base`));
     const root = join(worktreesDir, jobSlug);
     const baseWorktree = join(root, "base");
     const baseBranch = `hc/${jobSlug}/base`;
