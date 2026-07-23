@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { filterModelsForRole, capabilityScore, adjustRoleModels } from "../../src/tui/role-models.js";
+import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels } from "../../src/tui/role-models.js";
 
 const ALL = [
   "cc/claude-opus-4-8",
@@ -10,13 +10,11 @@ const ALL = [
 ];
 
 describe("filterModelsForRole", () => {
-  it("strong roles (analyst/planner) hide weak/fast models and explain why", () => {
-    const r = filterModelsForRole("analyst", ALL);
+  it("capable roles (analyst/judge) hide weak/fast models and explain why", () => {
+    const r = filterModelsForRole("judge", ALL);
     expect(r.models).toEqual(["cc/claude-opus-4-8", "cc/claude-sonnet-5"]);
-    expect(r.models).not.toContain("opencode-go/deepseek-v4-flash");
-    expect(r.models).not.toContain("provider/gpt-5-mini");
-    expect(r.models).not.toContain("provider/llama-8b");
-    expect(r.note).toMatch(/strong model/i);
+    expect(r.models).not.toContain("provider/gpt-5-mini"); // "mini" → fast
+    expect(r.note).toMatch(/capable model/i);
     expect(r.note).toContain("2 of 5");
   });
 
@@ -26,64 +24,72 @@ describe("filterModelsForRole", () => {
     expect(r.note).toMatch(/fast/i);
   });
 
-  it("other roles (coder) are unfiltered, no note", () => {
-    expect(filterModelsForRole("coder", ALL)).toEqual({ models: ALL });
-  });
-
   it("never strands the user: if the filter would empty the list, show all with a note", () => {
     const onlyWeak = ["a/flash", "b/mini"];
     const r = filterModelsForRole("planner", onlyWeak);
-    expect(r.models).toEqual(onlyWeak); // fell back to all
+    expect(r.models).toEqual(onlyWeak);
     expect(r.note).toMatch(/No strong models detected/i);
   });
 });
 
 describe("capabilityScore", () => {
-  it("ranks opus > sonnet > mid > fast", () => {
-    expect(capabilityScore("cc/claude-opus-4-8")).toBeGreaterThan(capabilityScore("cc/claude-sonnet-5"));
-    expect(capabilityScore("cc/claude-sonnet-5")).toBeGreaterThan(capabilityScore("opencode-go/deepseek-v4-flash"));
-    expect(capabilityScore("provider/gpt-5-mini")).toBe(30); // "mini" → fast tier, despite gpt-5
-    expect(capabilityScore("some/deepseek-v4")).toBe(75); // non-flash deepseek → mid
+  it("fable is the top, opus is version-aware, sonnet/codex below", () => {
+    expect(capabilityScore("cc/claude-fable-5")).toBe(100);
+    expect(capabilityScore("cc/claude-opus-4-8")).toBeGreaterThan(capabilityScore("cc/claude-opus-4-5"));
+    expect(capabilityScore("cc/claude-fable-5")).toBeGreaterThan(capabilityScore("cc/claude-opus-4-8"));
+    expect(capabilityScore("cc/claude-opus-4-8")).toBeGreaterThan(capabilityScore("cx/gpt-5.6-sol-high"));
+  });
+
+  it("Gemini is capable (not fast) but Gemini-flash IS fast", () => {
+    expect(capabilityScore("antigravity/gemini-3.1-pro-high")).toBeGreaterThan(30); // not fast
+    expect(capabilityScore("antigravity/gemini-3.5-flash-high")).toBeLessThan(30); // flash → fast tier
+  });
+
+  it("codex effort suffix nudges the score (ultra > low)", () => {
+    expect(capabilityScore("cx/gpt-5.6-sol-ultra")).toBeGreaterThan(capabilityScore("cx/gpt-5.6-sol-low"));
+  });
+});
+
+describe("baseModel", () => {
+  it("collapses nested provider prefixes + variant/date suffixes", () => {
+    expect(baseModel("no-think/cc/claude-opus-4-8")).toBe(baseModel("cc/claude-opus-4-8"));
+    expect(baseModel("cc/claude-opus-4-5-20251101")).toBe("claude-opus-4-5");
+    expect(baseModel("cx/gpt-5.6-sol-ultra")).toBe("gpt-5.6-sol");
   });
 });
 
 describe("adjustRoleModels", () => {
-  it("spreads strong roles across providers (each a top model of a different source), not all on one", () => {
-    const models = [
-      "antigravity/opus-x", "antigravity/sonnet-x",
-      "claude/opus-4-8", "codex/gpt-5", "opencode-go/deepseek-v4",
-    ];
-    const out = adjustRoleModels(["analyst", "planner", "coach", "judge"], models);
-    const providers = out.map((r) => r.model.split("/")[0]);
-    // 4 strong roles → 4 distinct providers (no single source hogs them all)
-    expect(new Set(providers).size).toBe(4);
-    expect(providers.filter((p) => p === "antigravity")).toHaveLength(1); // antigravity gets one, not all
-  });
+  const models = [
+    "cc/claude-fable-5", "claude/claude-fable-5", // duplicate fable across providers
+    "cc/claude-opus-4-8", "cc/claude-opus-4-6", "cc/claude-sonnet-5",
+    "cx/gpt-5.6-sol-ultra", "cx/gpt-5.5-high",
+    "antigravity/gemini-3.5-flash-high", "oc/deepseek-v4-flash",
+  ];
 
-  it("strong roles get capable (non-fast) models; fast roles get fast models", () => {
-    const models = ["a/opus", "b/sonnet", "c/flash", "d/mini"];
-    const out = adjustRoleModels(["analyst", "planner", "refiner", "team-lead"], models);
+  it("judge gets the single most capable model (fable); analyst gets opus-4-8", () => {
+    const out = adjustRoleModels(["judge", "analyst", "planner"], models);
     const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
-    expect(["a/opus", "b/sonnet"]).toContain(map.analyst);
-    expect(["a/opus", "b/sonnet"]).toContain(map.planner);
-    expect(map.analyst).not.toBe(map.planner); // spread, not the same model twice
-    expect(["c/flash", "d/mini"]).toContain(map.refiner);
-    expect(["c/flash", "d/mini"]).toContain(map["team-lead"]);
+    expect(map.judge).toMatch(/fable/);
+    expect(map.analyst).toBe("cc/claude-opus-4-8");
   });
 
-  it("round-robins (wraps) when there are more roles than models in a tier", () => {
-    const out = adjustRoleModels(["analyst", "planner", "coach"], ["a/opus", "b/sonnet"]);
-    const strong = out.map((r) => r.model);
-    expect(strong).toEqual(["a/opus", "b/sonnet", "a/opus"]); // wraps back around
-  });
-
-  it("falls back to the capable pool for fast roles when no fast model exists", () => {
-    const out = adjustRoleModels(["refiner", "analyst"], ["a/opus", "b/sonnet"]);
+  it("uses codex somewhere (capable tier) and gives fast roles fast models", () => {
+    const out = adjustRoleModels(["judge", "analyst", "planner", "coach", "architect", "coder", "designer", "refiner"], models);
     const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
-    expect(["a/opus", "b/sonnet"]).toContain(map.refiner); // no fast model → uses capable pool
+    expect(out.some((r) => /codex|gpt-5/.test(r.model))).toBe(true); // codex is drawn into the capable roles
+    expect(map.refiner).toMatch(/flash/); // fast role → fast model
+    expect(map.judge).toMatch(/fable/); // most capable stays on judge
+  });
+
+  it("dedupes the same model across providers (fable counted once)", () => {
+    // one reasoning role → fable; a second distinct model, not the other provider's fable
+    const out = adjustRoleModels(["judge", "analyst"], ["a/claude-fable-5", "b/claude-fable-5", "c/claude-opus-4-8"]);
+    const map = Object.fromEntries(out.map((r) => [r.role, r.model]));
+    expect(map.judge).toMatch(/fable/);
+    expect(map.analyst).toMatch(/opus-4-8/); // not the duplicate fable
   });
 
   it("empty model list → no assignments", () => {
-    expect(adjustRoleModels(["analyst"], [])).toEqual([]);
+    expect(adjustRoleModels(["judge"], [])).toEqual([]);
   });
 });
