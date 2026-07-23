@@ -1,17 +1,19 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { deriveAnchors, deriveTags, supersedes, type MemoryEntry } from "../engine/memory-retrieval.js";
 
 export interface MemoryStoreOpts {
-  home: string;
+  home: string; // kept for API compatibility; memory is now project-local, not under home
   cwd: string;
   now?: () => number;
 }
 
 /**
- * Per-project cross-session memory: durable facts the user asks to remember, retrieved lexically and
- * injected into later turns. Stored as JSONL at ~/.horsecode/projects/<hash(cwd)>/memory.jsonl.
+ * Per-project cross-session memory: durable facts/rules/lessons the user asks to remember, retrieved lexically
+ * and injected into later turns. Stored PROJECT-LOCAL at <cwd>/.horsecode/memory.jsonl so it is committed with
+ * the repo and shared with the team (a teammate who pulls the project gets the memory too) — not in the global
+ * home. A sibling .gitignore keeps the secret-bearing config out of git while allowing memory.jsonl to be shared.
  */
 export class MemoryStore {
   private readonly file: string;
@@ -28,8 +30,7 @@ export class MemoryStore {
 
   constructor(opts: MemoryStoreOpts) {
     this.now = opts.now ?? ((): number => Date.now());
-    const hash = createHash("sha256").update(opts.cwd).digest("hex").slice(0, 16);
-    this.file = join(opts.home, ".horsecode", "projects", hash, "memory.jsonl");
+    this.file = join(opts.cwd, ".horsecode", "memory.jsonl");
   }
 
   /** Load entries from disk (memoized). Corrupt lines are skipped. */
@@ -55,7 +56,13 @@ export class MemoryStore {
   }
 
   private async persist(): Promise<void> {
-    await mkdir(dirname(this.file), { recursive: true });
+    const dir = dirname(this.file);
+    await mkdir(dir, { recursive: true });
+    // Keep the secret-bearing local state out of git, but let memory.jsonl be committed + shared with the team.
+    const gi = join(dir, ".gitignore");
+    if (!existsSync(gi)) {
+      await writeFile(gi, "# horse-code: local/secret state stays out of git; memory.jsonl is shared\nconfig.json\nsources.json\nworktrees/\n", "utf8");
+    }
     await writeFile(this.file, (this.cache ?? []).map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
   }
 

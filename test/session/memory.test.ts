@@ -8,7 +8,7 @@ let home: string;
 let t = 0;
 beforeEach(async () => { home = await mkdtemp(join(tmpdir(), "hc-mem-")); t = 0; });
 afterEach(async () => { await rm(home, { recursive: true, force: true }); });
-const store = (cwd = "/proj/a"): MemoryStore => new MemoryStore({ home, cwd, now: () => ++t });
+const store = (cwd = join(home, "proj-a")): MemoryStore => new MemoryStore({ home, cwd, now: () => ++t });
 
 describe("MemoryStore", () => {
   it("adds a fact with derived anchors/tags and persists across instances", async () => {
@@ -98,8 +98,8 @@ describe("MemoryStore", () => {
   });
 
   it("scopes memory per project", async () => {
-    await store("/proj/a").add("only in a");
-    expect(await store("/proj/b").load()).toEqual([]);
+    await store(join(home, "a")).add("only in a");
+    expect(await store(join(home, "b")).load()).toEqual([]);
   });
 
   it("forgets the N-th memory (1-based); out of range → undefined", async () => {
