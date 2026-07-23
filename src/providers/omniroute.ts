@@ -8,6 +8,32 @@ export interface OmniRouteOptions {
   apiKey?: string;
   baseUrl: string;
   fetch?: FetchLike;
+  idleTimeoutMs?: number; // abort a stream that goes silent this long (guards against indefinite hangs)
+}
+
+/**
+ * Wraps an async iterable with an idle-timeout: if no value arrives within `idleMs`, it invokes `onIdle`
+ * (to abort the underlying request) and throws — turning a silent, indefinite stream stall into a real error.
+ */
+export async function* withIdleTimeout<T>(source: AsyncIterable<T>, idleMs: number, onIdle?: () => void): AsyncIterable<T> {
+  const it = source[Symbol.asyncIterator]();
+  for (;;) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const idle = new Promise<"idle">((resolve) => { timer = setTimeout(() => resolve("idle"), idleMs); });
+    const next = it.next();
+    next.catch(() => { /* the timeout may win first — don't leak an unhandled rejection */ });
+    const winner = await Promise.race([next, idle]);
+    if (timer) clearTimeout(timer);
+    if (winner === "idle") {
+      onIdle?.(); // abort the underlying request → in production this unblocks the pending read
+      // Fire-and-forget cleanup: do NOT await it.return() — the generator is parked on a read that may
+      // never settle, so awaiting would hang the very timeout we're enforcing.
+      void Promise.resolve(it.return?.(undefined)).catch(() => { /* ignore */ });
+      throw new Error(`omniroute: stream stalled (no data for ${Math.round(idleMs / 1000)}s) — aborted`);
+    }
+    if (winner.done) return;
+    yield winner.value;
+  }
 }
 
 interface ToolCallAccumulator {
@@ -41,11 +67,13 @@ export class OmniRouteProvider implements Provider {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
   private readonly fetchFn: FetchLike;
+  private readonly idleMs: number;
 
   constructor(opts: OmniRouteOptions) {
     this.apiKey = opts.apiKey;
     this.baseUrl = opts.baseUrl.replace(/\/$/, ""); // strip trailing slash
     this.fetchFn = opts.fetch ?? (globalThis.fetch as FetchLike);
+    this.idleMs = opts.idleTimeoutMs ?? 120_000; // 2 min of total silence → treat as a hang
   }
 
   async *chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent> {
@@ -55,13 +83,17 @@ export class OmniRouteProvider implements Provider {
     };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
+    // Abort the request when EITHER the caller aborts (Ctrl+C) OR the stream goes idle too long.
+    const idleAc = new AbortController();
+    const combined = AbortSignal.any([signal, idleAc.signal]);
+
     let res: Response;
     try {
       res = await this.fetchFn(`${this.baseUrl}/api/v1/chat/completions`, {
         method: "POST",
         headers,
         body: JSON.stringify(toOpenAIBody(req)),
-        signal,
+        signal: combined,
       });
     } catch (e) {
       yield { type: "error", message: e instanceof Error ? e.message : String(e) };
@@ -88,7 +120,8 @@ export class OmniRouteProvider implements Provider {
     const billed: { in?: number; out?: number } = {};
 
     try {
-      for await (const line of parseSSE(stream)) {
+      // Idle-timeout guard: if omniroute/the upstream model stalls mid-stream, abort instead of hanging.
+      for await (const line of withIdleTimeout(parseSSE(stream), this.idleMs, () => idleAc.abort())) {
         if (line.kind === "comment") {
           const m = line.value.match(/^x-omniroute-tokens-(in|out)\s*=\s*(\d+)/i);
           if (m) billed[m[1] === "in" ? "in" : "out"] = Number(m[2]);
