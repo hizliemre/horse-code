@@ -594,7 +594,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -604,6 +604,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   setModel?: (m: string) => void;
   setRoleModel?: (role: string, models: string[]) => void; // per-role fallback chain (/roles setmodel, adjust)
   listRoles?: () => { name: string; model: string; models: string[] }[]; // /roles → role → chain table
+  adjustRoles?: () => Promise<void>; // /roles adjust → LLM-tuned assignment (streams rationale + applies chains)
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
   listPins?: () => string[]; // /pins
@@ -733,8 +734,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const rows = (listRoles?.() ?? []).map((r) => chainRows(r.name, r.models?.length ? r.models : r.model ? [r.model] : []));
     return `**Roles & fallback chains:**\n${rows.join("\n")}\n\n_\`/roles adjust\` auto-assigns 3-model chains · \`/roles setmodel\` builds one manually._`;
   };
-  // /roles adjust → auto-assign a fallback CHAIN (primary + 2 fallbacks) to every role, sources spread.
+  // /roles adjust → prefer the LLM-tuned assignment (reasons in chat); fall back to the local heuristic.
   const doRolesAdjust = (): void => {
+    if (adjustRoles) { void adjustRoles(); return; } // LLM-driven: streams rationale + applies chains
     if (!listModels || !setRoleModel || !listRoles) { controller.note("Role adjust is not available."); return; }
     controller.note("Adjusting role models…");
     listModels().then((models) => {

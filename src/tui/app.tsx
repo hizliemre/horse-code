@@ -4,6 +4,7 @@ import type { LineReader } from "../terminal.js";
 import { makeAskUser } from "../terminal.js";
 import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
+import { tuneRoleModels } from "../engine/role-tuner.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { firewallProvider } from "../providers/firewall.js";
@@ -89,6 +90,22 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
+  // /roles adjust → a capable model reasons through role→model assignments (rationale shown in chat), then
+  // the validated 3-model chains are applied to every role. Falls back to the heuristic on any failure.
+  const adjustRoles = async (): Promise<void> => {
+    if (!opts.listModels) { controller.note("Role adjust is not available."); return; }
+    let models: string[];
+    try { models = await opts.listModels(); }
+    catch (e) { controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`); return; }
+    if (!models.length) { controller.note("No models available to assign."); return; }
+    const roleNames = listRoles().map((r) => r.name);
+    controller.note("🤖 Discussing role assignments with the strongest model — reasoning over cost, capability, and source diversity…");
+    const { reasoning, chains, tuner } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames });
+    controller.note(`**Assignment reasoning** (via \`${tuner}\`):\n${reasoning}`);
+    for (const { role, models: ch } of chains) deps0.roleRegistry.setRoleModel(role, ch);
+    const rows = chains.map(({ role, models: ch }) => [`- \`${role}\` → ${ch[0] ?? "—"}`, ...ch.slice(1).map((m) => `    ↳ ${m}`)].join("\n"));
+    controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any chain._`);
+  };
   // Session persistence (per project) → the transcript is saved after every turn so a session can be resumed.
   const store = new SessionStore({ home: homedir(), cwd: process.cwd() });
   const listSessions = (): Promise<{ id: string; title: string; updatedAt: number; count: number }[]> =>
@@ -195,7 +212,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={(role, models) => deps0.roleRegistry.setRoleModel(role, models)} listRoles={listRoles}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={(role, models) => deps0.roleRegistry.setRoleModel(role, models)} listRoles={listRoles} adjustRoles={adjustRoles}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}

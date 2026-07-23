@@ -14,7 +14,7 @@ describe("filterModelsForRole", () => {
     const r = filterModelsForRole("judge", ALL);
     expect(r.models).toEqual(["cc/claude-opus-4-8", "cc/claude-sonnet-5"]);
     expect(r.models).not.toContain("provider/gpt-5-mini"); // "mini" → fast
-    expect(r.note).toMatch(/capable model/i);
+    expect(r.note).toMatch(/most capable|flagship/i);
     expect(r.note).toContain("2 of 5");
   });
 

@@ -6,27 +6,37 @@
 // match "geMINI" (Gemini is a capable family, not a fast one).
 const WEAK_RE = /\b(flash|mini|nano|haiku|lite|small|turbo|fast|\d{1,2}b)\b/i;
 
-// Role tiers. Reasoning roles get the most capable models; coding roles get strong coding models; fast
-// roles (classify/route/coordinate) get cheap ones. Order within a tier = priority (first gets the best).
-const REASONING_ROLES = ["judge", "analyst", "planner", "coach", "architect"];
-const CODING_ROLES = ["senior-coder", "principal-coder", "senior-designer", "coder", "designer", "code-reviewer"];
+// Role tiers, by the model heft each role deserves:
+//  flagship — highest-stakes, low-volume judgment: the most capable (and costly) model is worth it.
+//  strong   — serious reasoning / senior review: an Opus-tier model, but not the flagship.
+//  mid      — high-volume or interactive work: a capable, efficient model (Sonnet-tier); NEVER the flagship,
+//             which would be wasteful (and slow) at that volume.
+//  fast     — classify/route/coordinate: a cheap, fast model.
+const FLAGSHIP_ROLES = ["judge", "principal-coder"];
+const STRONG_ROLES = ["analyst", "planner", "architect", "senior-coder", "senior-designer"];
+const MID_ROLES = ["coach", "coder", "designer", "code-reviewer"];
 const FAST_ROLES = ["refiner", "router", "project-manager", "team-lead"];
-const CAPABLE_ROLES = new Set([...REASONING_ROLES, ...CODING_ROLES]); // roles that want a non-fast model
+const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]); // want a non-fast model
 
-const ROLE_ADVICE: Record<string, string> = {
-  judge: "The judge critiques specs/plans — use the most capable model (e.g. fable/opus).",
-  analyst: "Analyst authors the spec and constitution — use a strong model.",
-  planner: "Planner designs the implementation — use a strong model.",
-  coach: "The coach is your main assistant — a strong model is recommended.",
-  architect: "Architect makes design decisions — use a strong model.",
-  "senior-coder": "Senior reviewer — a strong model catches more.",
-  "senior-designer": "Senior reviewer — a strong model catches more.",
-  "principal-coder": "Principal coder — a strong coding model is recommended.",
-  coder: "Coder writes the implementation — a capable coding model helps.",
-  designer: "Designer builds the UI — a capable model helps.",
-  refiner: "The refiner only classifies intent and rewrites the prompt — a fast, cheap model is ideal.",
-  router: "The router only picks a path — a fast, cheap model is ideal.",
+// Human-readable role profiles — the picker advice AND the brief the LLM tuner reasons over.
+export const ROLE_PROFILES: Record<string, string> = {
+  refiner: "Classifies intent and rewrites the prompt every turn — highest call volume, trivial task → a fast, cheap model.",
+  router: "Picks coder-vs-designer for a task — tiny and frequent → fast, cheap.",
+  "project-manager": "Turns a task list into board items — light and structured → fast, cheap.",
+  "team-lead": "Coordinates implementation waves — light orchestration → fast, cheap.",
+  coach: "Your main interactive assistant, used constantly all session (highest interaction volume) → a capable but EFFICIENT model, never the costly flagship.",
+  analyst: "Authors the spec and constitution → a strong reasoning model (Opus-tier).",
+  planner: "Designs the implementation plan → a strong reasoning model (Opus-tier).",
+  architect: "Diagnoses stuck tasks and produces recovery plans — serious design work → a strong model.",
+  judge: "Critiques specs/plans and makes the final review call — low volume, high stakes → the most capable flagship model.",
+  coder: "Writes the bulk of the implementation — very high work volume → a good high-throughput coding model (Sonnet-tier), NOT the flagship (wasteful at this volume).",
+  "senior-coder": "Reviews and revises above the coder — must be MORE capable than the coder (Opus-tier).",
+  "principal-coder": "Final code decision-maker — low volume, high stakes → the flagship is appropriate.",
+  designer: "Builds UI — high volume → a capable coding/design model, not the flagship.",
+  "senior-designer": "Senior UI reviewer — more capable than the designer.",
+  "code-reviewer": "Reviews diffs — moderate volume → a solid capable model.",
 };
+const ROLE_ADVICE = ROLE_PROFILES; // picker note reuses the profiles
 
 export interface RoleModelFilter {
   models: string[];
@@ -79,6 +89,15 @@ export function capabilityScore(model: string): number {
   if (/gpt-4|gemini.*pro/.test(s)) return 65;
   if (/deepseek/.test(s)) return 55;
   return 50; // unknown → assume mid
+}
+
+/** Which heft band a model sits in — drives which tier of role it's assigned to. */
+export function modelBand(model: string): "flagship" | "strong" | "mid" | "fast" {
+  if (WEAK_RE.test(model)) return "fast";
+  const s = capabilityScore(model);
+  if (s >= 95) return "flagship"; // fable / mythos
+  if (s >= 84) return "strong"; // opus, codex ultra/high
+  return "mid"; // sonnet, gpt-mid, gemini-pro, deepseek
 }
 
 /** Collapses a model id to a base identity (drop provider prefixes, effort/variant suffixes, date stamps). */
@@ -154,11 +173,14 @@ function pickFallbacks(primary: string, pool: string[], n: number): string[] {
 export const FALLBACK_COUNT = 2;
 
 /**
- * Auto-assigns a fallback CHAIN (primary + {@link FALLBACK_COUNT} fallbacks) to every role. Reasoning roles
- * get the most capable models best-first (judge → fable, analyst → opus-4-8, …); coding roles are spread
- * across subscriptions (source-interleaved over the leftovers, so they don't all pile on one source like
- * codex); fast roles get the cheap models. Fallbacks prefer different sources so an exhausted source drops
- * cleanly to another. Duplicate models across providers are collapsed so distinct models are used.
+ * Auto-assigns a fallback CHAIN (primary + {@link FALLBACK_COUNT} fallbacks) to every role, by tier:
+ *  - flagship roles (judge, principal-coder) → the most capable model (judge → fable);
+ *  - strong roles (analyst, planner, architect, senior-*) → Opus-tier, source-spread;
+ *  - mid roles (coach, coder, designer, code-reviewer) → capable-but-NOT-flagship, source-spread — so the
+ *    heavy-volume/interactive roles never burn the costly flagship, and neither do their fallbacks;
+ *  - fast roles → cheap models.
+ * Fallbacks prefer a different source so an exhausted source drops cleanly. This is the deterministic
+ * backstop; {@link ROLE_PROFILES} lets the LLM tuner refine it with reasoning.
  */
 export function adjustRoleModels(roles: string[], models: string[]): { role: string; models: string[] }[] {
   if (models.length === 0) return [];
@@ -166,30 +188,32 @@ export function adjustRoleModels(roles: string[], models: string[]): { role: str
   const fast = dedupBest(models.filter((m) => WEAK_RE.test(m)));
   const capablePool = capable.length ? capable : fast; // no capable models → fall back to fast
   const fastPool = fast.length ? fast : capable; // no fast models → fall back to capable
+  const nonFlagship = capablePool.filter((m) => modelBand(m) !== "flagship");
+  const strongPool = capablePool.filter((m) => modelBand(m) === "strong");
+  const midPool = capablePool.filter((m) => modelBand(m) === "mid");
 
   const wanted = new Set(roles);
-  const known = new Set([...REASONING_ROLES, ...CODING_ROLES, ...FAST_ROLES]);
-  const reasoningOrder = REASONING_ROLES.filter((r) => wanted.has(r)).concat(roles.filter((r) => !known.has(r)));
-  const codingOrder = CODING_ROLES.filter((r) => wanted.has(r));
-  const fastOrder = FAST_ROLES.filter((r) => wanted.has(r));
-
+  const known = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES, ...FAST_ROLES]);
   const primary = new Map<string, string>();
-  const usedCap = new Set<string>();
-  // Reasoning roles: capability-greedy — the strongest models, best-first.
-  reasoningOrder.forEach((r, i) => { const m = capablePool[i % capablePool.length]; primary.set(r, m); usedCap.add(m); });
-  // Coding roles: source-interleaved so they spread across subscriptions rather than all landing on whichever
-  // source dominates (e.g. every coder → codex). Models the reasoning tier didn't take come first (fresh), then
-  // the rest of the capable pool — so a thin leftover still yields a diverse, non-repeating spread.
-  const leftover = capablePool.filter((m) => !usedCap.has(m));
-  const spread = interleaveBySource([...new Set([...leftover, ...capablePool])]);
-  codingOrder.forEach((r, i) => primary.set(r, spread[i % spread.length]));
+
+  // Flagship roles: the most capable models, greedy (judge → fable, principal → next-most-capable).
+  const flagSrc = capablePool; // top of the capable pool is the flagship
+  FLAGSHIP_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, flagSrc[i % flagSrc.length]));
+  // Strong roles (+ any unknown role): Opus-tier, source-spread so they don't pile on one subscription.
+  const strongSrc = interleaveBySource(strongPool.length ? strongPool : nonFlagship.length ? nonFlagship : capablePool);
+  STRONG_ROLES.filter((r) => wanted.has(r)).concat(roles.filter((r) => !known.has(r)))
+    .forEach((r, i) => primary.set(r, strongSrc[i % strongSrc.length]));
+  // Mid roles: capable-but-NOT-flagship, source-spread (coach/coder must not get the flagship).
+  const midSrc = interleaveBySource(midPool.length ? midPool : nonFlagship.length ? nonFlagship : capablePool);
+  MID_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, midSrc[i % midSrc.length]));
   // Fast roles: cheap models, round-robin.
-  fastOrder.forEach((r, i) => primary.set(r, fastPool[i % fastPool.length]));
+  FAST_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, fastPool[i % fastPool.length]));
 
   return roles.map((role) => {
     const head = primary.get(role) ?? capablePool[0];
-    // Fallback pool: same tier first, then the other tier — so a chain never runs short of distinct models.
-    const pool = fastOrder.includes(role) ? [...fastPool, ...capablePool] : [...capablePool, ...fastPool];
+    // Mid/high-volume roles never fall back onto the flagship either; fast roles lead with cheap models.
+    const capForFb = MID_ROLES.includes(role) ? nonFlagship : capablePool;
+    const pool = FAST_ROLES.includes(role) ? [...fastPool, ...capForFb] : [...capForFb, ...fastPool];
     return { role, models: [head, ...pickFallbacks(head, pool, FALLBACK_COUNT)] };
   });
 }
