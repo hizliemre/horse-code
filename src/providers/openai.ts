@@ -1,5 +1,20 @@
 import type { ChatRequest, Message } from "../core/types.js";
 
+/**
+ * A tool call's arguments must serialize to a JSON OBJECT. A model sometimes emits a no-arg call with empty
+ * or malformed arguments (""); replaying that verbatim makes providers reject the whole conversation with
+ * "tool_use.input: Input should be an object". Coerce anything that isn't a plain object to "{}".
+ */
+function objectArgs(args: string | undefined): string {
+  if (!args || !args.trim()) return "{}";
+  try {
+    const v = JSON.parse(args);
+    return v && typeof v === "object" && !Array.isArray(v) ? args : "{}";
+  } catch {
+    return "{}";
+  }
+}
+
 export function toOpenAIMessages(messages: Message[]): unknown[] {
   return messages.map((m) => {
     if (m.role === "assistant" && m.toolCalls?.length) {
@@ -9,7 +24,7 @@ export function toOpenAIMessages(messages: Message[]): unknown[] {
         tool_calls: m.toolCalls.map((tc) => ({
           id: tc.id,
           type: "function",
-          function: { name: tc.name, arguments: tc.arguments },
+          function: { name: tc.name, arguments: objectArgs(tc.arguments) },
         })),
       };
     }

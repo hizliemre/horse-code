@@ -21,6 +21,19 @@ describe("toOpenAIMessages", () => {
     ]);
   });
 
+  it("coerces empty/malformed tool-call arguments to '{}' (a valid object) so replay isn't rejected", () => {
+    const out = toOpenAIMessages([
+      { role: "assistant", content: "", toolCalls: [
+        { id: "c1", name: "noargs", arguments: "" },        // empty → {}
+        { id: "c2", name: "bad", arguments: "not json" },   // malformed → {}
+        { id: "c3", name: "arr", arguments: "[1,2]" },      // array → {}
+        { id: "c4", name: "ok", arguments: '{"p":"a"}' },   // valid object → kept
+      ] },
+    ]) as [{ tool_calls: { function: { arguments: string } }[] }];
+    const args = out[0].tool_calls.map((t) => t.function.arguments);
+    expect(args).toEqual(["{}", "{}", "{}", '{"p":"a"}']);
+  });
+
   it("maps a tool result message via tool_call_id", () => {
     const out = toOpenAIMessages([{ role: "tool", content: "ok", toolCallId: "c1", name: "read" }]);
     expect(out).toEqual([{ role: "tool", tool_call_id: "c1", content: "ok" }]);
