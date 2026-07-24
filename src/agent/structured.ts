@@ -71,30 +71,46 @@ export async function runStructuredRole<T>(
   for (const t of opts.tools.list()) registry.register(t);
   registry.register(handle.tool);
 
-  const messages: Message[] = [...opts.messages];
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    let lastText = "";
-    for await (const ev of runRoleAgent({ ...opts, messages, tools: registry })) {
-      if (ev.type === "error") throw new Error(ev.message);
-      if (ev.type === "abort") throw new Error("cancelled");
-      if (ev.type === "usage") opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens });
-      if (ev.type === "message.done") lastText = ev.message.content ?? lastText;
-      if (handle.result() !== undefined) break; // valid submit captured → exit early
+  // Walk the FULL model chain (primary + fallbacks), not just the primary: a model that errors OR answers in
+  // prose (never calls submit) must not doom the role while its fallback models sit idle. Each model gets
+  // `maxAttempts` nudge-retries; on a hard error or persistent no-submit we fall to the next model. Only when
+  // EVERY model in the chain has failed do we give up. (runRoleAgent is driven per-model with fallbacks:[] so
+  // THIS loop owns the chain walk — otherwise a retryable error would skip models out from under it.)
+  const chain = [opts.model, ...(opts.fallbacks ?? [])];
+  let lastError: string | undefined; // most recent hard error → preserved so the final throw is informative
+  for (let ci = 0; ci < chain.length; ci++) {
+    const model = chain[ci];
+    if (ci > 0) opts.onFallback?.(chain[ci - 1], model, "structured: previous model returned no valid result");
+    const messages: Message[] = [...opts.messages]; // fresh conversation for each model
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let lastText = "";
+      let errored: string | undefined;
+      for await (const ev of runRoleAgent({ ...opts, model, fallbacks: [], messages, tools: registry })) {
+        if (ev.type === "error") { errored = ev.message; break; }
+        if (ev.type === "abort") throw new Error("cancelled");
+        if (ev.type === "usage") opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens });
+        if (ev.type === "message.done") lastText = ev.message.content ?? lastText;
+        if (handle.result() !== undefined) break; // valid submit captured → exit early
+      }
+      const r = handle.result();
+      if (r !== undefined) return r.value;
+
+      const salvaged = extractStructured(lastText, schema);
+      if (salvaged !== undefined) return salvaged;
+
+      if (errored !== undefined) { lastError = errored; break; } // this model erred → stop nudging, try the next
+      // Prose instead of a tool call → nudge THIS model to call submit, then retry it.
+      messages.push({ role: "assistant", content: lastText });
+      messages.push({
+        role: "user",
+        content:
+          "You did not call the `submit` tool. Call `submit` now with your result as structured arguments — do not answer in prose.",
+      });
     }
-    const r = handle.result();
-    if (r !== undefined) return r.value;
-
-    const salvaged = extractStructured(lastText, schema);
-    if (salvaged !== undefined) return salvaged;
-
-    // No submit and nothing to salvage → nudge the model to call submit, then retry.
-    messages.push({ role: "assistant", content: lastText });
-    messages.push({
-      role: "user",
-      content:
-        "You did not call the `submit` tool. Call `submit` now with your result as structured arguments — do not answer in prose.",
-    });
+    if (opts.signal.aborted) throw new Error("cancelled");
+    // this model won't produce a valid result → the outer loop moves to the next model in the chain
   }
 
-  throw new Error("structured role: submit was not called");
+  // Every model in the chain failed: surface the last hard error if there was one, else the no-submit message.
+  throw new Error(lastError ?? "structured role: submit was not called (whole model chain tried)");
 }
