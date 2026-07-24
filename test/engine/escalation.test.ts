@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTaskWithEscalation, tierOf } from "../../src/engine/escalation.js";
+import { runTaskWithEscalation, tierOf, autonomousAskHuman } from "../../src/engine/escalation.js";
 import type { EscalationDeps, AskHuman } from "../../src/engine/escalation.js";
+import type { Card } from "../../src/board/board.js";
+import type { Verdict } from "../../src/engine/task-types.js";
 import type { RoleConfig } from "../../src/config/config.js";
 import { Board } from "../../src/board/board.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -112,6 +114,31 @@ describe("runTaskWithEscalation", () => {
     const sys = p.requests.map((r) => r.messages[0].content);
     expect(sys).toContain("P-designer");
     expect(sys).toContain("P-senior-designer");
+  });
+
+  it("an attempt that THROWS (turn-count ceiling) escalates to the next tier — does NOT kill the task", async () => {
+    const p = new MockProvider([
+      submit('{"role":"coder"}'),                                          // route → coder
+      [{ type: "error", message: "maximum turn count exceeded (200)" }],   // tier0 implementer THROWS
+      noopImpl, submit('{"verdict":"pass","notes":[]}'),                   // tier1 senior-coder passes
+    ]);
+    const board = boardWithTask();
+    const v = await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
+    expect(v.verdict).toBe("pass"); // the throw at tier0 escalated to senior, which succeeded
+    expect(board.get("t1")!.column).toBe("DONE");
+    const stages = board.get("t1")!.stageHistory;
+    expect(stages.some((s) => s.action === "attempt-error" && /turn count/.test(s.note ?? ""))).toBe(true);
+  });
+
+  it("autonomousAskHuman: retries a bounded number of times with the notes, then abandons (no prompt)", async () => {
+    const ask = autonomousAskHuman(2);
+    const card = { id: "t1" } as Card;
+    const verdict: Verdict = { verdict: "fail", notes: ["fix the thing"] };
+    expect(await ask({ card, verdict })).toEqual({ action: "retry", notes: ["fix the thing"] });
+    expect(await ask({ card, verdict })).toEqual({ action: "retry", notes: ["fix the thing"] });
+    expect(await ask({ card, verdict })).toEqual({ action: "abandon" }); // budget exhausted
+    // per-task budget: a different card starts fresh
+    expect(await ask({ card: { id: "t2" } as Card, verdict })).toEqual({ action: "retry", notes: ["fix the thing"] });
   });
 
   it("council fail → askHuman accept → DONE (human:accept), verdict pass", async () => {

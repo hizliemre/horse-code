@@ -11,6 +11,22 @@ export type HumanDecision =
 
 export type AskHuman = (ctx: { card: Card; verdict: Verdict }) => Promise<HumanDecision>;
 
+/**
+ * Autonomous "human" seam: for an unattended run there is nobody to prompt, so a task that exhausts the
+ * escalation ladder is auto-retried up to `maxRetries` times (feeding the council's own notes back in), then
+ * abandoned. This keeps a long run moving on its own instead of blocking on an interactive prompt per failure.
+ */
+export function autonomousAskHuman(maxRetries = 2): AskHuman {
+  const retries = new Map<string, number>();
+  return async ({ card, verdict }) => {
+    const n = retries.get(card.id) ?? 0;
+    if (n >= maxRetries) return { action: "abandon" };
+    retries.set(card.id, n + 1);
+    const notes = verdict.notes.length > 0 ? verdict.notes : ["Address the review feedback and complete the task."];
+    return { action: "retry", notes };
+  };
+}
+
 export interface EscalationDeps extends TaskCycleDeps {
   rounds: number; // turns per tier (config escalation.rounds; default 3)
   askHuman: AskHuman;
@@ -19,6 +35,19 @@ export interface EscalationDeps extends TaskCycleDeps {
 /** Derives the tier from attempts + turns-per-tier: 0 implementer, 1 senior, 2 council. */
 export function tierOf(attempts: number, rounds: number): 0 | 1 | 2 {
   return attempts < rounds ? 0 : attempts < 2 * rounds ? 1 : 2;
+}
+
+/**
+ * Records a thrown attempt (turn-count ceiling, non-retryable model error) as a failed verdict WITHOUT killing
+ * the task, and feeds the error back as a review note so the next tier has context. The card is returned to
+ * TODO (the throw may have left it mid-run in IN-PROGRESS/REVIEW). Returns a fail verdict for the caller.
+ */
+function attemptError(board: Board, taskId: string, role: string, e: unknown): Verdict {
+  const msg = e instanceof Error ? e.message : String(e);
+  board.appendStage(taskId, { role, action: "attempt-error", note: msg });
+  board.addReviewNote(taskId, `The previous attempt did not finish (${msg}). Complete the task within the turn budget.`);
+  board.move(taskId, "TODO", role);
+  return { verdict: "fail", notes: [msg] };
 }
 
 /**
@@ -44,14 +73,29 @@ export async function runTaskWithEscalation(
     if (tier < 2) {
       const role: RunnableRole =
         tier === 0 ? family : family === "designer" ? "senior-designer" : "senior-coder";
-      const v = await runCycleWithRole(deps, board, taskId, cwd, role);
+      let v: Verdict;
+      try {
+        v = await runCycleWithRole(deps, board, taskId, cwd, role);
+      } catch (e) {
+        if (deps.signal.aborted) throw e; // genuine cancellation → propagate
+        // The attempt THREW (e.g. hit its turn-count ceiling, or a non-retryable model error). Treat it as a
+        // failed attempt and ESCALATE to the next tier — do NOT kill the task. A senior/council pass may still
+        // rescue it, which is what "run it autonomously" needs.
+        v = attemptError(board, taskId, role, e);
+      }
       if (v.verdict === "pass") return v; // runCycleWithRole moved it to DONE
       board.incrementAttempts(taskId); // fail → tier advances
       continue;
     }
 
     // tier 2 — escalation council
-    const v = await runEscalationCouncil(deps, board, taskId, cwd, family);
+    let v: Verdict;
+    try {
+      v = await runEscalationCouncil(deps, board, taskId, cwd, family);
+    } catch (e) {
+      if (deps.signal.aborted) throw e;
+      v = attemptError(board, taskId, "code-reviewer", e); // council threw → treat as a failed council round
+    }
     if (v.verdict === "pass") {
       board.clearReviewNotes(taskId);
       board.move(taskId, "DONE", "code-reviewer");

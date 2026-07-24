@@ -11,8 +11,9 @@ import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
 import { buildJobDeps } from "./wiring.js";
 import { makePRAdapter, detectPlatform, defaultCmdRunner } from "./adapters/pr.js";
-import { makeAskUser, makeApprove, makeAskHuman, nodeLineReader } from "./terminal.js";
+import { makeAskUser, makeApprove, nodeLineReader } from "./terminal.js";
 import type { LineReader } from "./terminal.js";
+import { autonomousAskHuman } from "./engine/escalation.js";
 import { runJob } from "./engine/job.js";
 import type { JobResult, JobDeps } from "./engine/job.js";
 import { runInit } from "./init.js";
@@ -117,7 +118,9 @@ export async function main(argv: string[]): Promise<void> {
   const buildDeps = (read: LineReader): Promise<JobDeps> =>
     buildJobDeps({
       config, provider, skillRegistry, manager, prAdapter,
-      askHuman: makeAskHuman(read),
+      // Autonomous by default: a task that exhausts the escalation ladder is auto-retried (then abandoned) so
+      // an unattended run finishes on its own instead of blocking on an interactive per-failure human prompt.
+      askHuman: autonomousAskHuman(),
       approve: makeApprove(read),
       signal: new AbortController().signal,
       home,
