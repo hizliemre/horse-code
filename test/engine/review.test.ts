@@ -128,7 +128,7 @@ describe("runTeam", () => {
     expect(agentEvents[1].agents).toEqual([]); // cleared on finish
   });
 
-  it("narrates each member's finding live (approve ✓ / revise ⚠)", async () => {
+  it("does NOT spam the chat with each member's raw finding (chat tracks actions, not agent output)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ assessments: {
       "security": '{"concerns":["secret leak"],"recommendation":"revise"}',
@@ -136,8 +136,7 @@ describe("runTeam", () => {
     } });
     const notes: string[] = [];
     await runTeam(rdeps(p), dir, "spec.md", (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
-    expect(notes.some((n) => /`security`.*⚠.*secret leak/.test(n))).toBe(true); // concern surfaced
-    expect(notes.some((n) => /`arch`.*✓/.test(n))).toBe(true); // approval surfaced
+    expect(notes).toEqual([]); // no per-member chat notes; members appear only in the live-agents panel
   });
 
   it("member toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {
@@ -235,6 +234,20 @@ describe("runReviewLoop", () => {
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); round++; }, async () => "x", 3);
     expect(out.approved).toBe(true);
     expect(feedbacks[0].length).toBeGreaterThan(0); // council revise rationales became the revise feedback
+  });
+
+  it("chat flow is an ACTION narrative: team discusses → hands to council → council defers to judge", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: teamSplit, councilVotes: splitVotes, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    const notes: string[] = [];
+    await runReviewLoop(rdeps(p), dir, "spec.md", noRevise, async () => "x", 1, (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
+    const joined = notes.join("\n");
+    expect(joined).toMatch(/team.*discussing/i);            // team is reviewing
+    expect(joined).toMatch(/Team.*split.*council/i);        // team → council hand-off
+    expect(joined).toMatch(/Council.*split.*judge/i);       // council → judge hand-off
+    expect(joined).toMatch(/Judge.*approve/i);              // judge ruled
+    // No per-agent output leaked into the chat (no rationales, no concern strings).
+    expect(joined).not.toMatch(/rationale|secret leak|no concerns/i);
   });
 
   it("council SPLIT (no supermajority) → judge decides pass → approved", async () => {

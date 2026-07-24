@@ -92,10 +92,8 @@ export async function runTeam(
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
         };
         const r = await runStructuredRole(opts, AssessmentSchema);
-        // Surface each member's finding live as it lands — the review reads like a real discussion.
-        emit({ kind: "note", text: r.recommendation === "approve"
-          ? `● \`${c.name}\` reviewed — ✓ no concerns`
-          : `● \`${c.name}\` reviewed — ⚠ ${r.concerns.join("; ") || "requests changes"}` });
+        // NB: no per-member chat note — the chat flow tracks ACTIONS (team → council → judge), not each
+        // agent's raw output. Members still appear in the live-agents panel (presence) while they work.
         return { name: c.name, concerns: r.concerns, recommendation: r.recommendation };
       }),
     );
@@ -129,7 +127,7 @@ export async function runCouncil(
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
         };
         const r = await runStructuredRole(opts, CouncilVoteSchema);
-        emit({ kind: "note", text: `⚖ \`council:${c.name}\` → ${r.vote === "pass" ? "✓ pass" : "⤾ revise"} — ${r.rationale}` });
+        // No per-vote chat note — the tally is reported as one action by the caller (runReviewLoop).
         return { name: c.name, vote: r.vote, rationale: r.rationale };
       }),
     );
@@ -157,10 +155,10 @@ export async function runJudge(
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
   const d = await runStructuredRole(opts, JudgeSchema);
-  const j = `⚖️ **Judge** (${resolved.model})`;
-  emit({ kind: "note", text: d.decision === "pass" ? `${j} → **pass** — approved`
-    : d.decision === "revise" ? `${j} → **revise**: ${d.feedback.join("; ") || "addressing the concerns"}`
-    : `${j} → **ask-human** — the council split and the judge needs your input` });
+  // ACTION-level note (the judge's ruling), not its reasoning. The revise details ride the revise step, not chat.
+  emit({ kind: "note", text: d.decision === "pass" ? `⚖️ **Judge** ruled: approve.`
+    : d.decision === "revise" ? `⚖️ **Judge** ruled: revise → sending it back for changes.`
+    : `⚖️ **Judge** needs your input to break the tie.` });
   return d;
 }
 
@@ -202,33 +200,35 @@ export async function runReviewLoop(
   // who may approve as-is, ask for MORE review rounds (another batch), or stop. Only "stop" ends without approval.
   for (;;) {
     for (let i = 0; i < maxRounds; i++, round++) {
-      emit({ kind: "note", text: `**Reviewing the ${label}** (round ${round + 1}) — ${deps.team.length}-member team evaluating in parallel…` });
+      // ACTION narrative only: the chat tracks WHO is deciding and the hand-offs (team → council → judge),
+      // not what each agent produced. Members' raw findings/votes stay out of the chat flow by design.
+      emit({ kind: "note", text: `🔍 **Reviewing the ${label}** (round ${round + 1}) — the team (${deps.team.length}) is discussing it…` });
       const assessments = await runTeam(deps, workdir, docPath, emit);
       // Team consensus first: if a strong majority approves, pass — don't convene the council over a nitpick.
       const approve = assessments.filter((a) => a.recommendation === "approve").length;
       if (assessments.length && approve / assessments.length >= TEAM_CONSENSUS) {
-        emit({ kind: "note", text: `✅ Team consensus — ${approve}/${assessments.length} approve. The ${label} passed.` });
+        emit({ kind: "note", text: `✅ **Team** reached consensus (${approve}/${assessments.length} approve) → the ${label} is approved.` });
         return { approved: true };
       }
 
-      // Contested → convene the council: 5 strong members weigh the findings and VOTE.
-      emit({ kind: "note", text: `⚖ Team is split (${approve}/${assessments.length} approve) — convening the ${deps.council.length}-member council to vote…` });
+      // Contested → the team hands the decision to the council, which weighs the findings and VOTES.
+      emit({ kind: "note", text: `⚖️ **Team** is split (${approve}/${assessments.length} approve) → handed the decision to the **council** (${deps.council.length} members vote).` });
       const votes = await runCouncil(deps, workdir, docPath, assessments, emit);
       const tally = tallyCouncil(votes);
       const passVotes = votes.filter((v) => v.vote === "pass").length;
 
       let decision: JudgeDecision;
       if (tally === "pass") {
-        emit({ kind: "note", text: `✅ Council supermajority — ${passVotes}/${votes.length} pass. The ${label} is approved.` });
+        emit({ kind: "note", text: `✅ **Council** voted to approve (${passVotes}/${votes.length} pass) → the ${label} is approved.` });
         return { approved: true };
       } else if (tally === "revise") {
-        emit({ kind: "note", text: `⤾ Council supermajority — ${votes.length - passVotes}/${votes.length} revise. Revising the ${label}…` });
+        emit({ kind: "note", text: `↻ **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the ${label} back for changes.` });
         decision = { decision: "revise", feedback: votes.filter((v) => v.vote === "revise").map((v) => v.rationale), question: "" };
       } else {
-        // Split vote → the judge is the final link.
-        emit({ kind: "note", text: `⚖ Council split (${passVotes}/${votes.length} pass) — escalating to the judge (final decision)…` });
+        // Split vote → the council defers the final call to the judge.
+        emit({ kind: "note", text: `⚖️ **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
         decision = await runJudge(deps, workdir, docPath, assessments, votes, emit);
-        if (decision.decision === "pass") { emit({ kind: "note", text: `✅ The ${label} passed review.` }); return { approved: true }; }
+        if (decision.decision === "pass") { emit({ kind: "note", text: `✅ **Judge** approved the ${label}.` }); return { approved: true }; }
       }
 
       let feedback = decision.feedback;
