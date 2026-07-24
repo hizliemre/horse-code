@@ -12,7 +12,7 @@ import { runProjectManager } from "./project-manager.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
 import { runRevision, type RevisionResult } from "./revision.js";
-import { clearCheckpoint } from "./checkpoint.js";
+import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
 
 export interface JobDeps extends ReviewDeps {
@@ -79,9 +79,19 @@ export async function runJob(
     }
     return session.baseWorktree;
   };
+  // A bare "continue" request (e.g. "kaldığımız yerden devam edelim") resumes the most recent preserved work
+  // WITHOUT re-running the refiner: adopt its worktree + checkpoint up front so the pipeline drives from it.
+  let resume: Checkpoint | undefined;
+  if (isContinuePrompt(opts.prompt)) {
+    const resumable = await deps.manager.findResumable(opts.prompt);
+    if (resumable) {
+      const cp = readCheckpoint(resumable.root);
+      if (cp) { session = resumable; resume = cp; emit({ kind: "note", text: `⏩ Resuming "${cp.title}" at \`${resumable.baseWorktree}\` — completed phases are skipped.` }); }
+    }
+  }
   try {
     emit({ kind: "phase", phase: "upstream" });
-    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images);
+    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images, resume);
 
     if (up.kind === "chat") {
       // The "chat" phase is emitted inside runUpstream (right before the coach runs) so the UI shows the

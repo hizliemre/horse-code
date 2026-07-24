@@ -116,11 +116,24 @@ describe("WorktreeManager.findResumable", () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "todo-app");
-    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: ["constitution", "spec"] });
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", language: "English", featureSlug: "001-todo-app", done: ["constitution", "spec"] });
     const found = await wm.findResumable("  build A todo APP "); // retyped, different case/spacing
     expect(found?.jobSlug).toBe("todo-app");
     expect(found?.baseWorktree).toBe(s.baseWorktree);
     expect(found?.resumed).toBe(true);
+  });
+
+  it("a bare 'continue' request resumes the MOST RECENTLY touched worktree (no exact prompt needed)", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const older = await wm.openSession("main", "old-task");
+    writeCheckpoint(older.root, { rawPrompt: "build the old thing", refinedPrompt: "x", title: "Old", language: "English", featureSlug: "001-old", done: ["spec"] });
+    await new Promise((r) => setTimeout(r, 15)); // ensure a later mtime on the newer checkpoint
+    const newer = await wm.openSession("main", "new-task");
+    writeCheckpoint(newer.root, { rawPrompt: "build the new thing", refinedPrompt: "y", title: "New", language: "Turkish", featureSlug: "001-new", done: ["constitution"] });
+    const found = await wm.findResumable("kaldığımız yerden devam edelim"); // matches neither prompt, but is a continue
+    expect(found?.jobSlug).toBe("new-task"); // most recent wins
   });
 
   it("returns null when no checkpoint matches (fresh session)", async () => {
@@ -128,7 +141,7 @@ describe("WorktreeManager.findResumable", () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "todo-app");
-    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: [] });
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", language: "English", featureSlug: "001-todo-app", done: [] });
     expect(await wm.findResumable("Build a chat app")).toBeNull(); // different prompt
   });
 
@@ -137,12 +150,12 @@ describe("WorktreeManager.findResumable", () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "todo-app");
-    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: ["spec"] });
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", language: "English", featureSlug: "001-todo-app", done: ["spec"] });
     // Detach the worktree from git but leave the dir + checkpoint on disk.
     await defaultGitRunner(["worktree", "remove", "--force", s.baseWorktree], repo);
     const { mkdir, writeFile } = await import("node:fs/promises");
     await mkdir(s.baseWorktree, { recursive: true });
-    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: ["spec"] });
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", language: "English", featureSlug: "001-todo-app", done: ["spec"] });
     await writeFile(join(s.root, "keep.txt"), "x", "utf8");
     expect(await wm.findResumable("Build a todo app")).toBeNull(); // not git-tracked → skipped
   });

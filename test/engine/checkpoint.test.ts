@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readCheckpoint, writeCheckpoint, clearCheckpoint, checkpointKey, type Checkpoint } from "../../src/engine/checkpoint.js";
+import { readCheckpoint, writeCheckpoint, clearCheckpoint, checkpointKey, isContinuePrompt, type Checkpoint } from "../../src/engine/checkpoint.js";
 
 let dir: string | undefined;
 afterEach(async () => {
@@ -15,6 +15,7 @@ const sample: Checkpoint = {
   rawPrompt: "Build a todo app",
   refinedPrompt: "Build a todo application with add/complete/delete",
   title: "Todo App",
+  language: "English",
   featureSlug: "001-todo-app",
   done: ["constitution", "spec"],
 };
@@ -44,5 +45,18 @@ describe("checkpointKey", () => {
   it("is tolerant of whitespace + case so a retyped prompt still matches", () => {
     expect(checkpointKey("  Build A  Todo\napp ")).toBe(checkpointKey("build a todo app"));
     expect(checkpointKey("Build a todo app")).not.toBe(checkpointKey("Build a chat app"));
+  });
+});
+
+describe("isContinuePrompt", () => {
+  it("flags short 'continue' requests in Turkish + English", () => {
+    for (const t of ["kaldığımız yerden devam edelim.", "devam", "devam et", "continue", "resume", "kaldığın yerden devam et", "keep going", "carry on"]) {
+      expect(isContinuePrompt(t)).toBe(true);
+    }
+  });
+  it("does NOT flag a real task, even one that mentions resume/continue", () => {
+    expect(isContinuePrompt("Build a todo app")).toBe(false);
+    expect(isContinuePrompt("Add a button that lets the user resume a paused download from the last byte offset")).toBe(false); // long → real task
+    expect(isContinuePrompt("implement session persistence")).toBe(false);
   });
 });

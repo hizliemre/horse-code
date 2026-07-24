@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 /** The spec-kit upstream phases a run may have completed, in order. */
@@ -8,11 +8,14 @@ export type UpstreamPhase = "constitution" | "spec" | "clarify" | "plan" | "task
  * A resume checkpoint written at a worktree's root (`<slug>/checkpoint.json`, OUTSIDE the git `base/` tree
  * so it is never committed). It records which upstream phases already finished so a re-run — even after
  * hcode is restarted — can reuse the preserved worktree and skip straight to the first unfinished phase.
+ * It also carries everything a resume needs WITHOUT re-running the refiner (refinedPrompt/title/language),
+ * so a bare "continue" request can pick the work back up directly.
  */
 export interface Checkpoint {
-  rawPrompt: string;   // the user's ORIGINAL prompt — the stable key a re-run is matched against
+  rawPrompt: string;   // the user's ORIGINAL prompt — the stable key an exact re-run is matched against
   refinedPrompt: string;
   title: string;
+  language: string;    // the user's language (English name, e.g. "Turkish") → review/escalation localization
   featureSlug: string; // the specs/NNN-… dir to reuse (so resume doesn't create a fresh numbered feature)
   done: UpstreamPhase[];
 }
@@ -24,6 +27,22 @@ function checkpointPath(worktreeRoot: string): string {
 /** Normalize a prompt for matching: trim + collapse whitespace + lowercase (tolerant of retyping). */
 export function checkpointKey(prompt: string): string {
   return prompt.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * Is this a bare "continue where we left off" request (rather than a fresh task)? Such a prompt should resume
+ * the most recently touched preserved worktree — the user must NOT have to retype the exact original request.
+ * Kept short-only to avoid mistaking a real task that merely mentions "resume/continue" for a continuation.
+ */
+export function isContinuePrompt(text: string): boolean {
+  const t = text.trim();
+  if (t.length > 60) return false; // a long prompt is a real new request, not a bare "continue"
+  return /(^|\s)(devam|kald[ıi]\w*|continue|resume|carry on|keep going|pick up (where|from))(\s|$|\.|,|!)/i.test(t);
+}
+
+/** Last-modified time (ms) of a worktree's checkpoint, or 0 if none — used to pick the most recent to resume. */
+export function checkpointMtime(worktreeRoot: string): number {
+  try { return statSync(checkpointPath(worktreeRoot)).mtimeMs; } catch { return 0; }
 }
 
 export function readCheckpoint(worktreeRoot: string): Checkpoint | null {

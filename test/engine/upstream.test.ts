@@ -219,7 +219,7 @@ describe("runUpstream", () => {
     await mkdir(join(dir, ".specify", "memory"), { recursive: true });
     await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
     await writeFile(join(dir, "specs", slug, "spec.md"), "# existing spec", "utf8");
-    writeCheckpoint(root, { rawPrompt: "Add X", refinedPrompt: "Do X", title: "add thing", featureSlug: slug, done: ["constitution", "spec", "clarify"] });
+    writeCheckpoint(root, { rawPrompt: "Add X", refinedPrompt: "Do X", title: "add thing", language: "English", featureSlug: slug, done: ["constitution", "spec", "clarify"] });
 
     // Only the plan review needs a judge verdict now — spec review must NOT run again.
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}'] });
@@ -230,6 +230,26 @@ describe("runUpstream", () => {
     expect(await readFile(join(dir, "specs", slug, "spec.md"), "utf8")).toBe("# existing spec"); // untouched
     // No COMMAND:specify request was issued — the spec phase truly did not re-run.
     expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:specify"))).toBe(false);
+  });
+
+  it("resume hint (a 'continue' request) drives the pipeline WITHOUT running the refiner", async () => {
+    const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
+    const { writeFile } = await import("node:fs/promises");
+    const slug = "001-add-thing";
+    await mkdir(join(dir, "specs", slug), { recursive: true });
+    await mkdir(join(dir, ".specify", "memory"), { recursive: true });
+    await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
+    await writeFile(join(dir, "specs", slug, "spec.md"), "# existing spec", "utf8");
+    await writeFile(join(dir, "specs", slug, "plan.md"), "# existing plan", "utf8");
+    writeCheckpoint(root, { rawPrompt: "Build a todo app", refinedPrompt: "Do X", title: "add thing", language: "English", featureSlug: slug, done: ["constitution", "spec", "clarify", "plan"] });
+
+    const p = upstreamProvider({ intent: "feature" });
+    // The user typed a bare "continue" (matches no rawPrompt), and job.ts passes the checkpoint as the resume hint.
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "kaldığımız yerden devam edelim", async () => "x", 3, [], () => {}, undefined, readCheckpoint(root)!);
+    expect(res.kind).toBe("approved");
+    if (res.kind === "approved") expect(res.refinedPrompt).toBe("Do X"); // came from the checkpoint, not the refiner
+    // The refiner was never invoked — no P-refiner request was made.
+    expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("P-refiner"))).toBe(false);
   });
 
   it("emits the spec-kit phase events in order", async () => {

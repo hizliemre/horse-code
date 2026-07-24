@@ -7,7 +7,7 @@ import { runCoachChat } from "./coach.js";
 import { extractListBlock } from "./next-steps.js";
 import { runReviewLoop } from "./review.js";
 import { commitStep } from "./operational.js";
-import { readCheckpoint, writeCheckpoint, type UpstreamPhase } from "./checkpoint.js";
+import { readCheckpoint, writeCheckpoint, type UpstreamPhase, type Checkpoint } from "./checkpoint.js";
 import type { ProgressEvent } from "./progress.js";
 import { constitutionPath, nextFeatureSlug, scaffoldFeature } from "../speckit/layout.js";
 import type { PhaseDeps } from "../speckit/phases.js";
@@ -35,6 +35,7 @@ export async function runUpstream(
   history: Message[] = [],
   emit: (ev: ProgressEvent) => void = () => {},
   images?: string[], // pasted images → attached to the coach's chat turn (vision)
+  resume?: Checkpoint, // set when resuming preserved work: skip the refiner, drive the pipeline from the checkpoint
 ): Promise<UpstreamResult> {
   // Each spec-kit phase is driven by a specific role — surface it (+ its model) in the status detail so the
   // user sees WHO is working (e.g. "Writing spec… — analyst · cc/opus-4-8"), not just the persistent coach badge.
@@ -44,14 +45,17 @@ export async function runUpstream(
     const model = role ? deps.roleRegistry.peekModel(role) : "";
     emit({ kind: "phase", phase, detail: role ? `${role} · ${model}` : undefined });
   };
-  // The refiner sees the history → follow-ups are refined in context (horse-code's feature applies everywhere).
+  // Resume: a "continue" request reuses the checkpoint's refined prompt/title/language directly — no refiner
+  // pass, no re-classification. Otherwise the refiner sees the history → follow-ups are refined in context.
   // Refiner + chat run WITHOUT a worktree (read-only / classify); the worktree is opened lazily below,
   // only for the feature/bugfix pipeline — so a plain chat never creates a worktree.
-  const r = await runRefiner(deps, prompt, history);
+  const r = resume
+    ? { intent: "feature" as Intent, refinedPrompt: resume.refinedPrompt, title: resume.title, language: resume.language }
+    : await runRefiner(deps, prompt, history);
   // Surface the refined prompt as soon as it's ready → the UI can replace the raw prompt before the
   // coach/pipeline runs (the refined prompt is what actually gets handed downstream).
   emit({ kind: "refined", refinedPrompt: r.refinedPrompt });
-  if (routeIntent(r.intent) === "chat") {
+  if (!resume && routeIntent(r.intent) === "chat") {
     // Refine is done → the coach now works. Emit the phase change here (not after) so the UI shows the
     // coach-waiting status ("zottiring…") while the coach runs, not the refine status.
     emit({ kind: "phase", phase: "chat" });
@@ -82,13 +86,11 @@ export async function runUpstream(
   const paths = scaffoldFeature(workdir, slug);
   const specRel = relative(workdir, paths.spec);
   const planRel = relative(workdir, paths.plan);
-  const mark = (phase: UpstreamPhase): void => {
-    done.add(phase);
-    writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, featureSlug: slug, done: [...done] });
-  };
+  const save = (): void => writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, language: r.language, featureSlug: slug, done: [...done] });
+  const mark = (phase: UpstreamPhase): void => { done.add(phase); save(); };
   if (done.size > 0) emit({ kind: "note", text: `⏩ Resuming — already done: ${[...done].join(", ")}. Continuing from the next phase.` });
   // Seed the checkpoint immediately so even a crash before the first phase completes leaves a resumable marker.
-  writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, featureSlug: slug, done: [...done] });
+  save();
 
   // Constitution: establish project principles once — only if this worktree has none yet.
   if (!done.has("constitution")) {
