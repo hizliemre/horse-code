@@ -103,23 +103,25 @@ export async function runTeam(
     const results = await Promise.all(
       deps.team.map(async (c): Promise<Assessment | null> => {
         const resolved = deps.teamRegistry.resolve(c.name);
+        const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps),
           messages: [{ role: "user", content: `Review the "${docPath}" document and evaluate it from this perspective.` }],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+          onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
         try {
           const r = await runStructuredRole(opts, AssessmentSchema);
           const a: Assessment = { name: c.name, findings: r.findings, recommendation: r.recommendation };
-          // Stream THIS member's result onto its live row the moment it lands (verdict + severity counts) —
-          // early finishers show immediately instead of the whole batch appearing at once. No chat note here;
-          // the consolidated summary is written once, when the whole team has reported (runReviewLoop).
-          emit({ kind: "agent-result", id: `team:${c.name}`, status: memberStatus(a) });
+          // Stream THIS member's result onto its live row the moment it lands (verdict + severity counts + its
+          // token spend) — early finishers show immediately instead of the whole batch appearing at once. No chat
+          // note here; the consolidated summary is written once, when the whole team has reported (runReviewLoop).
+          emit({ kind: "agent-result", id: `team:${c.name}`, status: memberStatus(a), ...tok });
           return a;
         } catch (e) {
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
-          emit({ kind: "agent-result", id: `team:${c.name}`, status: "— no response" });
+          emit({ kind: "agent-result", id: `team:${c.name}`, status: "— no response", ...tok });
           return null; // a flaky member (never submitted, model error) → drop it, don't crash the whole review
         }
       }),
@@ -162,20 +164,22 @@ export async function runCouncil(
     const results = await Promise.all(
       deps.council.map(async (c): Promise<CouncilVote | null> => {
         const resolved = deps.councilRegistry.resolve(c.name);
+        const tok = { promptTokens: 0, completionTokens: 0 };
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps),
           messages: [{ role: "user", content: `The "${docPath}" document plus the team's findings:\n${digest}\n\nCast your vote (pass/revise) with a rationale.` }],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+          onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
         try {
           const r = await runStructuredRole(opts, CouncilVoteSchema);
           // Stream this vote onto its live row as it lands (no chat note — the tally is one action from the caller).
-          emit({ kind: "agent-result", id: `council:${c.name}`, status: r.vote === "pass" ? "PASS" : "REVISE" });
+          emit({ kind: "agent-result", id: `council:${c.name}`, status: r.vote === "pass" ? "PASS" : "REVISE", ...tok });
           return { name: c.name, vote: r.vote, rationale: r.rationale };
         } catch (e) {
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
-          emit({ kind: "agent-result", id: `council:${c.name}`, status: "— no response" });
+          emit({ kind: "agent-result", id: `council:${c.name}`, status: "— no response", ...tok });
           return null; // a flaky voter → drop it; the tally uses the votes that landed (else → judge)
         }
       }),

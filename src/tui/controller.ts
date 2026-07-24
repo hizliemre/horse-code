@@ -28,6 +28,8 @@ export interface RunningAgent {
   startedAt: number;
   status?: string; // set when the agent finishes → its result (e.g. "REJECT · C:2 M:1 L:0"), shown inline
   doneAt?: number; // freeze the row's timer once the agent has reported its result
+  promptTokens?: number; // tokens this agent burned (↑), shown in the row's parens like the main shimmer
+  completionTokens?: number; // tokens this agent produced (↓)
 }
 
 export interface TuiState {
@@ -99,7 +101,7 @@ export class TuiController {
     else if (ev.kind === "agents") this.state = { ...this.state, runningAgents: this.setAgents(ev.agents) };
     // A sub-agent finished → stamp its result on that row (and freeze its timer) the moment it lands, so
     // early finishers show their verdict + finding counts immediately instead of all at once.
-    else if (ev.kind === "agent-result") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, status: ev.status, doneAt: this.now() } : a) };
+    else if (ev.kind === "agent-result") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, status: ev.status, doneAt: this.now(), promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) };
     // note: a live transcript line from deep in the pipeline (council findings, judge decision).
     else if (ev.kind === "note") this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: ev.text }] };
     // refined: swap the raw prompt for the refined one live (the coach/pipeline only ever sees the refine),

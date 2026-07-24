@@ -256,12 +256,13 @@ describe("Ink components", () => {
   it("RunningAgents shows a finished agent's result (verdict + counts) with a frozen duration", () => {
     const now = Date.now();
     const agents = [
-      { id: "t1", title: "team: security", model: "cx/gpt-5.6", startedAt: now - 30_000, status: "REJECT · C:2 M:1 L:0", doneAt: now - 5_000 },
+      { id: "t1", title: "team: security", model: "cx/gpt-5.6", startedAt: now - 30_000, status: "REJECT · C:2 M:1 L:0", doneAt: now - 5_000, promptTokens: 12_300, completionTokens: 4_500 },
       { id: "t2", title: "team: arch", model: "cc/opus", startedAt: now - 30_000 }, // still running
     ];
-    const f = strip(render(<RunningAgents agents={agents} cols={100} />).lastFrame());
+    const f = strip(render(<RunningAgents agents={agents} cols={120} />).lastFrame());
     expect(f).toContain("REJECT · C:2 M:1 L:0"); // result stamped on the finished row
     expect(f).toMatch(/25s/); // frozen at doneAt-startedAt (25s), not the full 30s
+    expect(f).toContain("↑12.3k ↓4.5k"); // this agent's own token spend, in the parens
     expect(f).toContain("✔"); // finished marker (running rows keep the ● bullet)
   });
 

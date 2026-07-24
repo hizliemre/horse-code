@@ -25,6 +25,7 @@ export interface RoleAgentOptions {
   onFallback?: (from: string, to: string, reason: string) => void; // fell from one model to the next → UI note
   onLiveActivity?: (label: string) => void; // live "writing <file> · N chars" while a tool call is generated
   onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit
+  onUsage?: (u: { promptTokens: number; completionTokens: number }) => void; // per-call token usage → per-agent metering
 }
 
 /** 1394 → "1.4k"; keeps the live activity line compact. */

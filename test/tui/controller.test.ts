@@ -40,10 +40,12 @@ describe("TuiController", () => {
       { id: "team:security", title: "team: security", model: "m1" },
       { id: "team:arch", title: "team: arch", model: "m2" },
     ] });
-    c.onEvent({ kind: "agent-result", id: "team:security", status: "REJECT · C:1 M:0 L:2" });
+    c.onEvent({ kind: "agent-result", id: "team:security", status: "REJECT · C:1 M:0 L:2", promptTokens: 8000, completionTokens: 1200 });
     const byId = Object.fromEntries(c.getState().runningAgents.map((a) => [a.id, a]));
     expect(byId["team:security"].status).toBe("REJECT · C:1 M:0 L:2");
     expect(byId["team:security"].doneAt).toBeGreaterThan(0); // timer frozen
+    expect(byId["team:security"].promptTokens).toBe(8000); // this agent's token spend
+    expect(byId["team:security"].completionTokens).toBe(1200);
     expect(byId["team:arch"].status).toBeUndefined(); // the other row is untouched (still running)
   });
 

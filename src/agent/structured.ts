@@ -77,6 +77,7 @@ export async function runStructuredRole<T>(
     for await (const ev of runRoleAgent({ ...opts, messages, tools: registry })) {
       if (ev.type === "error") throw new Error(ev.message);
       if (ev.type === "abort") throw new Error("cancelled");
+      if (ev.type === "usage") opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens });
       if (ev.type === "message.done") lastText = ev.message.content ?? lastText;
       if (handle.result() !== undefined) break; // valid submit captured → exit early
     }
