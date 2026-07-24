@@ -14,6 +14,12 @@ import type { WaveEngineResult } from "./wave-engine.js";
 import { runRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
+import type { Column } from "../board/board.js";
+
+/** Human-readable action for a board column transition (chat notes). */
+function columnAction(to: Column): string {
+  return to === "IN-PROGRESS" ? "In progress" : to === "REVIEW" ? "In review" : to === "DONE" ? "Done ✓" : "Sent back for rework";
+}
 
 export interface JobDeps extends ReviewDeps {
   manager: WorktreeManager;
@@ -121,6 +127,8 @@ export async function runJob(
     const board = await runProjectManager(pmOpts(deps, workdir, up.tasksPath));
     emit({ kind: "board", cards: snapshotBoard(board) });
     board.onChange = () => emit({ kind: "board", cards: snapshotBoard(board) });
+    // The chat shows task progress as ACTIONS (transitions), not a kanban board. One note per real column move.
+    board.onMove = (card, _from, to) => emit({ kind: "note", text: `📋 **${card.title}** → ${columnAction(to)}` });
 
     emit({ kind: "phase", phase: "waves" });
     const wave = await runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle });

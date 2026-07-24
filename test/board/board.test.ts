@@ -60,4 +60,20 @@ describe("Board core", () => {
     b.move("t1", "DONE");
     expect(b.get("t1")!.column).toBe("DONE");
   });
+
+  it("onMove fires only on a REAL column transition, with from/to (drives chat action notes)", () => {
+    const b = new Board();
+    const moves: { title: string; from: string; to: string }[] = [];
+    b.onMove = (card, from, to) => moves.push({ title: card.title, from, to });
+    b.addCard({ id: "t1", title: "X" });    // addCard → not a move, no onMove
+    b.move("t1", "IN-PROGRESS");
+    b.move("t1", "IN-PROGRESS");             // same column → NOT a transition, no onMove
+    b.move("t1", "REVIEW");
+    b.move("t1", "DONE");
+    expect(moves).toEqual([
+      { title: "X", from: "TODO", to: "IN-PROGRESS" },
+      { title: "X", from: "IN-PROGRESS", to: "REVIEW" },
+      { title: "X", from: "REVIEW", to: "DONE" },
+    ]);
+  });
 });

@@ -53,6 +53,7 @@ function cloneCard(c: Card): Card {
 
 export class Board {
   onChange?: () => void; // called after every mutation (if set; H3a progress events)
+  onMove?: (card: Card, from: Column, to: Column) => void; // called on a real column transition → action notes
   private cards = new Map<string, Card>();
 
   constructor(cards: Card[] = []) {
@@ -96,8 +97,10 @@ export class Board {
 
   move(id: string, column: Column, actor?: string): void {
     const c = this.require(id);
+    const from = c.column;
     c.column = column;
     if (actor) c.stageHistory.push({ role: actor, action: `→${column}` });
+    if (from !== column) this.onMove?.(c, from, column); // surface the transition as a chat action
     this.onChange?.();
   }
 

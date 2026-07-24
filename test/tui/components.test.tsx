@@ -35,7 +35,7 @@ describe("Ink components", () => {
     expect(f).toContain(">");
   });
 
-  it("App renders the initial state (friendly phase + cards)", () => {
+  it("App renders the running phase label — NO kanban board (progress shows as action notes)", () => {
     const c = new TuiController();
     c.onEvent({ kind: "phase", phase: "waves" });
     c.onEvent({ kind: "board", cards: [{ id: "1", title: "Alpha-task", column: "IN-PROGRESS" }] });
@@ -43,7 +43,7 @@ describe("Ink components", () => {
     // The shimmer status line tints each character separately → strip ANSI to read the label back.
     const f = (lastFrame() ?? "").replace(/\x1b\[[0-9;]*m/g, "");
     expect(f).toContain("Coding"); // friendly phase label (waves)
-    expect(f).toContain("Alpha-task");
+    expect(f).not.toContain("Alpha-task"); // the kanban board is gone from the chat UI
     unmount();
   });
 
@@ -78,12 +78,12 @@ describe("Ink components", () => {
     expect(render(<App controller={c} />).lastFrame() ?? "").toContain(">");
   });
 
-  it("App mode undefined → running (one-shot preserved, board renders)", () => {
+  it("App mode undefined → running (one-shot preserved; not the input prompt)", () => {
     const c = new TuiController();
+    c.onEvent({ kind: "phase", phase: "waves" });
     c.onEvent({ kind: "board", cards: [{ id: "1", title: "Task", column: "TODO" }] });
     const f = render(<App controller={c} />).lastFrame() ?? "";
-    expect(f).toContain("Task");
-    expect(f).not.toContain("Type your task");
+    expect(f).not.toContain("Type your task"); // stays in running mode, doesn't flip to the task input
   });
 
   it("App: /model opens the picker, lists models, applies a selection", async () => {

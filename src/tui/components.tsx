@@ -1007,7 +1007,6 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     ) : (
       <Box flexDirection="column">
         <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} />
-        <Board cards={state.cards} />
         {state.pending ? <Prompt question={state.pending.question} onSubmit={(s) => controller.answer(s)} /> : null}
       </Box>
     );
@@ -1088,15 +1087,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const doneLine = !!state.meta && !state.meta.running && !state.pending;
     const showStatus = progressLine || !!state.pending || doneLine;
     // Status lines sit directly above the input (no box, no gap). Height is deterministic → no Ink overflow.
-    const boardLines = showStatus && state.cards.length
-      ? 1 + Math.max(...COLUMNS.map((col) => state.cards.filter((c) => c.column === col).length))
-      : 0;
+    // NB: no kanban board here — task progress is surfaced as chat ACTION notes (📋 X → In progress) instead.
     // Pending prompt: 1 header line + the markdown-flattened body lines (same width as PendingQuestion → same count).
     const pendingLines = state.pending
       ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingBodyWidth(size.cols)).length
       : 0;
     const liveH = progressLine && state.liveActivity ? 1 : 0; // the transient "writing…" line
-    const statusH = (progressLine || doneLine ? 1 : 0) + liveH + boardLines + pendingLines; // progress/done(1) + live + board + pending
+    const statusH = (progressLine || doneLine ? 1 : 0) + liveH + pendingLines; // progress/done(1) + live + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     // A pending choice question replaces the free-text input with a ChoiceInput selector.
     const choiceOptions = state.pending?.options ?? [];
@@ -1134,7 +1131,6 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} /></Box> : null}
             {progressLine && state.liveActivity ? <Box paddingLeft={2}><Text color="#1a9fd8" wrap="truncate-end">{`  ✎ ${state.liveActivity}`}</Text></Box> : null}
             {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
-            {boardLines ? <Board cards={state.cards} /> : null}
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
           </Box>
         ) : null}
