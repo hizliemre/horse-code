@@ -82,8 +82,8 @@ export async function runTeam(
   // Surface each team member as a live sub-agent (they run in parallel) so the user sees the review happening.
   emit({ kind: "agents", agents: deps.team.map((c) => ({ id: `team:${c.name}`, title: `team: ${c.name}`, model: deps.teamRegistry.peekModel(c.name) })) });
   try {
-    return await Promise.all(
-      deps.team.map(async (c) => {
+    const results = await Promise.all(
+      deps.team.map(async (c): Promise<Assessment | null> => {
         const resolved = deps.teamRegistry.resolve(c.name);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
@@ -91,12 +91,18 @@ export async function runTeam(
           messages: [{ role: "user", content: `Review the "${docPath}" document and evaluate it from this perspective.` }],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
         };
-        const r = await runStructuredRole(opts, AssessmentSchema);
-        // NB: no per-member chat note — the chat flow tracks ACTIONS (team → council → judge), not each
-        // agent's raw output. Members still appear in the live-agents panel (presence) while they work.
-        return { name: c.name, concerns: r.concerns, recommendation: r.recommendation };
+        try {
+          const r = await runStructuredRole(opts, AssessmentSchema);
+          // NB: no per-member chat note — the chat flow tracks ACTIONS (team → council → judge), not each
+          // agent's raw output. Members still appear in the live-agents panel (presence) while they work.
+          return { name: c.name, concerns: r.concerns, recommendation: r.recommendation };
+        } catch (e) {
+          if (deps.signal.aborted) throw e; // genuine cancellation → propagate
+          return null; // a flaky member (never submitted, model error) → drop it, don't crash the whole review
+        }
       }),
     );
+    return results.filter((a): a is Assessment => a !== null);
   } finally {
     emit({ kind: "agents", agents: [] }); // clear the live-agents panel when the team finishes
   }
@@ -117,8 +123,8 @@ export async function runCouncil(
   const digest = findingsDigest(assessments);
   emit({ kind: "agents", agents: deps.council.map((c) => ({ id: `council:${c.name}`, title: `council: ${c.name}`, model: deps.councilRegistry.peekModel(c.name) })) });
   try {
-    return await Promise.all(
-      deps.council.map(async (c) => {
+    const results = await Promise.all(
+      deps.council.map(async (c): Promise<CouncilVote | null> => {
         const resolved = deps.councilRegistry.resolve(c.name);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
@@ -126,11 +132,17 @@ export async function runCouncil(
           messages: [{ role: "user", content: `The "${docPath}" document plus the team's findings:\n${digest}\n\nCast your vote (pass/revise) with a rationale.` }],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
         };
-        const r = await runStructuredRole(opts, CouncilVoteSchema);
-        // No per-vote chat note — the tally is reported as one action by the caller (runReviewLoop).
-        return { name: c.name, vote: r.vote, rationale: r.rationale };
+        try {
+          const r = await runStructuredRole(opts, CouncilVoteSchema);
+          // No per-vote chat note — the tally is reported as one action by the caller (runReviewLoop).
+          return { name: c.name, vote: r.vote, rationale: r.rationale };
+        } catch (e) {
+          if (deps.signal.aborted) throw e; // genuine cancellation → propagate
+          return null; // a flaky voter → drop it; the tally uses the votes that landed (else → judge)
+        }
       }),
     );
+    return results.filter((v): v is CouncilVote => v !== null);
   } finally {
     emit({ kind: "agents", agents: [] });
   }
@@ -154,7 +166,16 @@ export async function runJudge(
       `The council voted but reached NO supermajority:\n${council}\n\nYou are the final decider. Synthesize and decide (pass/revise/ask-human).` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
-  const d = await runStructuredRole(opts, JudgeSchema);
+  let d: JudgeDecision;
+  try {
+    d = await runStructuredRole(opts, JudgeSchema);
+  } catch (e) {
+    if (deps.signal.aborted) throw e; // genuine cancellation → propagate
+    // The judge never produced a structured ruling (no submit, model error). Don't crash the job — default to
+    // the safe, conservative decision: revise. The next round re-reviews; the review can still converge/escalate.
+    emit({ kind: "note", text: `⚖ **Judge** couldn't produce a ruling — defaulting to revise (re-reviewing).` });
+    return { decision: "revise", feedback: ["The judge could not reach a structured decision; revising and re-reviewing to be safe."], question: "" };
+  }
   // ACTION-level note (the judge's ruling), not its reasoning. The revise details ride the revise step, not chat.
   emit({ kind: "note", text: d.decision === "pass" ? `⚖ **Judge** ruled: approve.`
     : d.decision === "revise" ? `⚖ **Judge** ruled: revise → sending it back for changes.`

@@ -139,6 +139,18 @@ describe("runTeam", () => {
     expect(notes).toEqual([]); // no per-member chat notes; members appear only in the live-agents panel
   });
 
+  it("a member that never submits a valid result is DROPPED — the review does not crash", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    // `security` returns invalid JSON → runStructuredRole exhausts its retries and throws; runTeam must swallow
+    // that one and return the members that DID respond, instead of rejecting the whole Promise.all.
+    const p = reviewProvider({ assessments: {
+      "security": "I have no strong opinion",           // invalid → the member fails
+      "architectural": '{"concerns":[],"recommendation":"approve"}',
+    } });
+    const out = await runTeam(rdeps(p), dir, "spec.md"); // must NOT throw
+    expect(out.map((a) => a.name)).toEqual(["arch"]); // only the responding member survives
+  });
+
   it("member toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const { MockProvider } = await import("../../src/providers/mock.js");
@@ -189,6 +201,16 @@ describe("runJudge", () => {
       [{ name: "c1", vote: "revise", rationale: "risky" }, { name: "c2", vote: "pass", rationale: "ok" }]);
     expect(d.decision).toBe("revise");
     expect(d.feedback).toEqual(["no tests"]);
+  });
+
+  it("judge that never submits → defaults to REVISE (does not crash the review)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ judge: ["this is prose, not a decision"] }); // invalid → judge fails all retries
+    const d = await runJudge(rdeps(p), dir, "spec.md",
+      [{ name: "security", concerns: ["x"], recommendation: "revise" }],
+      [{ name: "c1", vote: "revise", rationale: "r" }]);
+    expect(d.decision).toBe("revise"); // safe conservative fallback, not a thrown error
+    expect(d.feedback.length).toBeGreaterThan(0);
   });
 });
 
