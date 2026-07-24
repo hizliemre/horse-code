@@ -215,13 +215,13 @@ export async function runJudge(
     if (deps.signal.aborted) throw e; // genuine cancellation → propagate
     // The judge never produced a structured ruling (no submit, model error). Don't crash the job — default to
     // the safe, conservative decision: revise. The next round re-reviews; the review can still converge/escalate.
-    emit({ kind: "note", text: `⚖ **Judge** couldn't produce a ruling — defaulting to revise (re-reviewing).` });
+    emit({ kind: "note", text: `🔨 **Judge** couldn't produce a ruling — defaulting to revise (re-reviewing).` });
     return { decision: "revise", feedback: ["The judge could not reach a structured decision; revising and re-reviewing to be safe."], question: "" };
   }
   // ACTION-level note (the judge's ruling), not its reasoning. The revise details ride the revise step, not chat.
-  emit({ kind: "note", text: d.decision === "pass" ? `⚖ **Judge** ruled: approve.`
-    : d.decision === "revise" ? `⚖ **Judge** ruled: revise → sending it back for changes.`
-    : `⚖ **Judge** needs your input to break the tie.` });
+  emit({ kind: "note", text: d.decision === "pass" ? `🔨 **Judge** ruled: approve.`
+    : d.decision === "revise" ? `🔨 **Judge** ruled: revise → sending it back for changes.`
+    : `🔨 **Judge** needs your input to break the tie.` });
   return d;
 }
 
@@ -277,7 +277,7 @@ export async function runReviewLoop(
       }
 
       // Contested → the team hands the decision to the council, which weighs the findings and VOTES.
-      emit({ kind: "note", text: `⚖ **Team** is split (${approve}/${assessments.length} approve) → handed the decision to the **council** (${deps.council.length} members vote).` });
+      emit({ kind: "note", text: `👥 **Team** is split (${approve}/${assessments.length} approve) → handed the decision to the **council** (${deps.council.length} members vote).` });
       const votes = await runCouncil(deps, workdir, docPath, assessments, emit);
       const tally = tallyCouncil(votes);
       const passVotes = votes.filter((v) => v.vote === "pass").length;
@@ -287,11 +287,11 @@ export async function runReviewLoop(
         emit({ kind: "note", text: `✅ **Council** voted to approve (${passVotes}/${votes.length} pass) → the ${label} is approved.` });
         return { approved: true };
       } else if (tally === "revise") {
-        emit({ kind: "note", text: `↻ **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the ${label} back for changes.` });
+        emit({ kind: "note", text: `🔄 **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the ${label} back for changes.` });
         decision = { decision: "revise", feedback: votes.filter((v) => v.vote === "revise").map((v) => v.rationale), question: "" };
       } else {
         // Split vote → the council defers the final call to the judge.
-        emit({ kind: "note", text: `⚖ **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
+        emit({ kind: "note", text: `🔨 **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
         decision = await runJudge(deps, workdir, docPath, assessments, votes, emit);
         if (decision.decision === "pass") { emit({ kind: "note", text: `✅ **Judge** approved the ${label}.` }); return { approved: true }; }
       }
@@ -302,7 +302,7 @@ export async function runReviewLoop(
         const answer = await askUser(decision.question);
         feedback = [...feedback, `Human answer: ${answer}`];
       }
-      emit({ kind: "note", text: `↻ Revising the ${label} with the feedback…` });
+      emit({ kind: "note", text: `🔄 Revising the ${label} with the feedback…` });
       await revise(feedback);
     }
     // Escalation — localized to the user's language (this string is code-generated, not from an LLM, so the
@@ -318,6 +318,6 @@ export async function runReviewLoop(
     // explicit "keep reviewing" option present, its meaning is ambiguous — a plain selection covers approval.)
     if (answer === approveLabel || /^\s*(approve|yes|onayla|onay|evet|kabul|tamam|ok)\s*$/i.test(answer)) return { approved: true };
     // Unrecognized free text → safest default is to keep reviewing (never force-approve or silently abandon).
-    emit({ kind: "note", text: language === "Turkish" ? "↻ Anlaşılamadı — review'a devam ediliyor." : "↻ Unclear answer — continuing the review." });
+    emit({ kind: "note", text: language === "Turkish" ? "🔄 Anlaşılamadı — review'a devam ediliyor." : "🔄 Unclear answer — continuing the review." });
   }
 }
