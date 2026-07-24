@@ -8,6 +8,12 @@ describe("fmtTokens", () => {
     expect(fmtTokens(1234)).toBe("1.2k");
     expect(fmtTokens(0)).toBe("0");
   });
+  it("rolls over to M and B instead of staying in k (21914000 → 21.9M, not 21914.0k)", () => {
+    expect(fmtTokens(21_914_000)).toBe("21.9M");
+    expect(fmtTokens(1_000_000)).toBe("1.0M");
+    expect(fmtTokens(3_200_000_000)).toBe("3.2B");
+    expect(fmtTokens(999_999)).toBe("1000.0k"); // just under 1M still k (rounds to 1000.0k)
+  });
 });
 
 describe("fmtDuration", () => {

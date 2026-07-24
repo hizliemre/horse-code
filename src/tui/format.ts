@@ -1,6 +1,9 @@
-/** Compact token count: 1234 → "1.2k", 900 → "900". */
+/** Compact token count that rolls over units: 900 → "900", 1234 → "1.2k", 21_914_000 → "21.9M", 3.2e9 → "3.2B". */
 export function fmtTokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }
 
 /** Duration like Claude Code: "1m 23s" from a minute up, else "45s". */
