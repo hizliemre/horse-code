@@ -251,14 +251,17 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const onCtrlC = (chunk: Buffer | string): void => {
     const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
     if (s !== "\x03" && s !== "\x1b[99;5u") return;
+    // Double-tap → force quit, from ANY state. This is the ALWAYS-available escape hatch: it runs BEFORE the
+    // per-mode defer below, so even a state whose single-press handler is stuck (a panel, a blocked prompt)
+    // can never trap the user — a quick second Ctrl+C always quits (matches the "press twice to quit" hint).
+    const now = Date.now();
+    if (now - lastCtrlC < 400) { restore(); process.exit(0); }
+    lastCtrlC = now;
     const st = controller.getState();
     const mode = st.mode ?? "running";
-    // A cancellable panel (model picker, choice selector) owns Ctrl+C → it cancels like Esc, never quits.
-    // Input mode: InputLine handles Ctrl+C (clear/exit).
+    // Single press: a cancellable panel (model picker, choice selector) owns Ctrl+C → it cancels like Esc.
+    // Input mode: InputLine handles it (clear if non-empty / exit if empty).
     if (mode === "input" || mode === "picker" || st.pending?.options?.length) return;
-    const now = Date.now();
-    if (now - lastCtrlC < 200) { restore(); process.exit(0); } // double-tap within 200ms → force quit
-    lastCtrlC = now;
     jobAbort?.abort(); // cancel the running job → it throws → endRun → back to input
   };
   process.stdin.on("data", onCtrlC);

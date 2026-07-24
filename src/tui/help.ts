@@ -32,7 +32,7 @@ export function helpSections(): HelpSection[] {
         { keys: "PgUp / PgDn", desc: "Scroll the transcript" },
         { keys: "→ / Tab", desc: "Complete the highlighted slash command" },
         { keys: "Esc", desc: "Cancel a panel / dismiss a choice" },
-        { keys: "Ctrl+C", desc: "Cancel the run · press twice to quit" },
+        { keys: "Ctrl+C", desc: "Cancel the run · press twice (fast) to quit from anywhere" },
         { keys: "?", desc: "This help (Esc / q / ? to close)" },
       ],
     },
