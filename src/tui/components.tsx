@@ -323,12 +323,14 @@ export function RunningAgents({ agents, cols }: { agents: RunningAgent[]; cols: 
     <Box flexDirection="column" width={width}>
       <Text dimColor>{`  ${agents.length} ${agents.length === 1 ? "agent" : "agents"} running`}</Text>
       {agents.map((a) => {
-        const dur = fmtDuration(Date.now() - a.startedAt);
+        const dur = fmtDuration((a.doneAt ?? Date.now()) - a.startedAt); // freeze once the agent has reported
+        const statusColor = a.status ? (/REJECT|revise/i.test(a.status) ? "#ff6b6b" : /APPROVE|pass/i.test(a.status) ? "green" : undefined) : undefined;
         return (
           <Text key={a.id} wrap="truncate-end">
-            <Text color="cyan">{`  ${ICONS.msgBullet} `}</Text>
+            <Text color={a.status ? undefined : "cyan"}>{`  ${a.status ? "✔" : ICONS.msgBullet} `}</Text>
             {a.title}
             <Text dimColor>{`  · ${dur}${a.model ? ` · ${a.model}` : ""}`}</Text>
+            {a.status ? <Text color={statusColor}>{`  · ${a.status}`}</Text> : null}
           </Text>
         );
       })}

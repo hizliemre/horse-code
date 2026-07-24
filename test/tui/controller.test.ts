@@ -34,6 +34,19 @@ describe("TuiController", () => {
     expect(c.getState().cards).toEqual([{ id: "a", title: "A", column: "TODO" }]);
   });
 
+  it("onEvent agent-result → stamps the result (+doneAt) on the matching agent row only", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "agents", agents: [
+      { id: "team:security", title: "team: security", model: "m1" },
+      { id: "team:arch", title: "team: arch", model: "m2" },
+    ] });
+    c.onEvent({ kind: "agent-result", id: "team:security", status: "REJECT · C:1 M:0 L:2" });
+    const byId = Object.fromEntries(c.getState().runningAgents.map((a) => [a.id, a]));
+    expect(byId["team:security"].status).toBe("REJECT · C:1 M:0 L:2");
+    expect(byId["team:security"].doneAt).toBeGreaterThan(0); // timer frozen
+    expect(byId["team:arch"].status).toBeUndefined(); // the other row is untouched (still running)
+  });
+
   it("onEvent refined → replaces the last user message live", () => {
     const c = new TuiController();
     c.awaitTask();

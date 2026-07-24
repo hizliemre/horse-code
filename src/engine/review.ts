@@ -19,11 +19,26 @@ export interface ReviewDeps extends TaskCycleDeps {
 export interface AskOpts { options?: string[]; multiSelect?: boolean }
 export type AskUser = (question: string, opts?: AskOpts) => Promise<string>;
 
-export interface Assessment { name: string; concerns: string[]; recommendation: "approve" | "revise" }
+export type Severity = "critical" | "medium" | "low";
+export interface Finding { severity: Severity; note: string }
+export interface Assessment { name: string; findings: Finding[]; recommendation: "approve" | "revise" }
 export const AssessmentSchema = z.object({
-  concerns: z.array(z.string()),
+  // Each concern is tagged with a severity so the UI can show critical/medium/low counts per reviewer.
+  findings: z.array(z.object({ severity: z.enum(["critical", "medium", "low"]), note: z.string() })).default([]),
   recommendation: z.enum(["approve", "revise"]),
 });
+
+/** Count a reviewer's findings by severity → the {C,M,L} shown after its model in the live panel. */
+function severityCounts(a: Assessment): { critical: number; medium: number; low: number } {
+  const c = { critical: 0, medium: 0, low: 0 };
+  for (const f of a.findings) c[f.severity]++;
+  return c;
+}
+/** The one-line result stamped on a team member's live row: verdict + severity counts. */
+function memberStatus(a: Assessment): string {
+  const c = severityCounts(a);
+  return `${a.recommendation === "approve" ? "APPROVE" : "REJECT"} · C:${c.critical} M:${c.medium} L:${c.low}`;
+}
 
 export interface CouncilVote { name: string; vote: "pass" | "revise"; rationale: string }
 export const CouncilVoteSchema = z.object({
@@ -43,8 +58,11 @@ export interface ReviewOutcome { approved: boolean }
 function teamPrompt(perspective: string): string {
   return (
     `You are a review TEAM member. Your perspective: ${perspective}. ` +
-    `Review the given document from this perspective; produce a reasoned concerns list and a recommendation (approve/revise). ` +
-    `Write your concerns in ENGLISH — they are a technical review artifact (documentation), not a conversation with the user, ` +
+    `Review the given document from this perspective and produce a list of findings — each with a SEVERITY ` +
+    `("critical" = blocks shipping, "medium" = should fix, "low" = minor/nit) and a concise note — plus a ` +
+    `recommendation: "approve" (no blocking issues) or "revise" (needs changes). Report only genuine issues; an ` +
+    `empty findings list with "approve" is the right answer for a clean document. ` +
+    `Write findings in ENGLISH — they are a technical review artifact, not a conversation with the user, ` +
     `so they stay English regardless of any conversational-language rule.`
   );
 }
@@ -93,11 +111,15 @@ export async function runTeam(
         };
         try {
           const r = await runStructuredRole(opts, AssessmentSchema);
-          // NB: no per-member chat note — the chat flow tracks ACTIONS (team → council → judge), not each
-          // agent's raw output. Members still appear in the live-agents panel (presence) while they work.
-          return { name: c.name, concerns: r.concerns, recommendation: r.recommendation };
+          const a: Assessment = { name: c.name, findings: r.findings, recommendation: r.recommendation };
+          // Stream THIS member's result onto its live row the moment it lands (verdict + severity counts) —
+          // early finishers show immediately instead of the whole batch appearing at once. No chat note here;
+          // the consolidated summary is written once, when the whole team has reported (runReviewLoop).
+          emit({ kind: "agent-result", id: `team:${c.name}`, status: memberStatus(a) });
+          return a;
         } catch (e) {
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
+          emit({ kind: "agent-result", id: `team:${c.name}`, status: "— no response" });
           return null; // a flaky member (never submitted, model error) → drop it, don't crash the whole review
         }
       }),
@@ -110,7 +132,21 @@ export async function runTeam(
 
 /** A short digest of the team's findings, handed to the council/judge as the evidence to weigh. */
 function findingsDigest(assessments: Assessment[]): string {
-  return assessments.map((a) => `- ${a.name} (${a.recommendation}): ${a.concerns.join("; ") || "no concerns"}`).join("\n");
+  return assessments.map((a) => {
+    const list = a.findings.map((f) => `[${f.severity}] ${f.note}`).join("; ") || "no findings";
+    return `- ${a.name} (${a.recommendation}): ${list}`;
+  }).join("\n");
+}
+
+/** The consolidated team result written to chat once ALL members have reported (verdict + counts per member). */
+function teamSummaryNote(assessments: Assessment[], label: string): string {
+  const approve = assessments.filter((a) => a.recommendation === "approve").length;
+  const lines = assessments.map((a) => {
+    const c = severityCounts(a);
+    const counts = c.critical || c.medium || c.low ? ` — C:${c.critical} M:${c.medium} L:${c.low}` : "";
+    return `- \`${a.name}\` ${a.recommendation === "approve" ? "✓ APPROVE" : "✗ REJECT"}${counts}`;
+  }).join("\n");
+  return `**Team review of the ${label}** — ${approve}/${assessments.length} approve:\n${lines}`;
 }
 
 /**
@@ -134,10 +170,12 @@ export async function runCouncil(
         };
         try {
           const r = await runStructuredRole(opts, CouncilVoteSchema);
-          // No per-vote chat note — the tally is reported as one action by the caller (runReviewLoop).
+          // Stream this vote onto its live row as it lands (no chat note — the tally is one action from the caller).
+          emit({ kind: "agent-result", id: `council:${c.name}`, status: r.vote === "pass" ? "PASS" : "REVISE" });
           return { name: c.name, vote: r.vote, rationale: r.rationale };
         } catch (e) {
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
+          emit({ kind: "agent-result", id: `council:${c.name}`, status: "— no response" });
           return null; // a flaky voter → drop it; the tally uses the votes that landed (else → judge)
         }
       }),
@@ -225,6 +263,8 @@ export async function runReviewLoop(
       // not what each agent produced. Members' raw findings/votes stay out of the chat flow by design.
       emit({ kind: "note", text: `🔍 **Reviewing the ${label}** (round ${round + 1}) — the team (${deps.team.length}) is discussing it…` });
       const assessments = await runTeam(deps, workdir, docPath, emit);
+      // The whole team has reported → write the consolidated result to chat (per-member verdict + counts).
+      if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, label) });
       // Team consensus first: if a strong majority approves, pass — don't convene the council over a nitpick.
       const approve = assessments.filter((a) => a.recommendation === "approve").length;
       if (assessments.length && approve / assessments.length >= TEAM_CONSENSUS) {

@@ -106,15 +106,28 @@ describe("runTeam", () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({
       assessments: {
-        "security": '{"concerns":["secret leak"],"recommendation":"revise"}',
-        "architectural": '{"concerns":[],"recommendation":"approve"}',
+        "security": '{"findings":[{"severity":"critical","note":"secret leak"},{"severity":"low","note":"nit"}],"recommendation":"revise"}',
+        "architectural": '{"findings":[],"recommendation":"approve"}',
       },
     });
     const out = await runTeam(rdeps(p), dir, "spec.md");
     const byName = Object.fromEntries(out.map((a) => [a.name, a]));
     expect(byName.security.recommendation).toBe("revise");
-    expect(byName.security.concerns).toEqual(["secret leak"]);
+    expect(byName.security.findings.map((f) => f.severity)).toEqual(["critical", "low"]); // severity-tagged
     expect(byName.arch.recommendation).toBe("approve");
+  });
+
+  it("streams each member's result (verdict + severity counts) onto its live row as it finishes", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: {
+      "security": '{"findings":[{"severity":"critical","note":"x"},{"severity":"critical","note":"y"},{"severity":"low","note":"z"}],"recommendation":"revise"}',
+      "architectural": '{"findings":[],"recommendation":"approve"}',
+    } });
+    const results: { id: string; status: string }[] = [];
+    await runTeam(rdeps(p), dir, "spec.md", (ev) => { if (ev.kind === "agent-result") results.push(ev as never); });
+    const byId = Object.fromEntries(results.map((r) => [r.id, r.status]));
+    expect(byId["team:security"]).toBe("REJECT · C:2 M:0 L:1");
+    expect(byId["team:arch"]).toBe("APPROVE · C:0 M:0 L:0");
   });
 
   it("emits team members as live sub-agents, then clears the panel when done", async () => {
@@ -172,7 +185,7 @@ describe("runCouncil", () => {
   it("each member casts a pass/revise vote with a rationale (from the team's findings)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ councilVotes: { correctness: "revise" } }); // c1 revises, rest pass
-    const votes = await runCouncil(rdeps(p), dir, "spec.md", [{ name: "security", concerns: ["x"], recommendation: "revise" }]);
+    const votes = await runCouncil(rdeps(p), dir, "spec.md", [{ name: "security", findings: [{ severity: "critical", note: "x" }], recommendation: "revise" }]);
     const byName = Object.fromEntries(votes.map((v) => [v.name, v.vote]));
     expect(byName.c1).toBe("revise");
     expect(byName.c2).toBe("pass");
@@ -197,7 +210,7 @@ describe("runJudge", () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["no tests"],"question":""}'] });
     const d = await runJudge(rdeps(p), dir, "spec.md",
-      [{ name: "security", concerns: ["x"], recommendation: "revise" }],
+      [{ name: "security", findings: [{ severity: "critical", note: "x" }], recommendation: "revise" }],
       [{ name: "c1", vote: "revise", rationale: "risky" }, { name: "c2", vote: "pass", rationale: "ok" }]);
     expect(d.decision).toBe("revise");
     expect(d.feedback).toEqual(["no tests"]);
@@ -207,7 +220,7 @@ describe("runJudge", () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ judge: ["this is prose, not a decision"] }); // invalid → judge fails all retries
     const d = await runJudge(rdeps(p), dir, "spec.md",
-      [{ name: "security", concerns: ["x"], recommendation: "revise" }],
+      [{ name: "security", findings: [{ severity: "critical", note: "x" }], recommendation: "revise" }],
       [{ name: "c1", vote: "revise", rationale: "r" }]);
     expect(d.decision).toBe("revise"); // safe conservative fallback, not a thrown error
     expect(d.feedback.length).toBeGreaterThan(0);

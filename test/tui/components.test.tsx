@@ -253,6 +253,18 @@ describe("Ink components", () => {
     expect(f).toContain("1 agent running");
   });
 
+  it("RunningAgents shows a finished agent's result (verdict + counts) with a frozen duration", () => {
+    const now = Date.now();
+    const agents = [
+      { id: "t1", title: "team: security", model: "cx/gpt-5.6", startedAt: now - 30_000, status: "REJECT · C:2 M:1 L:0", doneAt: now - 5_000 },
+      { id: "t2", title: "team: arch", model: "cc/opus", startedAt: now - 30_000 }, // still running
+    ];
+    const f = strip(render(<RunningAgents agents={agents} cols={100} />).lastFrame());
+    expect(f).toContain("REJECT · C:2 M:1 L:0"); // result stamped on the finished row
+    expect(f).toMatch(/25s/); // frozen at doneAt-startedAt (25s), not the full 30s
+    expect(f).toContain("✔"); // finished marker (running rows keep the ● bullet)
+  });
+
   it("parsePending strips the [question]/[permission]/[human] tag + leading newline", () => {
     expect(parsePending("\n[question] What now?")).toEqual({ kind: "question", body: "What now?" });
     expect(parsePending("\n[permission] rm -rf\napprove? (y/n)").kind).toBe("permission");

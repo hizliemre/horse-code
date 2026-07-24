@@ -14,6 +14,8 @@ export type ProgressEvent =
   // Ad-hoc live sub-agents not backed by a board card (e.g. the review council running in parallel).
   // An empty list clears the panel.
   | { kind: "agents"; agents: { id: string; title: string; model: string }[] }
+  // One live sub-agent finished → stamp its result on its row (id matches an `agents` entry) as it lands.
+  | { kind: "agent-result"; id: string; status: string }
   // A transcript note pushed live from deep in the pipeline (e.g. each councilor's finding, the judge's call).
   | { kind: "note"; text: string };
 
