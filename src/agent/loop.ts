@@ -119,6 +119,9 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     };
     working.push(assistantMsg);
     yield { type: "message.done", message: assistantMsg };
+    // Generation of this turn (incl. any tool-call args) is done → clear the transient "writing/grep · N chars"
+    // line so a read-only tool (grep/read/glob), which never pushes file activity, doesn't leave it stuck.
+    opts.onLiveActivity?.("");
 
     if (toolCalls.length === 0) return;
 

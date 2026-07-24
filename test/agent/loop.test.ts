@@ -144,6 +144,17 @@ describe("runRoleAgent live activity", () => {
     await drain(runRoleAgent(opts(p, { onLiveActivity: (l) => labels.push(l) })));
     expect(labels).toContain("writing constitution.md · 1.4k chars"); // basename + humanized size
   });
+
+  it("clears the live-activity label when the turn's generation ends (no stale 'grep · N chars')", async () => {
+    const p = new MockProvider([[
+      { type: "tool-progress", name: "grep", chars: 68 },
+      { type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" },
+    ]]);
+    const labels: string[] = [];
+    await drain(runRoleAgent(opts(p, { onLiveActivity: (l) => labels.push(l) })));
+    expect(labels).toContain("grep · 68 chars"); // shown while generating
+    expect(labels.at(-1)).toBe(""); // …then cleared once generation finishes, so it can't linger
+  });
 });
 
 describe("runRoleAgent fallback chain", () => {
