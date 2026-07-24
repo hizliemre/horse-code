@@ -242,6 +242,27 @@ describe("runReviewLoop", () => {
     expect(revised).toBe(0);
   });
 
+  it("a single CRITICAL finding blocks the team shortcut even with FULL approve → council adjudicates", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    // Both lenses "approve" (2/2 = 100% ≥ 70%), but security surfaces a critical finding. Count alone would
+    // shortcut-pass; the severity gate must instead convene the council (each lens is the sole authority on its
+    // dimension — a majority must not wave through one lens's critical). Council here votes revise → not approved.
+    const p = reviewProvider({
+      assessments: {
+        "security": '{"findings":[{"severity":"critical","note":"secret leak"}],"recommendation":"approve"}',
+        "architectural": '{"findings":[],"recommendation":"approve"}',
+      },
+      councilVotes: allRevise,
+    });
+    const notes: string[] = [];
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", noRevise, async () => "Stop", 1, (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
+    const joined = notes.join("\n");
+    expect(joined).toMatch(/1 critical/i);                 // council convened BECAUSE of the critical finding
+    expect(joined).toMatch(/council/i);
+    expect(joined).not.toMatch(/Team.*clean.*approved/i);  // did NOT take the clean shortcut
+    expect(out.approved).toBe(false);                      // council said revise → round 1 → stop
+  });
+
   it("team split → council supermajority PASS → approved (judge not consulted)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ assessments: teamSplit, judge: ['{"decision":"revise","feedback":["ignored"],"question":""}'] }); // council all pass (default)

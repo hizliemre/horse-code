@@ -40,6 +40,20 @@ function memberStatus(a: Assessment): string {
   return `${a.recommendation === "approve" ? "APPROVE" : "REJECT"} · C:${c.critical} M:${c.medium} L:${c.low}`;
 }
 
+const SEVERITY_RANK: Record<Severity, number> = { critical: 3, medium: 2, low: 1 };
+/** The worst severity anywhere in the team's findings ("none" if the doc is clean). */
+function worstSeverity(assessments: Assessment[]): Severity | "none" {
+  let worst: Severity | "none" = "none";
+  for (const a of assessments) for (const f of a.findings) {
+    if (worst === "none" || SEVERITY_RANK[f.severity] > SEVERITY_RANK[worst]) worst = f.severity;
+  }
+  return worst;
+}
+/** Total findings across the team at a given severity → used in the council-handoff note. */
+function severityTotal(assessments: Assessment[], sev: Severity): number {
+  return assessments.reduce((n, a) => n + a.findings.filter((f) => f.severity === sev).length, 0);
+}
+
 export interface CouncilVote { name: string; vote: "pass" | "revise"; rationale: string }
 export const CouncilVoteSchema = z.object({
   vote: z.enum(["pass", "revise"]),
@@ -269,15 +283,27 @@ export async function runReviewLoop(
       const assessments = await runTeam(deps, workdir, docPath, emit);
       // The whole team has reported → write the consolidated result to chat (per-member verdict + counts).
       if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, label) });
-      // Team consensus first: if a strong majority approves, pass — don't convene the council over a nitpick.
+      // Team shortcut-pass — but ONLY when the doc is genuinely CLEAN. Each lens is the SOLE authority on its
+      // dimension, so a majority "approve" must NOT wave through a serious finding from one lens (e.g. a single
+      // critical security finding while the other 14 lenses, which don't inspect security, approve). Shortcut is
+      // allowed only when there is NO critical AND NO medium finding anywhere AND a strong majority approves;
+      // any critical/medium finding sends it to the council to adjudicate (never auto-passed by count).
       const approve = assessments.filter((a) => a.recommendation === "approve").length;
-      if (assessments.length && approve / assessments.length >= TEAM_CONSENSUS) {
-        emit({ kind: "note", text: `✅ **Team** reached consensus (${approve}/${assessments.length} approve) → the ${label} is approved.` });
+      const worst = worstSeverity(assessments);
+      const clean = worst === "none" || worst === "low"; // no critical/medium → safe to shortcut
+      if (assessments.length && clean && approve / assessments.length >= TEAM_CONSENSUS) {
+        emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the ${label} is approved.` });
         return { approved: true };
       }
 
-      // Contested → the team hands the decision to the council, which weighs the findings and VOTES.
-      emit({ kind: "note", text: `👥 **Team** is split (${approve}/${assessments.length} approve) → handed the decision to the **council** (${deps.council.length} members vote).` });
+      // Contested → the team hands the decision to the council, which weighs the findings and VOTES. Say WHY:
+      // a serious finding surfaced, or the team just split on approval.
+      const crit = severityTotal(assessments, "critical");
+      const med = severityTotal(assessments, "medium");
+      const reason = crit || med
+        ? `surfaced ${crit} critical / ${med} medium finding(s)`
+        : `is split (${approve}/${assessments.length} approve)`;
+      emit({ kind: "note", text: `👥 **Team** ${reason} → handed the decision to the **council** (${deps.council.length} members vote).` });
       const votes = await runCouncil(deps, workdir, docPath, assessments, emit);
       const tally = tallyCouncil(votes);
       const passVotes = votes.filter((v) => v.vote === "pass").length;
