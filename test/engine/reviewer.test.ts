@@ -34,6 +34,14 @@ describe("runReviewer", () => {
     expect(await runReviewer(deps(p), card(), "/tmp")).toEqual({ verdict: "fail", notes: ["there is an error"] });
   });
 
+  it("scopes the review to the task's CODE and excludes the already-approved upstream docs", async () => {
+    const p = new MockProvider([submitTurn('{"verdict":"pass","notes":[]}')]);
+    await runReviewer(deps(p), card(), "/tmp");
+    const msg = p.requests[0].messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+    expect(msg).toMatch(/code/i);
+    expect(msg).toMatch(/do not review[\s\S]*specs|\.specify|plan\.md|tasks\.md/i); // don't re-review spec/plan/tasks
+  });
+
   it("toolset is read-only (no write/edit/shell)", async () => {
     const p = new MockProvider([submitTurn('{"verdict":"pass","notes":[]}')]);
     await runReviewer(deps(p), card(), "/tmp");

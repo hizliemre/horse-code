@@ -35,7 +35,12 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
     ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [
-      { role: "user", content: `Review the worktree changes for task "${task.title}"; give a verdict (pass/fail + notes).` },
+      { role: "user", content:
+        `Review the CODE that implements task "${task.title}" — correctness, tests, and implementation quality.\n` +
+        `The subject of this review is ALWAYS the code. Do NOT review, re-open, or comment on the upstream ` +
+        `planning documents (specs/**, .specify/**, plan.md, tasks.md) — they were already reviewed and approved ` +
+        `before coding began; treat them as fixed context, not as something to critique.\n` +
+        `Give a verdict (pass/fail + notes).` },
     ],
     permission: deps.permission,
     approve: deps.approve,
