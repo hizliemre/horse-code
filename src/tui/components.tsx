@@ -1034,9 +1034,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   // exactly-fitting window (no Ink overflow bug). The input is ALWAYS visible at the bottom; while a job
   // runs, a cyan status box sits above it and a metrics line below it. ↑/↓/PgUp/PgDn scrolls history.
   if (fullscreen) {
+    // Chat content sits one unit off the left edge (paddingLeft below); flatten to the narrowed width so lines
+    // still fit within the indented column and don't wrap early.
+    const CHAT_INDENT = 2;
+    const chatW = size.cols - CHAT_INDENT;
     const allLines: StyledLine[] = [
-      ...flattenSplash(size.cols, size.rows),
-      ...state.transcript.flatMap((m) => ("kind" in m ? flattenTool(m.activity, size.cols) : flattenMessage(m.role, m.text, size.cols))),
+      ...flattenSplash(chatW, size.rows),
+      ...state.transcript.flatMap((m) => ("kind" in m ? flattenTool(m.activity, chatW) : flattenMessage(m.role, m.text, chatW))),
     ];
     if (state.mode === "picker") {
       const PICKER_H = PICKER_HEIGHT + 1; // the ModelPicker box + its marginTop (deterministic)
@@ -1048,7 +1052,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       const win = allLines.slice(Math.max(0, end - viewportH), end);
       return (
         <Box flexDirection="column" height={size.rows}>
-          <ViewportLines lines={win} height={viewportH} />
+          <Box paddingLeft={CHAT_INDENT}><ViewportLines lines={win} height={viewportH} /></Box>
           <Text dimColor> </Text>
           <Box marginTop={1}>
             {(() => {
@@ -1143,7 +1147,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const windowed = allLines.slice(Math.max(0, end - viewportH), end);
     return (
       <Box flexDirection="column" height={size.rows}>
-        <ViewportLines lines={windowed} height={viewportH} />
+        <Box paddingLeft={CHAT_INDENT}><ViewportLines lines={windowed} height={viewportH} /></Box>
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
         {showStatus ? (
           <Box flexDirection="column">
