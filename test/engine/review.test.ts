@@ -186,31 +186,46 @@ describe("runReviewLoop", () => {
     expect(feedbacks[0].some((s) => s.includes("X"))).toBe(true);
   });
 
-  it("maxRounds exhausted → final askUser 'approve' → approved; 'stop' → not", async () => {
+  it("maxRounds exhausted → offers approve / keep-reviewing / stop; approve → approved, stop → not", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p1 = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    const ok = await runReviewLoop(rdeps(p1), dir, "spec.md", noRevise, async () => "approve", 2);
+    const mk = () => reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    let opts: string[] | undefined;
+    const ok = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async (_q, o) => { opts = o?.options; return "approve"; }, 2);
+    expect(opts).toEqual(["Approve as-is", "Keep reviewing (2 more rounds)", "Stop"]); // three options now
     expect(ok.approved).toBe(true);
-    const p2 = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    const stop = await runReviewLoop(rdeps(p2), dir, "spec.md", noRevise, async () => "stop", 2);
+    const stop = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => "Stop", 2);
     expect(stop.approved).toBe(false);
-    // negation "I don't approve" (contains "approve") is NOT wrongly counted as approval
-    const p3 = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
-    const neg = await runReviewLoop(rdeps(p3), dir, "spec.md", noRevise, async () => "I don't approve", 2);
+    // A negation is NOT read as approval — it keeps reviewing until an explicit stop.
+    const answers = ["I don't approve", "Stop"]; let ci = 0;
+    const neg = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => answers[ci++], 2);
     expect(neg.approved).toBe(false);
+    expect(ci).toBe(2); // did NOT approve on the negation; escalated again, then stopped
   });
 
-  it("escalation is a localized selectable choice; Turkish 'devam' → approved", async () => {
+  it("'keep reviewing' runs another batch of rounds before re-escalating (user can continue WITHOUT approving)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const answers = ["Keep reviewing (1 more rounds)", "Approve as-is"]; let ai = 0;
+    let councilRounds = 0;
+    const out = await runReviewLoop(
+      rdeps(p), dir, "spec.md", noRevise,
+      async () => answers[ai++], 1,
+      (ev) => { if (ev.kind === "note" && /Reviewing the/.test(ev.text)) councilRounds++; },
+      "English",
+    );
+    expect(out.approved).toBe(true);
+    expect(ai).toBe(2); // escalated twice: continue, then approve
+    expect(councilRounds).toBe(2); // one council round ran before EACH escalation (maxRounds = 1)
+  });
+
+  it("escalation is a localized selectable choice (Turkish) with the keep-reviewing option", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const mk = () => reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
     let asked = "", opts: string[] | undefined;
-    const out = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async (q, o) => { asked = q; opts = o?.options; return "devam"; }, 1, () => {}, "Turkish");
+    const out = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async (q, o) => { asked = q; opts = o?.options; return "Mevcut haliyle onayla"; }, 1, () => {}, "Turkish");
     expect(asked).toMatch(/revizyon turunda onaylanmadı/); // Turkish escalation
-    expect(opts).toEqual(["Devam et (mevcut haliyle onayla)", "Durdur"]); // selectable options, localized
-    expect(out.approved).toBe(true); // "devam" (continue) counts as proceed
-    // selecting the approve option verbatim also approves
-    const out2 = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => "Devam et (mevcut haliyle onayla)", 1, () => {}, "Turkish");
-    expect(out2.approved).toBe(true);
+    expect(opts).toEqual(["Mevcut haliyle onayla", "Review'a devam et (1 tur daha)", "Durdur"]);
+    expect(out.approved).toBe(true);
     // "Durdur" does NOT approve
     const out3 = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => "Durdur", 1, () => {}, "Turkish");
     expect(out3.approved).toBe(false);

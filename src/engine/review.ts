@@ -114,34 +114,44 @@ export async function runReviewLoop(
   language?: string, // the user's language (from the refiner) → localize the human-facing escalation prompt
 ): Promise<ReviewOutcome> {
   const label = /plan/i.test(docPath) ? "plan" : "spec";
-  for (let round = 0; round < maxRounds; round++) {
-    emit({ kind: "note", text: `**Reviewing the ${label}** (round ${round + 1}) — ${deps.councilors.length} council members evaluating in parallel…` });
-    const assessments = await runCouncil(deps, workdir, docPath, emit);
-    // Consensus vote first: if a strong majority approves, pass — don't let a minority's nitpicks force a revise.
-    const approve = assessments.filter((a) => a.recommendation === "approve").length;
-    if (assessments.length && approve / assessments.length >= CONSENSUS_THRESHOLD) {
-      emit({ kind: "note", text: `✅ Council consensus — ${approve}/${assessments.length} approve. The ${label} passed.` });
-      return { approved: true };
+  let round = 0;
+  // Outer loop: run a batch of up to `maxRounds` council/judge rounds; if none pass, escalate to the human,
+  // who may approve as-is, ask for MORE review rounds (another batch), or stop. Only "stop" ends without approval.
+  for (;;) {
+    for (let i = 0; i < maxRounds; i++, round++) {
+      emit({ kind: "note", text: `**Reviewing the ${label}** (round ${round + 1}) — ${deps.councilors.length} council members evaluating in parallel…` });
+      const assessments = await runCouncil(deps, workdir, docPath, emit);
+      // Consensus vote first: if a strong majority approves, pass — don't let a minority's nitpicks force a revise.
+      const approve = assessments.filter((a) => a.recommendation === "approve").length;
+      if (assessments.length && approve / assessments.length >= CONSENSUS_THRESHOLD) {
+        emit({ kind: "note", text: `✅ Council consensus — ${approve}/${assessments.length} approve. The ${label} passed.` });
+        return { approved: true };
+      }
+      // Contested → the judge synthesizes the decision.
+      const d = await runJudge(deps, workdir, docPath, assessments, emit);
+      if (d.decision === "pass") { emit({ kind: "note", text: `✅ The ${label} passed review.` }); return { approved: true }; }
+      let feedback = d.feedback;
+      if (d.decision === "ask-human") {
+        emit({ kind: "note", text: `❓ Judge needs your input: ${d.question}` });
+        const answer = await askUser(d.question);
+        feedback = [...feedback, `Human answer: ${answer}`];
+      }
+      emit({ kind: "note", text: `↻ Revising the ${label} with the feedback…` });
+      await revise(feedback);
     }
-    // Contested → the judge synthesizes the decision.
-    const d = await runJudge(deps, workdir, docPath, assessments, emit);
-    if (d.decision === "pass") { emit({ kind: "note", text: `✅ The ${label} passed review.` }); return { approved: true }; }
-    let feedback = d.feedback;
-    if (d.decision === "ask-human") {
-      emit({ kind: "note", text: `❓ Judge needs your input: ${d.question}` });
-      const answer = await askUser(d.question);
-      feedback = [...feedback, `Human answer: ${answer}`];
-    }
-    emit({ kind: "note", text: `↻ Revising the ${label} with the feedback…` });
-    await revise(feedback);
+    // Escalation — localized to the user's language (this string is code-generated, not from an LLM, so the
+    // "respond in <language>" rule wouldn't reach it). SELECTABLE so the intent is unambiguous — including the
+    // "keep reviewing" option the user needs to run more rounds WITHOUT approving.
+    const [q, approveLabel, continueLabel, stopLabel] = language === "Turkish"
+      ? [`${round} revizyon turunda onaylanmadı. Ne yapmak istersin?`, "Mevcut haliyle onayla", `Review'a devam et (${maxRounds} tur daha)`, "Durdur"]
+      : [`Not approved after ${round} revision rounds. What now?`, "Approve as-is", `Keep reviewing (${maxRounds} more rounds)`, "Stop"];
+    const answer = (await askUser(q, { options: [approveLabel, continueLabel, stopLabel] })).trim();
+    if (answer === continueLabel || /^\s*(review|more|daha|başka|tur|round)/i.test(answer)) continue; // another batch of rounds
+    if (answer === stopLabel || /^\s*(stop|durdur|iptal|cancel|hay[ıi]r|no)\s*$/i.test(answer)) return { approved: false };
+    // Anything else that reads as approval → proceed as-is. (Bare "devam" is intentionally NOT here: with the
+    // explicit "keep reviewing" option present, its meaning is ambiguous — a plain selection covers approval.)
+    if (answer === approveLabel || /^\s*(approve|yes|onayla|onay|evet|kabul|tamam|ok)\s*$/i.test(answer)) return { approved: true };
+    // Unrecognized free text → safest default is to keep reviewing (never force-approve or silently abandon).
+    emit({ kind: "note", text: language === "Turkish" ? "↻ Anlaşılamadı — review'a devam ediliyor." : "↻ Unclear answer — continuing the review." });
   }
-  // Escalation to the human — localized to the user's language (this string is code-generated, not from an LLM,
-  // so the "respond in <language>" rule wouldn't reach it). Presented as a SELECTABLE choice so a free-text
-  // answer like "devam" (continue) can't be misread as a rejection.
-  const [q, approveLabel, stopLabel] = language === "Turkish"
-    ? [`${maxRounds} revizyon turunda onaylanmadı. Ne yapmak istersin?`, "Devam et (mevcut haliyle onayla)", "Durdur"]
-    : [`Not approved after ${maxRounds} revision rounds. What now?`, "Approve (proceed as-is)", "Stop"];
-  const answer = await askUser(q, { options: [approveLabel, stopLabel] });
-  // Accept the approve option exactly, or a free-typed approval in EN/TR ("continue"/"devam" mean proceed).
-  return { approved: answer.trim() === approveLabel || /^\s*(approve|yes|continue|onayla|onay|evet|devam(\s*et)?)\s*$/i.test(answer.trim()) };
 }
