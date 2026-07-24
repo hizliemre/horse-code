@@ -3,6 +3,7 @@ import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { writerRegistry, buildAskUserTool } from "../engine/writer-registry.js";
 import { commitFile } from "../engine/operational.js";
+import { normalizeQuestion } from "../engine/normalize-question.js";
 import type { TaskCycleDeps } from "../engine/task-types.js";
 import type { AskUser } from "../engine/review.js";
 import type { SpecKitTemplates } from "./templates.js";
@@ -19,7 +20,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
   // fallbackOpts (not resolve): spec-kit phases drive the role with the spec-kit command prompt, so they
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
   const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts(role);
-  const tools = writerRegistry(p.deps.skillRegistry, extraTools ? [buildAskUserTool(p.askUser)] : []);
+  const tools = writerRegistry(p.deps.skillRegistry, extraTools ? [buildAskUserTool(p.askUser, (q) => normalizeQuestion(p.deps, q))] : []);
   const opts: RoleAgentOptions = {
     provider: p.deps.provider,
     model,
