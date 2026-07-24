@@ -136,19 +136,32 @@ describe("loadConfig", () => {
     expect(cfg.roles.coder).toEqual({ models: ["m"], skills: ["tdd", "cs"] });
   });
 
-  it("parses council.councilors", () => {
+  it("parses team.members and council.members", () => {
+    const readFile = (p: string) =>
+      p === "/home/.horsecode/config.json"
+        ? JSON.stringify({
+            team: { members: [{ name: "sec", perspective: "security", models: ["m1"] }] },
+            council: { members: [{ name: "risk-judge", perspective: "risk", models: ["m2"] }] },
+          })
+        : undefined;
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
+    expect(cfg.team?.members[0]).toEqual({ name: "sec", perspective: "security", models: ["m1"] });
+    expect(cfg.council?.members[0]).toEqual({ name: "risk-judge", perspective: "risk", models: ["m2"] });
+  });
+
+  it("migrates the legacy council.councilors → team.members (the team was formerly the council)", () => {
     const readFile = (p: string) =>
       p === "/home/.horsecode/config.json"
         ? JSON.stringify({ council: { councilors: [{ name: "sec", perspective: "security", models: ["m1"] }] } })
         : undefined;
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
-    expect(cfg.council?.councilors[0].name).toBe("sec");
-    expect(cfg.council?.councilors[0].perspective).toBe("security");
-    expect(cfg.council?.councilors[0].models).toEqual(["m1"]);
+    expect(cfg.team?.members[0].name).toBe("sec");
+    expect(cfg.council).toBeUndefined(); // legacy key held the team, not the new decider council
   });
 
-  it("is undefined when there is no council", () => {
+  it("team + council are undefined when the file configures neither", () => {
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: () => undefined });
+    expect(cfg.team).toBeUndefined();
     expect(cfg.council).toBeUndefined();
   });
 

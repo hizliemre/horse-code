@@ -67,20 +67,23 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Getters (not snapshots): re-read on every render so the line reflects live /roles adjust · setmodel changes.
   const coachModel = (): string => deps0.roleRegistry.peekModel("coach") || opts.model || "";
   const refinerModel = (): string => deps0.roleRegistry.peekModel("refiner") || opts.model || "";
-  // Every assignable role: the main roles + the review councilors (which live in a SEPARATE registry). Both
-  // bootstrap and /roles adjust must cover all of these — otherwise a councilor stays on the invalid "default".
+  // Every assignable role: the main roles + the review TEAM lenses + the review COUNCIL deciders (both live in
+  // SEPARATE registries). Bootstrap and /roles adjust must cover all of these — else a member stays on "default".
   const REQ = REQUIRED_ROLES as readonly string[];
-  const councilorNames = deps0.councilors.map((c) => c.name);
-  const tunableRoles = (): string[] => [...REQUIRED_ROLES, ...councilorNames];
-  const regFor = (role: string) => (REQ.includes(role) ? deps0.roleRegistry : deps0.councilRegistry);
+  const teamNames = deps0.team.map((c) => c.name);
+  const councilNames = deps0.council.map((c) => c.name);
+  const reviewNames = new Set([...teamNames, ...councilNames]);
+  const tunableRoles = (): string[] => [...REQUIRED_ROLES, ...teamNames, ...councilNames];
+  const regFor = (role: string) =>
+    REQ.includes(role) ? deps0.roleRegistry : deps0.council.some((c) => c.name === role) ? deps0.councilRegistry : deps0.teamRegistry;
   const peekRole = (role: string): string => regFor(role).peekModel(role);
   const applyChain = (role: string, chain: string[]): void => regFor(role).setRoleModel(role, chain);
-  // /roles → each role + its full model chain (primary + fallbacks). `council` flags review councilors so the
-  // UI can group them. `model` = chain head, reflects /model.
-  const listRoles = (): { name: string; model: string; models: string[]; council?: boolean }[] =>
+  // /roles → each role + its full model chain (primary + fallbacks). `council` flags review team/council members
+  // so the UI can group them. `model` = chain head, reflects /model.
+  const listRoles = (): { name: string; model: string; models: string[]; council?: boolean; decider?: boolean }[] =>
     tunableRoles().map((r) => {
       const chain = regFor(r).chain(r);
-      return { name: r, model: chain[0] ?? "", models: chain, council: !REQ.includes(r) };
+      return { name: r, model: chain[0] ?? "", models: chain, council: reviewNames.has(r), decider: councilNames.includes(r) };
     });
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.
@@ -166,6 +169,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // council, coach, implementers…), so e.g. "respond in Turkish" holds through the whole pipeline, not just chat.
   const rulesFromMemory = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
   deps0.roleRegistry.setRules(rulesFromMemory);
+  deps0.teamRegistry.setRules(rulesFromMemory);
   deps0.councilRegistry.setRules(rulesFromMemory);
   // Surface any rules carried over from previous sessions on launch, so the user knows what's in effect
   // even when they don't (re)state them this session.

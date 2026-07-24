@@ -7,11 +7,15 @@ export interface RoleConfig {
   skills?: string[];
 }
 
-export interface CouncilorConfig {
+/** A named reviewer with a viewpoint + its model chain. Used for BOTH the review team (finders) and the
+ *  review council (deciders). */
+export interface ReviewerConfig {
   name: string;
   perspective: string;
   models: string[];
 }
+/** @deprecated legacy alias — the team's members were formerly called "councilors". */
+export type CouncilorConfig = ReviewerConfig;
 
 /** An MCP server to connect at startup: local (stdio subprocess) or remote (http/sse URL). */
 export type McpServerSpec =
@@ -25,7 +29,10 @@ export interface ResolvedConfig {
   mode: PermissionMode;
   allowlist: string[];
   roles: Record<string, RoleConfig>;
-  council?: { councilors: CouncilorConfig[] };
+  // Two-stage review bodies: the `team` (many lenses) produces findings; the `council` (a small strong panel)
+  // votes on contested docs. Absent → wiring fills in DEFAULT_TEAM / DEFAULT_COUNCIL.
+  team?: { members: ReviewerConfig[] };
+  council?: { members: ReviewerConfig[] };
   specKit: { version: string };
   mcp: Record<string, McpServerSpec>;
   /** Allowlist of model sources (omniroute `owned_by`) to show; empty = all (non-free). Only your connected
@@ -46,6 +53,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   modelSources: [],
 };
 
+const reviewerSchema = z.object({ name: z.string(), perspective: z.string(), models: z.array(z.string()) });
+
 // Fields that can be read from files (all optional).
 const fileSchema = z
   .object({
@@ -64,11 +73,14 @@ const fileSchema = z
         }),
       )
       .optional(),
+    // The review team (finders). `councilors` is the legacy key (the team was formerly called the council).
+    team: z
+      .object({ members: z.array(reviewerSchema) })
+      .optional(),
     council: z
       .object({
-        councilors: z.array(
-          z.object({ name: z.string(), perspective: z.string(), models: z.array(z.string()) }),
-        ),
+        members: z.array(reviewerSchema).optional(),
+        councilors: z.array(reviewerSchema).optional(), // legacy: old configs kept the 15 lenses here
       })
       .optional(),
     specKit: z.object({ version: z.string() }).optional(),
@@ -131,6 +143,14 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // specKit: "most specific wins" instead of merging (use project's if present).
   merged.specKit = projectSafe.specKit ?? global.specKit ?? DEFAULT_CONFIG.specKit;
+
+  // Review bodies (most-specific wins). Legacy configs kept the TEAM's lenses under `council.councilors`;
+  // migrate them to `team` so the freed-up `council` key can hold the new decider panel.
+  const legacyTeam = projectSafe.council?.councilors ?? global.council?.councilors;
+  const teamMembers = projectSafe.team?.members ?? global.team?.members ?? legacyTeam;
+  merged.team = teamMembers ? { members: teamMembers } : undefined;
+  const councilMembers = projectSafe.council?.members ?? global.council?.members;
+  merged.council = councilMembers ? { members: councilMembers } : undefined;
 
   // env has the highest priority.
   if (opts.env.OMNIROUTE_API_KEY) merged.apiKey = opts.env.OMNIROUTE_API_KEY;

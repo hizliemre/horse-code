@@ -13,7 +13,9 @@ const WEAK_RE = /\b(flash|mini|nano|haiku|lite|small|turbo|fast|\d{1,2}b)\b/i;
 //             which would be wasteful (and slow) at that volume.
 //  fast     — classify/route/coordinate: a cheap, fast model.
 const FLAGSHIP_ROLES = ["judge", "principal-coder"];
-const STRONG_ROLES = ["analyst", "planner", "architect", "senior-coder", "senior-designer"];
+// The review COUNCIL (5 deciders) casts the binding vote on contested docs → genuinely strong (Opus-tier) models.
+const COUNCIL_ROLES = ["correctness-judge", "risk-judge", "completeness-judge", "user-value-judge", "feasibility-judge"];
+const STRONG_ROLES = ["analyst", "planner", "architect", "senior-coder", "senior-designer", ...COUNCIL_ROLES];
 const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational"];
 const FAST_ROLES = ["refiner", "router", "project-manager", "team-lead"];
 const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]); // want a non-fast model
@@ -37,21 +39,28 @@ export const ROLE_PROFILES: Record<string, string> = {
   "code-reviewer": "Reviews diffs — moderate volume → a solid capable model.",
   operational: "Handles version control: writes conventional commit messages and (later) drives merges/conflicts — high volume → a capable, efficient model.",
   // Review council — each critiques the spec/plan from one angle; low volume, quality-critical → strong models.
-  security: "Council lens: security holes, auth, input validation — low volume, high stakes → a strong model.",
-  architecture: "Council lens: architectural soundness, boundaries — low volume → a strong model.",
-  testability: "Council lens: testability, isolation, edge-case coverage — low volume → a strong model.",
-  correctness: "Council lens: logical correctness, boundary conditions, invariants → a strong model.",
-  performance: "Council lens: complexity, hot paths, scalability → a strong model.",
-  "error-handling": "Council lens: failure modes, recovery, partial-failure behavior → a strong model.",
-  concurrency: "Council lens: races, deadlocks, atomicity, ordering → a strong model.",
-  "data-integrity": "Council lens: data modeling, consistency, migrations, transactions → a strong model.",
-  "api-design": "Council lens: interface/contract design, compatibility, ergonomics → a strong model.",
-  maintainability: "Council lens: readability, coupling/cohesion, tech-debt → a strong model.",
-  simplicity: "Council lens: YAGNI, over-engineering, scope creep → a capable model.",
-  completeness: "Council lens: requirement coverage, missing cases, spec gaps → a strong model.",
-  observability: "Council lens: logging, metrics, tracing, debuggability → a capable model.",
-  dependencies: "Council lens: third-party deps, supply-chain, versioning, licensing → a capable model.",
-  accessibility: "Council lens: a11y, i18n, inclusive UX → a capable model.",
+  security: "Team lens: security holes, auth, input validation — low volume, high stakes → a strong model.",
+  architecture: "Team lens: architectural soundness, boundaries — low volume → a strong model.",
+  testability: "Team lens: testability, isolation, edge-case coverage — low volume → a strong model.",
+  correctness: "Team lens: logical correctness, boundary conditions, invariants → a strong model.",
+  performance: "Team lens: complexity, hot paths, scalability → a strong model.",
+  "error-handling": "Team lens: failure modes, recovery, partial-failure behavior → a strong model.",
+  concurrency: "Team lens: races, deadlocks, atomicity, ordering → a strong model.",
+  "data-integrity": "Team lens: data modeling, consistency, migrations, transactions → a strong model.",
+  "api-design": "Team lens: interface/contract design, compatibility, ergonomics → a strong model.",
+  maintainability: "Team lens: readability, coupling/cohesion, tech-debt → a strong model.",
+  simplicity: "Team lens: YAGNI, over-engineering, scope creep → a capable model.",
+  completeness: "Team lens: requirement coverage, missing cases, spec gaps → a strong model.",
+  observability: "Team lens: logging, metrics, tracing, debuggability → a capable model.",
+  dependencies: "Team lens: third-party deps, supply-chain, versioning, licensing → a capable model.",
+  accessibility: "Team lens: a11y, i18n, inclusive UX → a capable model.",
+  // Review COUNCIL — the small decision panel that VOTES on contested docs (weighing the team's findings).
+  // Binding, high-stakes → genuinely strong (Opus-tier) models.
+  "correctness-judge": "Council decider: votes pass/revise weighing correctness/logic/data findings → a strong model.",
+  "risk-judge": "Council decider: votes pass/revise weighing security, failure-mode, and blast-radius findings → a strong model.",
+  "completeness-judge": "Council decider: votes pass/revise weighing requirement-coverage and spec-gap findings → a strong model.",
+  "user-value-judge": "Council decider: votes pass/revise weighing usability, a11y, and scope-vs-intent → a strong model.",
+  "feasibility-judge": "Council decider: votes pass/revise weighing architecture, simplicity, and maintainability → a strong model.",
 };
 const ROLE_ADVICE = ROLE_PROFILES; // picker note reuses the profiles
 

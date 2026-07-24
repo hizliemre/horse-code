@@ -57,10 +57,12 @@ describe("buildJobDeps", () => {
       }
     }
   });
-  it("council resolves; rounds=3; permission mode from config", async () => {
+  it("team + council resolve; rounds=3; permission mode from config", async () => {
     const d = await deps(baseConfig({ mode: "ask" }));
-    expect(d.councilors.length).toBeGreaterThan(0);
-    expect(() => d.councilRegistry.resolve(d.councilors[0].name)).not.toThrow();
+    expect(d.team.length).toBeGreaterThan(0);
+    expect(d.council.length).toBeGreaterThan(0);
+    expect(() => d.teamRegistry.resolve(d.team[0].name)).not.toThrow();
+    expect(() => d.councilRegistry.resolve(d.council[0].name)).not.toThrow();
     expect(d.rounds).toBe(3);
   });
   it("config.roles overrides the default", async () => {

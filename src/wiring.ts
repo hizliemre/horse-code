@@ -1,9 +1,9 @@
 import { RoleRegistry } from "./agent/roles.js";
 import { PermissionEngine } from "./permission/engine.js";
 import type { PermissionRequest } from "./permission/engine.js";
-import { buildCouncilRegistry } from "./engine/review.js";
-import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_COUNCILORS } from "./prompts.js";
-import type { ResolvedConfig, RoleConfig, CouncilorConfig } from "./config/config.js";
+import { buildTeamRegistry, buildCouncilRegistry } from "./engine/review.js";
+import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
+import type { ResolvedConfig, RoleConfig, ReviewerConfig } from "./config/config.js";
 import type { Provider } from "./core/types.js";
 import type { FetchLike } from "./providers/omniroute.js";
 import type { SkillRegistry } from "./skills/registry.js";
@@ -36,11 +36,11 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   }
   const roleRegistry = new RoleRegistry(roles, DEFAULT_PROMPTS, opts.skillRegistry);
 
-  const councilors: CouncilorConfig[] = (config.council?.councilors ?? DEFAULT_COUNCILORS).map((c) => ({
-    ...c,
-    models: c.models.length > 0 ? c.models : [config.model],
-  }));
-  const councilRegistry = buildCouncilRegistry(councilors);
+  const fillModels = (r: ReviewerConfig): ReviewerConfig => ({ ...r, models: r.models.length > 0 ? r.models : [config.model] });
+  const team: ReviewerConfig[] = (config.team?.members ?? DEFAULT_TEAM).map(fillModels);
+  const teamRegistry = buildTeamRegistry(team);
+  const council: ReviewerConfig[] = (config.council?.members ?? DEFAULT_COUNCIL).map(fillModels);
+  const councilRegistry = buildCouncilRegistry(council);
 
   const permission = new PermissionEngine({ mode: config.mode, allowlist: config.allowlist });
 
@@ -58,8 +58,10 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     approve: opts.approve,
     signal: opts.signal,
     specKit,
+    teamRegistry,
+    team,
     councilRegistry,
-    councilors,
+    council,
     manager: opts.manager,
     prAdapter: opts.prAdapter,
     rounds: 3,

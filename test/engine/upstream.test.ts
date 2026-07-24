@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAskUserTool, runUpstream } from "../../src/engine/upstream.js";
 import type { ReviewDeps } from "../../src/engine/review.js";
-import { buildCouncilRegistry } from "../../src/engine/review.js";
-import type { CouncilorConfig, RoleConfig } from "../../src/config/config.js";
+import { buildTeamRegistry, buildCouncilRegistry } from "../../src/engine/review.js";
+import type { ReviewerConfig, RoleConfig } from "../../src/config/config.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
@@ -26,9 +26,10 @@ const ctx = (): ToolContext => ({ cwd: ".", signal: new AbortController().signal
 // Content-based provider scripting the spec-kit pipeline: it keys off the systemPrompt (refiner / coach /
 // council perspective / judge) and, for the spec-kit phases, off the spec-kit command text ("COMMAND:<phase>"
 // injected by fakeSpecKit). Captures every request for assertions.
-export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean; councilRec?: "approve" | "revise" } = {}): Provider & { requests: ChatRequest[] } {
+export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean; councilRec?: "approve" | "revise"; councilVotes?: string[] } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
+  let councilCall = 0;
   return {
     requests,
     async *chat(req) {
@@ -68,6 +69,10 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       if (sys.includes("COMMAND:plan")) { yield* writeOnce("# plan"); return; }
       if (sys.includes("COMMAND:tasks")) { yield* writeOnce("# tasks"); return; }
       if (sys.includes("Conventional Commits")) { yield* submit('{"message":"chore: test step"}'); return; }
+      if (sys.includes("review COUNCIL")) { // council decider → cast a pass/revise vote
+        const arr = opts.councilVotes ?? ["pass"];
+        yield* submit(`{"vote":"${arr[councilCall] ?? arr[arr.length - 1]}","rationale":"r"}`); councilCall++; return;
+      }
       if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
@@ -90,7 +95,8 @@ export function udeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
     judge: { models: ["m"], systemPrompt: "P-judge" },
     operational: { models: ["m"], systemPrompt: "Write Conventional Commits messages." },
   };
-  const councilors: CouncilorConfig[] = [{ name: "sec", perspective: "security", models: ["m"] }];
+  const team: ReviewerConfig[] = [{ name: "sec", perspective: "security", models: ["m"] }];
+  const council: ReviewerConfig[] = [{ name: "risk-judge", perspective: "risk", models: ["m"] }];
   return {
     provider,
     roleRegistry: new RoleRegistry(roles, {}, new SkillRegistry()),
@@ -99,8 +105,10 @@ export function udeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
-    councilRegistry: buildCouncilRegistry(councilors),
-    councilors,
+    teamRegistry: buildTeamRegistry(team),
+    team,
+    councilRegistry: buildCouncilRegistry(council),
+    council,
   };
 }
 
@@ -188,15 +196,16 @@ describe("runUpstream", () => {
   });
 
   it("if the spec isn't approved → rejected(spec)", async () => {
-    const p = upstreamProvider({ intent: "feature", councilRec: "revise", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    // Team is split (revise) → council convenes; a revise vote → revise; the single round then escalates → stop.
+    const p = upstreamProvider({ intent: "feature", councilRec: "revise", councilVotes: ["revise"] });
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("spec");
   });
 
   it("if the spec is approved but the plan isn't → rejected(plan)", async () => {
-    // Spec review passes; plan review returns revise and never approves → the plan-stage review loop rejects.
-    const p = upstreamProvider({ intent: "feature", councilRec: "revise", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"revise","feedback":["b"],"question":""}'] });
+    // Team is split on both; the council votes pass for the spec (approved) then revise for the plan (rejected).
+    const p = upstreamProvider({ intent: "feature", councilRec: "revise", councilVotes: ["pass", "revise"] });
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("plan");

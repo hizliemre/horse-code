@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runJob } from "../../src/engine/job.js";
 import type { JobDeps } from "../../src/engine/job.js";
-import { buildCouncilRegistry } from "../../src/engine/review.js";
+import { buildTeamRegistry, buildCouncilRegistry } from "../../src/engine/review.js";
 import { WorktreeManager } from "../../src/worktree/manager.js";
 import type { RevisionPRAdapter } from "../../src/adapters/pr.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { initTmpRepo } from "../worktree/helpers.js";
-import type { CouncilorConfig, RoleConfig } from "../../src/config/config.js";
+import type { ReviewerConfig, RoleConfig } from "../../src/config/config.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
@@ -19,7 +19,7 @@ import type { ProgressEvent } from "../../src/engine/progress.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 // End-to-end provider that responds to all roles based on systemPrompt.
-function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[]; councilRec?: "approve" | "revise" } = {}): Provider & { requests: ChatRequest[] } {
+function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[]; councilRec?: "approve" | "revise"; councilVote?: "pass" | "revise" } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
   let principalCall = 0;
@@ -61,6 +61,7 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       if (sys.includes("P-router")) { yield* submit('{"role":"coder"}'); return; }
       if (sys.includes("P-reviewer")) { yield* submit('{"verdict":"pass","notes":[]}'); return; }
       if (sys.includes("Conventional Commits")) { yield* submit(`{"message":"chore: test step"}`); return; }
+      if (sys.includes("review COUNCIL")) { yield* submit(`{"vote":"${opts.councilVote ?? "pass"}","rationale":"r"}`); return; } // council decider
       if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
@@ -111,7 +112,8 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
     "code-reviewer": { models: ["m"], systemPrompt: "P-reviewer" },
     "team-lead": { models: ["m"], systemPrompt: "P-teamlead" },
   };
-  const councilors: CouncilorConfig[] = [{ name: "sec", perspective: "security", models: ["m"] }];
+  const team: ReviewerConfig[] = [{ name: "sec", perspective: "security", models: ["m"] }];
+  const council: ReviewerConfig[] = [{ name: "risk-judge", perspective: "risk", models: ["m"] }];
   return {
     provider,
     roleRegistry: new RoleRegistry(roles, {}, new SkillRegistry()),
@@ -120,8 +122,10 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
-    councilRegistry: buildCouncilRegistry(councilors),
-    councilors,
+    teamRegistry: buildTeamRegistry(team),
+    team,
+    councilRegistry: buildCouncilRegistry(council),
+    council,
     manager,
     prAdapter,
     rounds: 1,
@@ -147,7 +151,7 @@ describe("runJob", () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
-      const p = jobProvider({ intent: "feature", councilRec: "revise", judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+      const p = jobProvider({ intent: "feature", councilRec: "revise", councilVote: "revise" }); // team + council both revise → not approved
       const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "stop", maxRounds: 1 });
       expect(res.kind).toBe("rejected");
       if (res.kind === "rejected") expect(res.stage).toBe("spec");

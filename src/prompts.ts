@@ -1,4 +1,4 @@
-import type { CouncilorConfig } from "./config/config.js";
+import type { ReviewerConfig } from "./config/config.js";
 
 export const REQUIRED_ROLES = [
   "refiner", "coach", "analyst", "planner", "judge", "project-manager", "team-lead",
@@ -40,7 +40,9 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
 };
 
 // The review council: independent lenses that each critique the spec/plan from one angle (run in parallel).
-export const DEFAULT_COUNCILORS: CouncilorConfig[] = [
+// The review TEAM: many single-angle lenses that each read the doc and produce findings (concerns + a
+// approve/revise recommendation). Breadth is the point — one lens per failure mode.
+export const DEFAULT_TEAM: ReviewerConfig[] = [
   { name: "security", perspective: "security vulnerabilities, secret leakage, authentication/authorization, input validation", models: [] },
   { name: "architecture", perspective: "layer violations, dependency direction, module boundaries, overall consistency", models: [] },
   { name: "testability", perspective: "testability, isolation, dependency injection, coverage of edge cases", models: [] },
@@ -56,4 +58,15 @@ export const DEFAULT_COUNCILORS: CouncilorConfig[] = [
   { name: "observability", perspective: "logging, metrics, tracing, debuggability, actionable failure signals", models: [] },
   { name: "dependencies", perspective: "third-party dependencies, supply-chain risk, versioning, licensing", models: [] },
   { name: "accessibility", perspective: "accessibility (a11y), internationalization (i18n), inclusive UX", models: [] },
+];
+
+// The review COUNCIL: a small, strong panel that VOTES on a contested doc after weighing the team's findings.
+// Each member decides from one high-level judgment lens (not a single narrow failure mode), casting pass/revise
+// with a rationale. Five members → a 4/5 supermajority decides; a split goes to the judge (the final link).
+export const DEFAULT_COUNCIL: ReviewerConfig[] = [
+  { name: "correctness-judge", perspective: "Does the document actually specify a correct, coherent, internally-consistent solution? Weigh the team's correctness/logic/data findings.", models: [] },
+  { name: "risk-judge", perspective: "What is the real blast radius of shipping this as-is? Weigh security, failure modes, concurrency, and data-integrity findings against likelihood and severity.", models: [] },
+  { name: "completeness-judge", perspective: "Are the requirements fully and unambiguously covered? Weigh the team's completeness, spec-gap, and API-contract findings.", models: [] },
+  { name: "user-value-judge", perspective: "Does this deliver the user's actual intent well? Weigh usability, accessibility, and whether the scope serves the request without gold-plating.", models: [] },
+  { name: "feasibility-judge", perspective: "Can this be built and maintained as described? Weigh architecture, simplicity, dependencies, and maintainability findings against effort.", models: [] },
 ];

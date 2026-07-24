@@ -3,11 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildCouncilRegistry, runCouncil, runJudge, runReviewLoop,
+  buildTeamRegistry, buildCouncilRegistry, runTeam, runCouncil, runJudge, runReviewLoop,
   type ReviewDeps,
 } from "../../src/engine/review.js";
-import type { CouncilorConfig } from "../../src/config/config.js";
-import type { RoleConfig } from "../../src/config/config.js";
+import type { ReviewerConfig, RoleConfig } from "../../src/config/config.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
@@ -18,8 +17,11 @@ let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-review-")); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-// Content-based deterministic provider: councilor (systemPrompt "perspective") + judge ("P-judge").
-export function reviewProvider(opts: { assessments?: Record<string, string>; judge?: string[] }): Provider {
+// Content-based deterministic provider serving the three review roles by their distinct system prompt:
+//  - TEAM member  → "Your perspective:" → an Assessment  (keyed by perspective substring in `assessments`)
+//  - COUNCIL vote → "review COUNCIL"    → a CouncilVote   (keyed by lens substring in `councilVotes`; default pass)
+//  - JUDGE        → "P-judge"           → a JudgeDecision (sequence in `judge`)
+export function reviewProvider(opts: { assessments?: Record<string, string>; councilVotes?: Record<string, "pass" | "revise">; judge?: string[] }): Provider {
   let judgeCall = 0;
   return {
     async *chat(req) {
@@ -28,6 +30,12 @@ export function reviewProvider(opts: { assessments?: Record<string, string>; jud
         yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: args } } as const;
         yield { type: "done", finishReason: "tool_calls" } as const;
       };
+      if (sys.includes("review COUNCIL")) {
+        const key = Object.keys(opts.councilVotes ?? {}).find((k) => sys.includes(k));
+        const vote = (opts.councilVotes ?? {})[key ?? ""] ?? "pass";
+        yield* emit(`{"vote":"${vote}","rationale":"r"}`);
+        return;
+      }
       if (sys.includes("perspective")) {
         const key = Object.keys(opts.assessments ?? {}).find((k) => sys.includes(k));
         yield* emit((opts.assessments ?? {})[key ?? ""] ?? '{"concerns":[],"recommendation":"approve"}');
@@ -45,9 +53,18 @@ export function reviewProvider(opts: { assessments?: Record<string, string>; jud
   };
 }
 
-export const councilors: CouncilorConfig[] = [
+export const team: ReviewerConfig[] = [
   { name: "security", perspective: "security vulnerabilities", models: ["m"] },
   { name: "arch", perspective: "architectural layers", models: ["m"] },
+];
+// A 5-member council so a 4/5 supermajority (or a split → judge) can be exercised. Lens substrings are used
+// to target individual votes in `councilVotes`.
+export const council: ReviewerConfig[] = [
+  { name: "c1", perspective: "correctness", models: ["m"] },
+  { name: "c2", perspective: "risk", models: ["m"] },
+  { name: "c3", perspective: "completeness", models: ["m"] },
+  { name: "c4", perspective: "uservalue", models: ["m"] },
+  { name: "c5", perspective: "feasibility", models: ["m"] },
 ];
 
 export function rdeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
@@ -60,22 +77,32 @@ export function rdeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
-    councilRegistry: buildCouncilRegistry(councilors),
-    councilors,
+    teamRegistry: buildTeamRegistry(team),
+    team,
+    councilRegistry: buildCouncilRegistry(council),
+    council,
   };
 }
 
-describe("buildCouncilRegistry", () => {
-  it("converts a councilor into a role; resolve returns the model + perspective prompt", () => {
-    const reg = buildCouncilRegistry(councilors);
-    const r = reg.resolve("security");
-    expect(r.model).toBe("m");
-    expect(r.systemPrompt).toContain("security vulnerabilities");
+// council votes → { c1..c5: revise } (all revise) helper
+const allRevise: Record<string, "revise"> = { correctness: "revise", risk: "revise", completeness: "revise", uservalue: "revise", feasibility: "revise" };
+// a 3-2 split (2 revise, 3 pass) → no 4/5 supermajority → escalates to the judge
+const splitVotes: Record<string, "pass" | "revise"> = { correctness: "revise", risk: "revise" };
+
+describe("buildTeamRegistry / buildCouncilRegistry", () => {
+  it("team member → role with the finder prompt; council member → role with the voter prompt", () => {
+    const t = buildTeamRegistry(team).resolve("security");
+    expect(t.model).toBe("m");
+    expect(t.systemPrompt).toContain("security vulnerabilities");
+    expect(t.systemPrompt).toContain("perspective");
+    const c = buildCouncilRegistry(council).resolve("c1");
+    expect(c.systemPrompt).toContain("review COUNCIL");
+    expect(c.systemPrompt).toContain("correctness");
   });
 });
 
-describe("runCouncil", () => {
-  it("runs the councilors in parallel → named assessments; read-only toolset", async () => {
+describe("runTeam", () => {
+  it("runs the team in parallel → named assessments; read-only toolset", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({
       assessments: {
@@ -83,46 +110,46 @@ describe("runCouncil", () => {
         "architectural": '{"concerns":[],"recommendation":"approve"}',
       },
     });
-    const out = await runCouncil(rdeps(p), dir, "spec.md");
+    const out = await runTeam(rdeps(p), dir, "spec.md");
     const byName = Object.fromEntries(out.map((a) => [a.name, a]));
     expect(byName.security.recommendation).toBe("revise");
     expect(byName.security.concerns).toEqual(["secret leak"]);
     expect(byName.arch.recommendation).toBe("approve");
   });
 
-  it("emits councilors as live sub-agents, then clears the panel when done", async () => {
+  it("emits team members as live sub-agents, then clears the panel when done", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ assessments: { "security": '{"concerns":[],"recommendation":"approve"}', "architectural": '{"concerns":[],"recommendation":"approve"}' } });
     const events: { kind: string; agents?: { title: string }[] }[] = [];
-    await runCouncil(rdeps(p), dir, "spec.md", (ev) => events.push(ev as never));
+    await runTeam(rdeps(p), dir, "spec.md", (ev) => events.push(ev as never));
     const agentEvents = events.filter((e) => e.kind === "agents");
     expect(agentEvents.length).toBe(2); // one to show, one to clear
-    expect(agentEvents[0].agents?.map((a) => a.title)).toEqual(expect.arrayContaining([expect.stringContaining("council:")]));
+    expect(agentEvents[0].agents?.map((a) => a.title)).toEqual(expect.arrayContaining([expect.stringContaining("team:")]));
     expect(agentEvents[1].agents).toEqual([]); // cleared on finish
   });
 
-  it("narrates each councilor's finding live (approve ✓ / revise ⚠)", async () => {
+  it("narrates each member's finding live (approve ✓ / revise ⚠)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ assessments: {
       "security": '{"concerns":["secret leak"],"recommendation":"revise"}',
       "architectural": '{"concerns":[],"recommendation":"approve"}',
     } });
     const notes: string[] = [];
-    await runCouncil(rdeps(p), dir, "spec.md", (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
+    await runTeam(rdeps(p), dir, "spec.md", (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
     expect(notes.some((n) => /`security`.*⚠.*secret leak/.test(n))).toBe(true); // concern surfaced
     expect(notes.some((n) => /`arch`.*✓/.test(n))).toBe(true); // approval surfaced
   });
 
-  it("councilor toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {
+  it("member toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const { MockProvider } = await import("../../src/providers/mock.js");
     const p = new MockProvider([
       [{ type: "tool-call", toolCall: { id: "s", name: "submit", arguments: '{"concerns":[],"recommendation":"approve"}' } },
        { type: "done", finishReason: "tool_calls" }],
     ]);
-    const one: CouncilorConfig[] = [{ name: "solo", perspective: "genel", models: ["m"] }];
-    const deps: ReviewDeps = { ...rdeps(p), councilRegistry: buildCouncilRegistry(one), councilors: one };
-    await runCouncil(deps, dir, "spec.md");
+    const one: ReviewerConfig[] = [{ name: "solo", perspective: "genel", models: ["m"] }];
+    const deps: ReviewDeps = { ...rdeps(p), teamRegistry: buildTeamRegistry(one), team: one };
+    await runTeam(deps, dir, "spec.md");
     const names = p.requests[0].tools.map((t) => t.name);
     expect(names).toEqual(expect.arrayContaining(["read_file", "grep", "glob", "skill"]));
     expect(names).not.toContain("write_file");
@@ -130,13 +157,37 @@ describe("runCouncil", () => {
   });
 });
 
+describe("runCouncil", () => {
+  it("each member casts a pass/revise vote with a rationale (from the team's findings)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ councilVotes: { correctness: "revise" } }); // c1 revises, rest pass
+    const votes = await runCouncil(rdeps(p), dir, "spec.md", [{ name: "security", concerns: ["x"], recommendation: "revise" }]);
+    const byName = Object.fromEntries(votes.map((v) => [v.name, v.vote]));
+    expect(byName.c1).toBe("revise");
+    expect(byName.c2).toBe("pass");
+    expect(votes.every((v) => v.rationale.length > 0)).toBe(true);
+  });
+
+  it("emits council members as live sub-agents then clears the panel", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const events: { kind: string; agents?: { title: string }[] }[] = [];
+    await runCouncil(reviewProviderDeps(), dir, "spec.md", [], (ev) => events.push(ev as never));
+    const agentEvents = events.filter((e) => e.kind === "agents");
+    expect(agentEvents[0].agents?.map((a) => a.title)).toEqual(expect.arrayContaining([expect.stringContaining("council:")]));
+    expect(agentEvents.at(-1)!.agents).toEqual([]);
+  });
+});
+
+// small helper: council-only deps with a default (all-pass) provider
+function reviewProviderDeps(): ReviewDeps { return rdeps(reviewProvider({})); }
+
 describe("runJudge", () => {
-  it("assessments + judge → decision", async () => {
+  it("weighs team findings + council votes → a decision", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["no tests"],"question":""}'] });
-    const d = await runJudge(rdeps(p), dir, "spec.md", [
-      { name: "security", concerns: ["x"], recommendation: "revise" },
-    ]);
+    const d = await runJudge(rdeps(p), dir, "spec.md",
+      [{ name: "security", concerns: ["x"], recommendation: "revise" }],
+      [{ name: "c1", vote: "revise", rationale: "risky" }, { name: "c2", vote: "pass", rationale: "ok" }]);
     expect(d.decision).toBe("revise");
     expect(d.feedback).toEqual(["no tests"]);
   });
@@ -144,40 +195,60 @@ describe("runJudge", () => {
 
 describe("runReviewLoop", () => {
   const noRevise = async () => {};
-  // Both councilors recommend "revise" → 0% approve < 70% consensus → the judge is consulted.
-  const noConsensus = { security: '{"concerns":["x"],"recommendation":"revise"}', arch: '{"concerns":["y"],"recommendation":"revise"}' };
+  // Both team lenses recommend "revise" → 0% approve < 70% consensus → the council is convened.
+  const teamSplit = { security: '{"concerns":["x"],"recommendation":"revise"}', architectural: '{"concerns":["y"],"recommendation":"revise"}' };
 
-  it("council consensus (≥70% approve) → approved WITHOUT troubling the judge", async () => {
+  it("team consensus (≥70% approve) → approved WITHOUT convening the council or judge", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    // default assessments = both approve → 100% ≥ 70% → passes on the vote; the judge (would-be revise) never runs
-    const p = reviewProvider({ judge: ['{"decision":"revise","feedback":["ignored"],"question":""}'] });
+    // default team assessments = both approve → 100% ≥ 70% → passes; council votes (would revise) never run
+    const p = reviewProvider({ councilVotes: allRevise, judge: ['{"decision":"revise","feedback":["ignored"],"question":""}'] });
     let revised = 0;
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async () => { revised++; }, async () => "x", 3);
     expect(out.approved).toBe(true);
     expect(revised).toBe(0);
   });
 
-  it("no consensus → judge decides pass → approved, revise not called", async () => {
+  it("team split → council supermajority PASS → approved (judge not consulted)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    const p = reviewProvider({ assessments: teamSplit, judge: ['{"decision":"revise","feedback":["ignored"],"question":""}'] }); // council all pass (default)
     let revised = 0;
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async () => { revised++; }, async () => "x", 3);
     expect(out.approved).toBe(true);
     expect(revised).toBe(0);
   });
 
-  it("no consensus → revise(feedback) → second round pass → approved", async () => {
+  it("team split → council supermajority REVISE → revise(rationales) → next round council pass → approved", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["no tests"],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
+    // round 1: team revise + council all revise → revise; round 2: council pass → approved. Provider is stateless
+    // per-request, so drive round 2 via the second team consensus? Simplest: keep council revise once via a toggle.
+    let round = 0;
+    const p: Provider = {
+      async *chat(req) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        const em = function* (a: string) { yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const; yield { type: "done", finishReason: "tool_calls" } as const; };
+        if (sys.includes("review COUNCIL")) { yield* em(round === 0 ? '{"vote":"revise","rationale":"needs work"}' : '{"vote":"pass","rationale":"ok"}'); return; }
+        if (sys.includes("perspective")) { yield* em('{"concerns":["x"],"recommendation":"revise"}'); return; }
+        yield { type: "text-delta", text: "ok" } as const; yield { type: "done", finishReason: "stop" } as const;
+      },
+    };
     const feedbacks: string[][] = [];
-    const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async () => "x", 3);
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); round++; }, async () => "x", 3);
     expect(out.approved).toBe(true);
-    expect(feedbacks).toEqual([["no tests"]]);
+    expect(feedbacks[0].length).toBeGreaterThan(0); // council revise rationales became the revise feedback
   });
 
-  it("ask-human → askUser is called, the answer lands in the next revise feedback → pass", async () => {
+  it("council SPLIT (no supermajority) → judge decides pass → approved", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"ask-human","feedback":["unclear"],"question":"X or Y?"}', '{"decision":"pass","feedback":[],"question":""}'] });
+    const p = reviewProvider({ assessments: teamSplit, councilVotes: splitVotes, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    let revised = 0;
+    const out = await runReviewLoop(rdeps(p), dir, "spec.md", async () => { revised++; }, async () => "x", 3);
+    expect(out.approved).toBe(true);
+    expect(revised).toBe(0); // judge passed on the split
+  });
+
+  it("council split → judge ask-human → askUser answer lands in the revise feedback → pass", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: teamSplit, councilVotes: splitVotes, judge: ['{"decision":"ask-human","feedback":["unclear"],"question":"X or Y?"}', '{"decision":"pass","feedback":[],"question":""}'] });
     const feedbacks: string[][] = [];
     let asked = "";
     const out = await runReviewLoop(rdeps(p), dir, "spec.md", async (f) => { feedbacks.push(f); }, async (q) => { asked = q; return "X"; }, 3);
@@ -188,45 +259,43 @@ describe("runReviewLoop", () => {
 
   it("maxRounds exhausted → offers approve / keep-reviewing / stop; approve → approved, stop → not", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const mk = () => reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const mk = () => reviewProvider({ assessments: teamSplit, councilVotes: allRevise }); // team+council revise → never passes
     let opts: string[] | undefined;
     const ok = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async (_q, o) => { opts = o?.options; return "approve"; }, 2);
-    expect(opts).toEqual(["Approve as-is", "Keep reviewing (2 more rounds)", "Stop"]); // three options now
+    expect(opts).toEqual(["Approve as-is", "Keep reviewing (2 more rounds)", "Stop"]);
     expect(ok.approved).toBe(true);
     const stop = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => "Stop", 2);
     expect(stop.approved).toBe(false);
-    // A negation is NOT read as approval — it keeps reviewing until an explicit stop.
     const answers = ["I don't approve", "Stop"]; let ci = 0;
     const neg = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => answers[ci++], 2);
     expect(neg.approved).toBe(false);
-    expect(ci).toBe(2); // did NOT approve on the negation; escalated again, then stopped
+    expect(ci).toBe(2);
   });
 
-  it("'keep reviewing' runs another batch of rounds before re-escalating (user can continue WITHOUT approving)", async () => {
+  it("'keep reviewing' runs another batch of rounds before re-escalating", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const p = reviewProvider({ assessments: teamSplit, councilVotes: allRevise });
     const answers = ["Keep reviewing (1 more rounds)", "Approve as-is"]; let ai = 0;
-    let councilRounds = 0;
+    let rounds = 0;
     const out = await runReviewLoop(
       rdeps(p), dir, "spec.md", noRevise,
       async () => answers[ai++], 1,
-      (ev) => { if (ev.kind === "note" && /Reviewing the/.test(ev.text)) councilRounds++; },
+      (ev) => { if (ev.kind === "note" && /Reviewing the/.test(ev.text)) rounds++; },
       "English",
     );
     expect(out.approved).toBe(true);
-    expect(ai).toBe(2); // escalated twice: continue, then approve
-    expect(councilRounds).toBe(2); // one council round ran before EACH escalation (maxRounds = 1)
+    expect(ai).toBe(2);
+    expect(rounds).toBe(2); // one review round before EACH escalation (maxRounds = 1)
   });
 
   it("escalation is a localized selectable choice (Turkish) with the keep-reviewing option", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const mk = () => reviewProvider({ assessments: noConsensus, judge: ['{"decision":"revise","feedback":["a"],"question":""}'] });
+    const mk = () => reviewProvider({ assessments: teamSplit, councilVotes: allRevise });
     let asked = "", opts: string[] | undefined;
     const out = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async (q, o) => { asked = q; opts = o?.options; return "Mevcut haliyle onayla"; }, 1, () => {}, "Turkish");
-    expect(asked).toMatch(/revizyon turunda onaylanmadı/); // Turkish escalation
+    expect(asked).toMatch(/revizyon turunda onaylanmadı/);
     expect(opts).toEqual(["Mevcut haliyle onayla", "Review'a devam et (1 tur daha)", "Durdur"]);
     expect(out.approved).toBe(true);
-    // "Durdur" does NOT approve
     const out3 = await runReviewLoop(rdeps(mk()), dir, "spec.md", noRevise, async () => "Durdur", 1, () => {}, "Turkish");
     expect(out3.approved).toBe(false);
   });
