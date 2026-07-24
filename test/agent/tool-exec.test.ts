@@ -59,6 +59,35 @@ const writeFile: Tool = { name: "write_file", description: "w", permissionLevel:
 const editFile: Tool = { name: "edit_file", description: "e", permissionLevel: "write", parameters: z.object({ path: z.string() }), describe: (a) => ({ allowKey: String(a.path), preview: "e" }), run: async () => ({ content: "ok", isError: false }) };
 const failWrite: Tool = { name: "write_file", description: "w", permissionLevel: "write", parameters: z.object({ path: z.string() }), describe: (a) => ({ allowKey: String(a.path), preview: "w" }), run: async () => ({ content: "disk full", isError: true }) };
 
+const shell: Tool = {
+  name: "shell",
+  description: "runs a command",
+  permissionLevel: "exec",
+  parameters: z.object({ command: z.string() }),
+  describe: (a) => ({ allowKey: String(a.command), preview: String(a.command) }),
+  run: async (a) => ({ content: `ran:${a.command}`, isError: false }),
+};
+
+describe("executeToolCalls permission re-check at execution time", () => {
+  it("a mid-batch switch to auto applies to still-queued asks (stops nagging immediately)", async () => {
+    // Two exec calls in ONE turn are both planned as "ask" (mode=ask). While approving the first, the user
+    // switches to auto → the second must auto-run WITHOUT a prompt.
+    const permission = new PermissionEngine({ mode: "ask", allowlist: [] });
+    const prompted: string[] = [];
+    const { events, result } = await drainGen(executeToolCalls(
+      [call("1", "shell", { command: "ls -la" }), call("2", "shell", { command: "mkdir -p src" })],
+      deps({
+        tools: registry(shell),
+        permission,
+        approve: async (req) => { prompted.push(req.allowKey); permission.setMode("auto"); return true; }, // approve #1 + flip to auto
+      }),
+    ));
+    expect(prompted).toEqual(["ls -la"]); // only the FIRST asked; the second auto-allowed after the switch
+    expect(events.filter((e) => e.type === "permission.ask")).toHaveLength(1);
+    expect(result.map((r) => r.result.content)).toEqual(["ran:ls -la", "ran:mkdir -p src"]); // both actually ran
+  });
+});
+
 describe("executeToolCalls onWrite (per-file commit hook)", () => {
   it("fires sequentially after each successful write_file/edit_file, with the path", async () => {
     const written: string[] = [];

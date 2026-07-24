@@ -111,14 +111,26 @@ export async function* executeToolCalls(
   // 4) gated (ask) → sequential
   for (const p of plans.filter((pp) => pp.kind === "ask")) {
     yield { type: "tool.request", toolCall: p.call };
-    yield {
-      type: "permission.ask",
-      requestId: p.call.id,
-      toolName: p.call.name,
-      permissionLevel: p.tool!.permissionLevel,
-      preview: p.req!.preview,
-    };
-    const ok = await deps.approve(p.req!);
+    // Re-check at execution time, NOT just at plan time: several tool-calls in one turn are all planned as
+    // "ask" up front, then prompted one by one. If the user switches the mode to `auto` (or otherwise widens
+    // permission) WHILE an earlier ask is pending, that change must apply to these still-queued asks — so a
+    // mid-job "→ auto" stops nagging immediately instead of asking for everything already planned.
+    const decision = deps.permission.check(p.req!);
+    let ok: boolean;
+    if (decision === "allow") {
+      ok = true; // mode widened since planning → auto-allow, no prompt
+    } else if (decision === "deny") {
+      ok = false;
+    } else {
+      yield {
+        type: "permission.ask",
+        requestId: p.call.id,
+        toolName: p.call.name,
+        permissionLevel: p.tool!.permissionLevel,
+        preview: p.req!.preview,
+      };
+      ok = await deps.approve(p.req!);
+    }
     const result = ok
       ? await p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity, remember: deps.remember })
       : errResult(p.call.name, "user denied");
