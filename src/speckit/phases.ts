@@ -16,6 +16,12 @@ export interface PhaseDeps { deps: TaskCycleDeps; templates: SpecKitTemplates; w
 // the workspace, so the role must skip those and just write the target file with write_file.
 const SKIP = "The workspace is already scaffolded — do NOT run any shell scripts. Use write_file to write the output file exactly at the path given below.";
 
+// Authoring a spec/plan (and revising it across review rounds) legitimately needs far more tool-round turns
+// than the 50-turn default meant for short agents — a big doc with clarify Q&A + several revise passes can
+// exceed 50 read/edit turns in one invocation. Give the spec-kit phases a generous ceiling so a healthy phase
+// isn't cut off mid-write (which would crash the whole upstream); a genuinely stuck phase still stops here.
+const PHASE_MAX_TURNS = 200;
+
 async function runRole(p: PhaseDeps, role: string, command: string, message: string, extraTools = false): Promise<void> {
   // fallbackOpts (not resolve): spec-kit phases drive the role with the spec-kit command prompt, so they
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
@@ -29,6 +35,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     onFallback,
     systemPrompt: `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`,
     tools,
+    maxTurns: PHASE_MAX_TURNS,
     messages: [{ role: "user", content: message }],
     permission: p.deps.permission,
     approve: p.deps.approve,
