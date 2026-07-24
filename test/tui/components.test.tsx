@@ -171,6 +171,21 @@ describe("Ink components", () => {
     unmount();
   });
 
+  it("InputLine: empty input + Ctrl+C does NOT quit — it arms a 'press again' hint (two-step exit)", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const { stdin, lastFrame, unmount } = render(<InputLine value="" cursor={0} onChange={() => {}} onSubmit={() => {}} />);
+    await sleep(50); // let the raw-stdin handler attach
+    // First empty Ctrl+C: if it quit, it would call process.exit(0) and kill the test runner — it must NOT.
+    stdin.write("\x03");
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("again to exit"); i++) await sleep(15);
+    expect(strip(lastFrame())).toContain("press Ctrl+C again to exit"); // armed, not quit
+    // Any other key disarms the pending exit (hint disappears).
+    stdin.write("x");
+    for (let i = 0; i < 200 && strip(lastFrame()).includes("again to exit"); i++) await sleep(15);
+    expect(strip(lastFrame())).not.toContain("again to exit");
+    unmount();
+  });
+
   it("ChoiceInput (multiSelect): space toggles checkboxes, Enter submits the checked options joined", async () => {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     let answer: string | undefined;

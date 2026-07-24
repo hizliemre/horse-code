@@ -377,6 +377,11 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   const onSubmitRef = useRef(onSubmit); onSubmitRef.current = onSubmit;
   const paletteRef = useRef(paletteOpen); paletteRef.current = paletteOpen;
   const runningRef = useRef(jobRunning); runningRef.current = jobRunning;
+  // Empty-input Ctrl+C is a TWO-STEP quit: the first press arms + shows a hint, the second quits. Any other
+  // keystroke disarms it. (A fast double-tap also force-quits via App's onCtrlC — this is the deliberate path.)
+  const [exitArmed, setExitArmed] = useState(false);
+  const exitArmedRef = useRef(false); exitArmedRef.current = exitArmed;
+  useEffect(() => { if (jobRunning) setExitArmed(false); }, [jobRunning]); // a job started → drop the exit hint
   const onPasteImageRef = useRef(onPasteImage); onPasteImageRef.current = onPasteImage;
   const onHelpRef = useRef(onHelp); onHelpRef.current = onHelp;
   const makePasteTokenRef = useRef(makePasteToken); makePasteTokenRef.current = makePasteToken;
@@ -414,8 +419,17 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
         return;
       }
       const v = valRef.current, c = curRef.current, change = onChangeRef.current;
-      // Ctrl+C: while a job runs, defer to App (cancel the job / double-tap to quit); otherwise clear if non-empty, exit if empty.
-      if (s === "\x03" || s === "\x1b[99;5u") { if (runningRef.current) return; if (v.length > 0) change("", 0); else process.exit(0); return; }
+      // Any key other than Ctrl+C cancels a pending "press Ctrl+C again to exit".
+      if (s !== "\x03" && s !== "\x1b[99;5u" && exitArmedRef.current) setExitArmed(false);
+      // Ctrl+C: while a job runs, defer to App (cancel the job). Non-empty input → clear it. Empty input → a
+      // TWO-STEP quit: first press arms + hints, a second press quits (never quit on a single empty press).
+      if (s === "\x03" || s === "\x1b[99;5u") {
+        if (runningRef.current) return;
+        if (v.length > 0) { change("", 0); setExitArmed(false); return; }
+        if (exitArmedRef.current) { process.exit(0); }
+        setExitArmed(true);
+        return;
+      }
       if (s === "\r") { onSubmitRef.current(v); return; }
       if (NEWLINE_SEQS.has(s)) { change(v.slice(0, c) + "\n" + v.slice(c), c + 1); return; }
       if (s === "\x7f" || s === "\x08") { if (c > 0) change(v.slice(0, c - 1) + v.slice(c), c - 1); return; }
@@ -472,6 +486,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
           </Text>
         );
       })}
+      {exitArmed ? <Text dimColor>  press Ctrl+C again to exit</Text> : null}
     </Box>
   );
 }
