@@ -5,6 +5,12 @@ import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 
+// A real coding task (scaffold a project, write code + tests, iterate until green) legitimately needs far
+// more turns than the 50-turn default meant for short role agents. Give the implementer a generous budget so
+// a large-but-healthy task isn't cut off mid-work; a genuinely stuck task still hits this ceiling and, thanks
+// to per-task error isolation in runWaveTask, fails ONLY that task instead of crashing the whole job.
+const IMPLEMENTER_MAX_TURNS = 200;
+
 /** Runs the implementer role with worktree-scoped tools + a new-vs-returning message. */
 export async function runImplementer(
   deps: TaskCycleDeps,
@@ -25,6 +31,7 @@ export async function runImplementer(
     provider: deps.provider,
     ...resolved,
     tools,
+    maxTurns: IMPLEMENTER_MAX_TURNS,
     messages: [{ role: "user", content }],
     permission: deps.permission,
     approve: deps.approve,

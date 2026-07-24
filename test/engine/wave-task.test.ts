@@ -111,6 +111,43 @@ describe("runWaveTask", () => {
     }
   });
 
+  it("implementer throws (e.g. turn-count ceiling) → task-failed in ISOLATION, wave not crashed", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const p = new MockProvider([
+        submit('{"role":"coder"}'), // router picks a role
+        [{ type: "error", message: "maximum turn count exceeded (200)" }], // implementer blows up mid-work
+      ]);
+      const board = board1();
+      const res = await runWaveTask(wdeps(p, mgr), session, board, "t1"); // must NOT throw
+      expect(res.status).toBe("task-failed");
+      const stages = board.get("t1")!.stageHistory;
+      expect(stages.some((s) => s.action === "task-failed" && /turn count/.test(s.note ?? ""))).toBe(true);
+      expect(existsSync(join(session.baseWorktree, "out.txt"))).toBe(false); // nothing merged
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a genuine abort during the implementer still propagates (not swallowed as task-failed)", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const ac = new AbortController();
+      const p = new MockProvider([
+        submit('{"role":"coder"}'),
+        [{ type: "error", message: "cancelled" }],
+      ]);
+      ac.abort(); // signal already aborted → the catch must rethrow, not return task-failed
+      await expect(runWaveTask(wdeps(p, mgr, { signal: ac.signal }), session, board1(), "t1")).rejects.toThrow();
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it("conflict: mergeTask conflict → {status:'conflict', files} relayed + merge-conflict stage", async () => {
     const wt = await mkdtemp(join(tmpdir(), "hc-stub-"));
     try {

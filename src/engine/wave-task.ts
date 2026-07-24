@@ -42,7 +42,18 @@ export async function runWaveTask(
   const tw = await ser(() => deps.manager.deriveTask(session, card.title));
 
   const rounds = Math.max(1, deps.rounds);
-  const v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree);
+  // Isolate this task's failures: an implementer/reviewer that throws (e.g. hits its turn-count ceiling, or a
+  // non-retryable model error) must fail ONLY this task, not reject the wave's Promise.all and crash the whole
+  // job. A real cancel (aborted signal) still propagates. The job then ends "partial" with this task listed.
+  let v;
+  try {
+    v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree);
+  } catch (e) {
+    if (deps.signal.aborted) throw e; // genuine cancellation → propagate
+    const msg = e instanceof Error ? e.message : String(e);
+    board.appendStage(taskId, { role: "team-lead", action: "task-failed", note: msg });
+    return { status: "task-failed", task: tw };
+  }
   deps.signal.throwIfAborted(); // don't proceed to commit/merge if an abort came in during escalation
 
   if (v.verdict === "fail") {
