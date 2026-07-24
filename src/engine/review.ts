@@ -156,9 +156,9 @@ export async function runJudge(
   };
   const d = await runStructuredRole(opts, JudgeSchema);
   // ACTION-level note (the judge's ruling), not its reasoning. The revise details ride the revise step, not chat.
-  emit({ kind: "note", text: d.decision === "pass" ? `⚖️ **Judge** ruled: approve.`
-    : d.decision === "revise" ? `⚖️ **Judge** ruled: revise → sending it back for changes.`
-    : `⚖️ **Judge** needs your input to break the tie.` });
+  emit({ kind: "note", text: d.decision === "pass" ? `⚖ **Judge** ruled: approve.`
+    : d.decision === "revise" ? `⚖ **Judge** ruled: revise → sending it back for changes.`
+    : `⚖ **Judge** needs your input to break the tie.` });
   return d;
 }
 
@@ -212,7 +212,7 @@ export async function runReviewLoop(
       }
 
       // Contested → the team hands the decision to the council, which weighs the findings and VOTES.
-      emit({ kind: "note", text: `⚖️ **Team** is split (${approve}/${assessments.length} approve) → handed the decision to the **council** (${deps.council.length} members vote).` });
+      emit({ kind: "note", text: `⚖ **Team** is split (${approve}/${assessments.length} approve) → handed the decision to the **council** (${deps.council.length} members vote).` });
       const votes = await runCouncil(deps, workdir, docPath, assessments, emit);
       const tally = tallyCouncil(votes);
       const passVotes = votes.filter((v) => v.vote === "pass").length;
@@ -226,7 +226,7 @@ export async function runReviewLoop(
         decision = { decision: "revise", feedback: votes.filter((v) => v.vote === "revise").map((v) => v.rationale), question: "" };
       } else {
         // Split vote → the council defers the final call to the judge.
-        emit({ kind: "note", text: `⚖️ **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
+        emit({ kind: "note", text: `⚖ **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
         decision = await runJudge(deps, workdir, docPath, assessments, votes, emit);
         if (decision.decision === "pass") { emit({ kind: "note", text: `✅ **Judge** approved the ${label}.` }); return { approved: true }; }
       }
