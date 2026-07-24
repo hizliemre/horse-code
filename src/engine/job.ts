@@ -12,6 +12,7 @@ import { runProjectManager } from "./project-manager.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
 import { runRevision, type RevisionResult } from "./revision.js";
+import { clearCheckpoint } from "./checkpoint.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
 
 export interface JobDeps extends ReviewDeps {
@@ -69,7 +70,13 @@ export async function runJob(
   // nameHint = the refiner's short English title → a meaningful worktree name; falls back to the job name
   // (raw-prompt slug) only if the refiner produced no title.
   const ensureWorktree = async (nameHint?: string): Promise<string> => {
-    if (!session) session = await deps.manager.openSession(opts.fromBranch, nameHint || opts.jobName);
+    if (!session) {
+      // Resume: reuse a preserved worktree from an earlier interrupted run of the same prompt (so the user
+      // continues from where they left off — even after restarting hcode); otherwise open a fresh session.
+      session = (await deps.manager.findResumable(opts.prompt))
+        ?? await deps.manager.openSession(opts.fromBranch, nameHint || opts.jobName);
+      if (session.resumed) emit({ kind: "note", text: `⏩ Resuming earlier work at \`${session.baseWorktree}\` — completed phases are skipped.` });
+    }
     return session.baseWorktree;
   };
   try {
@@ -87,6 +94,7 @@ export async function runJob(
       // Don't discard the rejected draft: commit it to its branch (so the work survives) and tell the user
       // how to inspect it, instead of silently deleting the worktree + branch.
       if (session) {
+        clearCheckpoint(session.root); // user rejected → a terminal state; don't auto-resume it next run
         const dir = await deps.manager.preserveSession(session, `hc: rejected ${up.stage} draft`);
         emit({ kind: "note", text: `📄 The rejected ${up.stage} draft is kept at \`${dir}\` (branch \`${session.baseBranch}\`) — inspect the files there.` });
       }
@@ -123,12 +131,13 @@ export async function runJob(
 
     emit({ kind: "phase", phase: "report" });
     const report = await runCoachReport(deps, session, board);
+    clearCheckpoint(session.root); // whole job succeeded → nothing left to resume
     emit({ kind: "phase", phase: "done" });
     return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {
     // Keep the worktree on error so the user can inspect whatever the pipeline produced before it failed
     // (files are already committed per-write). Don't closeSession — that would delete them.
-    if (session) emit({ kind: "note", text: `📄 Work so far is kept at \`${session.baseWorktree}\` (branch \`${session.baseBranch}\`) — inspect the files there.` });
+    if (session) emit({ kind: "note", text: `📄 Work so far is kept at \`${session.baseWorktree}\` (branch \`${session.baseBranch}\`). Re-run the same request to resume from where it stopped.` });
     throw e;
   }
 }

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { relative } from "node:path";
+import { relative, dirname } from "node:path";
 import type { Message } from "../core/types.js";
 import type { ReviewDeps, AskUser } from "./review.js";
 import { runRefiner, routeIntent, type Intent } from "./refiner.js";
@@ -7,6 +7,7 @@ import { runCoachChat } from "./coach.js";
 import { extractListBlock } from "./next-steps.js";
 import { runReviewLoop } from "./review.js";
 import { commitStep } from "./operational.js";
+import { readCheckpoint, writeCheckpoint, type UpstreamPhase } from "./checkpoint.js";
 import type { ProgressEvent } from "./progress.js";
 import { constitutionPath, nextFeatureSlug, scaffoldFeature } from "../speckit/layout.js";
 import type { PhaseDeps } from "../speckit/phases.js";
@@ -64,62 +65,91 @@ export async function runUpstream(
   }
 
   // Feature/bugfix → open the worktree now; name it from the refiner's short English title (not the raw
-  // prompt slug). The spec-kit phases are the first real file writes.
+  // prompt slug). If this is a resumed run, ensureWorktree returns the preserved worktree. The spec-kit
+  // phases are the first real file writes.
   const workdir = await ensureWorktree(r.title);
   // Load the spec-kit templates on demand (the chat branch above never reaches here, so chat never fetches).
   const templates = await deps.specKit();
   const p: PhaseDeps = { deps, templates, workdir, askUser };
 
+  // Resume checkpoint lives at the worktree ROOT (one level above `base/`), so it is never committed.
+  // `done` = phases a prior interrupted run already finished; skip them and continue from the first gap.
+  const root = dirname(workdir);
+  const prior = readCheckpoint(root);
+  const done = new Set<UpstreamPhase>(prior?.done ?? []);
+  // Reuse the prior feature slug so resume writes into the SAME specs/NNN-… dir (not a fresh numbered one).
+  const slug = prior?.featureSlug ?? nextFeatureSlug(workdir, r.title);
+  const paths = scaffoldFeature(workdir, slug);
+  const specRel = relative(workdir, paths.spec);
+  const planRel = relative(workdir, paths.plan);
+  const mark = (phase: UpstreamPhase): void => {
+    done.add(phase);
+    writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, featureSlug: slug, done: [...done] });
+  };
+  if (done.size > 0) emit({ kind: "note", text: `⏩ Resuming — already done: ${[...done].join(", ")}. Continuing from the next phase.` });
+  // Seed the checkpoint immediately so even a crash before the first phase completes leaves a resumable marker.
+  writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, featureSlug: slug, done: [...done] });
+
   // Constitution: establish project principles once — only if this worktree has none yet.
-  if (!existsSync(constitutionPath(workdir))) {
-    emitPhase("constitution");
-    await runConstitution(p);
-    await commitStep(deps, workdir, "establish the project constitution");
+  if (!done.has("constitution")) {
+    if (!existsSync(constitutionPath(workdir))) {
+      emitPhase("constitution");
+      await runConstitution(p);
+      await commitStep(deps, workdir, "establish the project constitution");
+    }
+    mark("constitution");
   }
 
-  const slug = nextFeatureSlug(workdir, r.title);
-  const paths = scaffoldFeature(workdir, slug);
-
   // Specify → council/judge review loop (revise = re-run specify with feedback).
-  emitPhase("specify");
-  await runSpecify(p, paths, r.refinedPrompt);
-  const specRel = relative(workdir, paths.spec);
-  const specOut = await runReviewLoop(
-    deps, workdir, specRel,
-    (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
-    askUser, maxRounds,
-    emit,
-    r.language,
-  );
-  if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
-  // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
-  if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
-  await commitStep(deps, workdir, "add the feature specification");
+  if (!done.has("spec")) {
+    emitPhase("specify");
+    await runSpecify(p, paths, r.refinedPrompt);
+    const specOut = await runReviewLoop(
+      deps, workdir, specRel,
+      (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
+      askUser, maxRounds,
+      emit,
+      r.language,
+    );
+    if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
+    // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
+    if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
+    await commitStep(deps, workdir, "add the feature specification");
+    mark("spec");
+  }
 
   // Clarify: structured Q&A loop that tightens the spec before planning (capped inside runClarify).
-  emitPhase("clarify");
-  await runClarify(p, paths);
-  await commitStep(deps, workdir, "clarify the feature specification");
+  if (!done.has("clarify")) {
+    emitPhase("clarify");
+    await runClarify(p, paths);
+    await commitStep(deps, workdir, "clarify the feature specification");
+    mark("clarify");
+  }
 
   // Plan → council/judge review loop (revise = re-run plan with feedback).
-  emitPhase("plan");
-  await runPlan(p, paths);
-  const planRel = relative(workdir, paths.plan);
-  const planOut = await runReviewLoop(
-    deps, workdir, planRel,
-    (fb) => runPlan(p, paths, fb),
-    askUser, maxRounds,
-    emit,
-    r.language,
-  );
-  if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
-  if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
-  await commitStep(deps, workdir, "add the implementation plan");
+  if (!done.has("plan")) {
+    emitPhase("plan");
+    await runPlan(p, paths);
+    const planOut = await runReviewLoop(
+      deps, workdir, planRel,
+      (fb) => runPlan(p, paths, fb),
+      askUser, maxRounds,
+      emit,
+      r.language,
+    );
+    if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
+    if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
+    await commitStep(deps, workdir, "add the implementation plan");
+    mark("plan");
+  }
 
   // Tasks: break the approved plan into the actionable task list handed downstream to the project-manager.
-  emitPhase("tasks");
-  await runTasks(p, paths);
-  await commitStep(deps, workdir, "break the plan into tasks");
+  if (!done.has("tasks")) {
+    emitPhase("tasks");
+    await runTasks(p, paths);
+    await commitStep(deps, workdir, "break the plan into tasks");
+    mark("tasks");
+  }
 
   return {
     intent: r.intent,

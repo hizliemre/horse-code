@@ -1,8 +1,9 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
+import { readCheckpoint, checkpointKey } from "../engine/checkpoint.js";
 
 /** Don't let the PR diff bloat the revision prompt: anything above this char limit is truncated. */
 const MAX_DIFF_CHARS = 60_000;
@@ -12,6 +13,7 @@ export interface WorktreeSession {
   root: string;
   baseWorktree: string;
   baseBranch: string;
+  resumed?: boolean; // true when this session reuses a preserved worktree from an earlier interrupted run
 }
 export interface TaskWorktree {
   taskSlug: string;
@@ -101,6 +103,48 @@ export class WorktreeManager {
     await mkdir(join(root, "tasks"), { recursive: true });
     await this.run(["worktree", "add", "-b", baseBranch, baseWorktree, base], this.repoRoot);
     return { jobSlug, root, baseWorktree, baseBranch };
+  }
+
+  /** Absolute paths of the worktrees git currently tracks (from `git worktree list --porcelain`). */
+  private async registeredWorktrees(): Promise<Set<string>> {
+    const r = await this.git(["worktree", "list", "--porcelain"], this.repoRoot);
+    const paths = new Set<string>();
+    for (const line of r.stdout.split("\n")) {
+      if (line.startsWith("worktree ")) {
+        const p = line.slice("worktree ".length).trim();
+        try { paths.add(realpathSync(p)); } catch { paths.add(p); }
+      }
+    }
+    return paths;
+  }
+
+  /**
+   * Resume support: find a preserved worktree from an earlier interrupted run of the SAME prompt. Scans every
+   * `.horsecode/worktrees/<slug>/checkpoint.json` for a matching prompt key, and only returns a session whose
+   * `base` worktree is still live in git (a pruned/stale dir can't be safely reused). Returns null when there
+   * is nothing to resume — the caller then opens a fresh session.
+   */
+  async findResumable(rawPrompt: string): Promise<WorktreeSession | null> {
+    const worktreesDir = join(this.repoRoot, ".horsecode", "worktrees");
+    if (!existsSync(worktreesDir)) return null;
+    // ensureRepo would be needed for the git call below, but if there's a worktrees dir there's already a repo.
+    const inside = await this.git(["rev-parse", "--is-inside-work-tree"], this.repoRoot);
+    if (inside.code !== 0) return null;
+    const key = checkpointKey(rawPrompt);
+    const registered = await this.registeredWorktrees();
+    for (const slug of readdirSync(worktreesDir)) {
+      const root = join(worktreesDir, slug);
+      const cp = readCheckpoint(root);
+      if (!cp || checkpointKey(cp.rawPrompt) !== key) continue;
+      const baseWorktree = join(root, "base");
+      // git worktree list reports canonical (symlink-resolved) paths, so compare via realpath — otherwise a
+      // repo under a symlinked prefix (e.g. macOS /var → /private/var) would never match.
+      let real: string;
+      try { real = realpathSync(baseWorktree); } catch { continue; } // dir gone → not resumable
+      if (!registered.has(real)) continue; // dir exists but git no longer tracks it → unsafe to reuse
+      return { jobSlug: slug, root, baseWorktree, baseBranch: `hc/${slug}/base`, resumed: true };
+    }
+    return null;
   }
 
   async deriveTask(session: WorktreeSession, taskName: string): Promise<TaskWorktree> {

@@ -110,6 +110,44 @@ describe("WorktreeManager.preserveSession (rejection)", () => {
   });
 });
 
+describe("WorktreeManager.findResumable", () => {
+  it("returns the preserved session when a checkpoint matches the prompt (case/space-tolerant)", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "todo-app");
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: ["constitution", "spec"] });
+    const found = await wm.findResumable("  build A todo APP "); // retyped, different case/spacing
+    expect(found?.jobSlug).toBe("todo-app");
+    expect(found?.baseWorktree).toBe(s.baseWorktree);
+    expect(found?.resumed).toBe(true);
+  });
+
+  it("returns null when no checkpoint matches (fresh session)", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "todo-app");
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: [] });
+    expect(await wm.findResumable("Build a chat app")).toBeNull(); // different prompt
+  });
+
+  it("ignores a checkpoint whose worktree git no longer tracks (stale dir, unsafe to reuse)", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "todo-app");
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: ["spec"] });
+    // Detach the worktree from git but leave the dir + checkpoint on disk.
+    await defaultGitRunner(["worktree", "remove", "--force", s.baseWorktree], repo);
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(s.baseWorktree, { recursive: true });
+    writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", featureSlug: "001-todo-app", done: ["spec"] });
+    await writeFile(join(s.root, "keep.txt"), "x", "utf8");
+    expect(await wm.findResumable("Build a todo app")).toBeNull(); // not git-tracked → skipped
+  });
+});
+
 describe("WorktreeManager.deriveTask", () => {
   it("creates a worktree derived from base + hc/<slug>/t/<task> branch", async () => {
     repo = await initTmpRepo();

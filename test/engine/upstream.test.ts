@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, readdir, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,9 +13,13 @@ import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider, ChatRequest, ToolContext } from "../../src/core/types.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
-let dir: string;
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-upstream-")); });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+// `root` is the per-job worktree root; the pipeline writes into `root/base` (workdir) and drops the resume
+// checkpoint at `root/checkpoint.json` (a sibling of base, never committed). `dir` mirrors that contract so
+// each test's checkpoint is isolated under its own root (and cleaned by afterEach).
+let root: string;
+let dir: string; // = root/base, the worktree the pipeline writes into
+beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "hc-upstream-")); dir = join(root, "base"); await mkdir(dir, { recursive: true }); });
+afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
 const ctx = (): ToolContext => ({ cwd: ".", signal: new AbortController().signal });
 
@@ -203,6 +207,29 @@ describe("runUpstream", () => {
     const events: { kind: string; refinedPrompt?: string }[] = [];
     await runUpstream(udeps(p), () => Promise.resolve(dir), "hello", async () => "x", 3, [], (ev) => events.push(ev));
     expect(events).toContainEqual({ kind: "refined", refinedPrompt: "Do X" });
+  });
+
+  it("resumes from a checkpoint: skips already-done phases (spec review only re-runs for the unfinished plan)", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    const { writeFile } = await import("node:fs/promises");
+    // Simulate an interrupted run: constitution + spec + clarify are done; plan/tasks remain. Pre-place the
+    // artifacts the completed phases already produced so the reused paths line up.
+    const slug = "001-add-thing";
+    await mkdir(join(dir, "specs", slug), { recursive: true });
+    await mkdir(join(dir, ".specify", "memory"), { recursive: true });
+    await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
+    await writeFile(join(dir, "specs", slug, "spec.md"), "# existing spec", "utf8");
+    writeCheckpoint(root, { rawPrompt: "Add X", refinedPrompt: "Do X", title: "add thing", featureSlug: slug, done: ["constitution", "spec", "clarify"] });
+
+    // Only the plan review needs a judge verdict now — spec review must NOT run again.
+    const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}'] });
+    const phases: string[] = [];
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); });
+    expect(res.kind).toBe("approved");
+    expect(phases).toEqual(["plan", "tasks"]); // constitution/specify/clarify were skipped
+    expect(await readFile(join(dir, "specs", slug, "spec.md"), "utf8")).toBe("# existing spec"); // untouched
+    // No COMMAND:specify request was issued — the spec phase truly did not re-run.
+    expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:specify"))).toBe(false);
   });
 
   it("emits the spec-kit phase events in order", async () => {
