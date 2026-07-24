@@ -152,16 +152,22 @@ describe("runTeam", () => {
     expect(notes).toEqual([]); // no per-member chat notes; members appear only in the live-agents panel
   });
 
-  it("a member that never submits a valid result is DROPPED — the review does not crash", async () => {
+  it("a member that can't review is NOT dropped — it becomes a BLOCKING critical (UNVERIFIED), fail-safe", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    // `security` returns invalid JSON → runStructuredRole exhausts its retries and throws; runTeam must swallow
-    // that one and return the members that DID respond, instead of rejecting the whole Promise.all.
+    // `security` returns invalid JSON → runStructuredRole exhausts its retries and throws. Instead of silently
+    // dropping that lens (which would let the review approve an UNVERIFIED dimension), runTeam must return a
+    // blocking critical assessment for it so the council has to adjudicate the gap.
+    const results: { id: string; status: string }[] = [];
     const p = reviewProvider({ assessments: {
       "security": "I have no strong opinion",           // invalid → the member fails
-      "architectural": '{"concerns":[],"recommendation":"approve"}',
+      "architectural": '{"findings":[],"recommendation":"approve"}',
     } });
-    const out = await runTeam(rdeps(p), dir, "spec.md"); // must NOT throw
-    expect(out.map((a) => a.name)).toEqual(["arch"]); // only the responding member survives
+    const out = await runTeam(rdeps(p), dir, "spec.md", (ev) => { if (ev.kind === "agent-result") results.push(ev as never); });
+    expect(out.map((a) => a.name).sort()).toEqual(["arch", "security"]); // security is KEPT, not dropped
+    const sec = out.find((a) => a.name === "security")!;
+    expect(sec.recommendation).toBe("revise");
+    expect(sec.findings).toEqual([expect.objectContaining({ severity: "critical" })]); // blocking, forces the council
+    expect(results.find((r) => r.id === "team:security")!.status).toMatch(/UNVERIFIED/);
   });
 
   it("member toolset is read-only (read/grep/glob/skill; no write/shell)", async () => {

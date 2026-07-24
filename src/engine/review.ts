@@ -114,8 +114,8 @@ export async function runTeam(
   // Surface each team member as a live sub-agent (they run in parallel) so the user sees the review happening.
   emit({ kind: "agents", agents: deps.team.map((c) => ({ id: `team:${c.name}`, title: `team: ${c.name}`, model: deps.teamRegistry.peekModel(c.name) })) });
   try {
-    const results = await Promise.all(
-      deps.team.map(async (c): Promise<Assessment | null> => {
+    return await Promise.all(
+      deps.team.map(async (c): Promise<Assessment> => {
         const resolved = deps.teamRegistry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
         const opts: RoleAgentOptions = {
@@ -135,12 +135,15 @@ export async function runTeam(
           return a;
         } catch (e) {
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
-          emit({ kind: "agent-result", id: `team:${c.name}`, status: "— no response", ...tok });
-          return null; // a flaky member (never submitted, model error) → drop it, don't crash the whole review
+          // Fail-SAFE, not fail-silent: a lens that can't complete its review leaves its dimension UNVERIFIED.
+          // Silently dropping it would let the review approve a dimension NOBODY checked (e.g. correctness /
+          // data-integrity). Return a BLOCKING critical finding instead → the shortcut can't pass over the gap
+          // and the council must adjudicate it. (Root cause is usually an unavailable/misassigned model chain.)
+          emit({ kind: "agent-result", id: `team:${c.name}`, status: "⚠ UNVERIFIED (no response)", ...tok });
+          return { name: c.name, recommendation: "revise", findings: [{ severity: "critical", note: `The "${c.name}" lens could not complete its review (no response from its model chain) — this dimension is UNVERIFIED and must be re-checked (check the model assigned to it).` }] };
         }
       }),
     );
-    return results.filter((a): a is Assessment => a !== null);
   } finally {
     emit({ kind: "agents", agents: [] }); // clear the live-agents panel when the team finishes
   }
@@ -176,7 +179,7 @@ export async function runCouncil(
   emit({ kind: "agents", agents: deps.council.map((c) => ({ id: `council:${c.name}`, title: `council: ${c.name}`, model: deps.councilRegistry.peekModel(c.name) })) });
   try {
     const results = await Promise.all(
-      deps.council.map(async (c): Promise<CouncilVote | null> => {
+      deps.council.map(async (c): Promise<CouncilVote> => {
         const resolved = deps.councilRegistry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 };
         const opts: RoleAgentOptions = {
@@ -193,12 +196,14 @@ export async function runCouncil(
           return { name: c.name, vote: r.vote, rationale: r.rationale };
         } catch (e) {
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
-          emit({ kind: "agent-result", id: `council:${c.name}`, status: "— no response", ...tok });
-          return null; // a flaky voter → drop it; the tally uses the votes that landed (else → judge)
+          // Fail-SAFE: a decider that can't vote counts as a conservative REVISE (we can't confirm the doc is
+          // fine), never silently dropped — otherwise a shrunk council could accidentally reach a "pass".
+          emit({ kind: "agent-result", id: `council:${c.name}`, status: "⚠ UNVERIFIED (no response)", ...tok });
+          return { name: c.name, vote: "revise", rationale: `The "${c.name}" decider could not vote (no response) — counted as revise to be safe.` };
         }
       }),
     );
-    return results.filter((v): v is CouncilVote => v !== null);
+    return results;
   } finally {
     emit({ kind: "agents", agents: [] });
   }

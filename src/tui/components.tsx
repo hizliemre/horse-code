@@ -324,7 +324,11 @@ export function RunningAgents({ agents, cols }: { agents: RunningAgent[]; cols: 
       <Text dimColor>{`  ${agents.length} ${agents.length === 1 ? "agent" : "agents"} running`}</Text>
       {agents.map((a) => {
         const dur = fmtDuration((a.doneAt ?? Date.now()) - a.startedAt); // freeze once the agent has reported
-        const statusColor = a.status ? (/REJECT|revise/i.test(a.status) ? "#ff6b6b" : /APPROVE|pass/i.test(a.status) ? "green" : undefined) : undefined;
+        const statusColor = a.status
+          ? (/UNVERIFIED|no response/i.test(a.status) ? "#ffb454" // amber — a lens that couldn't review (blocking)
+            : /REJECT|revise/i.test(a.status) ? "#ff6b6b"
+            : /APPROVE|pass/i.test(a.status) ? "green" : undefined)
+          : undefined;
         // Per-agent metering, formatted like the main shimmer: model (duration · ↑prompt ↓completion).
         const tokens = a.promptTokens !== undefined ? ` · ↑${fmtTokens(a.promptTokens)} ↓${fmtTokens(a.completionTokens ?? 0)}` : "";
         return (
