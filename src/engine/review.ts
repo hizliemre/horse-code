@@ -58,10 +58,32 @@ function worstSeverity(assessments: Assessment[]): Severity | "none" {
   }
   return worst;
 }
+/** Findings at the given severities, flattened and labelled with the lens that raised them (provenance). */
+function findingNotes(assessments: Assessment[], stage: ReviewStage, severities: readonly Severity[]): string[] {
+  return assessments.flatMap((a) => a.findings.filter((f) => severities.includes(f.severity))
+    .map((f) => `[${stage}][${f.severity}] ${a.name}: ${f.note}`));
+}
+
 /** The team's medium/low findings, flattened → carried to the next stage instead of forcing another round. */
 function nonBlockingNotes(assessments: Assessment[], stage: ReviewStage): string[] {
-  return assessments.flatMap((a) => a.findings.filter((f) => f.severity !== "critical")
-    .map((f) => `[${stage}][${f.severity}] ${a.name}: ${f.note}`));
+  return findingNotes(assessments, stage, ["medium", "low"]);
+}
+
+/**
+ * The brief handed to a revision.
+ *
+ * A decider's rationale is a VERDICT ("the data model is underspecified"); a lens finding is the DEFECT
+ * ("plan.md §4 defines Todo but never the parent/child FK"). Sending only the verdicts left the author to guess
+ * at the defect, so the same finding survived the rewrite, the blocking signature never changed, and the loop
+ * stalled on "not converging". Defects first — they are what actually has to change — reasons after.
+ */
+function reviseBrief(findings: string[], reasons: string[]): string[] {
+  return [...findings, ...reasons.map((r) => `[decision] ${r}`)];
+}
+
+/** A council vote as revision input: the member's name is kept so the author can weigh who objected and why. */
+function voteReasons(votes: CouncilVote[]): string[] {
+  return votes.filter((v) => v.vote === "revise").map((v) => `${v.name}: ${v.rationale}`);
 }
 
 /** Stable identity of each BLOCKING finding → lets convergence be judged by content instead of by count. */
@@ -539,7 +561,7 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         }
         // The council says one of these IS blocking despite its label → one more revision, then it's settled.
         const dJudged = dTally === "revise"
-          ? { decision: "revise" as const, feedback: dVotes.filter((v) => v.vote === "revise").map((v) => v.rationale), question: "" }
+          ? { decision: "revise" as const, feedback: voteReasons(dVotes), question: "" }
           : await runJudge(deps, stage, workdir, target, assessments, dVotes, request, emit);
         if (dJudged.decision === "pass") {
           emit({ kind: "note", text: `✅ **Judge** approved the ${label}; ${deferred.length} note(s) carried forward.` });
@@ -547,7 +569,8 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         }
         emit({ kind: "note", text: `🔄 **Council** found a non-critical finding worth fixing → one more revision of the ${label}.` });
         deferralVetoUsed = true; // bounded: the council gets exactly one veto over a deferral
-        await revise(dJudged.feedback);
+        // The deferred findings ARE the subject of this veto → hand them over, not just the verdict.
+        await revise(reviseBrief(deferred, dJudged.feedback));
         continue;
       }
 
@@ -557,6 +580,10 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
       const sig = blockingSignatures(assessments);
       const stuck = round > 0 && sig.size > 0 && [...sig].every((x) => prevSignatures.has(x));
       prevSignatures = sig;
+
+      // The defects a revision actually has to fix, per the SAME tiered bar the round is judged by: round 1
+      // weighs medium too, later rounds only critical. Handed to the author alongside the deciders' reasons.
+      const blockingFindings = findingNotes(assessments, stage, round === 0 ? ["critical", "medium"] : ["critical"]);
 
       // Contested → the team hands the decision to the council, which weighs the findings and VOTES. Say WHY:
       // a serious finding surfaced, or the team just split on approval.
@@ -576,7 +603,7 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         return { approved: true, deferred };
       } else if (tally === "revise") {
         emit({ kind: "note", text: `🔄 **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the ${label} back for changes.` });
-        decision = { decision: "revise", feedback: votes.filter((v) => v.vote === "revise").map((v) => v.rationale), question: "" };
+        decision = { decision: "revise", feedback: voteReasons(votes), question: "" };
       } else {
         // Split vote → the council defers the final call to the judge.
         emit({ kind: "note", text: `🔨 **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
@@ -602,8 +629,8 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         emit({ kind: "note", text: `⚠️ **Not converging** — the same blocking findings survived the last revision. Handing it to the **judge** for a final ruling.` });
         break;
       }
-      emit({ kind: "note", text: `🔄 Revising the ${label} with the feedback…` });
-      await revise(feedback);
+      emit({ kind: "note", text: `🔄 Revising the ${label} with ${blockingFindings.length} finding(s) + the deciders' reasons…` });
+      await revise(reviseBrief(blockingFindings, feedback));
     }
 
     // The batch is over (rounds spent, or the loop was provably stuck). THE JUDGE RULES BEFORE ANY HUMAN — this
@@ -619,7 +646,7 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
       if (finalRuling.decision === "revise" && batches < MAX_BATCHES) {
         batches++;
         emit({ kind: "note", text: `🔄 **Judge** ruled one more targeted attempt is worth it → another ${maxRounds} round(s).` });
-        await revise(finalRuling.feedback);
+        await revise(reviseBrief(findingNotes(lastAssessments, stage, ["critical"]), finalRuling.feedback));
         prevSignatures = new Set(); // a judge-directed attempt is a fresh start for convergence tracking
         continue;
       }

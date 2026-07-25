@@ -260,6 +260,61 @@ describe("runReviewLoop", () => {
     expect(revised).toBe(0);
   });
 
+  // A decider's rationale is a VERDICT; a lens finding is the DEFECT. Sending only the verdicts left the author
+  // to guess at the defect, so the same finding survived the rewrite and the loop stalled on "not converging".
+  it("the revision brief carries the team's DEFECTS, not just the council's verdicts", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({
+      assessments: {
+        security: '{"findings":[{"severity":"critical","note":"no CSRF token on the mutation endpoints"}],"recommendation":"revise"}',
+        architectural: '{"findings":[{"severity":"medium","note":"the module boundary is not stated"}],"recommendation":"revise"}',
+      },
+      councilVotes: allRevise,
+    });
+    const briefs: string[][] = [];
+    await runReviewLoop(rdeps(p), { stage: "spec", workdir: dir, target: "spec.md", revise: async (f) => { briefs.push(f); }, askUser: async () => "Stop", maxRounds: 1 });
+    const brief = briefs[0];
+    // The concrete defect, with its severity and the lens that raised it…
+    expect(brief.some((l) => l.includes("no CSRF token") && l.includes("[critical]") && l.includes("security"))).toBe(true);
+    // …the round-1 medium too (the tiered bar counts it as blocking on the first pass)…
+    expect(brief.some((l) => l.includes("the module boundary") && l.includes("[medium]"))).toBe(true);
+    // …and the deciders' reasons, labelled and attributed, AFTER the defects.
+    expect(brief.some((l) => l.startsWith("[decision]") && l.includes("c1:"))).toBe(true);
+    expect(brief.findIndex((l) => l.startsWith("[decision]"))).toBeGreaterThan(brief.findIndex((l) => l.includes("[critical]")));
+  });
+
+  it("from round 2 on, the brief carries only the CRITICAL defects (same tiered bar the round is judged by)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    // The critical CHANGES between passes, so the convergence guard sees progress and a second round runs.
+    let securityPass = 0;
+    const evolving: Provider = {
+      async *chat(req, signal) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        const emit = function* (a: string) {
+          yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
+          yield { type: "done", finishReason: "tool_calls" } as const;
+        };
+        if (sys.includes("review TEAM member")) {
+          if (sys.includes("security vulnerabilities")) {
+            securityPass++;
+            const note = securityPass === 1 ? "missing auth check" : "missing rate limit";
+            yield* emit(`{"findings":[{"severity":"critical","note":"${note}"}],"recommendation":"revise"}`);
+            return;
+          }
+          yield* emit('{"findings":[{"severity":"medium","note":"naming could be clearer"}],"recommendation":"revise"}');
+          return;
+        }
+        yield* reviewProvider({ councilVotes: allRevise }).chat(req, signal);
+      },
+    };
+    const briefs: string[][] = [];
+    await runReviewLoop(rdeps(evolving), { stage: "spec", workdir: dir, target: "spec.md", revise: async (f) => { briefs.push(f); }, askUser: async () => "Stop", maxRounds: 2 });
+    expect(briefs.length).toBeGreaterThanOrEqual(2);
+    expect(briefs[0].some((l) => l.includes("naming could be clearer"))).toBe(true);  // round 1 weighs medium
+    expect(briefs[1].some((l) => l.includes("missing rate limit"))).toBe(true);
+    expect(briefs[1].some((l) => l.includes("naming could be clearer"))).toBe(false); // round 2+ does not
+  });
+
   it("a single CRITICAL finding blocks the team shortcut even with FULL approve → council adjudicates", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     // Both lenses "approve" (2/2 = 100% ≥ 70%), but security surfaces a critical finding. Count alone would
