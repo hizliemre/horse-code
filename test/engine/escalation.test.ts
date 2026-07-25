@@ -208,3 +208,18 @@ describe("runTaskWithEscalation", () => {
     ).rejects.toThrow();
   });
 });
+
+// A no-op attempt is not a near miss to iterate on: nothing was written, so the SAME role given the SAME
+// instruction produces the same nothing. `tierOf` would otherwise spend every remaining same-tier retry
+// proving it — which is the "→ rework / wrote nothing / → In progress" churn seen in the wild.
+describe("a no-op attempt escalates immediately instead of burning same-tier retries", () => {
+  it("jumps to the next tier rather than repeating the same role `rounds` times", async () => {
+    const p = new MockProvider([submit('{"role":"coder"}'), ...Array.from({ length: 12 }, () => noopImpl)]);
+    const board = boardWithTask();
+    await runTaskWithEscalation(edeps(p, { rounds: 3 }), board, "t1", dir);
+    // Each tier gets exactly ONE no-op attempt, not `rounds` of them…
+    expect(board.get("t1")!.stageHistory.filter((s) => s.action === "no-changes").length).toBeLessThanOrEqual(2);
+    // …so the attempt counter lands on tier boundaries and never grinds in between.
+    expect(board.get("t1")!.attempts % 3).toBe(0);
+  });
+});

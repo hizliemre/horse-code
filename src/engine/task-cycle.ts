@@ -30,10 +30,14 @@ export async function runCycleWithRole(
   slot = 0,
 ): Promise<Verdict> {
   board.move(taskId, "IN-PROGRESS", role);
+  // Rotate by the attempt count too: the commonest reason an attempt produced nothing is that ITS MODEL
+  // answered in prose instead of calling write_file, and re-running the identical model would reproduce
+  // exactly that. Each retry therefore leads with the next link of the role's chain.
+  const rotation = slot + board.get(taskId)!.attempts;
   // The UI must name the model this worker will ACTUALLY use, which is its rotated head, not the chain's.
-  board.setModel(taskId, deps.roleRegistry.chainFor(role, slot)[0] ?? "");
+  board.setModel(taskId, deps.roleRegistry.chainFor(role, rotation)[0] ?? "");
   const before = await worktreeState(git, cwd);
-  await runImplementer(deps, role, board.get(taskId)!, cwd, slot);
+  await runImplementer(deps, role, board.get(taskId)!, cwd, rotation);
   const after = await worktreeState(git, cwd);
 
   // An implementer that produced NO change must never reach the review or the merge. With an empty worktree
@@ -46,8 +50,8 @@ export async function runCycleWithRole(
     board.clearReviewNotes(taskId);
     board.addReviewNote(taskId, note);
     board.move(taskId, "TODO", role);
-    deps.note?.(`⚠️ **${board.get(taskId)!.title}** — the implementer wrote nothing; retrying at the next tier.`);
-    return { verdict: "fail", notes: [note] };
+    deps.note?.(`⚠️ **${board.get(taskId)!.title}** — the implementer wrote nothing; escalating to a stronger role.`);
+    return { verdict: "fail", notes: [note], noProgress: true };
   }
 
   board.move(taskId, "REVIEW", role);

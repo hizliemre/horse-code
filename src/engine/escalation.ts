@@ -87,7 +87,15 @@ export async function runTaskWithEscalation(
         v = attemptError(board, taskId, role, e);
       }
       if (v.verdict === "pass") return v; // runCycleWithRole moved it to DONE
-      board.incrementAttempts(taskId); // fail → tier advances
+      if (v.noProgress) {
+        // Nothing was written at all. That is not a near miss to iterate on: the same role, given the same
+        // instruction, produces the same nothing — and `tierOf` would otherwise spend every remaining
+        // same-tier retry proving it. Jump straight to the next tier (a stronger role).
+        const target = (Math.floor(attempts / deps.rounds) + 1) * deps.rounds;
+        while (board.get(taskId)!.attempts < target) board.incrementAttempts(taskId);
+      } else {
+        board.incrementAttempts(taskId); // fail → tier advances
+      }
       continue;
     }
 

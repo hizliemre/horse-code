@@ -68,6 +68,11 @@ export type ImplementerRole = "coder" | "designer";
 export type RunnableRole = ImplementerRole | "senior-coder" | "senior-designer";
 
 export interface Verdict {
+  /**
+   * The attempt changed NOTHING — no file was written at all. Distinct from a failed review: there is no work
+   * to improve, so repeating the same role with the same instruction is provably futile.
+   */
+  noProgress?: boolean;
   /** Medium/low review findings that did NOT block this task — carried to the PR revision pass, never dropped. */
   deferred?: string[];
   verdict: "pass" | "fail";

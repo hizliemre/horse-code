@@ -8,8 +8,22 @@ export interface InlineSeg {
   code?: boolean;
 }
 
+/**
+ * Emoji whose BASE codepoint is narrow but which terminals draw two columns wide once the variation selector
+ * (U+FE0F) asks for the emoji presentation — ⚠️, ♻️, ❗️ and friends. Ink measures them as one column, so the
+ * space that follows is overdrawn by the glyph's second column and the text collides with the icon. Naturally
+ * wide emoji (📋, ✅, 🧠 …) measure correctly and are left alone.
+ */
+const NARROW_EMOJI_AT_START = /^(\p{Extended_Pictographic}\uFE0F)( )/u;
+
+/** Restores the gap after a variation-selector emoji that the terminal renders wider than Ink measured. */
+export function padNarrowEmoji(line: string): string {
+  return line.replace(NARROW_EMOJI_AT_START, "$1 $2");
+}
+
 /** Inline markdown: **bold**, `code`, _italic_. */
-export function parseInline(line: string): InlineSeg[] {
+export function parseInline(raw: string): InlineSeg[] {
+  const line = padNarrowEmoji(raw);
   const segs: InlineSeg[] = [];
   let i = 0;
   const flush = (from: number, to: number): void => {
