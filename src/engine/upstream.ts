@@ -8,6 +8,7 @@ import { extractListBlock } from "./next-steps.js";
 import { runReviewLoop } from "./review.js";
 import { commitStep } from "./operational.js";
 import { readCheckpoint, writeCheckpoint, type UpstreamPhase, type Checkpoint } from "./checkpoint.js";
+import { appendReviewNotes } from "./review-notes.js";
 import type { ProgressEvent } from "./progress.js";
 import { constitutionPath, nextFeatureSlug, scaffoldFeature } from "../speckit/layout.js";
 import type { PhaseDeps } from "../speckit/phases.js";
@@ -116,7 +117,9 @@ export async function runUpstream(
       askUser, maxRounds, emit, language: r.language,
     });
     if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
-    carryOver = specOut.deferred ?? [];
+    // Accumulate (never overwrite): a later stage should see everything earlier stages chose not to block on.
+    carryOver = [...carryOver, ...(specOut.deferred ?? [])];
+    if (appendReviewNotes(paths.dir, specOut.deferred ?? [])) emit({ kind: "note", text: `📝 ${specOut.deferred!.length} deferred spec note(s) recorded in \`${relative(workdir, paths.dir)}/review-notes.md\`.` });
     // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
     if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
     await commitStep(deps, workdir, "add the feature specification");
@@ -141,7 +144,8 @@ export async function runUpstream(
       askUser, maxRounds, emit, language: r.language,
     });
     if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
-    carryOver = planOut.deferred ?? []; // the plan review's own deferrals travel on to the task breakdown
+    carryOver = [...carryOver, ...(planOut.deferred ?? [])]; // spec + plan deferrals both reach the task breakdown
+    if (appendReviewNotes(paths.dir, planOut.deferred ?? [])) emit({ kind: "note", text: `📝 ${planOut.deferred!.length} deferred plan note(s) recorded in \`${relative(workdir, paths.dir)}/review-notes.md\`.` });
     if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
     await commitStep(deps, workdir, "add the implementation plan");
     mark("plan");

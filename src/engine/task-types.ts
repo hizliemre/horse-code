@@ -40,6 +40,8 @@ export type ImplementerRole = "coder" | "designer";
 export type RunnableRole = ImplementerRole | "senior-coder" | "senior-designer";
 
 export interface Verdict {
+  /** Medium/low review findings that did NOT block this task — carried to the PR revision pass, never dropped. */
+  deferred?: string[];
   verdict: "pass" | "fail";
   notes: string[];
 }

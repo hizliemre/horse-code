@@ -149,3 +149,37 @@ describe("runRevision", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("deferred code findings reach the PR revision pass", () => {
+  it("the FIRST principal review is handed the deferred list to adjudicate; later rounds are not", async () => {
+    const seen: string[] = [];
+    let review = 0;
+    const p: Provider = {
+      async *chat(req) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+        if (!sys.includes("P-principal")) { // senior-coder revises in prose and stops
+          yield { type: "text-delta", text: "revised" };
+          yield { type: "done", finishReason: "stop" };
+          return;
+        }
+        let args = '{"decision":"approve","comments":[]}';
+        if (convo.includes("PR review")) {
+          seen.push(convo);
+          review++;
+          args = review === 1 ? '{"decision":"request-changes","comments":["fix it"]}' : '{"decision":"approve","comments":[]}';
+        }
+        yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: args } };
+        yield { type: "done", finishReason: "tool_calls" };
+      },
+    };
+    const dir2 = await mkdtemp(join(tmpdir(), "hc-rev-def-"));
+    try {
+      await runRevision(rdeps(p, fakeManager()), session(dir2), new Board(), async () => {}, async () => "x", 3, undefined,
+        ["[code][medium] security: tighten validation"]);
+      expect(seen[0]).toContain("tighten validation");            // round 1 sees the deferred findings
+      expect(seen[0]).toMatch(/judge which genuinely deserve a fix/i);
+      expect(seen[1] ?? "").not.toContain("tighten validation");  // later rounds react to its own comments
+    } finally { await rm(dir2, { recursive: true, force: true }); }
+  });
+});

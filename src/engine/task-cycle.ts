@@ -24,6 +24,9 @@ export async function runCycleWithRole(
   const v = await runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
   if (v.verdict === "pass") {
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });
+    // Non-blocking findings ride the board to the end of the run, where the PR revision pass adjudicates them
+    // in one go on the MERGED result — instead of forcing another full re-implementation of this task.
+    for (const d of v.deferred ?? []) board.appendStage(taskId, { role: "code-reviewer", action: "deferred", note: d });
     board.clearReviewNotes(taskId);
     board.move(taskId, "DONE", "code-reviewer");
   } else {

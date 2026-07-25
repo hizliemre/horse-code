@@ -14,7 +14,9 @@ import type { WaveEngineResult } from "./wave-engine.js";
 import { runRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
+import { appendReviewNotes } from "./review-notes.js";
 import type { Column } from "../board/board.js";
+import { dirname, join } from "node:path";
 
 /** Human-readable action for a board column transition (chat notes). */
 function columnAction(to: Column): string {
@@ -138,11 +140,18 @@ export async function runJob(
     if (wave.status === "completed") {
       emit({ kind: "phase", phase: "pr", detail: wave.pr.url });
       const prDiff = await deps.manager.diff(session, opts.fromBranch);
+      // Non-blocking code findings the per-task reviews deferred: a passed task has no further attempt, so the
+      // PR revision pass is where they are adjudicated — once, on the merged result.
+      const deferred = board.list().flatMap((c) => c.stageHistory.filter((h) => h.action === "deferred").map((h) => h.note ?? "").filter(Boolean));
+      if (deferred.length) {
+        appendReviewNotes(join(workdir, dirname(up.specPath)), deferred);
+        emit({ kind: "note", text: `📝 ${deferred.length} deferred code note(s) handed to the PR revision pass (and recorded in review-notes.md).` });
+      }
       emit({ kind: "phase", phase: "revision" });
       revision = await runRevision(
         deps, session, board,
         (c) => deps.prAdapter.postComments(c),
-        opts.askUser, opts.revisionRounds ?? 3, prDiff,
+        opts.askUser, opts.revisionRounds ?? 3, prDiff, deferred,
       );
       emit({ kind: "phase", phase: "revision-done", detail: revision.status });
     }

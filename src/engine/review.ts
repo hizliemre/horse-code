@@ -54,8 +54,9 @@ function worstSeverity(assessments: Assessment[]): Severity | "none" {
   return worst;
 }
 /** The team's medium/low findings, flattened → carried to the next stage instead of forcing another round. */
-function nonBlockingNotes(assessments: Assessment[]): string[] {
-  return assessments.flatMap((a) => a.findings.filter((f) => f.severity !== "critical").map((f) => `[${f.severity}] ${a.name}: ${f.note}`));
+function nonBlockingNotes(assessments: Assessment[], stage: ReviewStage): string[] {
+  return assessments.flatMap((a) => a.findings.filter((f) => f.severity !== "critical")
+    .map((f) => `[${stage}][${f.severity}] ${a.name}: ${f.note}`));
 }
 
 /** Total findings across the team at a given severity → used in the council-handoff note. */
@@ -378,7 +379,7 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         }
       } else if (crit === 0) {
         // No blocking issue left: pass and DEFER the remaining medium/low findings to the next stage.
-        const deferred = nonBlockingNotes(assessments);
+        const deferred = nonBlockingNotes(assessments, stage);
         emit({ kind: "note", text: `✅ **Team** — no critical findings left → the ${label} is approved.${deferred.length ? ` ${deferred.length} medium/low note(s) carried forward to the next stage.` : ""}` });
         return { approved: true, deferred };
       }
@@ -470,9 +471,9 @@ export async function runCodeReview(
       return { verdict: "pass", notes: [] };
     }
   } else if (crit === 0) {
-    const deferred = nonBlockingNotes(assessments);
-    emit({ kind: "note", text: `✅ **Team** — no critical findings left → the code passed.${deferred.length ? ` ${deferred.length} medium/low note(s) noted but not blocking:\n${deferred.map((d) => `- ${d}`).join("\n")}` : ""}` });
-    return { verdict: "pass", notes: [] };
+    const deferred = nonBlockingNotes(assessments, "code");
+    emit({ kind: "note", text: `✅ **Team** — no critical findings left → the code passed.${deferred.length ? ` ${deferred.length} medium/low note(s) deferred to the PR revision pass.` : ""}` });
+    return { verdict: "pass", notes: [], deferred };
   }
 
   const reason = crit || med ? `surfaced ${crit} critical / ${med} medium finding(s)` : `is split (${approve}/${assessments.length} approve)`;

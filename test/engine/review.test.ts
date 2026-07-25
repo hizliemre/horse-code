@@ -548,7 +548,9 @@ describe("runCodeReview tiered bar (attempt-driven)", () => {
       (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); }, 1);
     expect(v.verdict).toBe("pass");
     expect(notes.join("\n")).toMatch(/no critical findings left/i);
-    expect(notes.join("\n")).toContain("tighten validation"); // surfaced, not silently dropped
+    expect(notes.join("\n")).toMatch(/deferred to the PR revision pass/i);
+    // Not dropped: they ride the Verdict to the board, and from there to the PR revision pass.
+    expect(v.deferred).toEqual(expect.arrayContaining([expect.stringContaining("[code][medium] security: tighten validation")]));
   });
 
   it("a later attempt with a CRITICAL still goes to the council and can fail", async () => {

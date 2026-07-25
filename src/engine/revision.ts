@@ -34,11 +34,18 @@ export type RevisionResult =
   | { status: "accepted"; rounds: number }
   | { status: "human"; rounds: number; answer: string };
 
-async function principalReview(deps: RevisionDeps, base: string, prDiff?: string) {
+async function principalReview(deps: RevisionDeps, base: string, prDiff?: string, deferred?: string[]) {
   const resolved = deps.roleRegistry.resolve("principal-coder");
-  const content = prDiff
+  // Findings the per-task code review deliberately did not block on. A task that passed has no further attempt,
+  // so THIS is where they get adjudicated — once, on the merged result. The principal decides which are worth
+  // fixing now; the rest are consciously accepted (they stay recorded in review-notes.md either way).
+  const carried = deferred?.length
+    ? `\n\nThe per-task code review deferred these non-blocking findings — judge which genuinely deserve a fix ` +
+      `now and include those in your comments; ignore the ones that are not worth it:\n${deferred.map((d) => `- ${d}`).join("\n")}`
+    : "";
+  const content = (prDiff
     ? `PR review: review the following diff:\n${prDiff}\n(use the read tools to inspect the worktree if needed.) Give approve or request-changes + concrete comments.`
-    : "PR review: review all changes in the base worktree holistically. Give approve or request-changes + concrete comments.";
+    : "PR review: review all changes in the base worktree holistically. Give approve or request-changes + concrete comments.") + carried;
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
@@ -83,13 +90,14 @@ export async function runRevision(
   askUser: AskUser,
   maxRounds: number,
   prDiff?: string,
+  deferred?: string[], // non-blocking findings carried over from the per-task code reviews
 ): Promise<RevisionResult> {
   board.addCard({ id: "__revision__", title: "PR revision" });
   const base = session.baseWorktree;
   const rounds = Math.max(1, maxRounds);
 
   for (let round = 1; round <= rounds; round++) {
-    const v = await principalReview(deps, base, prDiff);
+    const v = await principalReview(deps, base, prDiff, round === 1 ? deferred : undefined);
     if (v.decision === "approve") {
       board.appendStage("__revision__", { role: "principal-coder", action: "pr:approved" });
       return { status: "approved", rounds: round - 1 };
