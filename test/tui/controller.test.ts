@@ -70,6 +70,21 @@ describe("TuiController", () => {
     expect(byId["team:security"].completionTokens).toBe(800);
   });
 
+  // A row showed the chain HEAD forever, so once an agent slid down its fallback chain the panel kept naming
+  // a model that was no longer doing the work.
+  it("onEvent agent-model → the row names whichever model is actually serving it", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "agents", agents: [
+      { id: "team:security", title: "team: security", model: "primary" },
+      { id: "team:arch", title: "team: arch", model: "primary" },
+    ] });
+    c.onEvent({ kind: "agent-model", id: "team:security", model: "fallback-1" });
+    const byId = Object.fromEntries(c.getState().runningAgents.map((a) => [a.id, a]));
+    expect(byId["team:security"].model).toBe("fallback-1");
+    expect(byId["team:security"].status).toBeUndefined(); // still running — a rename is not a result
+    expect(byId["team:arch"].model).toBe("primary");      // other rows untouched
+  });
+
   it("onEvent refined → replaces the last user message live", () => {
     const c = new TuiController();
     c.awaitTask();

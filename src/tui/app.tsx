@@ -19,6 +19,7 @@ import { REQUIRED_ROLES } from "../prompts.js";
 import { SessionStore } from "../session/store.js";
 import { PinStore } from "../session/pins.js";
 import { MemoryStore } from "../session/memory.js";
+import { ModelHealth } from "../engine/model-health.js";
 import { memoryState } from "../engine/memory-retrieval.js";
 import { memoryNote } from "../engine/memory-inject.js";
 import type { MemoryEntry } from "../engine/memory-retrieval.js";
@@ -56,6 +57,7 @@ export interface RunTuiReplOpts {
   mcp?: Record<string, McpServerSpec>; // MCP servers to connect at startup (tools → coach)
   refreshSources?: () => Promise<string[]>; // probe omniroute → your connected model sources (cached)
   sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // current source allowlist
+  probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
   memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }
 
@@ -94,6 +96,21 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const chain = regFor(r).chain(r);
       return { name: r, model: chain[0] ?? "", models: chain, council: reviewNames.has(r), decider: councilNames.includes(r) };
     });
+  // Model health: a role whose whole chain dies gets a new one, and the dead models are quarantined across
+  // EVERY registry so they stop being handed out — to this role or any other.
+  const health = new ModelHealth({
+    port: {
+      roles: tunableRoles,
+      registries: () => [deps0.roleRegistry, deps0.teamRegistries.spec, deps0.teamRegistries.plan, deps0.teamRegistries.code, deps0.councilRegistry],
+      registryFor: regFor,
+    },
+    listModels: opts.listModels,
+    // STRICTER than source discovery, which counts 429 as "routed": a rate-limited model is exactly what was
+    // quarantined, so only a real answer may release it.
+    ...(opts.probeModel ? { probe: opts.probeModel } : {}),
+    note: (m) => controller.note(m),
+  });
+
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.
   const deps: JobDeps = {
@@ -113,6 +130,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 **Remembered** — ${fact}${r.superseded.length ? ` _(replaced: ${r.superseded.join("; ")})_` : ""}`); });
     },
     recordInjection: (ids) => { void memStore.recordInjection(ids); }, // durable "shown N times" count → hygiene
+    rechainRole: (role, reason) => health.handleChainFailure(role, reason), // dead chain → quarantine + reassign
     // Memory used to work invisibly, so "no memory applied" and "memory is broken" looked identical. Every
     // injection, citation and extraction now surfaces as one compact chat line.
     onMemory: (ev) => { const t = memoryNote(ev); if (t) controller.note(t); },
@@ -125,10 +143,15 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // the validated 3-model chains are applied to every role. Falls back to the heuristic on any failure.
   const adjustRoles = async (): Promise<void> => {
     if (!opts.listModels) { controller.note("Role adjust is not available."); return; }
+    // A quota limit is temporary: re-probe what is quarantined FIRST so models whose window reset come back
+    // into the pool, then assign from healthy models only — a spent model must never be handed out again.
+    await health.refresh();
     let models: string[];
-    try { models = await opts.listModels(); }
+    try { models = await health.healthyModels(); }
     catch (e) { controller.note(`Adjust error: ${e instanceof Error ? e.message : String(e)}`); return; }
-    if (!models.length) { controller.note("No models available to assign."); return; }
+    const held = health.quarantined();
+    if (held.length) controller.note(`⛔ Excluding ${held.length} quarantined model(s): ${held.map((q) => q.model).join(", ")}`);
+    if (!models.length) { controller.note("No healthy models available to assign."); return; }
     const roleNames = tunableRoles(); // main roles + review councilors (both must be covered)
     const tuner = mostCapable(models);
     controller.note(`🤖 \`${tuner}\` is assigning models to all ${roleNames.length} roles — reasoning over cost, capability & source diversity:`);

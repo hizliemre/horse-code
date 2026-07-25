@@ -22,11 +22,11 @@ export interface RoleAgentOptions {
   inbox?: () => string | undefined; // polled each turn → a "by-the-way" note is folded in as a user message
   remember?: (fact: string) => void; // remember_fact tool → persist a durable fact
   proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean; // propose_memory tool → curator queue
-  onExhausted?: (model: string) => void; // a model hit a retryable error → mark it spent for the session
+  onExhausted?: (model: string, reason?: string) => void; // a model hit a retryable error → mark it spent
   onFallback?: (from: string, to: string, reason: string) => void; // fell from one model to the next → UI note
   onLiveActivity?: (label: string) => void; // live "writing <file> · N chars" while a tool call is generated
   onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit
-  onUsage?: (u: { promptTokens: number; completionTokens: number }) => void; // per-call token usage → per-agent metering
+  onUsage?: (u: { promptTokens: number; completionTokens: number; model: string }) => void; // per-call usage + the model that served it
 }
 
 /** 1394 → "1.4k"; keeps the live activity line compact. */
@@ -90,6 +90,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
           opts.onLiveActivity?.(file ? `writing ${file} · ${fmtChars(ev.chars)}` : `${ev.name} · ${fmtChars(ev.chars)}`);
         } else if (ev.type === "usage") {
           yield { type: "usage", promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
+          opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, model: activeModel });
         } else if (ev.type === "error") {
           errored = { message: ev.message, retryable: ev.retryable };
           break;
@@ -98,7 +99,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       }
 
       if (!errored) break; // turn produced a (possibly tool-calling) response → proceed
-      if (errored.retryable) opts.onExhausted?.(activeModel); // spent for the session either way
+      if (errored.retryable) opts.onExhausted?.(activeModel, errored.message); // spent either way, WITH why
       if (errored.retryable && !streamed && chainIdx < chain.length - 1) {
         const next = chain[chainIdx + 1];
         opts.onFallback?.(activeModel, next, errored.message);

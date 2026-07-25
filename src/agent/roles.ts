@@ -9,14 +9,16 @@ export interface ResolvedRole {
   model: string;
   fallbacks: string[];
   systemPrompt: string;
-  onExhausted: (model: string) => void;
+  onExhausted: (model: string, reason?: string) => void;
   onFallback?: (from: string, to: string, reason: string) => void;
 }
 
 export class RoleRegistry {
   private modelOverride?: string;
   private roleOverrides = new Map<string, string[]>(); // per-role model CHAIN override (highest priority)
-  private readonly exhausted = new Set<string>(); // models spent this session (429/5xx) → skipped in chains
+  // Models that failed retryably (429/5xx/quota) → skipped in every chain until released. Kept WITH the
+  // reason and the time so a coordinator can report them and later re-probe whether the limit has reset.
+  private readonly quarantine = new Map<string, { at: number; reason: string }>();
   private notify?: (msg: string) => void; // fallback UI note sink (wired once the controller exists)
   private rulesProvider?: () => string[]; // durable behavioral rules → appended to EVERY role's prompt
 
@@ -60,24 +62,57 @@ export class RoleRegistry {
     else this.roleOverrides.delete(roleName);
   }
 
-  /** Mark a model spent for this session — every chain skips it from now on (until restart). */
-  markExhausted(model: string): void {
-    if (model) this.exhausted.add(model);
+  /** Mark a model spent — every chain skips it from now on, until it is released. */
+  markExhausted(model: string, reason = "unavailable", now = Date.now()): void {
+    if (model && !this.quarantine.has(model)) this.quarantine.set(model, { at: now, reason });
+  }
+
+  /** Models currently quarantined, with why and when — surfaced to the user and re-probed before an adjust. */
+  quarantined(): { model: string; at: number; reason: string }[] {
+    return [...this.quarantine].map(([model, q]) => ({ model, ...q }));
+  }
+
+  isQuarantined(model: string): boolean {
+    return this.quarantine.has(model);
+  }
+
+  /** Put a model back in play (its quota reset, or the user forced it). */
+  release(model: string): boolean {
+    return this.quarantine.delete(model);
+  }
+
+  /**
+   * Roles whose CURRENT chain still contains `model`. When a model is quarantined these are the roles that
+   * would otherwise keep resolving to a dead chain, so they are exactly the ones to re-assign.
+   */
+  rolesUsing(model: string): string[] {
+    return this.names().filter((r) => this.rawChain(r).includes(model));
+  }
+
+  /** The role's chain BEFORE quarantine filtering — what was actually assigned to it. */
+  rawChain(roleName: string): string[] {
+    const role = this.roles[roleName];
+    if (!role || !role.models.length) return [];
+    const perRole = this.roleOverrides.get(roleName);
+    if (perRole && perRole.length) return perRole;
+    if (this.modelOverride && roleName !== "refiner") return [this.modelOverride];
+    return role.models;
+  }
+
+  /** True when every model assigned to this role is quarantined — the chain has collapsed and needs replacing. */
+  chainCollapsed(roleName: string): boolean {
+    const raw = this.rawChain(roleName);
+    return raw.length > 0 && raw.every((m) => this.quarantine.has(m));
   }
 
   /** The full model chain for a role by priority: per-role override → global override (non-refiner) → config. */
   chain(roleName: string): string[] {
-    const role = this.roles[roleName];
-    if (!role || !role.models.length) return [];
-    const perRole = this.roleOverrides.get(roleName);
-    const base = perRole && perRole.length
-      ? perRole
-      : this.modelOverride && roleName !== "refiner"
-        ? [this.modelOverride]
-        : role.models;
-    // Strict priority: primary first. Drop session-exhausted models, but never strand — if the whole chain
-    // is spent, fall back to the raw chain (better to retry a spent model than to have no model at all).
-    const live = base.filter((m) => !this.exhausted.has(m));
+    const base = this.rawChain(roleName);
+    if (!base.length) return [];
+    // Strict priority: primary first. Drop quarantined models, but never strand — if the whole chain is spent,
+    // fall back to the raw chain (better to retry a spent model than to have no model at all). `chainCollapsed`
+    // is how a caller detects that this fallback is in effect and asks for a replacement chain instead.
+    const live = base.filter((m) => !this.quarantine.has(m));
     return live.length ? live : base;
   }
 
@@ -96,7 +131,7 @@ export class RoleRegistry {
     return {
       model: chain[0] ?? "",
       fallbacks: chain.slice(1),
-      onExhausted: (m) => this.markExhausted(m),
+      onExhausted: (m, reason) => this.markExhausted(m, reason ?? "unavailable"),
       onFallback: notify ? (from, to, reason) => notify(`⤵ ${from} unavailable (${reason}) — falling back to ${to}`) : undefined,
     };
   }

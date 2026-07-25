@@ -154,6 +154,22 @@ export async function main(argv: string[]): Promise<void> {
         return found;
       };
       const sourcesInfo = () => ({ sources: sourcesRef.current, manual: manualSources, needsDiscovery: !manualSources && sourcesRef.current.length === 0 });
+      // Strict health check for the model quarantine. makeProbe treats 429 as "routed" (the subscription
+      // exists), which is right for source discovery but wrong here — a rate-limited model is precisely what
+      // was quarantined. Only a real 200 releases it.
+      const probeModel = async (model: string): Promise<boolean> => {
+        try {
+          const res = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/v1/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}) },
+            body: JSON.stringify({ model, stream: false, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+            signal: AbortSignal.timeout(20_000),
+          });
+          return res.status === 200;
+        } catch {
+          return false;
+        }
+      };
       await runTuiRepl({
         buildDeps,
         memStore,
@@ -164,6 +180,7 @@ export async function main(argv: string[]): Promise<void> {
         mcp: config.mcp,
         refreshSources,
         sourcesInfo,
+        probeModel,
       });
       return;
     }

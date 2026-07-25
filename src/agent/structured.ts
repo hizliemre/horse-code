@@ -97,7 +97,8 @@ export async function runStructuredRole<T>(
       for await (const ev of runRoleAgent({ ...opts, model, fallbacks: [], messages, tools: registry })) {
         if (ev.type === "error") { errored = ev.message; break; }
         if (ev.type === "abort") throw new Error("cancelled");
-        if (ev.type === "usage") opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens });
+        // NB: runRoleAgent reports usage itself (it knows which chain link actually served the call), so
+        // forwarding the yielded event here too would double-count every reviewer's tokens.
         if (ev.type === "message.done") lastText = ev.message.content ?? lastText;
         if (handle.result() !== undefined) break; // valid submit captured → exit early
       }

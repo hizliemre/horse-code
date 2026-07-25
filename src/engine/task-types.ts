@@ -38,6 +38,12 @@ export interface TaskCycleDeps {
   proposeMemory?: (text: string, kind: "fact" | "lesson", role: string) => boolean;
   /** The per-job proposal queue itself — drained once by the curator when the job ends. */
   proposals?: import("./memory-proposals.js").ProposalQueue;
+  /**
+   * A role's whole model chain failed. Quarantines the spent models, re-chains this role AND every other role
+   * still holding them, and returns the replacement chain so the caller can retry once. Undefined = nothing
+   * healthy left to assign.
+   */
+  rechainRole?: (role: string, reason: string) => Promise<string[] | undefined>;
   /** Durable injection counter — distinguishes "never relevant" from "never came up" (feeds hygiene). */
   recordInjection?: (ids: string[]) => void;
   /** Memory telemetry sink: what was injected/used/learned, and why the rest was skipped. Wired to chat. */

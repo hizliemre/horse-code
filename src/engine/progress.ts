@@ -14,6 +14,9 @@ export type ProgressEvent =
   // Ad-hoc live sub-agents not backed by a board card (e.g. the review council running in parallel).
   // An empty list clears the panel.
   | { kind: "agents"; agents: { id: string; title: string; model: string }[] }
+  // The model actually SERVING a live sub-agent. A row used to show the chain HEAD forever, so once an agent
+  // slid down its fallback chain the panel kept naming a model that was no longer doing the work.
+  | { kind: "agent-model"; id: string; model: string }
   // A live sub-agent's token spend SO FAR → its row updates while it works, like the main shimmer. Without
   // this a row shows only a ticking clock for minutes, with no signal about what it is costing.
   | { kind: "agent-usage"; id: string; promptTokens: number; completionTokens: number }

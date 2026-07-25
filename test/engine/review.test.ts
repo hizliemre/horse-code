@@ -1068,3 +1068,62 @@ describe("live per-agent metering", () => {
     expect(usage[1].promptTokens).toBe(11000);
   });
 });
+
+// A fully spent chain used to be terminal for the session: the role reported "no response" on every later
+// round while the same dead model sat in other roles' chains waiting to fail them the same way.
+describe("a reviewer whose whole chain dies heals and retries", () => {
+  const dying = (deadModels: string[]): Provider => ({
+    async *chat(req, signal) {
+      if (deadModels.includes(req.model)) {
+        yield { type: "error", message: "429 quota exceeded", retryable: true };
+        return;
+      }
+      yield* reviewProvider({}).chat(req, signal);
+    },
+  });
+
+  it("retries on the replacement chain and produces a real assessment instead of an UNVERIFIED hole", async () => {
+    const d = rdeps(dying(["m"])); // every lens is configured on "m", which is dead
+    const notes: string[] = [];
+    const out = await runTeam({ ...d, rechainRole: async () => ["healthy-1", "healthy-2"] },
+      "code", dir, "target", undefined, (ev) => { if (ev.kind === "note") notes.push(ev.text); });
+    expect(out.every((a) => a.findings.every((f) => !/UNVERIFIED/.test(f.note)))).toBe(true);
+    expect(notes.join("\n")).toMatch(/lost its whole model chain/);
+  });
+
+  it("passes the REAL failure reason to the healer, not a generic message", async () => {
+    const reasons: string[] = [];
+    const d = rdeps(dying(["m"]));
+    await runTeam({ ...d, rechainRole: async (_r, reason) => { reasons.push(reason); return ["healthy-1"]; } }, "code", dir, "target");
+    expect(reasons.every((r) => /429 quota exceeded/.test(r))).toBe(true);
+  });
+
+  // "the model chain failed" and "the model was slow" have different fixes; quarantining a working-but-slow
+  // model would throw away capacity over a latency problem.
+  it("does NOT heal on a timeout — the model was reachable, only slow", async () => {
+    let healed = 0;
+    const hang: Provider = {
+      async *chat(_req, signal) {
+        await new Promise((_r, rej) => signal?.addEventListener("abort", () => rej(new Error("aborted"))));
+        yield { type: "done", finishReason: "stop" };
+      },
+    };
+    const out = await runTeam({ ...rdeps(hang), reviewTimeoutMs: 200, rechainRole: async () => { healed++; return ["x"]; } },
+      "code", dir, "target");
+    expect(healed).toBe(0);
+    expect(out[0].findings[0].note).toMatch(/did not finish within/);
+  }, 20_000);
+
+  it("when nothing healthy is left, it reports the REAL reason rather than a bare 'no response'", async () => {
+    const out = await runTeam({ ...rdeps(dying(["m"])), rechainRole: async () => undefined }, "code", dir, "target");
+    expect(out[0].findings[0].note).toMatch(/every model in its chain failed/);
+    expect(out[0].findings[0].note).toMatch(/429 quota exceeded/);
+  });
+
+  it("renames the row to the model actually serving it once the chain slides", async () => {
+    const models: string[] = [];
+    await runTeam({ ...rdeps(dying(["m"])), rechainRole: async () => ["healthy-1"] }, "code", dir, "target",
+      undefined, (ev) => { if (ev.kind === "agent-model") models.push(ev.model); });
+    expect(models).toContain("healthy-1"); // the panel names who is doing the work, not the dead chain head
+  });
+});

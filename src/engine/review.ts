@@ -216,6 +216,39 @@ export function buildCouncilRegistry(council: ReviewerConfig[]): RoleRegistry {
   return buildReviewerRegistry(council, councilPrompt);
 }
 
+/** The message of a thrown value, trimmed for a one-line status. */
+function errText(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  return m.length > 160 ? `${m.slice(0, 159)}…` : m;
+}
+
+/**
+ * Runs a structured reviewer and, if its ENTIRE model chain fails, heals the role and retries once.
+ *
+ * A fully spent chain used to be terminal for the session: the role reported "no response" on every later
+ * round while the same dead model sat in other roles' chains waiting to fail them too. Healing quarantines
+ * what died, re-assigns this role AND every role still holding those models, then retries here so the current
+ * round still gets a real review instead of an UNVERIFIED hole.
+ *
+ * A TIMEOUT is deliberately excluded: the model was reachable, only slow, and quarantining it would throw away
+ * a working model over a latency problem.
+ */
+async function runWithHealing<T>(
+  deps: ReviewDeps, role: string, id: string, opts: RoleAgentOptions, schema: z.ZodType<T>,
+  signal: AbortSignal, emit: (ev: ProgressEvent) => void,
+): Promise<T> {
+  try {
+    return await runStructuredRole(opts, schema);
+  } catch (e) {
+    if (deps.signal.aborted || signal.aborted || !deps.rechainRole) throw e;
+    const chain = await deps.rechainRole(role, errText(e));
+    if (!chain?.length) throw e;
+    emit({ kind: "note", text: `🔁 \`${role}\` lost its whole model chain — retrying on \`${chain[0]}\`.` });
+    emit({ kind: "agent-model", id, model: chain[0] }); // the row must name who is actually working now
+    return runStructuredRole({ ...opts, model: chain[0], fallbacks: chain.slice(1) }, schema);
+  }
+}
+
 /**
  * Runs a STAGE's team in parallel; each lens reviews the target read-only and produces a named assessment.
  * `target` is the doc path (spec/plan) or a description of the code change; `request` is the user's original
@@ -251,11 +284,14 @@ export async function runTeam(
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
         const hints = hintsByLens.get(c.name)!;
         const id = `team:${c.name}`;
+        let serving = registry.peekModel(c.name); // the row starts on the chain head; corrected as calls land
         const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}` };
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps, { propose: true }),
+          // A slide down the chain is a visible event: rename the row, then let the registry's own note run.
+          onFallback: (from, to, why) => { serving = to; emit({ kind: "agent-model", id, model: to }); resolved.onFallback?.(from, to, why); },
           proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
@@ -265,11 +301,14 @@ export async function runTeam(
           onUsage: (u) => {
             tok.promptTokens += u.promptTokens;
             tok.completionTokens += u.completionTokens;
+            // The usage report names the model that actually served the call, so a chain slide (inside the
+            // agent loop OR across the structured chain walk) shows up here rather than staying invisible.
+            if (u.model && u.model !== serving) { serving = u.model; emit({ kind: "agent-model", id, model: serving }); }
             emit({ kind: "agent-usage", id, ...tok });
           },
         };
         try {
-          const r = await runStructuredRole(opts, AssessmentSchema);
+          const r = await runWithHealing(deps, c.name, id, opts, AssessmentSchema, signal, emit);
           const a: Assessment = { name: c.name, findings: r.findings, recommendation: r.recommendation };
           // Credit the hints this lens actually echoed back in its findings → they rank higher next time.
           reinforceUsed(deps, hints.ids, r.findings.map((f) => f.note).join(" "), c.name);
@@ -287,9 +326,11 @@ export async function runTeam(
           // A timeout is reported as such: "it never answered" and "it ran past three minutes" have different
           // fixes (a broken model chain vs. a lens that needs a cheaper model or a narrower artifact).
           const timedOut = signal.aborted;
-          const why = timedOut ? `did not finish within its ${Math.round((deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS) / 1000)}s budget` : "got no response from its model chain";
+          const why = timedOut
+            ? `did not finish within its ${Math.round((deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS) / 1000)}s budget`
+            : `every model in its chain failed — ${errText(e)}`;
           emit({ kind: "agent-result", id: `team:${c.name}`, status: timedOut ? "⚠ UNVERIFIED (timed out)" : "⚠ UNVERIFIED (no response)", ...tok });
-          return { name: c.name, recommendation: "revise", findings: [{ severity: "critical", note: `The "${c.name}" lens could not complete its review (${why}) — this dimension is UNVERIFIED and must be re-checked (check the model assigned to it).` }] };
+          return { name: c.name, recommendation: "revise", findings: [{ severity: "critical", note: `The "${c.name}" lens could not complete its review (${why}) — this dimension is UNVERIFIED and must be re-checked.` }] };
         }
       }),
     );
@@ -352,11 +393,14 @@ export async function runCouncil(
         const tok = { promptTokens: 0, completionTokens: 0 };
         const hints = hintsByMember.get(c.name)!;
         const id = `council:${c.name}`;
+        let serving = deps.councilRegistry.peekModel(c.name);
         const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` };
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps, { propose: true }),
+          // A slide down the chain is a visible event: rename the row, then let the registry's own note run.
+          onFallback: (from, to, why) => { serving = to; emit({ kind: "agent-model", id, model: to }); resolved.onFallback?.(from, to, why); },
           proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, vote] : [vote],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
@@ -366,11 +410,14 @@ export async function runCouncil(
           onUsage: (u) => {
             tok.promptTokens += u.promptTokens;
             tok.completionTokens += u.completionTokens;
+            // The usage report names the model that actually served the call, so a chain slide (inside the
+            // agent loop OR across the structured chain walk) shows up here rather than staying invisible.
+            if (u.model && u.model !== serving) { serving = u.model; emit({ kind: "agent-model", id, model: serving }); }
             emit({ kind: "agent-usage", id, ...tok });
           },
         };
         try {
-          const r = await runStructuredRole(opts, CouncilVoteSchema);
+          const r = await runWithHealing(deps, c.name, id, opts, CouncilVoteSchema, signal, emit);
           reinforceUsed(deps, hints.ids, r.rationale, c.name);
           // Stream this vote onto its live row as it lands (no chat note — the tally is one action from the caller).
           emit({ kind: "agent-result", id: `council:${c.name}`, status: r.vote === "pass" ? "PASS" : "REVISE", ...tok });
@@ -381,7 +428,7 @@ export async function runCouncil(
           // fine), never silently dropped — otherwise a shrunk council could accidentally reach a "pass".
           const timedOut = signal.aborted;
           emit({ kind: "agent-result", id: `council:${c.name}`, status: timedOut ? "⚠ UNVERIFIED (timed out)" : "⚠ UNVERIFIED (no response)", ...tok });
-          return { name: c.name, vote: "revise", rationale: `The "${c.name}" decider could not vote (${timedOut ? "timed out" : "no response"}) — counted as revise to be safe.` };
+          return { name: c.name, vote: "revise", rationale: `The "${c.name}" decider could not vote (${timedOut ? "timed out" : `chain failed — ${errText(e)}`}) — counted as revise to be safe.` };
         }
       }),
     );

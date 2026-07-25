@@ -101,6 +101,8 @@ export class TuiController {
     else if (ev.kind === "agents") this.state = { ...this.state, runningAgents: this.setAgents(ev.agents) };
     // A sub-agent finished → stamp its result on that row (and freeze its timer) the moment it lands, so
     // early finishers show their verdict + finding counts immediately instead of all at once.
+    // The chain slid → rename the row to whichever model is actually serving it now.
+    else if (ev.kind === "agent-model") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, model: ev.model } : a) };
     // Running total, no status/doneAt: the row keeps ticking, it just also shows what it has spent so far.
     else if (ev.kind === "agent-usage") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) };
     else if (ev.kind === "agent-result") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, status: ev.status, doneAt: this.now(), promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) };
