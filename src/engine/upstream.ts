@@ -90,7 +90,11 @@ export async function runUpstream(
   // Deferred (non-blocking) findings accumulated across stages — restored from the checkpoint so a restart
   // does not lose what earlier reviews chose not to block on.
   let carryOver: string[] = prior?.carryOver ?? [];
-  const save = (): void => writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, language: r.language, featureSlug: slug, done: [...done], carryOver });
+  // The checkpoint's key is the ORIGINAL request, and a resume must not overwrite it with the word that
+  // triggered the resume: after one "devam et", every resumed worktree would be keyed "devam et" — colliding
+  // with each other and no longer matching an exact re-run of the request that actually started the work.
+  const rawPrompt = prior?.rawPrompt ?? prompt;
+  const save = (): void => writeCheckpoint(root, { rawPrompt, refinedPrompt: r.refinedPrompt, title: r.title, language: r.language, featureSlug: slug, done: [...done], carryOver });
   const mark = (phase: UpstreamPhase): void => { done.add(phase); save(); };
   if (done.size > 0) emit({ kind: "note", text: `⏩ Resuming — already done: ${[...done].join(", ")}. Continuing from the next phase.` });
   // Seed the checkpoint immediately so even a crash before the first phase completes leaves a resumable marker.

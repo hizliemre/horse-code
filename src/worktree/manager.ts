@@ -122,9 +122,9 @@ export class WorktreeManager {
    * Resume support: find a preserved worktree from an earlier interrupted run. Scans every
    * `.horsecode/worktrees/<slug>/checkpoint.json` and only considers a session whose `base` worktree is still
    * live in git (a pruned/stale dir can't be safely reused). A bare "continue" request (`isContinuePrompt`)
-   * resumes the MOST RECENTLY touched worktree — the user needn't retype the original request; otherwise the
-   * prompt must match a checkpoint's stored `rawPrompt` (case/space-tolerant). Returns null when there is
-   * nothing to resume — the caller then opens a fresh session.
+   * matches any preserved work — the user needn't retype the original request — and among those, the one with
+   * ACTUAL PROGRESS wins over the merely most recent. Otherwise the prompt must match a checkpoint's stored
+   * `rawPrompt` (case/space-tolerant). Returns null when there is nothing to resume.
    */
   async findResumable(rawPrompt: string): Promise<WorktreeSession | null> {
     const worktreesDir = join(this.repoRoot, ".horsecode", "worktrees");
@@ -135,7 +135,7 @@ export class WorktreeManager {
     const anyContinue = isContinuePrompt(rawPrompt);
     const key = checkpointKey(rawPrompt);
     const registered = await this.registeredWorktrees();
-    const candidates: { session: WorktreeSession; mtime: number }[] = [];
+    const candidates: { session: WorktreeSession; mtime: number; progress: number }[] = [];
     for (const slug of readdirSync(worktreesDir)) {
       const root = join(worktreesDir, slug);
       const cp = readCheckpoint(root);
@@ -148,10 +148,17 @@ export class WorktreeManager {
       let real: string;
       try { real = realpathSync(baseWorktree); } catch { continue; } // dir gone → not resumable
       if (!registered.has(real)) continue; // dir exists but git no longer tracks it → unsafe to reuse
-      candidates.push({ session: { jobSlug: slug, root, baseWorktree, baseBranch: `hc/${slug}/base`, resumed: true }, mtime: checkpointMtime(root) });
+      candidates.push({
+        session: { jobSlug: slug, root, baseWorktree, baseBranch: `hc/${slug}/base`, resumed: true },
+        mtime: checkpointMtime(root),
+        progress: cp.done.length,
+      });
     }
     if (candidates.length === 0) return null;
-    candidates.sort((a, b) => b.mtime - a.mtime); // most recently touched first
+    // Progress FIRST, recency second. Ranking by recency alone let an empty worktree — one that finished no
+    // phase at all — outrank the real work simply because it was touched later, and "continue" would then
+    // restart the pipeline from the constitution while a spec'd, committed feature sat next to it untouched.
+    candidates.sort((a, b) => (b.progress > 0 ? 1 : 0) - (a.progress > 0 ? 1 : 0) || b.mtime - a.mtime);
     return candidates[0].session;
   }
 

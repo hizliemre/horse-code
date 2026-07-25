@@ -259,6 +259,25 @@ describe("runUpstream", () => {
     expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("P-refiner"))).toBe(false);
   });
 
+  // The checkpoint's rawPrompt is the key an exact re-run matches on. A resume that overwrote it with the word
+  // that TRIGGERED the resume left every resumed worktree keyed "devam et" — colliding with each other and no
+  // longer matching the request that actually started the work.
+  it("a resume preserves the ORIGINAL rawPrompt instead of stamping the continue phrase over it", async () => {
+    const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
+    const { writeFile } = await import("node:fs/promises");
+    const slug = "001-add-thing";
+    await mkdir(join(dir, "specs", slug), { recursive: true });
+    await mkdir(join(dir, ".specify", "memory"), { recursive: true });
+    await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
+    await writeFile(join(dir, "specs", slug, "spec.md"), "# existing spec", "utf8");
+    await writeFile(join(dir, "specs", slug, "plan.md"), "# existing plan", "utf8");
+    writeCheckpoint(root, { rawPrompt: "Build a todo app", refinedPrompt: "Do X", title: "add thing", language: "English", featureSlug: slug, done: ["constitution", "spec", "clarify", "plan"] });
+
+    const p = upstreamProvider({ intent: "feature" });
+    await runUpstream(udeps(p), () => Promise.resolve(dir), "devam et", async () => "x", 3, [], () => {}, undefined, readCheckpoint(root)!);
+    expect(readCheckpoint(root)!.rawPrompt).toBe("Build a todo app");
+  });
+
   it("emits the spec-kit phase events in order", async () => {
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
     const phases: string[] = [];

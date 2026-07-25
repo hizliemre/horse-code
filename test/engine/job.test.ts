@@ -285,3 +285,49 @@ describe("runJob", () => {
     }
   });
 });
+
+// A "continue" request is never a request to START something. It used to fall through to the refiner, which
+// classified the word itself as a feature and scaffolded a whole new project from it — leaving an empty
+// worktree that then competed with the real work for the NEXT resume.
+describe("runJob — a continue request never starts a new project", () => {
+  it("answers in chat instead of scaffolding a worktree when there is nothing to resume", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const p = jobProvider({ intent: "feature" });
+      const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "devam et", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2 });
+      expect(res.kind).toBe("chat");
+      if (res.kind === "chat") expect(res.response).toMatch(/no preserved work/i);
+      // Nothing was scaffolded, and the refiner was never even consulted.
+      expect(existsSync(join(repo, ".horsecode", "worktrees"))).toBe(false);
+      expect(p.requests).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("resumes the preserved work — including the empty-worktree case that used to win on recency", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const real = await mgr.openSession("main", "real-work");
+      writeCheckpoint(real.root, { rawPrompt: "build the todo app", refinedPrompt: "Build the todo app", title: "real-work", language: "Turkish", featureSlug: "001-real", done: ["constitution", "spec", "clarify"] });
+      await new Promise((r) => setTimeout(r, 15));
+      const empty = await mgr.openSession("main", "empty-shell");
+      writeCheckpoint(empty.root, { rawPrompt: "devam et", refinedPrompt: "Continue the work", title: "empty-shell", language: "Turkish", featureSlug: "001-empty", done: [] });
+
+      const events: ProgressEvent[] = [];
+      const p = jobProvider({ intent: "feature" });
+      await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "devam et", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
+      const notes = events.filter((e) => e.kind === "note").map((e) => (e.kind === "note" ? e.text : "")).join("\n");
+      expect(notes).toContain("real-work");
+      expect(notes).not.toContain("empty-shell");
+      // …and the constitution is NOT re-authored: it is already marked done on the resumed checkpoint.
+      const phases = events.filter((e) => e.kind === "phase").map((e) => (e.kind === "phase" ? e.phase : ""));
+      expect(phases).not.toContain("constitution");
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});

@@ -133,7 +133,33 @@ describe("WorktreeManager.findResumable", () => {
     const newer = await wm.openSession("main", "new-task");
     writeCheckpoint(newer.root, { rawPrompt: "build the new thing", refinedPrompt: "y", title: "New", language: "Turkish", featureSlug: "001-new", done: ["constitution"] });
     const found = await wm.findResumable("kaldığımız yerden devam edelim"); // matches neither prompt, but is a continue
-    expect(found?.jobSlug).toBe("new-task"); // most recent wins
+    expect(found?.jobSlug).toBe("new-task"); // most recent wins — both have progress
+  });
+
+  // Observed in the wild: a mis-resume scaffolded an empty worktree, which then outranked a spec'd, committed
+  // feature purely because it was newer — so "continue" restarted the pipeline from the constitution.
+  it("prefers work that has ACTUAL PROGRESS over a newer worktree that finished nothing", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const real = await wm.openSession("main", "real-work");
+    writeCheckpoint(real.root, { rawPrompt: "build the todo app", refinedPrompt: "x", title: "Real", language: "Turkish", featureSlug: "001-real", done: ["constitution", "spec", "clarify"] });
+    await new Promise((r) => setTimeout(r, 15));
+    const empty = await wm.openSession("main", "empty-shell");
+    writeCheckpoint(empty.root, { rawPrompt: "devam et", refinedPrompt: "y", title: "Empty", language: "Turkish", featureSlug: "001-empty", done: [] });
+    expect((await wm.findResumable("devam et"))?.jobSlug).toBe("real-work");
+  });
+
+  it("still falls back to recency when NEITHER has progress", async () => {
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const older = await wm.openSession("main", "old-empty");
+    writeCheckpoint(older.root, { rawPrompt: "a", refinedPrompt: "x", title: "A", language: "English", featureSlug: "001-a", done: [] });
+    await new Promise((r) => setTimeout(r, 15));
+    const newer = await wm.openSession("main", "new-empty");
+    writeCheckpoint(newer.root, { rawPrompt: "b", refinedPrompt: "y", title: "B", language: "English", featureSlug: "001-b", done: [] });
+    expect((await wm.findResumable("devam"))?.jobSlug).toBe("new-empty");
   });
 
   it("returns null when no checkpoint matches (fresh session)", async () => {

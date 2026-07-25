@@ -124,9 +124,19 @@ export async function runJob(
   let resume: Checkpoint | undefined;
   if (isContinuePrompt(opts.prompt)) {
     const resumable = await deps.manager.findResumable(opts.prompt);
-    if (resumable) {
-      const cp = readCheckpoint(resumable.root);
-      if (cp) { session = resumable; resume = cp; emit({ kind: "note", text: `⏩ Resuming "${cp.title}" at \`${resumable.baseWorktree}\` — completed phases are skipped.` }); }
+    const cp = resumable ? readCheckpoint(resumable.root) : null;
+    if (resumable && cp) {
+      const at = cp.done.length ? `already done: ${cp.done.join(", ")}` : "nothing finished yet";
+      session = resumable;
+      resume = cp;
+      emit({ kind: "note", text: `⏩ Resuming "${cp.title}" at \`${resumable.baseWorktree}\` — ${at}.` });
+    } else {
+      // "continue" is never a request to START something. Falling through here used to hand the word itself to
+      // the refiner, which dutifully classified it as a feature and scaffolded a whole new project out of it —
+      // an empty worktree that then competed with the real work for the NEXT resume.
+      return { kind: "chat", response:
+        "There is no preserved work to continue — no resumable worktree with a checkpoint was found in this " +
+        "project. Tell me what to work on and I'll start it, or re-send the original request to pick it up." };
     }
   }
   try {
