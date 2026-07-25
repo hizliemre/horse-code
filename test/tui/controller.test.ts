@@ -49,6 +49,27 @@ describe("TuiController", () => {
     expect(byId["team:arch"].status).toBeUndefined(); // the other row is untouched (still running)
   });
 
+  // A row that shows only a ticking clock for minutes says nothing about what it is costing WHILE it costs it.
+  it("onEvent agent-usage → updates the running total without ending the row", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "agents", agents: [
+      { id: "team:security", title: "team: security", model: "m1" },
+      { id: "team:arch", title: "team: arch", model: "m2" },
+    ] });
+    c.onEvent({ kind: "agent-usage", id: "team:security", promptTokens: 4000, completionTokens: 300 });
+    let byId = Object.fromEntries(c.getState().runningAgents.map((a) => [a.id, a]));
+    expect(byId["team:security"].promptTokens).toBe(4000);
+    expect(byId["team:security"].status).toBeUndefined(); // still running…
+    expect(byId["team:security"].doneAt).toBeUndefined(); // …and its timer keeps ticking
+    expect(byId["team:arch"].promptTokens).toBeUndefined(); // other rows untouched
+
+    // Later calls replace the total (the emitter sends a cumulative figure, not a delta).
+    c.onEvent({ kind: "agent-usage", id: "team:security", promptTokens: 9500, completionTokens: 800 });
+    byId = Object.fromEntries(c.getState().runningAgents.map((a) => [a.id, a]));
+    expect(byId["team:security"].promptTokens).toBe(9500);
+    expect(byId["team:security"].completionTokens).toBe(800);
+  });
+
   it("onEvent refined → replaces the last user message live", () => {
     const c = new TuiController();
     c.awaitTask();

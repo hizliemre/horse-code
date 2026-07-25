@@ -984,3 +984,32 @@ describe("a stuck reviewer cannot hold the round hostage", () => {
     expect(out.find((a) => a.name === "security")?.findings.some((f) => /UNVERIFIED/.test(f.note))).toBe(false);
   }, 30_000);
 });
+
+describe("live per-agent metering", () => {
+  it("each reviewer streams its running token total while it works, not only when it finishes", async () => {
+    // Two calls per lens: the first burns tokens without submitting, the second submits.
+    const twoCalls: Provider = {
+      async *chat(req, signal) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        if (sys.includes("security vulnerabilities") && !req.messages.some((m) => m.role === "tool")) {
+          yield { type: "usage", promptTokens: 5000, completionTokens: 400 };
+          yield { type: "tool-call", toolCall: { id: "g", name: "grep", arguments: '{"pattern":"x"}' } };
+          yield { type: "done", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "usage", promptTokens: 6000, completionTokens: 200 };
+        yield* reviewProvider({}).chat(req, signal);
+      },
+    };
+    const usage: { id: string; promptTokens: number }[] = [];
+    let sawUsageBeforeResult = false;
+    await runTeam(rdeps(twoCalls), "code", dir, "target", undefined, (ev) => {
+      if (ev.kind === "agent-usage" && ev.id === "team:security") { usage.push(ev); sawUsageBeforeResult = true; }
+      if (ev.kind === "agent-result" && ev.id === "team:security" && !sawUsageBeforeResult) throw new Error("result arrived with no live usage");
+    });
+    expect(usage.length).toBeGreaterThanOrEqual(2); // one per LLM call, while it was still running
+    // The figure is CUMULATIVE — the row shows a total, not the last call's delta.
+    expect(usage[0].promptTokens).toBe(5000);
+    expect(usage[1].promptTokens).toBe(11000);
+  });
+});

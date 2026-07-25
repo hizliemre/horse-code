@@ -228,6 +228,7 @@ export async function runTeam(
         const resolved = registry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
         const hints = hintsByLens.get(c.name)!;
+        const id = `team:${c.name}`;
         const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}` };
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
@@ -237,7 +238,13 @@ export async function runTeam(
           messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
           maxTurns: REVIEW_MAX_TURNS,
-          onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
+          // Stream the running total onto this member's row as each call lands — a row that shows only a
+          // ticking clock for minutes says nothing about what it is costing while it is still costing it.
+          onUsage: (u) => {
+            tok.promptTokens += u.promptTokens;
+            tok.completionTokens += u.completionTokens;
+            emit({ kind: "agent-usage", id, ...tok });
+          },
         };
         try {
           const r = await runStructuredRole(opts, AssessmentSchema);
@@ -322,6 +329,7 @@ export async function runCouncil(
         const resolved = deps.councilRegistry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 };
         const hints = hintsByMember.get(c.name)!;
+        const id = `council:${c.name}`;
         const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` };
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
@@ -331,7 +339,13 @@ export async function runCouncil(
           messages: hints.message ? [{ role: "user", content: hints.message }, vote] : [vote],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
           maxTurns: REVIEW_MAX_TURNS,
-          onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
+          // Stream the running total onto this member's row as each call lands — a row that shows only a
+          // ticking clock for minutes says nothing about what it is costing while it is still costing it.
+          onUsage: (u) => {
+            tok.promptTokens += u.promptTokens;
+            tok.completionTokens += u.completionTokens;
+            emit({ kind: "agent-usage", id, ...tok });
+          },
         };
         try {
           const r = await runStructuredRole(opts, CouncilVoteSchema);

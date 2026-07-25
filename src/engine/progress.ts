@@ -14,6 +14,9 @@ export type ProgressEvent =
   // Ad-hoc live sub-agents not backed by a board card (e.g. the review council running in parallel).
   // An empty list clears the panel.
   | { kind: "agents"; agents: { id: string; title: string; model: string }[] }
+  // A live sub-agent's token spend SO FAR → its row updates while it works, like the main shimmer. Without
+  // this a row shows only a ticking clock for minutes, with no signal about what it is costing.
+  | { kind: "agent-usage"; id: string; promptTokens: number; completionTokens: number }
   // One live sub-agent finished → stamp its result + token spend on its row (id matches an `agents` entry).
   | { kind: "agent-result"; id: string; status: string; promptTokens?: number; completionTokens?: number }
   // A transcript note pushed live from deep in the pipeline (e.g. each councilor's finding, the judge's call).
