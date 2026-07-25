@@ -45,6 +45,50 @@ export interface MemoryEntry {
   // default "fact"; a "lesson" (from a correction/failure) weighs higher; a "rule" is a durable behavioral
   // directive (language/style/convention) that is ALWAYS injected (like a pin), not selected by relevance.
   kind?: "fact" | "lesson" | "rule";
+  /**
+   * Content fingerprint of each FILE anchor at the moment the memory was written. Without it a memory silently
+   * rots: "auth lives in src/auth.ts and validates X" stays "true" long after that file changed. With it,
+   * retrieval can tell that the anchored code moved on and stop injecting a claim that no longer holds.
+   */
+  anchorHashes?: Record<string, string>;
+  /** Set when an anchor no longer verifies (file gone or content changed) → excluded from injection. */
+  stale?: boolean;
+}
+
+/** Filesystem seam for anchor verification (injectable so the logic stays unit-testable). */
+export interface AnchorFs {
+  /** Content fingerprint of a project-relative path, or undefined when it does not exist / is unreadable. */
+  fingerprint(relPath: string): string | undefined;
+}
+
+/** Anchors that look like file paths (contain a separator or a dotted extension) — the verifiable ones. */
+export function fileAnchors(anchors: string[]): string[] {
+  return anchors.filter((a) => /[/\\]/.test(a) || /\.[a-z0-9]{1,6}$/i.test(a));
+}
+
+/** Fingerprints every file anchor that currently exists → stored with the memory at write time. */
+export function hashAnchors(anchors: string[], fs: AnchorFs): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const a of fileAnchors(anchors)) {
+    const fp = fs.fingerprint(a);
+    if (fp !== undefined) out[a] = fp;
+  }
+  return out;
+}
+
+/**
+ * Re-checks a memory's file anchors. A memory goes stale when an anchored file disappeared or its content
+ * changed since the memory was written — the claim was ABOUT that code, so it can no longer be trusted.
+ * Memories with no verifiable anchor (a pure preference, a rule) are always considered fresh.
+ */
+export function verifyAnchors(entry: MemoryEntry, fs: AnchorFs): boolean {
+  const hashes = entry.anchorHashes;
+  if (!hashes) return true; // written before anchors were fingerprinted, or nothing verifiable
+  for (const [path, was] of Object.entries(hashes)) {
+    const now = fs.fingerprint(path);
+    if (now === undefined || now !== was) return false;
+  }
+  return true;
 }
 
 /** Retrieval bonus for lessons — missing a lesson costs more than missing a preference. */
@@ -81,6 +125,7 @@ export function selectMemories(
   if (budget === 0) return [];
   const threshold = opts.threshold ?? 0.6;
   return entries
+    .filter((e) => !e.stale) // an anchored file changed → the claim is no longer trustworthy
     .map((e) => ({ e, score: effectiveScore(query, e) })) // lessons get a small bonus over equal-scored facts
     .filter((x) => x.score >= threshold)
     // ties broken by reinforcement (frequently-cited memories rank higher), then recency.

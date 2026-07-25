@@ -1,7 +1,12 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { deriveAnchors, deriveTags, supersedes, type MemoryEntry } from "../engine/memory-retrieval.js";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
+import { deriveAnchors, deriveTags, supersedes, hashAnchors, verifyAnchors, type AnchorFs, type MemoryEntry } from "../engine/memory-retrieval.js";
+
+/** Files larger than this are fingerprinted by size+mtime instead of content (cheap, still change-sensitive). */
+const HASH_MAX_BYTES = 512 * 1024;
 
 export interface MemoryStoreOpts {
   home: string; // kept for API compatibility; memory is now project-local, not under home
@@ -28,9 +33,43 @@ export class MemoryStore {
     return run;
   }
 
+  private readonly cwd: string;
+  private lastVerify = 0;
+
   constructor(opts: MemoryStoreOpts) {
     this.now = opts.now ?? ((): number => Date.now());
+    this.cwd = opts.cwd;
     this.file = join(opts.cwd, ".horsecode", "memory.jsonl");
+  }
+
+  /** Project-relative content fingerprint, used to detect that an anchored file moved on. */
+  private readonly anchorFs: AnchorFs = {
+    fingerprint: (rel: string): string | undefined => {
+      try {
+        const abs = join(this.cwd, rel);
+        const st = statSync(abs);
+        if (!st.isFile()) return undefined;
+        if (st.size > HASH_MAX_BYTES) return `s${st.size}:${Math.floor(st.mtimeMs)}`;
+        return createHash("sha256").update(readFileSync(abs)).digest("hex").slice(0, 16);
+      } catch {
+        return undefined; // missing/unreadable → the anchor no longer verifies
+      }
+    },
+  };
+
+  /**
+   * Re-checks every entry's file anchors and flags the ones whose anchored code changed. Throttled: retrieval
+   * asks for `all()` on every turn, and re-hashing on each call would be pure waste.
+   */
+  verify(force = false): void {
+    if (!this.cache) return;
+    const t = this.now();
+    if (!force && t - this.lastVerify < 2000) return;
+    this.lastVerify = t;
+    for (const e of this.cache) {
+      const fresh = verifyAnchors(e, this.anchorFs);
+      if (e.stale !== !fresh) e.stale = !fresh; // flag only; the entry is kept (the file may come back)
+    }
   }
 
   /** Load entries from disk (memoized). Corrupt lines are skipped. */
@@ -52,7 +91,14 @@ export class MemoryStore {
 
   /** Synchronous snapshot of the loaded entries (for the retrieval injector). */
   all(): MemoryEntry[] {
+    this.verify(); // a memory whose anchored file changed must not be injected as if still true
     return this.cache ?? [];
+  }
+
+  /** Entries currently flagged stale — surfaced by /memory so the user can re-confirm or delete them. */
+  stale(): MemoryEntry[] {
+    this.verify();
+    return (this.cache ?? []).filter((e) => e.stale);
   }
 
   private async persist(): Promise<void> {
@@ -77,7 +123,11 @@ export class MemoryStore {
       if (!t) return { ok: false as const, error: "empty memory" };
       if (this.cache!.some((e) => e.text === t)) return { ok: false as const, error: "already remembered" };
       const anchors = deriveAnchors(t);
-      const entry: MemoryEntry = { id: `m${this.now()}`, text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now(), uses: 0, kind };
+      const hashes = hashAnchors(anchors, this.anchorFs); // fingerprint the code this claim is ABOUT
+      const entry: MemoryEntry = {
+        id: `m${this.now()}`, text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now(), uses: 0, kind,
+        ...(Object.keys(hashes).length ? { anchorHashes: hashes } : {}),
+      };
       // A new entry supersedes only same-kind, same-topic ones (a fact never replaces a lesson, or vice versa).
       const sameKind = (e: MemoryEntry): boolean => (e.kind ?? "fact") === kind;
       const superseded = this.cache!.filter((e) => sameKind(e) && supersedes(entry, e)).map((e) => e.text);

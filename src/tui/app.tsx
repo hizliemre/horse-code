@@ -54,6 +54,7 @@ export interface RunTuiReplOpts {
   mcp?: Record<string, McpServerSpec>; // MCP servers to connect at startup (tools → coach)
   refreshSources?: () => Promise<string[]>; // probe omniroute → your connected model sources (cached)
   sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // current source allowlist
+  memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }
 
 /** TUI REPL: task input → live job → report → loop. Ctrl+C exits; job errors are isolated. */
@@ -169,14 +170,20 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const addPin = (text: string): Promise<{ ok: true; pin: string } | { ok: false; error: string }> => pinStore.add(text);
   const removePin = (n: number): Promise<string | undefined> => pinStore.remove(n);
   // Cross-session memory (per project) → relevant facts retrieved + injected into the coach turn.
-  const memStore = new MemoryStore({ home: homedir(), cwd: process.cwd() });
+  // The store is created at the composition root (cli.ts) so every entry point shares ONE memory and the
+  // rules are already wired into every registry there; fall back to a local one only for direct callers/tests.
+  const memStore = opts.memStore ?? new MemoryStore({ home: homedir(), cwd: process.cwd() });
   await memStore.load();
   // Durable rules (kind "rule") apply to EVERY role — appended to each role's system prompt (spec-kit phases,
   // council, coach, implementers…), so e.g. "respond in Turkish" holds through the whole pipeline, not just chat.
   const rulesFromMemory = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
-  deps0.roleRegistry.setRules(rulesFromMemory);
-  for (const s of ["spec", "plan", "code"] as const) deps0.teamRegistries[s].setRules(rulesFromMemory);
-  deps0.councilRegistry.setRules(rulesFromMemory);
+  // NB: rules are bound to every registry in buildJobDeps (composition root) so ALL entry points get them —
+  // re-binding here is only needed when a caller built deps without a `rules` source (tests/direct use).
+  if (!opts.memStore) {
+    deps0.roleRegistry.setRules(rulesFromMemory);
+    for (const s of ["spec", "plan", "code"] as const) deps0.teamRegistries[s].setRules(rulesFromMemory);
+    deps0.councilRegistry.setRules(rulesFromMemory);
+  }
   // Surface any rules carried over from previous sessions on launch, so the user knows what's in effect
   // even when they don't (re)state them this session.
   const carried = rulesFromMemory();

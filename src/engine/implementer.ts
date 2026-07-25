@@ -3,6 +3,7 @@ import { runToCompletion, type RoleAgentOptions } from "../agent/loop.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
+import { memoryHints } from "./memory-inject.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 
 // A real coding task (scaffold a project, write code + tests, iterate until green) legitimately needs far
@@ -26,13 +27,16 @@ export async function runImplementer(
   const content = returning
     ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
     : `This is a NEW task: "${task.title}". Implement it.`;
+  // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
+  // blind to them and kept re-learning the same things.
+  const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`);
 
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
     tools,
     maxTurns: IMPLEMENTER_MAX_TURNS,
-    messages: [{ role: "user", content }],
+    messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content }] : [{ role: "user", content }],
     permission: deps.permission,
     approve: deps.approve,
     cwd,

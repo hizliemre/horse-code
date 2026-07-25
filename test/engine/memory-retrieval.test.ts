@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints,
-  supersedes, memoryReferenced,
-  type MemoryEntry,
-} from "../../src/engine/memory-retrieval.js";
+import { deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints, supersedes, memoryReferenced, type MemoryEntry, fileAnchors, hashAnchors, verifyAnchors, type AnchorFs } from "../../src/engine/memory-retrieval.js";
 
 const entry = (id: string, text: string, over: Partial<MemoryEntry> = {}): MemoryEntry => {
   const anchors = over.anchors ?? deriveAnchors(text);
@@ -112,5 +108,37 @@ describe("renderMemoryHints", () => {
     expect(out).toContain("Relevant notes from earlier sessions");
     expect(out).toContain("- use pnpm");
     expect(out).toContain("- node 22");
+  });
+});
+
+describe("anchor verification (memory must not rot)", () => {
+  const fs = (files: Record<string, string>): AnchorFs => ({ fingerprint: (p) => files[p] });
+
+  it("picks out the anchors that are verifiable file paths", () => {
+    expect(fileAnchors(["src/auth.ts", "validateToken", "pnpm test", "README.md"])).toEqual(["src/auth.ts", "README.md"]);
+  });
+
+  it("fingerprints existing file anchors only", () => {
+    const h = hashAnchors(["src/a.ts", "src/gone.ts", "someSymbol"], fs({ "src/a.ts": "h1" }));
+    expect(h).toEqual({ "src/a.ts": "h1" });
+  });
+
+  it("stays fresh while the anchored file is unchanged, goes stale when it changes or disappears", () => {
+    const e: MemoryEntry = { id: "m1", text: "auth lives in src/auth.ts", anchors: ["src/auth.ts"], tags: [], createdAt: 0, anchorHashes: { "src/auth.ts": "h1" } };
+    expect(verifyAnchors(e, fs({ "src/auth.ts": "h1" }))).toBe(true);
+    expect(verifyAnchors(e, fs({ "src/auth.ts": "CHANGED" }))).toBe(false);
+    expect(verifyAnchors(e, fs({}))).toBe(false); // file deleted
+  });
+
+  it("a memory with no verifiable anchor (a preference, a rule) is always fresh", () => {
+    const e: MemoryEntry = { id: "m2", text: "prefer short names", anchors: [], tags: [], createdAt: 0 };
+    expect(verifyAnchors(e, fs({}))).toBe(true);
+  });
+
+  it("stale memories are never selected for injection", () => {
+    const fresh: MemoryEntry = { id: "a", text: "auth uses src/auth.ts jwt", anchors: ["src/auth.ts"], tags: ["jwt"], createdAt: 0 };
+    const rotten: MemoryEntry = { ...fresh, id: "b", stale: true };
+    const hits = selectMemories([rotten, fresh], "how does src/auth.ts work", { load: 0 });
+    expect(hits.map((h) => h.id)).toEqual(["a"]);
   });
 });

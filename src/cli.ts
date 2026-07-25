@@ -14,6 +14,7 @@ import { makePRAdapter, detectPlatform, defaultCmdRunner } from "./adapters/pr.j
 import { makeAskUser, makeApprove, nodeLineReader } from "./terminal.js";
 import type { LineReader } from "./terminal.js";
 import { autonomousAskHuman } from "./engine/escalation.js";
+import { MemoryStore } from "./session/memory.js";
 import { runJob } from "./engine/job.js";
 import type { JobResult, JobDeps } from "./engine/job.js";
 import { runInit } from "./init.js";
@@ -115,9 +116,14 @@ export async function main(argv: string[]): Promise<void> {
   const prAdapter = makePRAdapter({ platform: detectPlatform(remoteUrl), run: defaultCmdRunner, cwd, log: (s) => console.log(s) });
   const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
   const home = process.env.HOME ?? "";
+  // ONE memory store for every entry point (REPL, one-shot TUI, headless). Rules live in memory, and rules must
+  // reach every agent — so the store is created here, at the composition root, and handed to buildJobDeps.
+  const memStore = new MemoryStore({ home, cwd });
+  await memStore.load();
+  const rules = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
   const buildDeps = (read: LineReader): Promise<JobDeps> =>
     buildJobDeps({
-      config, provider, skillRegistry, manager, prAdapter,
+      config, provider, skillRegistry, manager, prAdapter, rules,
       // Autonomous by default: a task that exhausts the escalation ladder is auto-retried (then abandoned) so
       // an unattended run finishes on its own instead of blocking on an interactive per-failure human prompt.
       askHuman: autonomousAskHuman(),
@@ -148,6 +154,7 @@ export async function main(argv: string[]): Promise<void> {
       const sourcesInfo = () => ({ sources: sourcesRef.current, manual: manualSources, needsDiscovery: !manualSources && sourcesRef.current.length === 0 });
       await runTuiRepl({
         buildDeps,
+        memStore,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
         formatResult: renderResult,
         model: config.model,
@@ -180,6 +187,11 @@ export async function main(argv: string[]): Promise<void> {
   const { read, close } = nodeLineReader();
   try {
     const deps = await buildDeps(read);
+    // Headless runs get memory too: rules already ride every prompt via buildJobDeps; facts/lessons are
+    // retrieved per turn and reinforced when actually cited.
+    deps.memory = () => memStore.all();
+    deps.reinforceMemory = (id) => { void memStore.reinforce(id); };
+    deps.rememberFact = (fact) => { void memStore.add(fact); };
     const res = await runJob(deps, { ...job, askUser: makeAskUser(read) });
     console.log(renderResult(res));
   } finally {

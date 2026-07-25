@@ -4,6 +4,7 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import { writerRegistry, buildAskUserTool } from "../engine/writer-registry.js";
 import { commitFile } from "../engine/operational.js";
 import { normalizeQuestion } from "../engine/normalize-question.js";
+import { memoryHints } from "../engine/memory-inject.js";
 import type { TaskCycleDeps } from "../engine/task-types.js";
 import type { AskUser } from "../engine/review.js";
 import type { SpecKitTemplates } from "./templates.js";
@@ -27,6 +28,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
   const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts(role);
   const tools = writerRegistry(p.deps.skillRegistry, extraTools ? [buildAskUserTool(p.askUser, (q) => normalizeQuestion(p.deps, q))] : []);
+  const hints = memoryHints(p.deps, message);
   const opts: RoleAgentOptions = {
     provider: p.deps.provider,
     model,
@@ -36,7 +38,8 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     systemPrompt: `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`,
     tools,
     maxTurns: PHASE_MAX_TURNS,
-    messages: [{ role: "user", content: message }],
+    // Project memory (conventions/decisions/lessons) reaches the authoring roles too, not just the coach.
+    messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content: message }] : [{ role: "user", content: message }],
     permission: p.deps.permission,
     approve: p.deps.approve,
     cwd: p.workdir,

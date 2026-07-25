@@ -101,3 +101,43 @@ describe("logPRAdapter", () => {
     expect(r.url).toContain("pending");
   });
 });
+
+describe("rules reach EVERY agent (wired at the composition root)", () => {
+  it("binds the rule source to the main registry, all three team stages, and the council", async () => {
+    const rules = () => ["Always answer in Turkish", "Never use `as any`"];
+    const d = await buildJobDeps({
+      config: baseConfig(), provider: fakeProvider, skillRegistry: new SkillRegistry(),
+      manager: new WorktreeManager({ repoRoot: "/tmp" }),
+      prAdapter: logPRAdapter(() => {}), askHuman: async () => ({ action: "abandon" }),
+      approve: async () => true, signal: new AbortController().signal,
+      home, fetch: fakeFetch, rules,
+    });
+    // a main role, one lens from each stage, and a council decider must all carry the rules
+    const prompts = [
+      d.roleRegistry.resolve("coach").systemPrompt,
+      d.teamRegistries.spec.resolve(d.teams.spec[0].name).systemPrompt,
+      d.teamRegistries.plan.resolve(d.teams.plan[0].name).systemPrompt,
+      d.teamRegistries.code.resolve(d.teams.code[0].name).systemPrompt,
+      d.councilRegistry.resolve(d.council[0].name).systemPrompt,
+    ];
+    for (const p of prompts) {
+      expect(p).toContain("Always answer in Turkish");
+      expect(p).toContain("Never use `as any`");
+    }
+  });
+
+  it("the rule source is LIVE — a rule saved mid-session applies without a rebuild", async () => {
+    let current: string[] = [];
+    const d = await buildJobDeps({
+      config: baseConfig(), provider: fakeProvider, skillRegistry: new SkillRegistry(),
+      manager: new WorktreeManager({ repoRoot: "/tmp" }),
+      prAdapter: logPRAdapter(() => {}), askHuman: async () => ({ action: "abandon" }),
+      approve: async () => true, signal: new AbortController().signal,
+      home, fetch: fakeFetch, rules: () => current,
+    });
+    expect(d.roleRegistry.resolve("coach").systemPrompt).not.toContain("brand new rule");
+    current = ["brand new rule"];
+    expect(d.roleRegistry.resolve("coach").systemPrompt).toContain("brand new rule");
+    expect(d.councilRegistry.resolve(d.council[0].name).systemPrompt).toContain("brand new rule");
+  });
+});

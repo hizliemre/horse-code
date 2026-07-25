@@ -15,6 +15,8 @@ import { loadSpecKit } from "./speckit/templates.js";
 import type { SpecKitTemplates } from "./speckit/templates.js";
 
 export interface BuildJobDepsOpts {
+  /** Live source of the durable behavioral rules → appended to EVERY role's system prompt. */
+  rules?: () => string[];
   config: ResolvedConfig;
   provider: Provider;
   skillRegistry: SkillRegistry;
@@ -50,6 +52,15 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   };
   const council: ReviewerConfig[] = (config.council?.members ?? DEFAULT_COUNCIL).map(fillModels);
   const councilRegistry = buildCouncilRegistry(council);
+
+  // RULES REACH EVERY AGENT — wired here, in the composition root, not in a UI entry point. Doing it in the TUI
+  // meant the one-shot (`hcode "<prompt>"`) and headless paths ran with NO rules at all, and any new entry
+  // point would silently repeat that. `rules` is a live getter, so a rule saved mid-session applies at once.
+  if (opts.rules) {
+    roleRegistry.setRules(opts.rules);
+    for (const s of ["spec", "plan", "code"] as const) teamRegistries[s].setRules(opts.rules);
+    councilRegistry.setRules(opts.rules);
+  }
 
   const permission = new PermissionEngine({ mode: config.mode, allowlist: config.allowlist });
 

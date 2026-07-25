@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryStore } from "../../src/session/memory.js";
@@ -108,5 +108,40 @@ describe("MemoryStore", () => {
     expect(await s.remove(2)).toBe("two");
     expect(s.all().map((e) => e.text)).toEqual(["one", "three"]);
     expect(await s.remove(9)).toBeUndefined();
+  });
+});
+
+describe("anchored memories are re-verified against the code", () => {
+  it("fingerprints file anchors on write and flags the memory stale once that file changes", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "hc-mem-anchor-"));
+    try {
+      await mkdir(join(cwd, "src"), { recursive: true });
+      const file = join(cwd, "src", "auth.ts");
+      await writeFile(file, "export const validate = 1;", "utf8");
+      const s = new MemoryStore({ home: cwd, cwd });
+      await s.load();
+      const r = await s.add("token validation lives in src/auth.ts");
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.entry.anchorHashes?.["src/auth.ts"]).toBeTruthy(); // fingerprinted at write time
+
+      s.verify(true);
+      expect(s.stale()).toEqual([]); // unchanged → still trustworthy
+
+      await writeFile(file, "export const validate = 2; // rewritten", "utf8");
+      s.verify(true);
+      expect(s.stale().map((e) => e.text)).toEqual(["token validation lives in src/auth.ts"]);
+      expect(s.all().find((e) => e.stale)).toBeTruthy();
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
+  it("a memory with no file anchor is never flagged stale", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "hc-mem-anchor-"));
+    try {
+      const s = new MemoryStore({ home: cwd, cwd });
+      await s.load();
+      await s.add("always answer in Turkish", "rule");
+      s.verify(true);
+      expect(s.stale()).toEqual([]);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 });
