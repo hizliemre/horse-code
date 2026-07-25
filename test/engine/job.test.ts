@@ -77,7 +77,10 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
         return;
       }
       if (sys.includes("P-senior-coder")) {
-        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: "fix.txt", content: "fix" })); return; }
+        // Distinct target per stage: the wave-stage senior already committed fix.txt, so re-writing the same
+        // content in the PR revision would be a genuine no-op (and is now correctly detected as one).
+        const path = userContent.includes("PR revision") ? "fix-revision.txt" : "fix.txt";
+        if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path, content: "fix" })); return; }
         yield* stop("done"); return;
       }
       yield* stop("ok"); // coder / architect / team-lead → no-op

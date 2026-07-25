@@ -1,6 +1,8 @@
+import { existsSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { z } from "zod";
 import { runStructuredRole } from "../agent/structured.js";
+import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { writerRegistry } from "../engine/writer-registry.js";
 import type { PhaseDeps } from "./phases.js";
@@ -17,6 +19,8 @@ export const ClarifyStepSchema = z.object({
  */
 export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 5): Promise<void> {
   const specRel = relative(p.workdir, paths.spec);
+  const specText = (): string => (existsSync(paths.spec) ? readFileSync(paths.spec, "utf8") : "");
+  const before = specText();
   // fallbackOpts: clarify is driven by the spec-kit clarify command prompt (own prompt), but wants the
   // analyst's model chain + session-fallback on exhaustion.
   const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts("analyst");
@@ -45,8 +49,32 @@ export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 
       onActivity: p.deps.onActivity,
     };
     const step = await runStructuredRole(opts, ClarifyStepSchema);
-    if (!step.nextQuestion) return;
+    if (!step.nextQuestion) break;
     const answer = await p.askUser(step.nextQuestion);
     qa.push(`Q: ${step.nextQuestion}\nA: ${answer}`);
+  }
+
+  // The user answered questions but the spec never changed → those answers were about to be LOST (the plan
+  // stage would read a spec that never absorbed them). Do one explicit write-back pass before giving up.
+  if (qa.length > 0 && specText() === before) {
+    const opts: RoleAgentOptions = {
+      provider: p.deps.provider,
+      model, fallbacks, onExhausted, onFallback,
+      systemPrompt: `${p.templates.command("clarify")}${p.deps.roleRegistry.ruleSuffix()}`,
+      tools: writerRegistry(p.deps.skillRegistry),
+      messages: [{
+        role: "user",
+        content:
+          `The clarification answers below were NOT written into the spec. Update "${specRel}" now with ` +
+          `write_file/edit_file so every answer is reflected in the requirements — this is the only step that ` +
+          `persists them.\n\n${qa.join("\n\n")}`,
+      }],
+      permission: p.deps.permission,
+      approve: p.deps.approve,
+      cwd: p.workdir,
+      signal: p.deps.signal,
+      onActivity: p.deps.onActivity,
+    };
+    await runToCompletion(opts);
   }
 }

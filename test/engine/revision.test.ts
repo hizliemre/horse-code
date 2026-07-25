@@ -183,3 +183,43 @@ describe("deferred code findings reach the PR revision pass", () => {
     } finally { await rm(dir2, { recursive: true, force: true }); }
   });
 });
+
+describe("a revision pass that changes nothing", () => {
+  it("retries once, then settles instead of burning every remaining round", async () => {
+    const dir2 = await mkdtemp(join(tmpdir(), "hc-rev-noop-"));
+    try {
+      let seniorRuns = 0, reviews = 0;
+      const p: Provider = {
+        async *chat(req) {
+          const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+          const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+          const em = function* (a: string) {
+            yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
+            yield { type: "done", finishReason: "tool_calls" } as const;
+          };
+          if (sys.includes("P-senior-coder")) { // "fixes" it in prose only — writes nothing
+            seniorRuns++;
+            yield { type: "text-delta", text: "looks fine to me" };
+            yield { type: "done", finishReason: "stop" };
+            return;
+          }
+          if (convo.includes("FINAL DECISION")) { yield* em('{"decision":"accept","question":""}'); return; }
+          reviews++;
+          yield* em('{"decision":"request-changes","comments":["no tests"]}');
+        },
+      };
+      // A real git worktree is required for the no-change detection to be active.
+      const { initTmpRepo } = await import("../worktree/helpers.js");
+      const repo = await initTmpRepo();
+      try {
+        const { WorktreeManager } = await import("../../src/worktree/manager.js");
+        const mgr = new WorktreeManager({ repoRoot: repo });
+        const s = await mgr.openSession("main", "rev");
+        const res = await runRevision(rdeps(p, fakeManager()), s, new Board(), async () => {}, async () => "x", 5);
+        expect(seniorRuns).toBe(2);           // one attempt + exactly one explicit retry
+        expect(reviews).toBe(1);              // did NOT burn the remaining 4 principal reviews
+        expect(res.status).toBe("accepted");  // settled via the final decision
+      } finally { await rm(repo, { recursive: true, force: true }); }
+    } finally { await rm(dir2, { recursive: true, force: true }); }
+  });
+});

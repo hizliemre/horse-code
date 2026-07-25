@@ -93,26 +93,31 @@ export async function runUpstream(
   // Seed the checkpoint immediately so even a crash before the first phase completes leaves a resumable marker.
   save();
 
+  // An authoring phase can finish WITHOUT writing its file (the model answers in prose and never calls
+  // write_file). Reviewing a missing document is pure waste: every lens correctly reports "it does not exist",
+  // the revision cannot fix a file that was never written, and the whole round budget burns for nothing.
+  // So: verify the artifact exists, retry the phase ONCE, and fail loudly rather than review nothing.
+  const ensureWritten = async (file: string, rel: string, phase: string, run: () => Promise<void>, optional = false): Promise<void> => {
+    if (existsSync(file)) return;
+    emit({ kind: "note", text: `⚠️ The ${phase} phase produced no \`${rel}\` — retrying it once.` });
+    await run();
+    if (existsSync(file)) return;
+    // Required artifacts (spec/plan/tasks) gate everything downstream → fail loudly. An optional one (the
+    // constitution is read "if present") must not kill an otherwise healthy run — warn and carry on.
+    if (!optional) throw new Error(`${phase} did not produce ${rel} (the role never wrote the file)`);
+    emit({ kind: "note", text: `⚠️ Continuing without \`${rel}\` — the ${phase} phase never wrote it.` });
+  };
+
   // Constitution: establish project principles once — only if this worktree has none yet.
   if (!done.has("constitution")) {
     if (!existsSync(constitutionPath(workdir))) {
       emitPhase("constitution");
       await runConstitution(p);
+      await ensureWritten(constitutionPath(workdir), relative(workdir, constitutionPath(workdir)), "constitution", () => runConstitution(p), true);
       await commitStep(deps, workdir, "establish the project constitution");
     }
     mark("constitution");
   }
-
-  // An authoring phase can finish WITHOUT writing its file (the model answers in prose and never calls
-  // write_file). Reviewing a missing document is pure waste: every lens correctly reports "it does not exist",
-  // the revision cannot fix a file that was never written, and the whole round budget burns for nothing.
-  // So: verify the artifact exists, retry the phase ONCE, and fail loudly rather than review nothing.
-  const ensureWritten = async (file: string, rel: string, phase: string, run: () => Promise<void>): Promise<void> => {
-    if (existsSync(file)) return;
-    emit({ kind: "note", text: `⚠️ The ${phase} phase produced no \`${rel}\` — retrying it once before any review.` });
-    await run();
-    if (!existsSync(file)) throw new Error(`${phase} did not produce ${rel} (the role never wrote the file)`);
-  };
 
   // Medium/low findings the spec review deferred (instead of spending another revision round on them) travel
   // to the plan phase as known, non-blocking context. Empty on a resumed run that skipped the spec phase.

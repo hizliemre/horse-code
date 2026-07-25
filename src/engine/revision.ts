@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Board } from "../board/board.js";
+import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 import type { WorktreeManager, WorktreeSession } from "../worktree/manager.js";
 import type { TaskCycleDeps } from "./task-types.js";
 import type { AskUser } from "./review.js";
@@ -12,6 +13,8 @@ import { buildSkillTool } from "../skills/apply.js";
 
 export interface RevisionDeps extends TaskCycleDeps {
   manager: Pick<WorktreeManager, "commitMerge" | "push">;
+  /** Injectable git runner (tests); defaults to the real one. Used to detect a revision that changed nothing. */
+  git?: GitRunner;
 }
 export type PostComments = (comments: string[]) => Promise<void>;
 
@@ -33,6 +36,15 @@ export type RevisionResult =
   | { status: "approved"; rounds: number }
   | { status: "accepted"; rounds: number }
   | { status: "human"; rounds: number; answer: string };
+
+/** HEAD + dirty state of the base worktree — detects a revision pass that produced no change at all. */
+async function worktreeState(deps: RevisionDeps, base: string): Promise<string | undefined> {
+  const git = deps.git ?? defaultGitRunner;
+  const head = await git(["rev-parse", "HEAD"], base);
+  if (head.code !== 0) return undefined; // not a git worktree (tests/stubs) → guard disabled
+  const status = await git(["status", "--porcelain"], base);
+  return `${head.stdout.trim()}|${status.stdout.trim()}`;
+}
 
 async function principalReview(deps: RevisionDeps, base: string, prDiff?: string, deferred?: string[]) {
   const resolved = deps.roleRegistry.resolve("principal-coder");
@@ -116,7 +128,24 @@ export async function runRevision(
     }
 
     await postComments(v.comments);
+    const beforeRevise = await worktreeState(deps, base);
     await seniorRevise(deps, base, v.comments);
+    // A revision that changed nothing means the next principal review would see IDENTICAL code and repeat the
+    // same comments — burning every remaining round. Retry once with an explicit instruction, then stop.
+    if (beforeRevise !== undefined && (await worktreeState(deps, base)) === beforeRevise) {
+      board.appendStage("__revision__", { role: "senior-coder", action: "pr:no-changes" });
+      await seniorRevise(deps, base, [...v.comments, "Your previous attempt changed NO files. Apply the fixes with write_file/edit_file, or state clearly which comment is wrong and why."]);
+      if ((await worktreeState(deps, base)) === beforeRevise) {
+        const f = await principalFinal(deps, base); // nothing is moving → settle it now instead of looping
+        if (f.decision === "accept") {
+          board.appendStage("__revision__", { role: "principal-coder", action: "pr:final:accept" });
+          return { status: "accepted", rounds: round };
+        }
+        const answer = await askUser(f.question);
+        board.appendStage("__revision__", { role: "human", action: "pr:human", note: answer });
+        return { status: "human", rounds: round, answer };
+      }
+    }
     board.appendStage("__revision__", { role: "senior-coder", action: "pr:revised" });
     await deps.manager.commitMerge(session, `hc: revision ${round}`);
     await deps.manager.push(session);

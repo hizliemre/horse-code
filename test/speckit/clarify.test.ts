@@ -8,7 +8,7 @@ import { MockProvider } from "../../src/providers/mock.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
-import type { ChatEvent } from "../../src/core/types.js";
+import type { ChatEvent, Provider } from "../../src/core/types.js";
 import type { SpecKitTemplates } from "../../src/speckit/templates.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 
@@ -59,5 +59,34 @@ describe("runClarify", () => {
       2,
     );
     expect(n).toBe(2); // capped
+  });
+});
+
+describe("answers that were never written into the spec", () => {
+  it("does a final write-back pass so the user's answers are not lost", async () => {
+    const paths = scaffoldFeature(wd, "001-x");
+    await writeFile(paths.spec, "# Spec", "utf8");
+    // The role asks one question, then says it is done — but never touches the spec file.
+    let recovery = 0;
+    const seen: string[] = [];
+    const p: Provider & { requests: unknown[] } = {
+      requests: [],
+      async *chat(req) {
+        const convo = req.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+        seen.push(convo);
+        if (convo.includes("NOT written into the spec")) { // the recovery pass
+          recovery++;
+          yield { type: "text-delta", text: "updated" };
+          yield { type: "done", finishReason: "stop" };
+          return;
+        }
+        const asked = seen.filter((c) => !c.includes("NOT written")).length;
+        yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: `{"nextQuestion":${asked === 1 ? '"Retention?"' : "null"}}` } };
+        yield { type: "done", finishReason: "tool_calls" };
+      },
+    };
+    await runClarify({ deps: deps(p as never), templates, workdir: wd, askUser: async () => "30 days" }, paths);
+    expect(recovery).toBe(1);                       // the answers were written back, not dropped
+    expect(seen.join("\n")).toContain("30 days");   // …and the recovery pass carried them
   });
 });
