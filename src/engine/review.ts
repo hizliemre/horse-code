@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { runStructuredRole } from "../agent/structured.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
@@ -402,6 +404,13 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
     for (let i = 0; i < maxRounds; i++, round++) {
       // ACTION narrative only: the chat tracks WHO is deciding and the hand-offs (team → council → judge),
       // not what each agent produced. Members' raw findings/votes stay out of the chat flow by design.
+      // Safety net: never review a document that does not exist. Every lens would (correctly) report it as a
+      // blocking finding and the revision could not fix a file that was never written — the whole round budget
+      // would burn for nothing. Fail immediately with a message that names the real problem.
+      if (stage !== "code" && !existsSync(isAbsolute(target) ? target : join(workdir, target))) {
+        emit({ kind: "note", text: `⚠️ **${label} not found** at \`${target}\` — nothing to review. The authoring phase produced no file.` });
+        return { approved: false };
+      }
       emit({ kind: "note", text: `🔍 **Reviewing the ${label}** (round ${round + 1}) — the team (${deps.teams[stage].length}) is discussing it…` });
       const assessments = await runTeam(deps, stage, workdir, target, request, emit);
       // The whole team has reported → write the consolidated result to chat (per-member verdict + counts).

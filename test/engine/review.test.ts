@@ -688,3 +688,24 @@ describe("authority ladder: team → council → judge → (only then) human", (
     expect(out.approved).toBe(false);
   });
 });
+
+describe("missing artifact guard", () => {
+  it("never reviews a document that does not exist — fails immediately instead of burning the budget", async () => {
+    // No spec.md written at all (the authoring phase produced nothing).
+    const p = reviewProvider({});
+    const notes: string[] = [];
+    let teamRan = 0;
+    const spy: Provider = {
+      async *chat(req) { teamRan++; yield* p.chat(req, new AbortController().signal); },
+    };
+    const out = await runReviewLoop(rdeps(spy), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: async () => {}, askUser: async () => "Stop", maxRounds: 5,
+      emit: (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); },
+    });
+    expect(out.approved).toBe(false);
+    expect(teamRan).toBe(0); // not a single lens was spent on a missing file
+    expect(notes.join("\n")).toMatch(/not found/i);
+    expect(notes.join("\n")).toMatch(/produced no file/i);
+  });
+});

@@ -311,3 +311,32 @@ describe("plan review deferrals reach the task breakdown", () => {
     expect(msg).toContain("add retry budget");
   });
 });
+
+describe("authoring phase that writes no file", () => {
+  it("retries the phase once, and never sends a missing document to review", async () => {
+    // The provider refuses to write on the FIRST specify call, then writes on the retry.
+    let specifyCalls = 0;
+    const p = upstreamProvider({ intent: "feature" });
+    const wrapped: Provider & { requests: typeof p.requests } = {
+      requests: p.requests,
+      async *chat(req, signal) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        if (sys.includes("COMMAND:specify")) {
+          specifyCalls++;
+          if (specifyCalls === 1) { // first attempt: prose only, no write_file
+            p.requests.push(req);
+            yield { type: "text-delta", text: "Here is the spec, conceptually." };
+            yield { type: "done", finishReason: "stop" };
+            return;
+          }
+        }
+        yield* p.chat(req, signal);
+      },
+    };
+    const notes: string[] = [];
+    const res = await runUpstream(udeps(wrapped), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
+    expect(res.kind).toBe("approved");
+    expect(notes.join("\n")).toMatch(/produced no `?specs?/i); // the retry was announced
+    expect(existsSync(join(dir, "specs"))).toBe(true);
+  });
+});

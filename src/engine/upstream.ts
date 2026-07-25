@@ -103,6 +103,17 @@ export async function runUpstream(
     mark("constitution");
   }
 
+  // An authoring phase can finish WITHOUT writing its file (the model answers in prose and never calls
+  // write_file). Reviewing a missing document is pure waste: every lens correctly reports "it does not exist",
+  // the revision cannot fix a file that was never written, and the whole round budget burns for nothing.
+  // So: verify the artifact exists, retry the phase ONCE, and fail loudly rather than review nothing.
+  const ensureWritten = async (file: string, rel: string, phase: string, run: () => Promise<void>): Promise<void> => {
+    if (existsSync(file)) return;
+    emit({ kind: "note", text: `⚠️ The ${phase} phase produced no \`${rel}\` — retrying it once before any review.` });
+    await run();
+    if (!existsSync(file)) throw new Error(`${phase} did not produce ${rel} (the role never wrote the file)`);
+  };
+
   // Medium/low findings the spec review deferred (instead of spending another revision round on them) travel
   // to the plan phase as known, non-blocking context. Empty on a resumed run that skipped the spec phase.
   let carryOver: string[] = [];
@@ -111,6 +122,7 @@ export async function runUpstream(
   if (!done.has("spec")) {
     emitPhase("specify");
     await runSpecify(p, paths, r.refinedPrompt);
+    await ensureWritten(paths.spec, specRel, "specify", () => runSpecify(p, paths, r.refinedPrompt));
     const specOut = await runReviewLoop(deps, {
       stage: "spec", workdir, target: specRel, request: r.refinedPrompt,
       revise: (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
@@ -138,6 +150,7 @@ export async function runUpstream(
   if (!done.has("plan")) {
     emitPhase("plan");
     await runPlan(p, paths, undefined, carryOver);
+    await ensureWritten(paths.plan, planRel, "plan", () => runPlan(p, paths, undefined, carryOver));
     const planOut = await runReviewLoop(deps, {
       stage: "plan", workdir, target: planRel, request: r.refinedPrompt,
       revise: (fb) => runPlan(p, paths, fb),
