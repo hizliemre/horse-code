@@ -53,6 +53,11 @@ function worstSeverity(assessments: Assessment[]): Severity | "none" {
   }
   return worst;
 }
+/** The team's medium/low findings, flattened → carried to the next stage instead of forcing another round. */
+function nonBlockingNotes(assessments: Assessment[]): string[] {
+  return assessments.flatMap((a) => a.findings.filter((f) => f.severity !== "critical").map((f) => `[${f.severity}] ${a.name}: ${f.note}`));
+}
+
 /** Total findings across the team at a given severity → used in the council-handoff note. */
 function severityTotal(assessments: Assessment[], sev: Severity): number {
   return assessments.reduce((n, a) => n + a.findings.filter((f) => f.severity === sev).length, 0);
@@ -71,7 +76,12 @@ export const JudgeSchema = z.object({
   question: z.string(),
 });
 
-export interface ReviewOutcome { approved: boolean }
+export interface ReviewOutcome {
+  approved: boolean;
+  /** Medium/low findings that were NOT worth another revision round — carried forward to the next stage as
+   *  known, non-blocking context (they are never silently dropped). */
+  deferred?: string[];
+}
 
 /** What the artifact IS, and which questions therefore belong to this stage (vs a later one). */
 const STAGE_FRAMING: Record<ReviewStage, string> = {
@@ -340,6 +350,7 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
   const language = o.language;
   const label = stage;
   let round = 0;
+  let prevCriticals = Number.POSITIVE_INFINITY; // convergence guard: criticals must DROP round over round
   // Outer loop: run a batch of up to `maxRounds` council/judge rounds; if none pass, escalate to the human,
   // who may approve as-is, ask for MORE review rounds (another batch), or stop. Only "stop" ends without approval.
   for (;;) {
@@ -350,23 +361,39 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
       const assessments = await runTeam(deps, stage, workdir, target, request, emit);
       // The whole team has reported → write the consolidated result to chat (per-member verdict + counts).
       if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, label) });
-      // Team shortcut-pass — but ONLY when the doc is genuinely CLEAN. Each lens is the SOLE authority on its
-      // dimension, so a majority "approve" must NOT wave through a serious finding from one lens (e.g. a single
-      // critical security finding while the other 14 lenses, which don't inspect security, approve). Shortcut is
-      // allowed only when there is NO critical AND NO medium finding anywhere AND a strong majority approves;
-      // any critical/medium finding sends it to the council to adjudicate (never auto-passed by count).
       const approve = assessments.filter((a) => a.recommendation === "approve").length;
-      const worst = worstSeverity(assessments);
-      const clean = worst === "none" || worst === "low"; // no critical/medium → safe to shortcut
-      if (assessments.length && clean && approve / assessments.length >= TEAM_CONSENSUS) {
-        emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the ${label} is approved.` });
-        return { approved: true };
+      const crit = severityTotal(assessments, "critical");
+      const med = severityTotal(assessments, "medium");
+
+      // TIERED BAR. Round 1 is the thorough pass: a critical OR medium finding blocks the shortcut (one lens is
+      // the SOLE authority on its dimension, so a majority "approve" must never wave through a serious finding).
+      // From round 2 on, only CRITICAL blocks: "medium" findings on a doc are effectively inexhaustible — any
+      // document can always be clarified further — so keeping them blocking turns the loop into endless polish
+      // (observed: ~10 rounds of "clarify …" commits). Their notes are carried forward instead of re-revised.
+      if (round === 0) {
+        const clean = crit === 0 && med === 0;
+        if (assessments.length && clean && approve / assessments.length >= TEAM_CONSENSUS) {
+          emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the ${label} is approved.` });
+          return { approved: true };
+        }
+      } else if (crit === 0) {
+        // No blocking issue left: pass and DEFER the remaining medium/low findings to the next stage.
+        const deferred = nonBlockingNotes(assessments);
+        emit({ kind: "note", text: `✅ **Team** — no critical findings left → the ${label} is approved.${deferred.length ? ` ${deferred.length} medium/low note(s) carried forward to the next stage.` : ""}` });
+        return { approved: true, deferred };
       }
+
+      // Not converging? If the critical count didn't drop versus the previous round, more rounds won't help —
+      // stop burning them and take it to the human now.
+      if (round > 0 && crit >= prevCriticals) {
+        emit({ kind: "note", text: `⚠️ **Review is not converging** — ${crit} critical finding(s), no better than the previous round. Taking it to you instead of spending more rounds.` });
+        prevCriticals = crit;
+        break;
+      }
+      prevCriticals = crit;
 
       // Contested → the team hands the decision to the council, which weighs the findings and VOTES. Say WHY:
       // a serious finding surfaced, or the team just split on approval.
-      const crit = severityTotal(assessments, "critical");
-      const med = severityTotal(assessments, "medium");
       const reason = crit || med
         ? `surfaced ${crit} critical / ${med} medium finding(s)`
         : `is split (${approve}/${assessments.length} approve)`;

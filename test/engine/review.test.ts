@@ -241,6 +241,11 @@ describe("runReviewLoop", () => {
   const noRevise = async () => {};
   // Both team lenses recommend "revise" → 0% approve < 70% consensus → the council is convened.
   const teamSplit = { security: '{"concerns":["x"],"recommendation":"revise"}', architectural: '{"concerns":["y"],"recommendation":"revise"}' };
+  // Blocking findings: from round 2 on ONLY criticals keep the loop going, so escalation tests need these.
+  const teamCritical = {
+    security: '{"findings":[{"severity":"critical","note":"x"}],"recommendation":"revise"}',
+    architectural: '{"findings":[{"severity":"critical","note":"y"}],"recommendation":"revise"}',
+  };
 
   it("team consensus (≥70% approve) → approved WITHOUT convening the council or judge", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
@@ -338,7 +343,7 @@ describe("runReviewLoop", () => {
 
   it("maxRounds exhausted → offers approve / keep-reviewing / stop; approve → approved, stop → not", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const mk = () => reviewProvider({ assessments: teamSplit, councilVotes: allRevise }); // team+council revise → never passes
+    const mk = () => reviewProvider({ assessments: teamCritical, councilVotes: allRevise }); // criticals persist → never passes
     let opts: string[] | undefined;
     const ok = await runReviewLoop(rdeps(mk()), { stage: "spec", workdir: dir, target: "spec.md", revise: noRevise, askUser: async (_q, o) => { opts = o?.options; return "approve"; }, maxRounds: 2 });
     expect(opts).toEqual(["Approve as-is", "Keep reviewing (2 more rounds)", "Stop"]);
@@ -353,7 +358,7 @@ describe("runReviewLoop", () => {
 
   it("'keep reviewing' runs another batch of rounds before re-escalating", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ assessments: teamSplit, councilVotes: allRevise });
+    const p = reviewProvider({ assessments: teamCritical, councilVotes: allRevise });
     const answers = ["Keep reviewing (1 more rounds)", "Approve as-is"]; let ai = 0;
     let rounds = 0;
     const out = await runReviewLoop(
@@ -462,5 +467,63 @@ describe("runCodeReview (code stage → task-cycle verdict)", () => {
     };
     await runCodeReview(rdeps(p), dir, "task title");
     expect(sys.join("\n")).toMatch(/review TEAM member for the CODE stage/);
+  });
+});
+
+describe("tiered bar + convergence guard (loop termination)", () => {
+  const noRevise = async () => {};
+  const mediumOnly = {
+    security: '{"findings":[{"severity":"medium","note":"clarify FR-3"}],"recommendation":"revise"}',
+    architectural: '{"findings":[{"severity":"low","note":"wording"}],"recommendation":"revise"}',
+  };
+
+  it("round 1: a medium finding still blocks the shortcut (thorough first pass)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: mediumOnly, councilVotes: allRevise });
+    let revised = 0;
+    const notes: string[] = [];
+    await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: async () => { revised++; }, askUser: async () => "Stop", maxRounds: 1,
+      emit: (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); },
+    });
+    expect(notes.join("\n")).toMatch(/1 critical \/ 1 medium|medium finding/i); // council convened in round 1
+    expect(revised).toBe(1); // …and it produced a revision
+  });
+
+  it("round 2+: mediums/lows no longer block — it passes and DEFERS them (kills the polish loop)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    // Every round yields only medium/low findings. Old behaviour: revise forever. New: round 2 approves.
+    const p = reviewProvider({ assessments: mediumOnly, councilVotes: allRevise });
+    let revised = 0;
+    const out = await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: async () => { revised++; }, askUser: async () => "Stop", maxRounds: 5,
+    });
+    expect(out.approved).toBe(true);
+    expect(revised).toBe(1); // exactly ONE revision (round 1), then round 2 passed
+    expect(out.deferred).toEqual(expect.arrayContaining([
+      expect.stringContaining("[medium] security: clarify FR-3"),
+      expect.stringContaining("[low] arch: wording"),
+    ]));
+  });
+
+  it("criticals that don't drop round-over-round stop the batch early (no burning rounds)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const stuck = {
+      security: '{"findings":[{"severity":"critical","note":"still broken"}],"recommendation":"revise"}',
+      architectural: '{"findings":[{"severity":"critical","note":"still broken"}],"recommendation":"revise"}',
+    };
+    const p = reviewProvider({ assessments: stuck, councilVotes: allRevise });
+    let rounds = 0;
+    const notes: string[] = [];
+    const out = await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: noRevise, askUser: async () => "Stop", maxRounds: 5,
+      emit: (ev) => { if (ev.kind === "note") { const t = (ev as { text: string }).text; notes.push(t); if (/Reviewing the/.test(t)) rounds++; } },
+    });
+    expect(out.approved).toBe(false);
+    expect(rounds).toBe(2); // round 1 revised, round 2 saw no improvement → escalated instead of 5 rounds
+    expect(notes.join("\n")).toMatch(/not converging/i);
   });
 });

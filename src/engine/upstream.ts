@@ -102,6 +102,10 @@ export async function runUpstream(
     mark("constitution");
   }
 
+  // Medium/low findings the spec review deferred (instead of spending another revision round on them) travel
+  // to the plan phase as known, non-blocking context. Empty on a resumed run that skipped the spec phase.
+  let carryOver: string[] = [];
+
   // Specify → council/judge review loop (revise = re-run specify with feedback).
   if (!done.has("spec")) {
     emitPhase("specify");
@@ -112,6 +116,7 @@ export async function runUpstream(
       askUser, maxRounds, emit, language: r.language,
     });
     if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
+    carryOver = specOut.deferred ?? [];
     // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
     if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
     await commitStep(deps, workdir, "add the feature specification");
@@ -129,7 +134,7 @@ export async function runUpstream(
   // Plan → council/judge review loop (revise = re-run plan with feedback).
   if (!done.has("plan")) {
     emitPhase("plan");
-    await runPlan(p, paths);
+    await runPlan(p, paths, undefined, carryOver);
     const planOut = await runReviewLoop(deps, {
       stage: "plan", workdir, target: planRel, request: r.refinedPrompt,
       revise: (fb) => runPlan(p, paths, fb),

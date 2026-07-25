@@ -26,7 +26,7 @@ const ctx = (): ToolContext => ({ cwd: ".", signal: new AbortController().signal
 // Content-based provider scripting the spec-kit pipeline: it keys off the systemPrompt (refiner / coach /
 // council perspective / judge) and, for the spec-kit phases, off the spec-kit command text ("COMMAND:<phase>"
 // injected by fakeSpecKit). Captures every request for assertions.
-export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean; councilRec?: "approve" | "revise"; councilVotes?: string[] } = {}): Provider & { requests: ChatRequest[] } {
+export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean; councilRec?: "approve" | "revise"; councilVotes?: string[]; teamFindings?: string } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
   let councilCall = 0;
@@ -73,7 +73,7 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
         const arr = opts.councilVotes ?? ["pass"];
         yield* submit(`{"vote":"${arr[councilCall] ?? arr[arr.length - 1]}","rationale":"r"}`); councilCall++; return;
       }
-      if (sys.includes("review TEAM member")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
+      if (sys.includes("review TEAM member")) { yield* submit(opts.teamFindings ?? `{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
         yield* submit(arr[judgeCall] ?? arr[arr.length - 1]);
@@ -275,5 +275,22 @@ describe("runUpstream", () => {
     const p = upstreamProvider({ intent: "feature", skipWrite: true, judge: ['{"decision":"pass","feedback":[],"question":""}'] });
     await expect(runUpstream(udeps(p), () => Promise.resolve(dir), "X", async () => "x", 1)).rejects.toThrow(/spec/);
     expect(existsSync(join(dir, ".specify/memory/constitution.md"))).toBe(true); // constitution still ran
+  });
+});
+
+describe("deferred spec findings carry over to the plan", () => {
+  it("medium/low notes the spec review deferred are handed to the plan phase as non-blocking context", async () => {
+    // Round 1: a medium finding → council revise → revise. Round 2: still only medium → passes + defers it.
+    const p = upstreamProvider({
+      intent: "feature",
+      teamFindings: '{"findings":[{"severity":"medium","note":"clarify retention"}],"recommendation":"revise"}',
+      councilVotes: ["revise"],
+    });
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 5);
+    expect(res.kind).toBe("approved");
+    const planReq = p.requests.filter((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:plan"));
+    const planMsg = planReq.flatMap((r) => r.messages.map((m) => (typeof m.content === "string" ? m.content : ""))).join("\n");
+    expect(planMsg).toMatch(/carried over from the spec review/i);
+    expect(planMsg).toContain("clarify retention");
   });
 });

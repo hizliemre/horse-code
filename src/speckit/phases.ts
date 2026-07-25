@@ -65,14 +65,20 @@ export async function runSpecify(p: PhaseDeps, paths: FeaturePaths, prompt: stri
   await runRole(p, "analyst", p.templates.command("specify"), msg, true);
 }
 
-export async function runPlan(p: PhaseDeps, paths: FeaturePaths, feedback?: string[]): Promise<void> {
+export async function runPlan(p: PhaseDeps, paths: FeaturePaths, feedback?: string[], carryOver?: string[]): Promise<void> {
   const rel = relative(p.workdir, paths.plan);
   const specRel = relative(p.workdir, paths.spec);
   const cRel = relative(p.workdir, constitutionPath(p.workdir));
+  // Non-blocking notes the spec review deliberately deferred rather than spending another revision round on:
+  // surfaced here so the plan can settle them where they actually belong, instead of being lost.
+  const carried = carryOver?.length
+    ? `\n\nKnown non-blocking notes carried over from the spec review — address them in the plan where they ` +
+      `apply (they are context, not blockers):\n${carryOver.map((c) => `- ${c}`).join("\n")}`
+    : "";
   const msg = feedback?.length
     ? `Revise the plan at "${rel}" with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}`
     : `Read the spec "${specRel}" and the constitution "${cRel}" (if present).\n` +
-      `Follow this template:\n\n${p.templates.template("plan")}\n\nWrite the plan to "${rel}".`;
+      `Follow this template:\n\n${p.templates.template("plan")}\n\nWrite the plan to "${rel}".${carried}`;
   await runRole(p, "planner", p.templates.command("plan"), msg);
 }
 
