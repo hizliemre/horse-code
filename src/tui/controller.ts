@@ -344,11 +344,22 @@ export class TuiController {
     this.notify();
   }
 
+  /**
+   * The mode to return to when a picker closes.
+   *
+   * A picker is an OVERLAY, not the end of the turn: `/mode auto`, `/model` or `/roles` can be used while a job
+   * is running, and hard-resetting to "input" tore the status line off a job that was still working — the
+   * shimmer never came back for the rest of the run.
+   */
+  private modeAfterPicker(): "input" | "running" {
+    return this.state.meta?.running ? "running" : "input";
+  }
+
   /** Applies a picked permission mode and confirms it in the transcript. */
   applyMode(mode: string, desc: string): void {
     this.state = {
       ...this.state,
-      mode: "input", picker: undefined,
+      mode: this.modeAfterPicker(), picker: undefined,
       transcript: [...this.state.transcript, { role: "assistant", text: `Permission mode → **${mode}** — ${desc}.` }],
     };
     this.notify();
@@ -389,7 +400,7 @@ export class TuiController {
   }
 
   applyModel(model: string): void {
-    this.state = { ...this.state, mode: "input", picker: undefined, currentModel: model };
+    this.state = { ...this.state, mode: this.modeAfterPicker(), picker: undefined, currentModel: model };
     this.notify();
   }
 
@@ -399,14 +410,14 @@ export class TuiController {
     const body = chain.length ? `${chain[0]}${chain.slice(1).map((m) => `  ↳ ${m}`).join("")}` : "—";
     this.state = {
       ...this.state,
-      mode: "input", picker: undefined,
+      mode: this.modeAfterPicker(), picker: undefined,
       transcript: [...this.state.transcript, { role: "assistant", text: `\`${role}\` → ${body}` }],
     };
     this.notify();
   }
 
   cancelPicker(): void {
-    this.state = { ...this.state, mode: "input", picker: undefined };
+    this.state = { ...this.state, mode: this.modeAfterPicker(), picker: undefined };
     this.notify();
   }
 
