@@ -75,16 +75,16 @@ describe("executeToolCalls permission re-check at execution time", () => {
     const permission = new PermissionEngine({ mode: "ask", allowlist: [] });
     const prompted: string[] = [];
     const { events, result } = await drainGen(executeToolCalls(
-      [call("1", "shell", { command: "ls -la" }), call("2", "shell", { command: "mkdir -p src" })],
+      [call("1", "shell", { command: "mkdir -p src" }), call("2", "shell", { command: "npm install" })],
       deps({
         tools: registry(shell),
         permission,
         approve: async (req) => { prompted.push(req.allowKey); permission.setMode("auto"); return true; }, // approve #1 + flip to auto
       }),
     ));
-    expect(prompted).toEqual(["ls -la"]); // only the FIRST asked; the second auto-allowed after the switch
+    expect(prompted).toEqual(["mkdir -p src"]); // only the FIRST asked; the second auto-allowed after the switch
     expect(events.filter((e) => e.type === "permission.ask")).toHaveLength(1);
-    expect(result.map((r) => r.result.content)).toEqual(["ran:ls -la", "ran:mkdir -p src"]); // both actually ran
+    expect(result.map((r) => r.result.content)).toEqual(["ran:mkdir -p src", "ran:npm install"]); // both actually ran
   });
 });
 

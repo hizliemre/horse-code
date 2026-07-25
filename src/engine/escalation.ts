@@ -60,6 +60,8 @@ export async function runTaskWithEscalation(
   board: Board,
   taskId: string,
   cwd: string,
+  /** Position among the parallel workers in this wave → spreads the role's chain across subscriptions. */
+  slot = 0,
 ): Promise<Verdict> {
   const task = board.get(taskId);
   if (!task) throw new Error(`runTaskWithEscalation: unknown task: ${taskId}`);
@@ -76,7 +78,7 @@ export async function runTaskWithEscalation(
         tier === 0 ? family : family === "designer" ? "senior-designer" : "senior-coder";
       let v: Verdict;
       try {
-        v = await runCycleWithRole(deps, board, taskId, cwd, role);
+        v = await runCycleWithRole(deps, board, taskId, cwd, role, undefined, slot);
       } catch (e) {
         if (deps.signal.aborted) throw e; // genuine cancellation → propagate
         // The attempt THREW (e.g. hit its turn-count ceiling, or a non-retryable model error). Treat it as a

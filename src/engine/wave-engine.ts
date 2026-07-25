@@ -52,7 +52,7 @@ export async function runWave(
 
   const ser = createMutex();
   const results = await Promise.all(
-    runnable.map(async (t) => {
+    runnable.map(async (t, slot) => {
       const resolveConflict = async (tw: TaskWorktree, files: string[]): Promise<MergeResult> => {
         try {
           const r = await resolveMergeConflict(deps, session, board, t, tw);
@@ -65,7 +65,7 @@ export async function runWave(
           return { status: "conflict", files };
         }
       };
-      const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict }, session, board, t);
+      const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict }, session, board, t, slot);
       return { t, status: res.status };
     }),
   );

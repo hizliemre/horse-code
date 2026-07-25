@@ -158,3 +158,45 @@ describe("RoleRegistry.setRules", () => {
     }
   });
 });
+
+// Five implementers in one wave are all the role `coder`, so every one of them resolved to the SAME chain head
+// and hammered a single subscription until it rate-limited (observed: 5/5 on cx/gpt-5.6-sol-ultra).
+describe("RoleRegistry.chainFor — parallel workers spread across the chain", () => {
+  const r = () => new RoleRegistry({ coder: { models: ["a/m1", "b/m2", "c/m3"], systemPrompt: "P" } });
+
+  it("each slot leads with a different model", () => {
+    const reg = r();
+    expect(reg.chainFor("coder", 0)[0]).toBe("a/m1");
+    expect(reg.chainFor("coder", 1)[0]).toBe("b/m2");
+    expect(reg.chainFor("coder", 2)[0]).toBe("c/m3");
+  });
+
+  // Rotation, not truncation: spreading the load must not cost a worker its fallbacks.
+  it("every worker keeps the FULL chain, just in a different order", () => {
+    const reg = r();
+    for (const slot of [0, 1, 2, 7]) {
+      expect([...reg.chainFor("coder", slot)].sort()).toEqual(["a/m1", "b/m2", "c/m3"]);
+    }
+  });
+
+  it("wraps around when there are more workers than models", () => {
+    expect(r().chainFor("coder", 4)[0]).toBe("b/m2"); // 4 % 3 = 1
+  });
+
+  it("slot 0 is exactly the plain chain (sequential callers are unchanged)", () => {
+    const reg = r();
+    expect(reg.chainFor("coder")).toEqual(reg.chain("coder"));
+  });
+
+  it("a quarantined model drops out of the rotation too", () => {
+    const reg = r();
+    reg.markExhausted("b/m2", "429");
+    expect(reg.chainFor("coder", 0)[0]).toBe("a/m1");
+    expect(reg.chainFor("coder", 1)[0]).toBe("c/m3"); // not the dead one
+  });
+
+  it("a single-model role is unaffected", () => {
+    const one = new RoleRegistry({ coder: { models: ["a/m1"], systemPrompt: "P" } });
+    expect(one.chainFor("coder", 3)).toEqual(["a/m1"]);
+  });
+});

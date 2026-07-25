@@ -78,9 +78,10 @@ describe("PermissionEngine", () => {
 
   it("a rule added via addAllow takes effect on the next check", () => {
     const eng = new PermissionEngine({ mode: "ask", allowlist: [] });
-    expect(eng.check({ level: "exec", preview: "ls", allowKey: "ls" })).toBe("ask");
-    eng.addAllow("ls");
-    expect(eng.check({ level: "exec", preview: "ls", allowKey: "ls" })).toBe("allow");
+    // NB: a MUTATING command — a read-only one is allowed outright and would not exercise the allowlist.
+    expect(eng.check({ level: "exec", preview: "npm test", allowKey: "npm test" })).toBe("ask");
+    eng.addAllow("npm test");
+    expect(eng.check({ level: "exec", preview: "npm test", allowKey: "npm test" })).toBe("allow");
   });
 
   it("auto mode auto-grants write permission", () => {

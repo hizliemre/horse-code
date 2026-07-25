@@ -26,11 +26,14 @@ export async function runCycleWithRole(
   cwd: string,
   role: RunnableRole,
   git: GitRunner = defaultGitRunner,
+  /** Position among the parallel workers on this role → each leads with a different link of its chain. */
+  slot = 0,
 ): Promise<Verdict> {
   board.move(taskId, "IN-PROGRESS", role);
-  board.setModel(taskId, deps.roleRegistry.peekModel(role)); // surface the implementer model in the live-agents UI
+  // The UI must name the model this worker will ACTUALLY use, which is its rotated head, not the chain's.
+  board.setModel(taskId, deps.roleRegistry.chainFor(role, slot)[0] ?? "");
   const before = await worktreeState(git, cwd);
-  await runImplementer(deps, role, board.get(taskId)!, cwd);
+  await runImplementer(deps, role, board.get(taskId)!, cwd, slot);
   const after = await worktreeState(git, cwd);
 
   // An implementer that produced NO change must never reach the review or the merge. With an empty worktree
@@ -92,11 +95,13 @@ export async function runTaskCycle(
   board: Board,
   taskId: string,
   worktreePath: string,
+  /** Position among the parallel workers in this wave → spreads the role's chain across subscriptions. */
+  slot = 0,
 ): Promise<Verdict> {
   const task = board.get(taskId);
   if (!task) throw new Error(`runTaskCycle: unknown task: ${taskId}`);
 
   const role = await routeTask(deps, task);
   board.setWorktree(taskId, worktreePath);
-  return runCycleWithRole(deps, board, taskId, worktreePath, role);
+  return runCycleWithRole(deps, board, taskId, worktreePath, role, defaultGitRunner, slot);
 }

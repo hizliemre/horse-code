@@ -1,5 +1,5 @@
 import type { PermissionLevel, PermissionMode } from "../core/types.js";
-import { matchesAllowlist, isDangerous } from "./rules.js";
+import { matchesAllowlist, isDangerous, isReadOnly } from "./rules.js";
 
 export type PermissionDecision = "allow" | "ask" | "deny";
 
@@ -37,6 +37,11 @@ export class PermissionEngine {
     // Allowlist match is valid in every mode (unless dangerous).
     const isExec = req.level === "exec";
     const dangerous = isExec && isDangerous(req.allowKey);
+
+    // Inspecting the workspace is how an agent orients itself. A command proven to only READ cannot change a
+    // byte, so prompting for it buys no safety and turns an autonomous run into a clicking exercise. This is
+    // deliberately ABOVE the mode switch: even in "ask", `git status` and `grep` are not decisions worth making.
+    if (isExec && !dangerous && isReadOnly(req.allowKey)) return "allow";
 
     const kind = req.level === "write" ? "glob" : "prefix";
     if (!dangerous && matchesAllowlist(req.allowKey, this.allowlist, kind)) {

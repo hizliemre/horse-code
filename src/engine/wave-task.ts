@@ -34,6 +34,8 @@ export async function runWaveTask(
   session: WorktreeSession,
   board: Board,
   taskId: string,
+  /** This task's index within its wave → its implementer leads with a different link of the role's chain. */
+  slot = 0,
 ): Promise<TaskResult> {
   const card = board.get(taskId);
   if (!card) throw new Error(`runWaveTask: unknown task: ${taskId}`);
@@ -47,7 +49,7 @@ export async function runWaveTask(
   // job. A real cancel (aborted signal) still propagates. The job then ends "partial" with this task listed.
   let v;
   try {
-    v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree);
+    v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree, slot);
   } catch (e) {
     if (deps.signal.aborted) throw e; // genuine cancellation → propagate
     const msg = e instanceof Error ? e.message : String(e);

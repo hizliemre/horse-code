@@ -116,6 +116,18 @@ export class RoleRegistry {
     return live.length ? live : base;
   }
 
+  /**
+   * The role's chain ROTATED by `slot`. Parallel workers share one role — five implementers in a wave are all
+   * `coder` — so every one of them resolved to the same chain head and hammered a single subscription until it
+   * rate-limited. Rotating gives each worker a different lead model while keeping its FULL fallback set, so
+   * spreading the load costs no resilience.
+   */
+  chainFor(roleName: string, slot = 0): string[] {
+    const c = this.chain(roleName);
+    const k = c.length ? ((slot % c.length) + c.length) % c.length : 0;
+    return k === 0 ? c : [...c.slice(k), ...c.slice(0, k)];
+  }
+
   /** The model a role would use next (chain head), for UI display only. */
   peekModel(roleName: string): string {
     return this.chain(roleName)[0] ?? "";

@@ -18,8 +18,11 @@ export async function runImplementer(
   role: RunnableRole,
   task: Card,
   cwd: string,
+  /** Position among the workers running this SAME role in parallel → each leads with a different chain link. */
+  slot = 0,
 ): Promise<void> {
   const resolved = deps.roleRegistry.resolve(role);
+  const chain = deps.roleRegistry.chainFor(role, slot);
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
 
@@ -34,6 +37,7 @@ export async function runImplementer(
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
+    ...(chain.length ? { model: chain[0], fallbacks: chain.slice(1) } : {}),
     tools,
     maxTurns: IMPLEMENTER_MAX_TURNS,
     messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content }] : [{ role: "user", content }],
