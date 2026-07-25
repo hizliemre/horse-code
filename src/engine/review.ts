@@ -450,21 +450,31 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
 export async function runCodeReview(
   deps: ReviewDeps, workdir: string, taskTitle: string, request?: string,
   emit: (ev: ProgressEvent) => void = () => {},
+  attempt = 0, // how many times this task has already been reviewed+revised → drives the tiered bar
 ): Promise<Verdict> {
   emit({ kind: "note", text: `🔍 **Reviewing the code** for "${taskTitle}" — the team (${deps.teams.code.length}) is discussing it…` });
   const assessments = await runTeam(deps, "code", workdir, taskTitle, request, emit);
   if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, "code") });
 
   const approve = assessments.filter((a) => a.recommendation === "approve").length;
-  const worst = worstSeverity(assessments);
-  const clean = worst === "none" || worst === "low";
-  if (assessments.length && clean && approve / assessments.length >= TEAM_CONSENSUS) {
-    emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the code passed.` });
+  const crit = severityTotal(assessments, "critical");
+  const med = severityTotal(assessments, "medium");
+
+  // TIERED BAR, same rule the doc stages use — here an "attempt" is the loop, not a review round. The FIRST
+  // review of a task is the thorough pass (critical OR medium blocks); once the code has already been revised
+  // for reviewer notes, only CRITICAL blocks. Otherwise inexhaustible medium nitpicks would keep failing the
+  // task and each retry costs a full re-implementation, which is far more expensive than a doc revision.
+  if (attempt === 0) {
+    if (assessments.length && crit === 0 && med === 0 && approve / assessments.length >= TEAM_CONSENSUS) {
+      emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the code passed.` });
+      return { verdict: "pass", notes: [] };
+    }
+  } else if (crit === 0) {
+    const deferred = nonBlockingNotes(assessments);
+    emit({ kind: "note", text: `✅ **Team** — no critical findings left → the code passed.${deferred.length ? ` ${deferred.length} medium/low note(s) noted but not blocking:\n${deferred.map((d) => `- ${d}`).join("\n")}` : ""}` });
     return { verdict: "pass", notes: [] };
   }
 
-  const crit = severityTotal(assessments, "critical");
-  const med = severityTotal(assessments, "medium");
   const reason = crit || med ? `surfaced ${crit} critical / ${med} medium finding(s)` : `is split (${approve}/${assessments.length} approve)`;
   emit({ kind: "note", text: `👥 **Team** ${reason} → handed the decision to the **council** (${deps.council.length} members vote).` });
   const votes = await runCouncil(deps, "code", workdir, taskTitle, assessments, request, emit);

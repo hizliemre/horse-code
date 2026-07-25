@@ -141,6 +141,7 @@ export async function runUpstream(
       askUser, maxRounds, emit, language: r.language,
     });
     if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
+    carryOver = planOut.deferred ?? []; // the plan review's own deferrals travel on to the task breakdown
     if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
     await commitStep(deps, workdir, "add the implementation plan");
     mark("plan");
@@ -149,7 +150,7 @@ export async function runUpstream(
   // Tasks: break the approved plan into the actionable task list handed downstream to the project-manager.
   if (!done.has("tasks")) {
     emitPhase("tasks");
-    await runTasks(p, paths);
+    await runTasks(p, paths, carryOver);
     await commitStep(deps, workdir, "break the plan into tasks");
     mark("tasks");
   }

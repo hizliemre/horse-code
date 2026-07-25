@@ -294,3 +294,19 @@ describe("deferred spec findings carry over to the plan", () => {
     expect(planMsg).toContain("clarify retention");
   });
 });
+
+describe("plan review deferrals reach the task breakdown", () => {
+  it("plan-stage medium/low notes are handed to the tasks phase as non-blocking context", async () => {
+    const p = upstreamProvider({
+      intent: "feature",
+      teamFindings: '{"findings":[{"severity":"medium","note":"add retry budget"}],"recommendation":"revise"}',
+      councilVotes: ["revise"],
+    });
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 5);
+    expect(res.kind).toBe("approved");
+    const taskReq = p.requests.filter((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:tasks"));
+    const msg = taskReq.flatMap((r) => r.messages.map((m) => (typeof m.content === "string" ? m.content : ""))).join("\n");
+    expect(msg).toMatch(/carried over from the earlier reviews/i);
+    expect(msg).toContain("add retry budget");
+  });
+});

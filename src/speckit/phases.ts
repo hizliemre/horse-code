@@ -82,11 +82,16 @@ export async function runPlan(p: PhaseDeps, paths: FeaturePaths, feedback?: stri
   await runRole(p, "planner", p.templates.command("plan"), msg);
 }
 
-export async function runTasks(p: PhaseDeps, paths: FeaturePaths): Promise<void> {
+export async function runTasks(p: PhaseDeps, paths: FeaturePaths, carryOver?: string[]): Promise<void> {
   const rel = relative(p.workdir, paths.tasks);
   const planRel = relative(p.workdir, paths.plan);
+  // Non-blocking notes the plan review deferred → the task list is the last place they can still be picked up.
+  const carried = carryOver?.length
+    ? `\n\nKnown non-blocking notes carried over from the earlier reviews — fold them into a task only where ` +
+      `they genuinely apply (they are context, not new requirements):\n${carryOver.map((c) => `- ${c}`).join("\n")}`
+    : "";
   const msg =
     `Read the plan "${planRel}" and break it into an actionable task list.\n` +
-    `Follow this template:\n\n${p.templates.template("tasks")}\n\nWrite the tasks to "${rel}".`;
+    `Follow this template:\n\n${p.templates.template("tasks")}\n\nWrite the tasks to "${rel}".${carried}`;
   await runRole(p, "project-manager", p.templates.command("tasks"), msg);
 }

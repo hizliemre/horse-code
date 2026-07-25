@@ -527,3 +527,37 @@ describe("tiered bar + convergence guard (loop termination)", () => {
     expect(notes.join("\n")).toMatch(/not converging/i);
   });
 });
+
+describe("runCodeReview tiered bar (attempt-driven)", () => {
+  const mediumOnlyCode = {
+    security: '{"findings":[{"severity":"medium","note":"tighten validation"}],"recommendation":"revise"}',
+    architectural: '{"findings":[{"severity":"low","note":"naming"}],"recommendation":"revise"}',
+  };
+
+  it("first attempt: a medium finding still fails the task (thorough first review)", async () => {
+    const p = reviewProvider({ assessments: mediumOnlyCode, councilVotes: allRevise });
+    const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined, () => {}, 0);
+    expect(v.verdict).toBe("fail");
+    expect(v.notes.some((n) => /medium.*tighten validation/i.test(n))).toBe(true);
+  });
+
+  it("a later attempt: only CRITICAL fails — mediums are noted, not another re-implementation", async () => {
+    const p = reviewProvider({ assessments: mediumOnlyCode, councilVotes: allRevise });
+    const notes: string[] = [];
+    const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined,
+      (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); }, 1);
+    expect(v.verdict).toBe("pass");
+    expect(notes.join("\n")).toMatch(/no critical findings left/i);
+    expect(notes.join("\n")).toContain("tighten validation"); // surfaced, not silently dropped
+  });
+
+  it("a later attempt with a CRITICAL still goes to the council and can fail", async () => {
+    const p = reviewProvider({
+      assessments: { security: '{"findings":[{"severity":"critical","note":"sql injection"}],"recommendation":"revise"}' },
+      councilVotes: allRevise,
+    });
+    const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined, () => {}, 3);
+    expect(v.verdict).toBe("fail");
+    expect(v.notes.some((n) => /sql injection/.test(n))).toBe(true);
+  });
+});

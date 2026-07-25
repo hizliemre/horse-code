@@ -19,7 +19,9 @@ export async function runCycleWithRole(
 
   // Code stage of the same team → council → judge review the docs get (single-shot; the escalation ladder retries).
   const card = board.get(taskId)!;
-  const v = await runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); });
+  // `attempts` drives the tiered bar: the first review of a task is the thorough pass, later attempts (the code
+  // has already been revised for reviewer notes) are blocked only by CRITICAL findings.
+  const v = await runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
   if (v.verdict === "pass") {
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });
     board.clearReviewNotes(taskId);
