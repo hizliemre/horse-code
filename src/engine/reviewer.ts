@@ -8,6 +8,7 @@ import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { rememberFactTool } from "../tools/remember.js";
+import { proposeMemoryTool } from "../tools/propose-memory.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 
@@ -17,13 +18,15 @@ export const VerdictSchema = z.object({
 });
 
 /** Reviewer's read-only toolset: read/grep/glob + skill (NO write/edit/shell). Coach also gets remember_fact + MCP tools. */
-export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean; mcp?: boolean } = {}): ToolRegistry {
+export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean; propose?: boolean; mcp?: boolean } = {}): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
   r.register(grepTool);
   r.register(globTool);
   r.register(buildSkillTool(deps.skillRegistry));
   if (opts.remember) r.register(rememberFactTool);
+  // Review agents get a voice, not a pen: propose_memory queues a signal for the curator, it never writes.
+  if (opts.propose) r.register(proposeMemoryTool);
   if (opts.mcp) for (const t of deps.mcpTools?.() ?? []) r.register(t);
   return r;
 }
@@ -41,7 +44,8 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
-    tools: readOnlyRegistry(deps),
+    tools: readOnlyRegistry(deps, { propose: true }),
+    proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "code-reviewer") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission,
     approve: deps.approve,

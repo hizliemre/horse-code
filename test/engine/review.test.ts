@@ -844,3 +844,78 @@ describe("role-targeted memory for review agents", () => {
     expect(r.map((a) => a.name).sort()).toEqual(["arch", "security"]);
   });
 });
+
+// ── Review agents propose; they never write ───────────────────────────────────────────────────────────────
+// They read more of the project than anyone else, but they are narrow single-angle finders on cheaper model
+// tiers — exactly the agents whose unsupervised writes would poison the store.
+describe("review agents have a voice, not a pen", () => {
+  const toolNames = async (run: (d: ReviewDeps) => Promise<unknown>): Promise<string[]> => {
+    let names: string[] = [];
+    const provider: Provider = {
+      async *chat(req, signal) {
+        if (!names.length) names = req.tools.map((t) => t.name);
+        yield* reviewProvider({}).chat(req, signal);
+      },
+    };
+    await run(rdeps(provider));
+    return names;
+  };
+
+  it("a lens can propose but cannot remember, write, edit or run commands", async () => {
+    const names = await toolNames((d) => runTeam(d, "code", dir, "target"));
+    expect(names).toContain("propose_memory");
+    expect(names).not.toContain("remember_fact");
+    for (const forbidden of ["write_file", "edit_file", "shell"]) expect(names).not.toContain(forbidden);
+  });
+
+  it("so can the council and the judge", async () => {
+    expect(await toolNames((d) => runCouncil(d, "code", dir, "target", []))).toContain("propose_memory");
+    expect(await toolNames((d) => runJudge(d, "code", dir, "target", [], []))).toContain("propose_memory");
+  });
+
+  it("a proposal is tagged with the lens that made it", async () => {
+    const queued: { text: string; role: string }[] = [];
+    const provider: Provider = {
+      async *chat(req, signal) {
+        // The security lens proposes before submitting its assessment.
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        if (sys.includes("security vulnerabilities") && !req.messages.some((m) => m.role === "tool")) {
+          yield { type: "tool-call", toolCall: { id: "p", name: "propose_memory", arguments: '{"text":"secrets are loaded from .env only","kind":"fact"}' } };
+          yield { type: "done", finishReason: "tool_calls" };
+          return;
+        }
+        yield* reviewProvider({}).chat(req, signal);
+      },
+    };
+    const d: ReviewDeps = {
+      ...rdeps(provider),
+      proposeMemory: (text, _kind, role) => { queued.push({ text, role }); return true; },
+    };
+    await runTeam(d, "code", dir, "target");
+    expect(queued).toEqual([{ text: "secrets are loaded from .env only", role: "security" }]);
+  });
+
+  // The load-bearing guarantee: a proposal reaches a queue, never the store.
+  it("proposing never writes a memory", async () => {
+    const written: string[] = [];
+    const provider: Provider = {
+      async *chat(req, signal) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        if (sys.includes("security vulnerabilities") && !req.messages.some((m) => m.role === "tool")) {
+          yield { type: "tool-call", toolCall: { id: "p", name: "propose_memory", arguments: '{"text":"a claim"}' } };
+          yield { type: "done", finishReason: "tool_calls" };
+          return;
+        }
+        yield* reviewProvider({}).chat(req, signal);
+      },
+    };
+    const d: ReviewDeps = {
+      ...rdeps(provider),
+      proposeMemory: () => true,
+      rememberFact: (f) => written.push(f),
+      learnMemory: async (t) => { written.push(t); return true; },
+    };
+    await runTeam(d, "code", dir, "target");
+    expect(written).toEqual([]);
+  });
+});

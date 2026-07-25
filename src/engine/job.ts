@@ -16,11 +16,11 @@ import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } fr
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
 import { appendReviewNotes } from "./review-notes.js";
 import { memoryHints } from "./memory-inject.js";
-import { consolidateJob } from "./memory-consolidate.js";
+import { curateMemories } from "./memory-consolidate.js";
 import { saveBoard, loadBoard } from "../board/persist.js";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import type { Column } from "../board/board.js";
+import type { Card, Column } from "../board/board.js";
 import { dirname, join } from "node:path";
 
 /** Human-readable action for a board column transition (chat notes). */
@@ -55,6 +55,26 @@ function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOpt
       `"src/models/todo.ts defines a Todo type with id, title, done" is a criterion; "the model is implemented" is not.` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
+}
+
+/**
+ * Runs the memory curator over everything this job produced. Review agents only ever PROPOSE; this is the one
+ * place any of it can become a stored memory. Best-effort by design — memory is advisory, so a failed curation
+ * must never turn a finished job into a failed one, nor mask the error that ended a failed one.
+ */
+async function curate(deps: JobDeps, request: string, cards: Card[], deferred: string[], cwd: string): Promise<void> {
+  try {
+    const proposals = deps.proposals?.drain() ?? [];
+    if (proposals.length === 0 && cards.length === 0) return;
+    await curateMemories(
+      deps,
+      { request, cards, ...(deferred.length ? { deferred } : {}), ...(proposals.length ? { proposals } : {}) },
+      cwd,
+      [...deps.roleRegistry.names(), ...deps.council.map((c) => c.name),
+        ...(["spec", "plan", "code"] as const).flatMap((s) => deps.teams[s].map((c) => c.name))],
+      (deps.memory?.() ?? []).map((m) => m.text),
+    );
+  } catch { /* never blocks, and never masks a job error */ }
 }
 
 async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Board): Promise<string> {
@@ -182,17 +202,7 @@ export async function runJob(
       emit({ kind: "phase", phase: "revision-done", detail: revision.status });
     }
 
-    // What this job taught the project, written down before the evidence is thrown away. Best-effort by design:
-    // memory is advisory, so a failed extraction must never turn a finished job into a failed one.
-    try {
-      await consolidateJob(
-        deps,
-        { request: up.refinedPrompt ?? opts.prompt, cards: board.list(), ...(deferredAll.length ? { deferred: deferredAll } : {}) },
-        session.baseWorktree,
-        [...deps.roleRegistry.names(), ...deps.council.map((c) => c.name),
-          ...(["spec", "plan", "code"] as const).flatMap((s) => deps.teams[s].map((c) => c.name))],
-      );
-    } catch { /* never blocks the job */ }
+    await curate(deps, up.refinedPrompt ?? opts.prompt, board.list(), deferredAll, session.baseWorktree);
 
     emit({ kind: "phase", phase: "report" });
     const report = await runCoachReport(deps, session, board);
@@ -204,6 +214,9 @@ export async function runJob(
     // Keep the worktree on error so the user can inspect whatever the pipeline produced before it failed
     // (files are already committed per-write). Don't closeSession — that would delete them.
     if (session) emit({ kind: "note", text: `📄 Work so far is kept at \`${session.baseWorktree}\` (branch \`${session.baseBranch}\`). Re-run the same request to resume from where it stopped.` });
+    // Curate on the way out too: the runs that FAIL are the most instructive ones, and their proposals live
+    // only in process memory — rethrowing without curating would throw away exactly the hardest-won signal.
+    if (session) await curate(deps, opts.prompt, [], [], session.baseWorktree);
     throw e;
   }
 }

@@ -3,6 +3,7 @@ import { PermissionEngine } from "./permission/engine.js";
 import type { PermissionRequest } from "./permission/engine.js";
 import { buildTeamRegistry, buildCouncilRegistry, type ReviewStage } from "./engine/review.js";
 import { InjectionLog } from "./engine/memory-retrieval.js";
+import { ProposalQueue } from "./engine/memory-proposals.js";
 import { REQUIRED_ROLES, DEFAULT_PROMPTS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
 import type { ResolvedConfig, RoleConfig, ReviewerConfig } from "./config/config.js";
 import type { Provider } from "./core/types.js";
@@ -65,6 +66,10 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
 
   const permission = new PermissionEngine({ mode: config.mode, allowlist: config.allowlist });
 
+  // Review agents propose into this; nothing here is ever stored as written. The memory curator drains it at
+  // the end of a job and decides what — if anything — becomes a real memory.
+  const queue = new ProposalQueue();
+
   // Lazy + memoized: don't fetch spec-kit at build. A cold-cache fetch failure (bad tag, GitHub down) must
   // NOT brick plain chat, which never touches spec-kit. The pipeline calls specKit() on demand; the first
   // call caches the promise so repeated phases share one load.
@@ -82,6 +87,9 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     // One injection log per session: shared by the coach and every role so a memory shown to one agent is
     // not immediately re-shown to the next.
     injectionLog: new InjectionLog(),
+    // One proposal queue per session: review agents propose into it, the curator drains it when a job ends.
+    proposals: queue,
+    proposeMemory: (text, kind, role) => queue.add(text, kind, role),
     teams,
     teamRegistries,
     councilRegistry,

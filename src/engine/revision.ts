@@ -62,7 +62,8 @@ async function principalReview(deps: RevisionDeps, base: string, prDiff?: string
   const hints = memoryHints(deps, content, { role: "principal-coder" });
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
-    tools: readOnlyRegistry(deps),
+    tools: readOnlyRegistry(deps, { propose: true }),
+    proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "principal-coder") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content }] : [{ role: "user", content }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };

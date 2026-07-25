@@ -12,7 +12,8 @@ export type MemoryEvent =
   | { kind: "injected"; role: string; hits: SelectedMemory[]; stats: SelectionStats }
   | { kind: "used"; role: string; texts: string[] }
   | { kind: "hygiene"; merged: number; candidates: number }
-  | { kind: "learned"; texts: string[] };
+  | { kind: "learned"; texts: string[] }
+  | { kind: "curated"; proposed: number; stored: string[] };
 
 export interface MemoryHints {
   /** Ready-to-append user message, or "" when nothing was selected. */
@@ -109,6 +110,12 @@ export function memoryNote(ev: MemoryEvent): string | undefined {
   }
   if (ev.kind === "used") return `🧠 **memory paid off** in \`${ev.role}\`: ${ev.texts.map((t) => `"${clip(t)}"`).join(" · ")}`;
   if (ev.kind === "learned") return `🧠 **learned** ${ev.texts.length} memory(ies):\n${ev.texts.map((t) => `- ${clip(t, 96)}`).join("\n")}`;
+  if (ev.kind === "curated") {
+    // The RATIO is the story: review agents propose freely, and most proposals correctly die here.
+    const from = ev.proposed ? ` from ${ev.proposed} agent proposal(s)` : "";
+    if (!ev.stored.length) return `🧠 **memory curator** — nothing durable to store${from}.`;
+    return `🧠 **memory curator** — stored ${ev.stored.length}${from}:\n${ev.stored.map((t) => `- ${clip(t, 96)}`).join("\n")}`;
+  }
   const parts: string[] = [];
   if (ev.merged) parts.push(`merged ${ev.merged} duplicate(s)`);
   if (ev.candidates) parts.push(`${ev.candidates} flagged for review (\`/memories\`)`);

@@ -31,6 +31,13 @@ export interface TaskCycleDeps {
   injectionLog?: import("./memory-retrieval.js").InjectionLog;
   /** remember_fact tool sink: persist a durable fact the model learned from a tool result. */
   rememberFact?: (fact: string) => void;
+  /**
+   * Queue a memory PROPOSAL from a review agent. Nothing is written here — the curator rules on the queue once
+   * the job ends. Returns whether it was queued (false = duplicate or queue full).
+   */
+  proposeMemory?: (text: string, kind: "fact" | "lesson", role: string) => boolean;
+  /** The per-job proposal queue itself — drained once by the curator when the job ends. */
+  proposals?: import("./memory-proposals.js").ProposalQueue;
   /** Durable injection counter — distinguishes "never relevant" from "never came up" (feeds hygiene). */
   recordInjection?: (ids: string[]) => void;
   /** Memory telemetry sink: what was injected/used/learned, and why the rest was skipped. Wired to chat. */

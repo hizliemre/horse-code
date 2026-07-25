@@ -14,12 +14,15 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import { ToolRegistry } from "../tools/registry.js";
 import type { Card } from "../board/board.js";
 import type { TaskCycleDeps } from "./task-types.js";
+import type { MemoryProposal } from "./memory-proposals.js";
 
 /** One job may teach at most this much. A run that "learned" ten things has really learned none. */
 export const MAX_LEARNED = 5;
 /** Evidence budget. Past this the extractor is skimming noise, not reading a story. */
 export const MAX_EVIDENCE_CHARS = 6000;
-/** The extractor is inferring, not transcribing — its output must always rank below what the user stated. */
+/** How many existing memories the curator is shown for dedup context. */
+export const MAX_EXISTING_SHOWN = 40;
+/** The curator is inferring, not transcribing — its output must always rank below what the user stated. */
 export const EXTRACTED_CONFIDENCE = 0.75;
 
 export const LearnedSchema = z.object({
@@ -59,6 +62,12 @@ export interface JobEvidence {
   cards: Card[];
   /** Findings the review deliberately did not block on. */
   deferred?: string[];
+  /**
+   * Raw signals review agents proposed during the job. These carry the most information and the least
+   * trust — they come from narrow single-angle lenses, several on cheap model tiers. The curator treats them
+   * as claims to verify and rewrite, never as text to store.
+   */
+  proposals?: MemoryProposal[];
 }
 
 /**
@@ -77,7 +86,20 @@ export function buildEvidence(ev: JobEvidence): string {
     lines.push("", "Findings accepted without a fix:");
     for (const d of ev.deferred) lines.push(`- ${d}`);
   }
+  if (ev.proposals?.length) {
+    // Attributed on purpose: "the concurrency lens proposed this" is exactly the context that lets the curator
+    // discount a narrow lens over-generalizing from the one thing it was told to look for.
+    lines.push("", "UNVERIFIED proposals from review agents (claims to judge, not text to store):");
+    for (const p of ev.proposals) lines.push(`- [${p.kind}, proposed by ${p.proposedBy}] ${p.text}`);
+  }
   return redact(lines.join("\n")).slice(0, MAX_EVIDENCE_CHARS);
+}
+
+/** The memories already on file — shown to the curator so it updates the pool instead of duplicating it. */
+function existingBlock(existing: string[]): string {
+  if (!existing.length) return "";
+  const shown = existing.slice(0, MAX_EXISTING_SHOWN);
+  return `\n\nAlready in memory — do NOT propose anything that merely restates one of these:\n${shown.map((t) => `- ${t}`).join("\n")}`;
 }
 
 /** Drops audience entries that name no real role — an unknown audience would hide the memory from everyone. */
@@ -87,19 +109,25 @@ export function sanitizeAudience(audience: string[] | undefined, knownRoles: Set
 }
 
 /**
- * Extracts what this job taught and writes it to memory. Returns the texts actually stored (empty is a normal,
- * common outcome). Never throws: memory is advisory, and a failed extraction must not turn a finished job into
- * a failed one.
+ * THE single write gate into memory for everything the pipeline produces.
+ *
+ * Review agents propose; nothing they wrote is ever stored as text. This curator reads their proposals
+ * alongside the job's own evidence, judges each claim, rewrites what survives in its own words, and returns
+ * only that. Returns the texts actually stored (empty is a normal, common outcome).
+ *
+ * Never throws: memory is advisory, and a failed curation must not turn a finished job into a failed one.
  */
-export async function consolidateJob(
+export async function curateMemories(
   deps: TaskCycleDeps,
   ev: JobEvidence,
   cwd: string,
   knownRoles: Iterable<string> = [],
+  existing: string[] = [],
 ): Promise<string[]> {
   if (!deps.learnMemory) return [];
-  const evidence = buildEvidence(ev);
-  if (!ev.cards.some((c) => !c.id.startsWith("__"))) return []; // nothing actually ran
+  const proposed = ev.proposals?.length ?? 0;
+  // Something must have actually happened: either real work ran, or an agent proposed something.
+  if (!ev.cards.some((c) => !c.id.startsWith("__")) && !proposed) return [];
   let resolved;
   try {
     resolved = deps.roleRegistry.resolve("memory-keeper");
@@ -110,9 +138,10 @@ export async function consolidateJob(
     provider: deps.provider, ...resolved,
     tools: new ToolRegistry(), // no tools: it reasons over the evidence it was handed, it does not go looking
     messages: [{ role: "user", content:
-      `A job just finished in this project. Decide what it taught that is worth remembering for FUTURE, ` +
-      `unrelated sessions.\n\n${evidence}\n\nReturn at most ${MAX_LEARNED} memories — an empty list is correct ` +
-      `if this job taught nothing durable.` }],
+      `A job just finished in this project. Decide what — if anything — it taught that is worth remembering ` +
+      `for FUTURE, unrelated sessions.\n\n${buildEvidence(ev)}${existingBlock(existing)}\n\n` +
+      `Return at most ${MAX_LEARNED} memories, IN YOUR OWN WORDS. An empty list is correct if this job taught ` +
+      `nothing durable — that is the most common answer.` }],
     permission: deps.permission, approve: deps.approve, cwd, signal: deps.signal,
   };
   let out;
@@ -125,16 +154,18 @@ export async function consolidateJob(
   const stored: string[] = [];
   for (const m of out.memories.slice(0, MAX_LEARNED)) {
     const text = m.text.trim();
-    // The prompt forbids secrets; this enforces it. An unsupervised writer is never trusted on its own word.
+    // The prompt forbids secrets; this enforces it. A writer is never trusted on its own word — not even this one.
     if (!text || looksSecret(text)) continue;
+    const audience = sanitizeAudience(m.audience, roles);
     const ok = await deps.learnMemory(text, m.kind, {
       learnedBy: "memory-keeper",
       confidence: EXTRACTED_CONFIDENCE,
       ...(m.importance !== undefined ? { importance: m.importance } : {}),
-      ...(sanitizeAudience(m.audience, roles) ? { audience: sanitizeAudience(m.audience, roles)! } : {}),
+      ...(audience ? { audience } : {}),
     });
     if (ok) stored.push(text);
   }
-  if (stored.length) deps.onMemory?.({ kind: "learned", texts: stored });
+  // Reported together so the ratio is visible: "12 proposals → 1 stored" is the curator doing its job.
+  if (stored.length || proposed) deps.onMemory?.({ kind: "curated", proposed, stored });
   return stored;
 }

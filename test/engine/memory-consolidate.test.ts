@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  consolidateJob, buildEvidence, looksSecret, redact, sanitizeAudience,
+  curateMemories, buildEvidence, looksSecret, redact, sanitizeAudience,
   MAX_LEARNED, MAX_EVIDENCE_CHARS, EXTRACTED_CONFIDENCE,
 } from "../../src/engine/memory-consolidate.js";
 import { Board, type Card } from "../../src/board/board.js";
@@ -100,10 +100,10 @@ describe("sanitizeAudience", () => {
   it("treats an absent audience as unscoped", () => expect(sanitizeAudience(undefined, known)).toBeUndefined());
 });
 
-describe("consolidateJob", () => {
+describe("curateMemories", () => {
   it("stores what the job taught, below user-stated confidence", async () => {
     const sink: { text: string; kind: string; opts: LearnOpts }[] = [];
-    const stored = await consolidateJob(
+    const stored = await curateMemories(
       deps(submits([{ text: "csrf tokens are required on every POST", kind: "lesson" }]), sink),
       { request: "add auth", cards: cards({ attempts: 3 }) }, "/tmp",
     );
@@ -117,21 +117,21 @@ describe("consolidateJob", () => {
 
   it("an empty extraction is a normal outcome, not a failure", async () => {
     const sink: { text: string; kind: string; opts: LearnOpts }[] = [];
-    expect(await consolidateJob(deps(submits([]), sink), { request: "x", cards: cards() }, "/tmp")).toEqual([]);
+    expect(await curateMemories(deps(submits([]), sink), { request: "x", cards: cards() }, "/tmp")).toEqual([]);
     expect(sink).toEqual([]);
   });
 
   it("caps how much one job may add", async () => {
     const many = Array.from({ length: 12 }, (_, i) => ({ text: `memory ${i}`, kind: "fact" as const }));
     const sink: { text: string; kind: string; opts: LearnOpts }[] = [];
-    const stored = await consolidateJob(deps(submits(many), sink), { request: "x", cards: cards() }, "/tmp");
+    const stored = await curateMemories(deps(submits(many), sink), { request: "x", cards: cards() }, "/tmp");
     expect(stored).toHaveLength(MAX_LEARNED);
   });
 
   // The prompt forbids secrets; an unsupervised writer is never trusted on its own word.
   it("refuses to store a secret even when the model returns one", async () => {
     const sink: { text: string; kind: string; opts: LearnOpts }[] = [];
-    const stored = await consolidateJob(deps(submits([
+    const stored = await curateMemories(deps(submits([
       { text: "the omniroute key is sk-37d3edbe1d5d9beb089776052ac0b9", kind: "fact" },
       { text: "the api base is /v2", kind: "fact" },
     ]), sink), { request: "x", cards: cards() }, "/tmp");
@@ -141,39 +141,49 @@ describe("consolidateJob", () => {
 
   it("validates the audience against real role names", async () => {
     const sink: { text: string; kind: string; opts: LearnOpts }[] = [];
-    await consolidateJob(
+    await curateMemories(
       deps(submits([{ text: "a", kind: "fact", audience: ["coder", "made-up"] }]), sink),
       { request: "x", cards: cards() }, "/tmp", ["coder"],
     );
     expect(sink[0].opts.audience).toEqual(["coder"]);
   });
 
-  it("emits one learned event so the user sees what was written", async () => {
+  it("emits one curated event so the user sees what was written", async () => {
     const events: MemoryEvent[] = [];
-    await consolidateJob(deps(submits([{ text: "a durable fact", kind: "fact" }]), [], events),
+    await curateMemories(deps(submits([{ text: "a durable fact", kind: "fact" }]), [], events),
       { request: "x", cards: cards() }, "/tmp");
-    expect(events).toEqual([{ kind: "learned", texts: ["a durable fact"] }]);
+    expect(events).toEqual([{ kind: "curated", proposed: 0, stored: ["a durable fact"] }]);
+  });
+
+  // The proposal→stored ratio is the whole point of the gate; a silent "0 stored" would look like a bug.
+  it("reports the ratio even when every proposal was rejected", async () => {
+    const events: MemoryEvent[] = [];
+    await curateMemories(deps(submits([]), [], events), {
+      request: "x", cards: cards(),
+      proposals: [{ text: "a shaky claim", kind: "fact", proposedBy: "code-security" }],
+    }, "/tmp");
+    expect(events).toEqual([{ kind: "curated", proposed: 1, stored: [] }]);
   });
 
   // Memory is advisory: a failed extraction must never turn a finished job into a failed one.
   it("swallows a model that never submits", async () => {
-    expect(await consolidateJob(deps(silent, []), { request: "x", cards: cards() }, "/tmp")).toEqual([]);
+    expect(await curateMemories(deps(silent, []), { request: "x", cards: cards() }, "/tmp")).toEqual([]);
   });
 
   it("skips silently when the role is not configured", async () => {
     const sink: { text: string; kind: string; opts: LearnOpts }[] = [];
-    expect(await consolidateJob(deps(submits([{ text: "a", kind: "fact" }]), sink, [], false), { request: "x", cards: cards() }, "/tmp")).toEqual([]);
+    expect(await curateMemories(deps(submits([{ text: "a", kind: "fact" }]), sink, [], false), { request: "x", cards: cards() }, "/tmp")).toEqual([]);
   });
 
   it("does nothing when no real task ran", async () => {
     const b = new Board();
     b.addCard({ id: "__revision__", title: "PR revision" });
-    expect(await consolidateJob(deps(submits([{ text: "a", kind: "fact" }]), []), { request: "x", cards: b.list() }, "/tmp")).toEqual([]);
+    expect(await curateMemories(deps(submits([{ text: "a", kind: "fact" }]), []), { request: "x", cards: b.list() }, "/tmp")).toEqual([]);
   });
 
   it("is inert without a memory sink wired", async () => {
     const d = deps(submits([{ text: "a", kind: "fact" }]), []);
     delete (d as { learnMemory?: unknown }).learnMemory;
-    expect(await consolidateJob(d, { request: "x", cards: cards() }, "/tmp")).toEqual([]);
+    expect(await curateMemories(d, { request: "x", cards: cards() }, "/tmp")).toEqual([]);
   });
 });

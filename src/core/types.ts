@@ -42,6 +42,9 @@ export interface ToolContext {
   signal: AbortSignal;
   onActivity?: (a: ToolActivity) => void; // optional live-activity sink (file writes/edits)
   remember?: (fact: string) => void; // persist a durable fact learned from a tool result (remember_fact tool)
+  // Queue a memory PROPOSAL (propose_memory tool). Returns whether it was queued. Writes nothing: review
+  // agents propose, and a single trusted curator decides what is actually stored.
+  proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean;
 }
 
 export interface PermissionDescriptor {

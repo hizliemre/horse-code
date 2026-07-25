@@ -206,7 +206,8 @@ export async function runTeam(
         const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}` };
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
-          tools: readOnlyRegistry(deps),
+          tools: readOnlyRegistry(deps, { propose: true }),
+          proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
@@ -293,7 +294,8 @@ export async function runCouncil(
         const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` };
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
-          tools: readOnlyRegistry(deps),
+          tools: readOnlyRegistry(deps, { propose: true }),
+          proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, vote] : [vote],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
@@ -357,7 +359,8 @@ export async function runJudge(
     `The council's votes:\n${council}\n\n${ask}` };
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
-    tools: readOnlyRegistry(deps),
+    tools: readOnlyRegistry(deps, { propose: true }),
+    proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "judge") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, brief] : [brief],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };

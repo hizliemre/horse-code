@@ -21,6 +21,7 @@ export interface RoleAgentOptions {
   onActivity?: (a: import("../core/types.js").ToolActivity) => void; // live file-write/edit activity → UI
   inbox?: () => string | undefined; // polled each turn → a "by-the-way" note is folded in as a user message
   remember?: (fact: string) => void; // remember_fact tool → persist a durable fact
+  proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean; // propose_memory tool → curator queue
   onExhausted?: (model: string) => void; // a model hit a retryable error → mark it spent for the session
   onFallback?: (from: string, to: string, reason: string) => void; // fell from one model to the next → UI note
   onLiveActivity?: (label: string) => void; // live "writing <file> · N chars" while a tool call is generated
@@ -133,6 +134,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       signal: opts.signal,
       onActivity: opts.onActivity,
       remember: opts.remember,
+      proposeMemory: opts.proposeMemory,
       onWrite: opts.onWrite,
     });
     for (const r of results) {
