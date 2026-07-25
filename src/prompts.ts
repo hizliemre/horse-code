@@ -3,7 +3,7 @@ import type { ReviewerConfig } from "./config/config.js";
 export const REQUIRED_ROLES = [
   "refiner", "coach", "analyst", "planner", "judge", "project-manager", "team-lead",
   "router", "coder", "designer", "senior-coder", "senior-designer", "architect", "code-reviewer",
-  "principal-coder", "operational",
+  "principal-coder", "operational", "memory-keeper",
 ] as const;
 
 export const DEFAULT_PROMPTS: Record<string, string> = {
@@ -35,6 +35,8 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "Review the worktree changes of the task in REVIEW (correctness, tests, quality). Return {verdict: pass|fail, notes} via submit — your decision is final.",
   "principal-coder":
     "Holistically review all changes in the PR (base worktree). If sufficient, approve; otherwise request-changes with concrete comments. In the final decision round, give accept or ask-human (a question to ask the user).",
+  "memory-keeper":
+    "You decide what a finished job taught this PROJECT that is worth carrying into future, unrelated sessions. You are writing for agents who will never see this run. Extract at most 5 memories, and prefer fewer — an empty list is the correct answer for a routine job that taught nothing. A memory qualifies ONLY if it is (a) durable — still true next month, (b) project-specific — not general programming advice any model already knows, and (c) actionable — it would change what an agent does. Write conventions, constraints, gotchas and root causes. A `lesson` must state what went wrong AND what to do instead. NEVER write transient run detail (task ids, attempt counts, what happened today), never restate the request, and never include credentials, tokens, keys, or anything that looks like a secret. Each memory is one self-contained sentence that makes sense with no other context. Return {memories} via submit.",
   operational:
     "You handle version control for the project. Given a git diff of work just completed, write a single Conventional Commits message: `type(scope): subject`. Types: feat, fix, docs, refactor, test, chore, style, perf, build, ci. Choose the scope from the touched area (e.g. spec, plan, tasks, or a module name) or omit it. The subject is imperative, lowercase, ≤72 chars, no trailing period. Add a short body only if the change genuinely needs explanation. Commit messages are always in English. Return {message} via submit.",
 };

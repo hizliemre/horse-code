@@ -8,6 +8,7 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
 import { runStructuredRole } from "../agent/structured.js";
 import { readOnlyRegistry } from "./reviewer.js";
+import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 
@@ -58,13 +59,16 @@ async function principalReview(deps: RevisionDeps, base: string, prDiff?: string
   const content = (prDiff
     ? `PR review: review the following diff:\n${prDiff}\n(use the read tools to inspect the worktree if needed.) Give approve or request-changes + concrete comments.`
     : "PR review: review all changes in the base worktree holistically. Give approve or request-changes + concrete comments.") + carried;
+  const hints = memoryHints(deps, content, { role: "principal-coder" });
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content }],
+    messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content }] : [{ role: "user", content }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };
-  return runStructuredRole(opts, PrincipalReviewSchema);
+  const review = await runStructuredRole(opts, PrincipalReviewSchema);
+  reinforceUsed(deps, hints.ids, review.comments.join(" "), "principal-coder");
+  return review;
 }
 
 async function principalFinal(deps: RevisionDeps, base: string) {
@@ -82,9 +86,11 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
   const resolved = deps.roleRegistry.resolve("senior-coder");
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
+  const hints = memoryHints(deps, comments.join(" "), { role: "senior-coder" });
+  const ask = { role: "user" as const, content: `PR revision: address the following comments (fix them or justify as "by design"), work in the main worktree:\n${comments.map((c) => `- ${c}`).join("\n")}` };
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved, tools,
-    messages: [{ role: "user", content: `PR revision: address the following comments (fix them or justify as "by design"), work in the main worktree:\n${comments.map((c) => `- ${c}`).join("\n")}` }],
+    messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };
   await runToCompletion(opts);

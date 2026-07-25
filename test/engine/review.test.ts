@@ -12,6 +12,8 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider } from "../../src/core/types.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
+import type { MemoryEntry } from "../../src/engine/memory-retrieval.js";
+import type { MemoryEvent } from "../../src/engine/memory-inject.js";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-review-")); });
@@ -765,5 +767,80 @@ describe("only the rejecting lenses re-review", () => {
       revise: noRevise, askUser: async () => "Stop", maxRounds: 2,
     });
     expect(teamRuns).toBeGreaterThanOrEqual(4); // 2 lenses × ≥2 rounds — nothing was carried
+  });
+});
+
+// ── Memory reaches the review agents ──────────────────────────────────────────────────────────────────────
+// Rules already rode every system prompt; facts and lessons did not, so the fifteen lenses that do the actual
+// finding had no access to what earlier runs learned and kept re-discovering the same things.
+describe("role-targeted memory for review agents", () => {
+  const memEntry = (over: Partial<MemoryEntry> & { id: string; text: string }): MemoryEntry =>
+    ({ anchors: [], tags: [], createdAt: 0, ...over });
+
+  /** Captures every user-role message body the provider was asked to answer. */
+  function recording(base: Provider): { provider: Provider; bodies: string[] } {
+    const bodies: string[] = [];
+    return {
+      bodies,
+      provider: {
+        async *chat(req, signal) {
+          for (const m of req.messages) if (m.role === "user" && typeof m.content === "string") bodies.push(m.content);
+          yield* base.chat(req, signal);
+        },
+      },
+    };
+  }
+
+  const withMemory = (d: ReviewDeps, entries: MemoryEntry[], events: MemoryEvent[] = []): ReviewDeps =>
+    ({ ...d, memory: () => entries, onMemory: (ev: MemoryEvent) => { events.push(ev); } });
+
+  it("a lens receives a lesson addressed to it by name", async () => {
+    const { provider, bodies } = recording(reviewProvider({}));
+    const entries = [memEntry({ id: "s", text: "csrf checks belong in src/mw.ts", anchors: ["src/mw.ts"], tags: ["csrf"], audience: ["security"] })];
+    await runTeam(withMemory(rdeps(provider), entries), "code", dir, "src/mw.ts changes");
+    expect(bodies.some((b) => b.includes("csrf checks belong in"))).toBe(true);
+  });
+
+  // With fifteen lenses, an unscoped pool means every lens pays for every other lens's context.
+  it("a lens does NOT receive another lens's memory", async () => {
+    const { provider, bodies } = recording(reviewProvider({}));
+    const entries = [memEntry({ id: "s", text: "csrf checks belong in src/mw.ts", anchors: ["src/mw.ts"], tags: ["csrf"], audience: ["security"] })];
+    await runTeam(withMemory(rdeps(provider), entries), "code", dir, "src/mw.ts changes");
+    // "arch" ran too; its prompt must not carry the security lens's lesson.
+    const archBodies = bodies.filter((b) => !b.includes("<memory"));
+    expect(archBodies.length).toBeGreaterThan(0);
+    expect(bodies.filter((b) => b.includes("csrf checks belong in"))).toHaveLength(1);
+  });
+
+  it("the team reports memory ONCE, not once per lens", async () => {
+    const events: MemoryEvent[] = [];
+    const entries = [memEntry({ id: "s", text: "src/mw.ts is generated — never edit it by hand", anchors: ["src/mw.ts"], tags: ["generated"] })];
+    await runTeam(withMemory(rdeps(reviewProvider({})), entries, events), "code", dir, "src/mw.ts changes");
+    const injected = events.filter((e) => e.kind === "injected");
+    expect(injected).toHaveLength(1);
+    if (injected[0].kind === "injected") expect(injected[0].role).toBe("team:code");
+  });
+
+  it("the council gets memory too, under its own label", async () => {
+    const events: MemoryEvent[] = [];
+    const entries = [memEntry({ id: "s", text: "src/mw.ts is generated — never edit it by hand", anchors: ["src/mw.ts"], tags: ["generated"] })];
+    await runCouncil(withMemory(rdeps(reviewProvider({})), entries, events), "code", dir, "src/mw.ts changes", []);
+    const injected = events.filter((e) => e.kind === "injected");
+    expect(injected).toHaveLength(1);
+    if (injected[0].kind === "injected") expect(injected[0].role).toBe("council");
+  });
+
+  it("memory stays fenced as DATA even inside a review prompt", async () => {
+    const { provider, bodies } = recording(reviewProvider({}));
+    const entries = [memEntry({ id: "s", text: "src/mw.ts is generated", anchors: ["src/mw.ts"], tags: ["generated"] })];
+    await runTeam(withMemory(rdeps(provider), entries), "code", dir, "src/mw.ts changes");
+    const hint = bodies.find((b) => b.includes("<memory"));
+    expect(hint).toContain('<memory id="s">');
+    expect(hint).toMatch(/not instructions/i);
+  });
+
+  it("runs exactly as before when no memory is wired", async () => {
+    const r = await runTeam(rdeps(reviewProvider({})), "code", dir, "target");
+    expect(r.map((a) => a.name).sort()).toEqual(["arch", "security"]);
   });
 });

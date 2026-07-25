@@ -4,6 +4,7 @@ import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { deriveAnchors, deriveTags, supersedes, hashAnchors, verifyAnchors, isExpired, SHORT_TTL_MS, type AnchorFs, type MemoryEntry } from "../engine/memory-retrieval.js";
+import { hygiene, type HygieneReport } from "../engine/memory-hygiene.js";
 
 /** Files larger than this are fingerprinted by size+mtime instead of content (cheap, still change-sensitive). */
 const HASH_MAX_BYTES = 512 * 1024;
@@ -35,6 +36,7 @@ export class MemoryStore {
 
   private readonly cwd: string;
   private lastVerify = 0;
+  private candidates: string[] = []; // ids the last hygiene run put up for review
 
   constructor(opts: MemoryStoreOpts) {
     this.now = opts.now ?? ((): number => Date.now());
@@ -111,6 +113,49 @@ export class MemoryStore {
     });
   }
 
+  /**
+   * Reconciles the pool: merges duplicates and returns the entries now up for review. Never deletes — a wrong
+   * automatic deletion is unrecoverable here (the file is the only copy), so questionable entries are only
+   * flagged. Runs once per session and on demand.
+   */
+  async runHygiene(): Promise<HygieneReport> {
+    return this.serialize(async () => {
+      await this.load();
+      this.verify(true); // fresh staleness flags first — "long-stale" is one of the review reasons
+      const report = hygiene(this.cache!, this.now());
+      if (report.merged.length) {
+        this.cache = report.entries;
+        await this.persist();
+      }
+      this.candidates = report.candidates.map((c) => c.id);
+      return report;
+    });
+  }
+
+  /** Ids flagged by the last hygiene run — surfaced by /memories next to the lifecycle state. */
+  reviewCandidates(): string[] {
+    return [...this.candidates];
+  }
+
+  /**
+   * Records that these memories were put into a prompt. Without the count there is no way to tell a memory that
+   * is genuinely never relevant from one that has simply never come up — and the first should stop winning slots.
+   */
+  async recordInjection(ids: string[]): Promise<void> {
+    if (!ids.length) return;
+    return this.serialize(async () => {
+      await this.load();
+      let touched = false;
+      for (const id of ids) {
+        const e = this.cache!.find((m) => m.id === id);
+        if (!e) continue;
+        e.injections = (e.injections ?? 0) + 1;
+        touched = true;
+      }
+      if (touched) await this.persist();
+    });
+  }
+
   /** Entries currently flagged stale — surfaced by /memory so the user can re-confirm or delete them. */
   stale(): MemoryEntry[] {
     this.verify();
@@ -135,7 +180,11 @@ export class MemoryStore {
   async add(
     text: string,
     kind: "fact" | "lesson" | "rule" = "fact",
-    opts: { audience?: string[]; learnedBy?: string; persistence?: "permanent" | "long" | "short" } = {},
+    opts: {
+      audience?: string[]; learnedBy?: string; persistence?: "permanent" | "long" | "short";
+      /** Only set by non-user writers (the auto-extractor): the defaults already encode "the user said so". */
+      importance?: number; confidence?: number;
+    } = {},
   ): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> {
     return this.serialize(async () => {
       await this.load();
@@ -153,6 +202,10 @@ export class MemoryStore {
         ...(persistence === "short" ? { expiresAt: this.now() + SHORT_TTL_MS } : {}),
         ...(opts.audience?.length ? { audience: opts.audience } : {}),
         ...(opts.learnedBy ? { learnedBy: opts.learnedBy } : {}),
+        // Stored only when the writer states them: an absent field means "the defaults for this kind apply",
+        // which is exactly right for a memory the user dictated.
+        ...(opts.importance !== undefined ? { importance: opts.importance } : {}),
+        ...(opts.confidence !== undefined ? { confidence: opts.confidence } : {}),
         ...(Object.keys(hashes).length ? { anchorHashes: hashes } : {}),
       };
       // A new entry supersedes only same-kind, same-topic ones (a fact never replaces a lesson, or vice versa).

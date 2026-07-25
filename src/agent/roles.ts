@@ -26,6 +26,11 @@ export class RoleRegistry {
     private skillRegistry?: SkillRegistry,
   ) {}
 
+  /** Every configured role name — used to validate a role reference produced by a model (memory audiences). */
+  names(): string[] {
+    return [...new Set([...Object.keys(this.roles), ...Object.keys(this.defaultPrompts)])];
+  }
+
   /** Wire the fallback-note sink (called after the controller exists). */
   setNotify(fn: (msg: string) => void): void {
     this.notify = fn;

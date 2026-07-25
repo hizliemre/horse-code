@@ -15,6 +15,7 @@ import { makeAskUser, makeApprove, nodeLineReader } from "./terminal.js";
 import type { LineReader } from "./terminal.js";
 import { autonomousAskHuman } from "./engine/escalation.js";
 import { MemoryStore } from "./session/memory.js";
+import { memoryNote } from "./engine/memory-inject.js";
 import { runJob } from "./engine/job.js";
 import type { JobResult, JobDeps } from "./engine/job.js";
 import { runInit } from "./init.js";
@@ -193,6 +194,11 @@ export async function main(argv: string[]): Promise<void> {
     deps.memory = () => memStore.all();
     deps.reinforceMemory = (id) => { void memStore.reinforce(id); };
     deps.rememberFact = (fact) => { void memStore.add(fact); };
+    deps.recordInjection = (ids) => { void memStore.recordInjection(ids); };
+    deps.learnMemory = async (text, kind, o) => (await memStore.add(text, kind, o)).ok;
+    // Headless has no chat pane; memory telemetry goes to stdout so an unattended run is still auditable.
+    deps.onMemory = (ev) => { const t = memoryNote(ev); if (t) console.log(t); };
+    await memStore.runHygiene().catch(() => { /* maintenance is best-effort */ });
     const res = await runJob(deps, { ...job, askUser: makeAskUser(read) });
     console.log(renderResult(res));
   } finally {

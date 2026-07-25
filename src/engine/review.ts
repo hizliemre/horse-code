@@ -5,6 +5,7 @@ import { runStructuredRole } from "../agent/structured.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { RoleRegistry } from "../agent/roles.js";
 import { readOnlyRegistry } from "./reviewer.js";
+import { memoryHints, emitBatchInjection, reinforceUsed } from "./memory-inject.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
@@ -189,23 +190,32 @@ export async function runTeam(
   }
   const scope = request ? `\n\nThe user's original request (the scope you must judge against):\n"""\n${request}\n"""` : "";
   const what = stage === "code" ? `Review the code for: ${target}.` : `Review the "${target}" document.`;
+  // What earlier runs learned, addressed to each lens by name. A lens is the narrowest audience in the system:
+  // "the concurrency lens keeps missing X" is precisely the kind of lesson that must reach one agent and no other.
+  const query = `${stage} ${target} ${request ?? ""}`;
+  const hintsByLens = new Map(team.map((c) => [c.name, memoryHints(deps, query, { role: c.name, silent: true })]));
   // Surface each team member as a live sub-agent (they run in parallel) so the user sees the review happening.
   emit({ kind: "agents", agents: team.map((c) => ({ id: `team:${c.name}`, title: `team: ${c.name}`, model: registry.peekModel(c.name) })) });
+  emitBatchInjection(deps, `team:${stage}`, [...hintsByLens.values()]); // one aggregate note, not one per lens
   try {
     const fresh = await Promise.all(
       team.map(async (c): Promise<Assessment> => {
         const resolved = registry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
+        const hints = hintsByLens.get(c.name)!;
+        const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}` };
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps),
-          messages: [{ role: "user", content: `${what} Evaluate it through your lens.${scope}` }],
+          messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
         try {
           const r = await runStructuredRole(opts, AssessmentSchema);
           const a: Assessment = { name: c.name, findings: r.findings, recommendation: r.recommendation };
+          // Credit the hints this lens actually echoed back in its findings → they rank higher next time.
+          reinforceUsed(deps, hints.ids, r.findings.map((f) => f.note).join(" "), c.name);
           // Stream THIS member's result onto its live row the moment it lands (verdict + severity counts + its
           // token spend) — early finishers show immediately instead of the whole batch appearing at once. No chat
           // note here; the consolidated summary is written once, when the whole team has reported (runReviewLoop).
@@ -271,21 +281,26 @@ export async function runCouncil(
       `forward, not dropped), or vote "revise" ONLY if one of them would genuinely cause the wrong thing to be ` +
       `built or shipped despite its label. Wanting it clearer, tighter or more complete is NOT a reason to revise.`
     : "";
+  const hintsByMember = new Map(deps.council.map((c) => [c.name, memoryHints(deps, `${stage} ${target} ${request ?? ""}`, { role: c.name, silent: true })]));
   emit({ kind: "agents", agents: deps.council.map((c) => ({ id: `council:${c.name}`, title: `council: ${c.name}`, model: deps.councilRegistry.peekModel(c.name) })) });
+  emitBatchInjection(deps, "council", [...hintsByMember.values()]);
   try {
     const results = await Promise.all(
       deps.council.map(async (c): Promise<CouncilVote> => {
         const resolved = deps.councilRegistry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 };
+        const hints = hintsByMember.get(c.name)!;
+        const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` };
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps),
-          messages: [{ role: "user", content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` }],
+          messages: hints.message ? [{ role: "user", content: hints.message }, vote] : [vote],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
         try {
           const r = await runStructuredRole(opts, CouncilVoteSchema);
+          reinforceUsed(deps, hints.ids, r.rationale, c.name);
           // Stream this vote onto its live row as it lands (no chat note — the tally is one action from the caller).
           emit({ kind: "agent-result", id: `council:${c.name}`, status: r.vote === "pass" ? "PASS" : "REVISE", ...tok });
           return { name: c.name, vote: r.vote, rationale: r.rationale };
@@ -335,18 +350,21 @@ export async function runJudge(
     : `You are the final decider on this contested round. Judge it against what was asked for and against what ` +
       `THIS stage is responsible for (a spec answers WHAT/WHY, a plan answers HOW, code is the implementation). ` +
       `Decide (pass/revise/ask-human).`;
+  const hints = memoryHints(deps, `${stage} ${target} ${request ?? ""}`, { role: "judge" });
+  const brief = { role: "user" as const, content:
+    `${subject} is contested (the ${stage} review stage).${request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : ""}\n\n` +
+    `The review team's findings:\n${findings}\n\n` +
+    `The council's votes:\n${council}\n\n${ask}` };
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content:
-      `${subject} is contested (the ${stage} review stage).${request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : ""}\n\n` +
-      `The review team's findings:\n${findings}\n\n` +
-      `The council's votes:\n${council}\n\n${ask}` }],
+    messages: hints.message ? [{ role: "user", content: hints.message }, brief] : [brief],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
   let d: JudgeDecision;
   try {
     d = await runStructuredRole(opts, JudgeSchema);
+    reinforceUsed(deps, hints.ids, d.feedback.join(" "), "judge");
   } catch (e) {
     if (deps.signal.aborted) throw e; // genuine cancellation → propagate
     // The judge never produced a structured ruling (no submit, model error). Don't crash the job — default to

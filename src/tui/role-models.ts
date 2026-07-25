@@ -25,7 +25,7 @@ const STRONG_ROLES = [
   "analyst", "planner", "architect", "senior-coder", "senior-designer",
   ...COUNCIL_ROLES, ...PLAN_LENS_ROLES, ...CODE_LENS_ROLES,
 ];
-const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational", ...SPEC_LENS_ROLES];
+const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational", "memory-keeper", ...SPEC_LENS_ROLES];
 const FAST_ROLES = ["refiner", "router", "project-manager", "team-lead"];
 const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]); // want a non-fast model
 
@@ -46,6 +46,7 @@ export const ROLE_PROFILES: Record<string, string> = {
   designer: "Builds UI — high volume → a capable coding/design model, not the flagship.",
   "senior-designer": "Senior UI reviewer — more capable than the designer.",
   "code-reviewer": "Reviews diffs — moderate volume → a solid capable model.",
+  "memory-keeper": "Decides what a finished job taught the project and writes it to durable memory — low volume, but a bad memory poisons every later run → a capable, efficient model, never the cheapest.",
   operational: "Handles version control: writes conventional commit messages and (later) drives merges/conflicts — high volume → a capable, efficient model.",
 };
 

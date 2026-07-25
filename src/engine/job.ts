@@ -15,6 +15,8 @@ import { runRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
 import { appendReviewNotes } from "./review-notes.js";
+import { memoryHints } from "./memory-inject.js";
+import { consolidateJob } from "./memory-consolidate.js";
 import { saveBoard, loadBoard } from "../board/persist.js";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -40,10 +42,11 @@ export type JobResult =
 
 function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
   const resolved = deps.roleRegistry.resolve("project-manager");
+  const hints = memoryHints(deps, `task breakdown ${tasksPath}`, { role: "project-manager" });
   return {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content:
+    messages: [...(hints.message ? [{ role: "user" as const, content: hints.message }] : []), { role: "user", content:
       `Read the "${tasksPath}" task list and turn it into board tasks (id, title, deps, acceptance).\n\n` +
       `For EACH task also write its \`acceptance\` — 2-4 concrete statements that will be OBSERVABLY true when ` +
       `the task is done, each checkable by reading the worktree: a named file exists and exports/contains X, a ` +
@@ -158,12 +161,14 @@ export async function runJob(
     emit({ kind: "phase", phase: "waves-done", detail: wave.status });
 
     let revision: RevisionResult | undefined;
+    let deferredAll: string[] = [];
     if (wave.status === "completed") {
       emit({ kind: "phase", phase: "pr", detail: wave.pr.url });
       const prDiff = await deps.manager.diff(session, opts.fromBranch);
       // Non-blocking code findings the per-task reviews deferred: a passed task has no further attempt, so the
       // PR revision pass is where they are adjudicated — once, on the merged result.
       const deferred = board.list().flatMap((c) => c.stageHistory.filter((h) => h.action === "deferred").map((h) => h.note ?? "").filter(Boolean));
+      deferredAll = deferred; // also handed to the post-job memory extractor as evidence
       if (deferred.length) {
         appendReviewNotes(join(workdir, dirname(up.specPath)), deferred);
         emit({ kind: "note", text: `📝 ${deferred.length} deferred code note(s) handed to the PR revision pass (and recorded in review-notes.md).` });
@@ -176,6 +181,18 @@ export async function runJob(
       );
       emit({ kind: "phase", phase: "revision-done", detail: revision.status });
     }
+
+    // What this job taught the project, written down before the evidence is thrown away. Best-effort by design:
+    // memory is advisory, so a failed extraction must never turn a finished job into a failed one.
+    try {
+      await consolidateJob(
+        deps,
+        { request: up.refinedPrompt ?? opts.prompt, cards: board.list(), ...(deferredAll.length ? { deferred: deferredAll } : {}) },
+        session.baseWorktree,
+        [...deps.roleRegistry.names(), ...deps.council.map((c) => c.name),
+          ...(["spec", "plan", "code"] as const).flatMap((s) => deps.teams[s].map((c) => c.name))],
+      );
+    } catch { /* never blocks the job */ }
 
     emit({ kind: "phase", phase: "report" });
     const report = await runCoachReport(deps, session, board);

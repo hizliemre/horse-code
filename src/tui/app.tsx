@@ -20,6 +20,7 @@ import { SessionStore } from "../session/store.js";
 import { PinStore } from "../session/pins.js";
 import { MemoryStore } from "../session/memory.js";
 import { memoryState } from "../engine/memory-retrieval.js";
+import { memoryNote } from "../engine/memory-inject.js";
 import type { MemoryEntry } from "../engine/memory-retrieval.js";
 import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
@@ -111,6 +112,11 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     rememberFact: (fact) => { // remember_fact tool → persist a fact learned mid-turn (from a tool result)
       void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 **Remembered** — ${fact}${r.superseded.length ? ` _(replaced: ${r.superseded.join("; ")})_` : ""}`); });
     },
+    recordInjection: (ids) => { void memStore.recordInjection(ids); }, // durable "shown N times" count → hygiene
+    // Memory used to work invisibly, so "no memory applied" and "memory is broken" looked identical. Every
+    // injection, citation and extraction now surfaces as one compact chat line.
+    onMemory: (ev) => { const t = memoryNote(ev); if (t) controller.note(t); },
+    learnMemory: async (text, kind, o) => (await memStore.add(text, kind, o)).ok, // post-job auto-extraction
     compactionState: {}, // holds the compaction summary cache across turns (invalidated on /clear or /resume by fingerprint)
   };
   // /model picker → live-swap every role's model on the running session (no config write).
@@ -189,11 +195,18 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // even when they don't (re)state them this session.
   const carried = rulesFromMemory();
   if (carried.length) controller.note(`📌 **Active rules** (${carried.length}): ${carried.join(" · ")}`);
+  // One maintenance pass per session: near-duplicates that arrived from different angles are merged, and
+  // entries that stopped earning their place are flagged (never deleted — the file is the only copy).
+  void memStore.runHygiene().then((r) => {
+    const t = memoryNote({ kind: "hygiene", merged: r.merged.reduce((n, m) => n + m.absorbed.length, 0), candidates: r.candidates.length });
+    if (t) controller.note(t);
+  }).catch(() => { /* maintenance is best-effort; never blocks a session */ });
   // /memory shows the lifecycle state so a memory that stopped being injected is visible, not silently gone.
   const listMemories = (): (MemoryEntry & { state: string })[] => {
     const all = memStore.all();
     const now = Date.now();
-    return all.map((m) => ({ ...m, state: memoryState(m, all, now) }));
+    const flagged = new Set(memStore.reviewCandidates());
+    return all.map((m) => ({ ...m, state: flagged.has(m.id) ? "review" : memoryState(m, all, now) }));
   };
   const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> => memStore.add(text);
   const removeMemory = (n: number): Promise<string | undefined> => memStore.remove(n);

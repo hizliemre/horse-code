@@ -31,6 +31,19 @@ export interface TaskCycleDeps {
   injectionLog?: import("./memory-retrieval.js").InjectionLog;
   /** remember_fact tool sink: persist a durable fact the model learned from a tool result. */
   rememberFact?: (fact: string) => void;
+  /** Durable injection counter — distinguishes "never relevant" from "never came up" (feeds hygiene). */
+  recordInjection?: (ids: string[]) => void;
+  /** Memory telemetry sink: what was injected/used/learned, and why the rest was skipped. Wired to chat. */
+  onMemory?: (ev: import("./memory-inject.js").MemoryEvent) => void;
+  /**
+   * Writes a memory the auto-extractor derived from a finished job. Separate from `rememberFact` because it is
+   * unsupervised: it carries provenance, an audience and a below-certain confidence.
+   */
+  learnMemory?: (
+    text: string,
+    kind: "fact" | "lesson",
+    opts: { learnedBy: string; audience?: string[]; importance?: number; confidence?: number },
+  ) => Promise<boolean>;
   /** Mutable holder for the compaction summary cache (persists across coach turns within a session). */
   compactionState?: { value?: import("./compaction.js").CompactionCache };
   /** Tools discovered from connected MCP servers → added to the coach's toolset (getter: filled once connected). */
