@@ -126,8 +126,15 @@ export async function runUpstream(
   // Specify → council/judge review loop (revise = re-run specify with feedback).
   if (!done.has("spec")) {
     emitPhase("specify");
-    await runSpecify(p, paths, r.refinedPrompt);
-    await ensureWritten(paths.spec, specRel, "specify", () => runSpecify(p, paths, r.refinedPrompt));
+    // A phase is "done" only once its review passes, so an interrupt DURING the review leaves it unmarked.
+    // The document itself is already written (and committed per-write) — re-authoring it would throw that work
+    // away and start the review from scratch. If the artifact exists, go straight to reviewing it.
+    if (existsSync(paths.spec)) {
+      emit({ kind: "note", text: `⏩ \`${specRel}\` already written — resuming at its review instead of rewriting it.` });
+    } else {
+      await runSpecify(p, paths, r.refinedPrompt);
+      await ensureWritten(paths.spec, specRel, "specify", () => runSpecify(p, paths, r.refinedPrompt));
+    }
     const specOut = await runReviewLoop(deps, {
       stage: "spec", workdir, target: specRel, request: r.refinedPrompt,
       revise: (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
@@ -154,8 +161,12 @@ export async function runUpstream(
   // Plan → council/judge review loop (revise = re-run plan with feedback).
   if (!done.has("plan")) {
     emitPhase("plan");
-    await runPlan(p, paths, undefined, carryOver);
-    await ensureWritten(paths.plan, planRel, "plan", () => runPlan(p, paths, undefined, carryOver));
+    if (existsSync(paths.plan)) {
+      emit({ kind: "note", text: `⏩ \`${planRel}\` already written — resuming at its review instead of rewriting it.` });
+    } else {
+      await runPlan(p, paths, undefined, carryOver);
+      await ensureWritten(paths.plan, planRel, "plan", () => runPlan(p, paths, undefined, carryOver));
+    }
     const planOut = await runReviewLoop(deps, {
       stage: "plan", workdir, target: planRel, request: r.refinedPrompt,
       revise: (fb) => runPlan(p, paths, fb),

@@ -340,3 +340,28 @@ describe("authoring phase that writes no file", () => {
     expect(existsSync(join(dir, "specs"))).toBe(true);
   });
 });
+
+describe("interrupted during a review", () => {
+  it("resumes at the REVIEW — an already-written spec/plan is not re-authored from scratch", async () => {
+    // Simulate the interrupted state: constitution+spec+clarify done, and plan.md ALREADY written (the run was
+    // stopped while the council was reviewing it), but the checkpoint never marked "plan" (review never passed).
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    const { writeFile: wf } = await import("node:fs/promises");
+    const slug = "001-add-thing";
+    await mkdir(join(dir, "specs", slug), { recursive: true });
+    await mkdir(join(dir, ".specify", "memory"), { recursive: true });
+    await wf(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
+    await wf(join(dir, "specs", slug, "spec.md"), "# existing spec", "utf8");
+    await wf(join(dir, "specs", slug, "plan.md"), "# existing plan — hours of work", "utf8");
+    writeCheckpoint(root, { rawPrompt: "Add X", refinedPrompt: "Do X", title: "add thing", language: "English", featureSlug: slug, done: ["constitution", "spec", "clarify"] });
+
+    const p = upstreamProvider({ intent: "feature" });
+    const notes: string[] = [];
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
+    expect(res.kind).toBe("approved");
+    // The planner was never re-run, and the existing plan survived untouched.
+    expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:plan"))).toBe(false);
+    expect(await readFile(join(dir, "specs", slug, "plan.md"), "utf8")).toBe("# existing plan — hours of work");
+    expect(notes.join("\n")).toMatch(/already written — resuming at its review/i);
+  });
+});
