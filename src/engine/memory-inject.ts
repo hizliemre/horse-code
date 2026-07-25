@@ -9,12 +9,12 @@ import type { TaskCycleDeps } from "./task-types.js";
  * mistakes. This returns a ready-to-append user message with the memories that match `query`, plus the ids so
  * the caller can reinforce the ones the model actually used.
  */
-export function memoryHints(deps: TaskCycleDeps, query: string, load = 0): { message: string; ids: string[] } {
+export function memoryHints(deps: TaskCycleDeps, query: string, opts: { load?: number; role?: string } = {}): { message: string; ids: string[] } {
   const all: MemoryEntry[] = deps.memory?.() ?? [];
   // Rules are injected globally; selecting them here would duplicate them in every prompt.
   const selectable = all.filter((m) => (m.kind ?? "fact") !== "rule");
   if (!selectable.length) return { message: "", ids: [] };
-  const hits = selectMemories(selectable, query, { load });
+  const hits = selectMemories(selectable, query, { load: opts.load ?? 0, ...(opts.role ? { role: opts.role } : {}) });
   if (!hits.length) return { message: "", ids: [] };
   return { message: renderMemoryHints(hits), ids: hits.map((h) => h.id) };
 }

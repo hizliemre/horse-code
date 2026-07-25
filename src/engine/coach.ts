@@ -76,7 +76,7 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
   const memories = deps.memory?.() ?? [];
   const selectable = memories.filter((m) => m.kind !== "rule");
   const load = historyTokens(compacted) / COMPACT_MAX_TOKENS;
-  const hits = selectable.length ? selectMemories(selectable, prompt, { load }) : [];
+  const hits = selectable.length ? selectMemories(selectable, prompt, { load, role: "coach" }) : [];
   const memoryMsg: Message[] = hits.length ? [{ role: "user", content: renderMemoryHints(hits) }] : [];
   const opts: RoleAgentOptions = {
     provider: deps.provider,

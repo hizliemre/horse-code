@@ -29,7 +29,7 @@ export async function runImplementer(
     : `This is a NEW task: "${task.title}". Implement it.`;
   // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
   // blind to them and kept re-learning the same things.
-  const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`);
+  const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role });
 
   const opts: RoleAgentOptions = {
     provider: deps.provider,

@@ -120,6 +120,7 @@ export async function main(argv: string[]): Promise<void> {
   // reach every agent — so the store is created here, at the composition root, and handed to buildJobDeps.
   const memStore = new MemoryStore({ home, cwd });
   await memStore.load();
+  await memStore.pruneExpired(); // short-lived scaffolding past its TTL never reaches a prompt
   const rules = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
   const buildDeps = (read: LineReader): Promise<JobDeps> =>
     buildJobDeps({

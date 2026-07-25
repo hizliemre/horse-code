@@ -53,7 +53,36 @@ export interface MemoryEntry {
   anchorHashes?: Record<string, string>;
   /** Set when an anchor no longer verifies (file gone or content changed) → excluded from injection. */
   stale?: boolean;
+  /**
+   * Roles this memory is FOR. A lesson the code-reviewer learned about diff hygiene is noise for the refiner;
+   * with 59 roles an unscoped pool means every agent pays for every other agent's context. Empty/absent = all.
+   */
+  audience?: string[];
+  /** The role that recorded it — provenance, and the default audience hint when none is given. */
+  learnedBy?: string;
+  /**
+   * How long it should live. `permanent` is never expired or pruned; `long` (default) survives indefinitely but
+   * may be reviewed; `short` is session-scoped scaffolding that expires on its own.
+   */
+  persistence?: "permanent" | "long" | "short";
+  /** Hard expiry (epoch ms). Past it the memory is neither injected nor listed. */
+  expiresAt?: number;
 }
+
+/** Is this memory addressed to `role`? An unscoped memory is addressed to everyone. */
+export function audienceMatches(entry: MemoryEntry, role?: string): boolean {
+  if (!entry.audience?.length) return true;
+  return role !== undefined && entry.audience.includes(role);
+}
+
+/** Has this memory passed its hard expiry? `permanent` never expires. */
+export function isExpired(entry: MemoryEntry, now: number): boolean {
+  if (entry.persistence === "permanent") return false;
+  return entry.expiresAt !== undefined && entry.expiresAt <= now;
+}
+
+/** Default lifetime per persistence class (ms). `short` is scaffolding: useful this session, not next month. */
+export const SHORT_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** Filesystem seam for anchor verification (injectable so the logic stays unit-testable). */
 export interface AnchorFs {
@@ -119,13 +148,16 @@ export function hintBudget(load: number, max: number): number {
 export function selectMemories(
   entries: MemoryEntry[],
   query: string,
-  opts: { load: number; max?: number; threshold?: number },
+  opts: { load: number; max?: number; threshold?: number; role?: string; now?: number },
 ): MemoryEntry[] {
   const budget = hintBudget(opts.load, opts.max ?? 5);
   if (budget === 0) return [];
   const threshold = opts.threshold ?? 0.6;
+  const now = opts.now ?? Date.now();
   return entries
     .filter((e) => !e.stale) // an anchored file changed → the claim is no longer trustworthy
+    .filter((e) => !isExpired(e, now)) // short-lived scaffolding past its TTL
+    .filter((e) => audienceMatches(e, opts.role)) // don't pay for another role's context
     .map((e) => ({ e, score: effectiveScore(query, e) })) // lessons get a small bonus over equal-scored facts
     .filter((x) => x.score >= threshold)
     // ties broken by reinforcement (frequently-cited memories rank higher), then recency.

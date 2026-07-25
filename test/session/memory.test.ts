@@ -145,3 +145,37 @@ describe("anchored memories are re-verified against the code", () => {
     } finally { await rm(cwd, { recursive: true, force: true }); }
   });
 });
+
+describe("persistence classes + audience at write time", () => {
+  it("rules are permanent by default; short-lived entries get a TTL and are pruned", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "hc-mem-ttl-"));
+    try {
+      let t = 1_000_000;
+      const s = new MemoryStore({ home: cwd, cwd, now: () => t });
+      await s.load();
+      const rule = await s.add("always answer in Turkish", "rule");
+      expect(rule.ok && rule.entry.persistence).toBe("permanent");
+      expect(rule.ok && rule.entry.expiresAt).toBeUndefined();
+
+      const scratch = await s.add("the sandbox port is 4310", "fact", { persistence: "short" });
+      expect(scratch.ok && scratch.entry.persistence).toBe("short");
+      expect(scratch.ok && scratch.entry.expiresAt).toBeGreaterThan(t);
+
+      expect(await s.pruneExpired()).toBe(0); // nothing due yet
+      t += 25 * 60 * 60 * 1000;               // a day later
+      expect(await s.pruneExpired()).toBe(1); // the short-lived note is gone
+      expect(s.all().map((e) => e.text)).toEqual(["always answer in Turkish"]); // the rule survives
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+
+  it("records who learned a memory and who it is addressed to", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "hc-mem-aud-"));
+    try {
+      const s = new MemoryStore({ home: cwd, cwd });
+      await s.load();
+      const r = await s.add("diffs need a migration note", "lesson", { learnedBy: "code-reviewer", audience: ["code-reviewer", "coder"] });
+      expect(r.ok && r.entry.learnedBy).toBe("code-reviewer");
+      expect(r.ok && r.entry.audience).toEqual(["code-reviewer", "coder"]);
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+});

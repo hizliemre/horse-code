@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints, supersedes, memoryReferenced, type MemoryEntry, fileAnchors, hashAnchors, verifyAnchors, type AnchorFs } from "../../src/engine/memory-retrieval.js";
+import { deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints, supersedes, memoryReferenced, type MemoryEntry, fileAnchors, hashAnchors, verifyAnchors, type AnchorFs, isExpired, audienceMatches } from "../../src/engine/memory-retrieval.js";
 
 const entry = (id: string, text: string, over: Partial<MemoryEntry> = {}): MemoryEntry => {
   const anchors = over.anchors ?? deriveAnchors(text);
@@ -140,5 +140,37 @@ describe("anchor verification (memory must not rot)", () => {
     const rotten: MemoryEntry = { ...fresh, id: "b", stale: true };
     const hits = selectMemories([rotten, fresh], "how does src/auth.ts work", { load: 0 });
     expect(hits.map((h) => h.id)).toEqual(["a"]);
+  });
+});
+
+describe("audience scoping + persistence/TTL", () => {
+  const base = { anchors: ["src/store.ts"], tags: ["store"], createdAt: 0 };
+  const forAll: MemoryEntry = { ...base, id: "all", text: "the store adapter lives in src/store.ts" };
+  const forReviewer: MemoryEntry = { ...base, id: "rev", text: "src/store.ts diffs need a migration note", audience: ["code-reviewer"] };
+
+  it("an unscoped memory reaches every role; a scoped one only its audience", () => {
+    const q = "changing src/store.ts";
+    expect(selectMemories([forAll, forReviewer], q, { load: 0, role: "coder" }).map((m) => m.id)).toEqual(["all"]);
+    const rev = selectMemories([forAll, forReviewer], q, { load: 0, role: "code-reviewer" }).map((m) => m.id);
+    expect(rev).toContain("rev");
+    expect(rev).toContain("all");
+  });
+
+  it("with no role given, scoped memories are held back (they were addressed to someone)", () => {
+    expect(selectMemories([forReviewer], "changing src/store.ts", { load: 0 })).toEqual([]);
+  });
+
+  it("expired short-lived memories are not selected; permanent ones never expire", () => {
+    const now = 1_000_000;
+    const expired: MemoryEntry = { ...base, id: "x", text: "temp note about src/store.ts", persistence: "short", expiresAt: now - 1 };
+    const permanent: MemoryEntry = { ...base, id: "p", text: "src/store.ts is the only write path", persistence: "permanent", expiresAt: now - 1 };
+    const ids = selectMemories([expired, permanent], "src/store.ts", { load: 0, now }).map((m) => m.id);
+    expect(ids).toEqual(["p"]);
+  });
+
+  it("isExpired / audienceMatches are honest about the edge cases", () => {
+    expect(isExpired({ ...base, id: "a", text: "t" }, 10)).toBe(false); // no TTL → never expires
+    expect(isExpired({ ...base, id: "a", text: "t", expiresAt: 10 }, 10)).toBe(true); // inclusive
+    expect(audienceMatches({ ...base, id: "a", text: "t", audience: [] }, undefined)).toBe(true); // empty = all
   });
 });

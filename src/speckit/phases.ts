@@ -28,7 +28,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
   const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts(role);
   const tools = writerRegistry(p.deps.skillRegistry, extraTools ? [buildAskUserTool(p.askUser, (q) => normalizeQuestion(p.deps, q))] : []);
-  const hints = memoryHints(p.deps, message);
+  const hints = memoryHints(p.deps, message, { role });
   const opts: RoleAgentOptions = {
     provider: p.deps.provider,
     model,

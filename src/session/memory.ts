@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
-import { deriveAnchors, deriveTags, supersedes, hashAnchors, verifyAnchors, type AnchorFs, type MemoryEntry } from "../engine/memory-retrieval.js";
+import { deriveAnchors, deriveTags, supersedes, hashAnchors, verifyAnchors, isExpired, SHORT_TTL_MS, type AnchorFs, type MemoryEntry } from "../engine/memory-retrieval.js";
 
 /** Files larger than this are fingerprinted by size+mtime instead of content (cheap, still change-sensitive). */
 const HASH_MAX_BYTES = 512 * 1024;
@@ -95,6 +95,22 @@ export class MemoryStore {
     return this.cache ?? [];
   }
 
+  /**
+   * Drops entries past their hard expiry. `permanent` is exempt by definition; everything else only expires if
+   * it was given an explicit TTL, so nothing silently disappears that was not marked short-lived.
+   */
+  async pruneExpired(): Promise<number> {
+    return this.serialize(async () => {
+      await this.load();
+      const now = this.now();
+      const before = this.cache!.length;
+      this.cache = this.cache!.filter((e) => !isExpired(e, now));
+      const dropped = before - this.cache.length;
+      if (dropped > 0) await this.persist();
+      return dropped;
+    });
+  }
+
   /** Entries currently flagged stale — surfaced by /memory so the user can re-confirm or delete them. */
   stale(): MemoryEntry[] {
     this.verify();
@@ -116,7 +132,11 @@ export class MemoryStore {
    * Remember a fact (anchors/tags auto-derived). A new fact that supersedes existing same-topic facts
    * replaces them (returned in `superseded`) so contradictions don't accumulate.
    */
-  async add(text: string, kind: "fact" | "lesson" | "rule" = "fact"): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> {
+  async add(
+    text: string,
+    kind: "fact" | "lesson" | "rule" = "fact",
+    opts: { audience?: string[]; learnedBy?: string; persistence?: "permanent" | "long" | "short" } = {},
+  ): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> {
     return this.serialize(async () => {
       await this.load();
       const t = text.trim();
@@ -124,8 +144,15 @@ export class MemoryStore {
       if (this.cache!.some((e) => e.text === t)) return { ok: false as const, error: "already remembered" };
       const anchors = deriveAnchors(t);
       const hashes = hashAnchors(anchors, this.anchorFs); // fingerprint the code this claim is ABOUT
+      // A rule is a standing directive → permanent by default. Everything else is long-lived unless the caller
+      // says it is short-lived scaffolding, which then carries a hard TTL.
+      const persistence = opts.persistence ?? (kind === "rule" ? "permanent" : "long");
       const entry: MemoryEntry = {
         id: `m${this.now()}`, text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now(), uses: 0, kind,
+        persistence,
+        ...(persistence === "short" ? { expiresAt: this.now() + SHORT_TTL_MS } : {}),
+        ...(opts.audience?.length ? { audience: opts.audience } : {}),
+        ...(opts.learnedBy ? { learnedBy: opts.learnedBy } : {}),
         ...(Object.keys(hashes).length ? { anchorHashes: hashes } : {}),
       };
       // A new entry supersedes only same-kind, same-topic ones (a fact never replaces a lesson, or vice versa).
