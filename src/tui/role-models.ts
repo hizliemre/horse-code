@@ -118,6 +118,19 @@ const versionBump = (s: string, family?: string): number => {
   return g ? Number(g[1]) + Number(g[2]) / 10 : 0;
 };
 
+/**
+ * Families we actually recognise as general-purpose LLMs. An omniroute catalog also carries image/video and
+ * vanity endpoints (`veo`, `big-pickle`, `pepper-1`, …); those score as "unknown" and must never be handed a
+ * reasoning role just because they happen to sit in a source the round-robin reached.
+ */
+const KNOWN_FAMILY_RE = /(fable|mythos|opus|sonnet|haiku|claude|codex|gpt-|\bo\d\b|gemini|deepseek|llama|qwen|kimi|glm|mistral|grok|nova|command-r|phi-\d)/i;
+export function isKnownModel(model: string): boolean {
+  return KNOWN_FAMILY_RE.test(model);
+}
+
+/** Score given to a model we can't rank — used as the floor that keeps it out of the reasoning tiers. */
+const UNRANKED_SCORE = 50;
+
 /** Capability score from the model id (higher = more capable). Knows the real Claude/OpenAI families. */
 export function capabilityScore(model: string): number {
   const s = model.toLowerCase();
@@ -128,7 +141,7 @@ export function capabilityScore(model: string): number {
   if (/sonnet/.test(s)) return 78 + versionBump(s, "sonnet");
   if (/gpt-4|gemini.*pro/.test(s)) return 65;
   if (/deepseek/.test(s)) return 55;
-  return 50; // unknown → assume mid
+  return UNRANKED_SCORE; // recognised family but no ranking signal (llama/qwen/kimi/…) or plain unknown
 }
 
 /** The most capable model in a list (used to pick who does the LLM role-tuning reasoning). */
@@ -142,6 +155,9 @@ export function modelBand(model: string): "flagship" | "strong" | "mid" | "fast"
   const s = capabilityScore(model);
   if (s >= 95) return "flagship"; // fable / mythos
   if (s >= 84) return "strong"; // opus, codex ultra/high
+  // Floor: a model we cannot actually rank (score = the unknown default) is NOT "mid" — it must not win a
+  // reasoning/review slot over a model we know. It stays usable for cheap roles and as a fallback tail.
+  if (s <= UNRANKED_SCORE) return "fast";
   return "mid"; // sonnet, gpt-mid, gemini-pro, deepseek
 }
 
@@ -229,8 +245,12 @@ export const FALLBACK_COUNT = 2;
  */
 export function adjustRoleModels(roles: string[], models: string[]): { role: string; models: string[] }[] {
   if (models.length === 0) return [];
-  const capable = dedupBest(models.filter((m) => !WEAK_RE.test(m)));
-  const fast = dedupBest(models.filter((m) => WEAK_RE.test(m)));
+  // Unrecognised endpoints (video/vanity models) are kept only as a last resort: they must not win a tier slot
+  // over a real LLM just because source round-robin reached their source first.
+  const recognised = models.filter(isKnownModel);
+  const pick = recognised.length ? recognised : models; // nothing recognised → fall back to whatever exists
+  const capable = dedupBest(pick.filter((m) => !WEAK_RE.test(m)));
+  const fast = dedupBest(pick.filter((m) => WEAK_RE.test(m)));
   const capablePool = capable.length ? capable : fast; // no capable models → fall back to fast
   const fastPool = fast.length ? fast : capable; // no fast models → fall back to capable
   const nonFlagship = capablePool.filter((m) => modelBand(m) !== "flagship");

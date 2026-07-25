@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels } from "../../src/tui/role-models.js";
+import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel } from "../../src/tui/role-models.js";
 
 const ALL = [
   "cc/claude-opus-4-8",
@@ -128,5 +128,42 @@ describe("adjustRoleModels", () => {
 
   it("empty model list → no assignments", () => {
     expect(adjustRoleModels(["judge"], [])).toEqual([]);
+  });
+});
+
+describe("tier eligibility (only real, rankable LLMs get reasoning roles)", () => {
+  it("unrecognised endpoints (video/vanity) are not treated as models", () => {
+    expect(isKnownModel("cc/claude-opus-4-8")).toBe(true);
+    expect(isKnownModel("antigravity/gemini-3.1-pro-high")).toBe(true);
+    expect(isKnownModel("opencode-go/deepseek-v4-pro")).toBe(true);
+    expect(isKnownModel("veo-free/veo")).toBe(false);      // video model
+    expect(isKnownModel("oc/big-pickle")).toBe(false);     // vanity endpoint
+    expect(isKnownModel("pepper/pepper-1")).toBe(false);
+  });
+
+  it("a model we cannot rank is NOT 'mid' — it must not outrank a known model for a review lens", () => {
+    expect(modelBand("oc/qwen3.6-plus-free")).toBe("fast");   // recognised family, no ranking signal
+    expect(modelBand("ddgw/llama-4-scout")).toBe("fast");
+    expect(modelBand("cc/claude-sonnet-4-6")).toBe("mid");    // genuinely mid
+    expect(modelBand("antigravity/gemini-3.1-pro")).toBe("mid");
+    expect(modelBand("cc/claude-opus-4-8")).toBe("strong");
+    expect(modelBand("cc/claude-fable-5")).toBe("flagship");
+  });
+
+  it("adjust never hands a review lens an unrankable/unknown endpoint when real models exist", () => {
+    const models = [
+      "cc/claude-fable-5", "cc/claude-opus-4-8", "aug/claude-opus-4.6", "cx/gpt-5.6-sol-ultra",
+      "cc/claude-sonnet-4-6", "antigravity/gemini-3.1-pro-high", "opencode-go/deepseek-v4-pro",
+      "veo-free/veo", "oc/big-pickle", "pepper/pepper-1", "cc/claude-haiku-4-5",
+    ];
+    const roles = ["judge", "spec-scope", "spec-clarity", "plan-security", "code-correctness", "refiner"];
+    const out = adjustRoleModels(roles, models);
+    const junk = /veo|big-pickle|pepper/;
+    for (const a of out) expect(a.models[0], a.role).not.toMatch(junk); // no junk as a PRIMARY
+    const by = Object.fromEntries(out.map((a) => [a.role, a.models[0]]));
+    expect(modelBand(by["spec-scope"])).toBe("mid");        // spec lenses → capable but efficient
+    expect(modelBand(by["plan-security"])).toBe("strong");  // plan/code lenses → strong
+    expect(modelBand(by["code-correctness"])).toBe("strong");
+    expect(by["judge"]).toBe("cc/claude-fable-5");          // flagship for the final authority
   });
 });
