@@ -231,13 +231,26 @@ function teamSummaryNote(assessments: Assessment[], label: string): string {
  * Runs the COUNCIL in parallel: each member weighs the doc + the team's findings and votes pass/revise with a
  * rationale. Returns the votes; the caller tallies them (a 4/5-style supermajority decides, else the judge).
  */
+export type CouncilQuestion =
+  | "blocking"  // "is this good enough to ship as-is?" — the default, used while blocking findings remain
+  | "deferral"; // "only non-critical findings are left: defer them, or is one genuinely blocking after all?"
+
 export async function runCouncil(
   deps: ReviewDeps, stage: ReviewStage, workdir: string, target: string, assessments: Assessment[],
-  request?: string, emit: (ev: ProgressEvent) => void = () => {},
+  request?: string, emit: (ev: ProgressEvent) => void = () => {}, question: CouncilQuestion = "blocking",
 ): Promise<CouncilVote[]> {
   const digest = findingsDigest(assessments);
   const scope = request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : "";
   const subject = stage === "code" ? `the code for: ${target}` : `the "${target}" ${stage}`;
+  // The deferral question is deliberately calibrated: without it a pile of "medium" findings always reads as
+  // "revise", which is what turns the loop into endless polish. The council still holds the judgment — it can
+  // promote a mislabelled finding to blocking — but "it could be clearer" is explicitly not a reason to revise.
+  const ask = question === "deferral"
+    ? `\n\nNOTE: this work has ALREADY been revised once and NO critical findings remain — only medium/low ones. ` +
+      `Decide: vote "pass" to hand it to the next stage and DEFER those findings (they are recorded and carried ` +
+      `forward, not dropped), or vote "revise" ONLY if one of them would genuinely cause the wrong thing to be ` +
+      `built or shipped despite its label. Wanting it clearer, tighter or more complete is NOT a reason to revise.`
+    : "";
   emit({ kind: "agents", agents: deps.council.map((c) => ({ id: `council:${c.name}`, title: `council: ${c.name}`, model: deps.councilRegistry.peekModel(c.name) })) });
   try {
     const results = await Promise.all(
@@ -247,7 +260,7 @@ export async function runCouncil(
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps),
-          messages: [{ role: "user", content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}\n\nCast your vote (pass/revise) with a rationale.` }],
+          messages: [{ role: "user", content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` }],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
@@ -352,6 +365,7 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
   const label = stage;
   let round = 0;
   let prevCriticals = Number.POSITIVE_INFINITY; // convergence guard: criticals must DROP round over round
+  let deferralVetoUsed = false; // the council may override a deferral ONCE; after that mediums always defer
   // Outer loop: run a batch of up to `maxRounds` council/judge rounds; if none pass, escalate to the human,
   // who may approve as-is, ask for MORE review rounds (another batch), or stop. Only "stop" ends without approval.
   for (;;) {
@@ -378,10 +392,38 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
           return { approved: true };
         }
       } else if (crit === 0) {
-        // No blocking issue left: pass and DEFER the remaining medium/low findings to the next stage.
+        // No criticals left — but whether the remaining medium/low findings are worth another round is a
+        // JUDGMENT call, and the council is what horse-code has for judgment. Ask it the calibrated deferral
+        // question instead of deciding by rule; it can still promote a mislabelled finding to blocking.
         const deferred = nonBlockingNotes(assessments, stage);
-        emit({ kind: "note", text: `✅ **Team** — no critical findings left → the ${label} is approved.${deferred.length ? ` ${deferred.length} medium/low note(s) carried forward to the next stage.` : ""}` });
-        return { approved: true, deferred };
+        if (!deferred.length) {
+          emit({ kind: "note", text: `✅ **Team** — nothing left to fix → the ${label} is approved.` });
+          return { approved: true };
+        }
+        if (deferralVetoUsed) { // the council already had its say on these; don't re-litigate them forever
+          emit({ kind: "note", text: `✅ **Team** — only medium/low findings remain → the ${label} is approved; ${deferred.length} note(s) carried forward.` });
+          return { approved: true, deferred };
+        }
+        emit({ kind: "note", text: `👥 **Team** — no criticals, ${deferred.length} medium/low finding(s) → asking the **council** whether to defer them or fix one now.` });
+        const dVotes = await runCouncil(deps, stage, workdir, target, assessments, request, emit, "deferral");
+        const dTally = tallyCouncil(dVotes);
+        const dPass = dVotes.filter((v) => v.vote === "pass").length;
+        if (dTally === "pass") {
+          emit({ kind: "note", text: `✅ **Council** voted to defer (${dPass}/${dVotes.length} pass) → the ${label} is approved; ${deferred.length} note(s) carried forward.` });
+          return { approved: true, deferred };
+        }
+        // The council says one of these IS blocking despite its label → one more revision, then it's settled.
+        const dJudged = dTally === "revise"
+          ? { decision: "revise" as const, feedback: dVotes.filter((v) => v.vote === "revise").map((v) => v.rationale), question: "" }
+          : await runJudge(deps, stage, workdir, target, assessments, dVotes, request, emit);
+        if (dJudged.decision === "pass") {
+          emit({ kind: "note", text: `✅ **Judge** approved the ${label}; ${deferred.length} note(s) carried forward.` });
+          return { approved: true, deferred };
+        }
+        emit({ kind: "note", text: `🔄 **Council** found a non-critical finding worth fixing → one more revision of the ${label}.` });
+        deferralVetoUsed = true; // bounded: the council gets exactly one veto over a deferral
+        await revise(dJudged.feedback);
+        continue;
       }
 
       // Not converging? If the critical count didn't drop versus the previous round, more rounds won't help —
@@ -405,8 +447,10 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
 
       let decision: JudgeDecision;
       if (tally === "pass") {
-        emit({ kind: "note", text: `✅ **Council** voted to approve (${passVotes}/${votes.length} pass) → the ${label} is approved.` });
-        return { approved: true };
+        // Approved with findings still on the table → they are deferred, never silently dropped.
+        const deferred = nonBlockingNotes(assessments, stage);
+        emit({ kind: "note", text: `✅ **Council** voted to approve (${passVotes}/${votes.length} pass) → the ${label} is approved.${deferred.length ? ` ${deferred.length} note(s) carried forward.` : ""}` });
+        return { approved: true, deferred };
       } else if (tally === "revise") {
         emit({ kind: "note", text: `🔄 **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the ${label} back for changes.` });
         decision = { decision: "revise", feedback: votes.filter((v) => v.vote === "revise").map((v) => v.rationale), question: "" };
@@ -414,7 +458,11 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         // Split vote → the council defers the final call to the judge.
         emit({ kind: "note", text: `🔨 **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
         decision = await runJudge(deps, stage, workdir, target, assessments, votes, request, emit);
-        if (decision.decision === "pass") { emit({ kind: "note", text: `✅ **Judge** approved the ${label}.` }); return { approved: true }; }
+        if (decision.decision === "pass") {
+          const deferred = nonBlockingNotes(assessments, stage);
+          emit({ kind: "note", text: `✅ **Judge** approved the ${label}.${deferred.length ? ` ${deferred.length} note(s) carried forward.` : ""}` });
+          return { approved: true, deferred };
+        }
       }
 
       let feedback = decision.feedback;
@@ -472,8 +520,26 @@ export async function runCodeReview(
     }
   } else if (crit === 0) {
     const deferred = nonBlockingNotes(assessments, "code");
-    emit({ kind: "note", text: `✅ **Team** — no critical findings left → the code passed.${deferred.length ? ` ${deferred.length} medium/low note(s) deferred to the PR revision pass.` : ""}` });
-    return { verdict: "pass", notes: [], deferred };
+    if (!deferred.length) {
+      emit({ kind: "note", text: `✅ **Team** — nothing left to fix → the code passed.` });
+      return { verdict: "pass", notes: [] };
+    }
+    // Same judgment call as the doc stages: whether a leftover medium is really blocking is the COUNCIL's call,
+    // not a hard rule. A "pass" defers them to the PR revision pass; a "revise" sends the task back once more.
+    emit({ kind: "note", text: `👥 **Team** — no criticals, ${deferred.length} medium/low finding(s) → asking the **council** whether to defer them.` });
+    const dVotes = await runCouncil(deps, "code", workdir, taskTitle, assessments, request, emit, "deferral");
+    const dTally = tallyCouncil(dVotes);
+    if (dTally === "pass") {
+      emit({ kind: "note", text: `✅ **Council** voted to defer → the code passed; ${deferred.length} note(s) go to the PR revision pass.` });
+      return { verdict: "pass", notes: [], deferred };
+    }
+    if (dTally === "revise") {
+      emit({ kind: "note", text: `🔄 **Council** found a non-critical finding worth fixing now → sending the code back.` });
+      return { verdict: "fail", notes: deferred };
+    }
+    const dJudge = await runJudge(deps, "code", workdir, taskTitle, assessments, dVotes, request, emit);
+    if (dJudge.decision === "pass") return { verdict: "pass", notes: [], deferred };
+    return { verdict: "fail", notes: dJudge.feedback.length ? dJudge.feedback : deferred };
   }
 
   const reason = crit || med ? `surfaced ${crit} critical / ${med} medium finding(s)` : `is split (${approve}/${assessments.length} approve)`;

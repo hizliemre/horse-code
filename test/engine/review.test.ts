@@ -491,21 +491,58 @@ describe("tiered bar + convergence guard (loop termination)", () => {
     expect(revised).toBe(1); // …and it produced a revision
   });
 
-  it("round 2+: mediums/lows no longer block — it passes and DEFERS them (kills the polish loop)", async () => {
+  it("round 2+ with only mediums: the COUNCIL decides whether to defer (not a hard rule)", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    // Every round yields only medium/low findings. Old behaviour: revise forever. New: round 2 approves.
-    const p = reviewProvider({ assessments: mediumOnly, councilVotes: allRevise });
+    // Council: revise on the round-1 (blocking) question, pass on the round-2 deferral question.
+    let councilCalls = 0;
+    const p: Provider = {
+      async *chat(req) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        const em = function* (a: string) {
+          yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
+          yield { type: "done", finishReason: "tool_calls" } as const;
+        };
+        if (sys.includes("review COUNCIL")) { councilCalls++; yield* em(councilCalls <= council.length ? '{"vote":"revise","rationale":"r"}' : '{"vote":"pass","rationale":"ok"}'); return; }
+        if (sys.includes("review TEAM member")) {
+          yield* em(sys.includes("security")
+            ? '{"findings":[{"severity":"medium","note":"clarify FR-3"}],"recommendation":"revise"}'
+            : '{"findings":[{"severity":"low","note":"wording"}],"recommendation":"revise"}');
+          return;
+        }
+        yield { type: "text-delta", text: "ok" }; yield { type: "done", finishReason: "stop" };
+      },
+    };
     let revised = 0;
+    const notes: string[] = [];
     const out = await runReviewLoop(rdeps(p), {
       stage: "spec", workdir: dir, target: "spec.md",
       revise: async () => { revised++; }, askUser: async () => "Stop", maxRounds: 5,
+      emit: (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); },
     });
     expect(out.approved).toBe(true);
-    expect(revised).toBe(1); // exactly ONE revision (round 1), then round 2 passed
+    expect(revised).toBe(1); // round 1 revised; round 2 the council was ASKED and agreed to defer
+    expect(notes.join("\n")).toMatch(/asking the \*\*council\*\* whether to defer/i);
+    expect(notes.join("\n")).toMatch(/voted to defer/i);
     expect(out.deferred).toEqual(expect.arrayContaining([
-      expect.stringContaining("[medium] security: clarify FR-3"),
-      expect.stringContaining("[low] arch: wording"),
+      expect.stringContaining("[spec][medium] security: clarify FR-3"),
+      expect.stringContaining("[spec][low] arch: wording"),
     ]));
+  });
+
+  it("the council may VETO a deferral once (a mislabelled medium is really blocking), then it settles", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: mediumOnly, councilVotes: allRevise }); // council always says revise
+    let revised = 0;
+    const notes: string[] = [];
+    const out = await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: async () => { revised++; }, askUser: async () => "Stop", maxRounds: 5,
+      emit: (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); },
+    });
+    expect(out.approved).toBe(true);
+    expect(revised).toBe(2); // round 1 + the council's single deferral veto — bounded, not a loop
+    expect(notes.join("\n")).toMatch(/worth fixing.*one more revision/i);
+    expect(out.deferred?.length).toBeGreaterThan(0);
   });
 
   it("criticals that don't drop round-over-round stop the batch early (no burning rounds)", async () => {
@@ -541,16 +578,23 @@ describe("runCodeReview tiered bar (attempt-driven)", () => {
     expect(v.notes.some((n) => /medium.*tighten validation/i.test(n))).toBe(true);
   });
 
-  it("a later attempt: only CRITICAL fails — mediums are noted, not another re-implementation", async () => {
-    const p = reviewProvider({ assessments: mediumOnlyCode, councilVotes: allRevise });
+  it("a later attempt: the COUNCIL is asked whether to defer the leftover mediums (pass → no re-implementation)", async () => {
+    const p = reviewProvider({ assessments: mediumOnlyCode }); // council defaults to "pass" → defer
     const notes: string[] = [];
     const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined,
       (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); }, 1);
     expect(v.verdict).toBe("pass");
-    expect(notes.join("\n")).toMatch(/no critical findings left/i);
-    expect(notes.join("\n")).toMatch(/deferred to the PR revision pass/i);
+    expect(notes.join("\n")).toMatch(/asking the \*\*council\*\* whether to defer/i);
+    expect(notes.join("\n")).toMatch(/voted to defer/i);
     // Not dropped: they ride the Verdict to the board, and from there to the PR revision pass.
     expect(v.deferred).toEqual(expect.arrayContaining([expect.stringContaining("[code][medium] security: tighten validation")]));
+  });
+
+  it("a later attempt: the council can still say a leftover medium must be fixed now → task fails", async () => {
+    const p = reviewProvider({ assessments: mediumOnlyCode, councilVotes: allRevise });
+    const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined, () => {}, 1);
+    expect(v.verdict).toBe("fail");
+    expect(v.notes.some((n) => /tighten validation/.test(n))).toBe(true);
   });
 
   it("a later attempt with a CRITICAL still goes to the council and can fail", async () => {
