@@ -1,3 +1,4 @@
+import { SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "../prompts.js";
 // Role-aware model selection: the /roles setmodel picker filters models to fit a role, and /roles adjust
 // auto-assigns a sensible model to every role (best models → reasoning, coding models → coders, cheap → fast).
 // Heuristic — matches on the model id.
@@ -13,10 +14,18 @@ const WEAK_RE = /\b(flash|mini|nano|haiku|lite|small|turbo|fast|\d{1,2}b)\b/i;
 //             which would be wasteful (and slow) at that volume.
 //  fast     — classify/route/coordinate: a cheap, fast model.
 const FLAGSHIP_ROLES = ["judge", "principal-coder"];
-// The review COUNCIL (5 deciders) casts the binding vote on contested docs → genuinely strong (Opus-tier) models.
-const COUNCIL_ROLES = ["correctness-judge", "risk-judge", "completeness-judge", "user-value-judge", "feasibility-judge"];
-const STRONG_ROLES = ["analyst", "planner", "architect", "senior-coder", "senior-designer", ...COUNCIL_ROLES];
-const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational"];
+// The review COUNCIL (5 deciders) casts the binding vote on contested work → genuinely strong (Opus-tier) models.
+const COUNCIL_ROLES = DEFAULT_COUNCIL.map((c) => c.name);
+// Review finder lenses, by stage. A spec is a small business-level doc → a capable, efficient model suffices;
+// plan and code lenses reason over technical design and real implementations → strong models.
+const SPEC_LENS_ROLES = SPEC_TEAM.map((c) => c.name);
+const PLAN_LENS_ROLES = PLAN_TEAM.map((c) => c.name);
+const CODE_LENS_ROLES = CODE_TEAM.map((c) => c.name);
+const STRONG_ROLES = [
+  "analyst", "planner", "architect", "senior-coder", "senior-designer",
+  ...COUNCIL_ROLES, ...PLAN_LENS_ROLES, ...CODE_LENS_ROLES,
+];
+const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational", ...SPEC_LENS_ROLES];
 const FAST_ROLES = ["refiner", "router", "project-manager", "team-lead"];
 const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]); // want a non-fast model
 
@@ -38,30 +47,21 @@ export const ROLE_PROFILES: Record<string, string> = {
   "senior-designer": "Senior UI reviewer — more capable than the designer.",
   "code-reviewer": "Reviews diffs — moderate volume → a solid capable model.",
   operational: "Handles version control: writes conventional commit messages and (later) drives merges/conflicts — high volume → a capable, efficient model.",
-  // Review council — each critiques the spec/plan from one angle; low volume, quality-critical → strong models.
-  security: "Team lens: security holes, auth, input validation — low volume, high stakes → a strong model.",
-  architecture: "Team lens: architectural soundness, boundaries — low volume → a strong model.",
-  testability: "Team lens: testability, isolation, edge-case coverage — low volume → a strong model.",
-  correctness: "Team lens: logical correctness, boundary conditions, invariants → a strong model.",
-  performance: "Team lens: complexity, hot paths, scalability → a strong model.",
-  "error-handling": "Team lens: failure modes, recovery, partial-failure behavior → a strong model.",
-  concurrency: "Team lens: races, deadlocks, atomicity, ordering → a strong model.",
-  "data-integrity": "Team lens: data modeling, consistency, migrations, transactions → a strong model.",
-  "api-design": "Team lens: interface/contract design, compatibility, ergonomics → a strong model.",
-  maintainability: "Team lens: readability, coupling/cohesion, tech-debt → a strong model.",
-  simplicity: "Team lens: YAGNI, over-engineering, scope creep → a capable model.",
-  completeness: "Team lens: requirement coverage, missing cases, spec gaps → a strong model.",
-  observability: "Team lens: logging, metrics, tracing, debuggability → a capable model.",
-  dependencies: "Team lens: third-party deps, supply-chain, versioning, licensing → a capable model.",
-  accessibility: "Team lens: a11y, i18n, inclusive UX → a capable model.",
-  // Review COUNCIL — the small decision panel that VOTES on contested docs (weighing the team's findings).
-  // Binding, high-stakes → genuinely strong (Opus-tier) models.
-  "correctness-judge": "Council decider: votes pass/revise weighing correctness/logic/data findings → a strong model.",
-  "risk-judge": "Council decider: votes pass/revise weighing security, failure-mode, and blast-radius findings → a strong model.",
-  "completeness-judge": "Council decider: votes pass/revise weighing requirement-coverage and spec-gap findings → a strong model.",
-  "user-value-judge": "Council decider: votes pass/revise weighing usability, a11y, and scope-vs-intent → a strong model.",
-  "feasibility-judge": "Council decider: votes pass/revise weighing architecture, simplicity, and maintainability → a strong model.",
 };
+
+// Review-role profiles are DERIVED from the lens definitions so the tuner's brief can never drift from the
+// actual lens set: each stage's finders + the council deciders, described with the model heft they deserve.
+for (const [stage, lenses, heft] of [
+  ["spec", SPEC_TEAM, "a capable, efficient model (a spec is a short business-level doc)"],
+  ["plan", PLAN_TEAM, "a strong model (technical design judgment)"],
+  ["code", CODE_TEAM, "a strong model (reads real implementations)"],
+] as const) {
+  for (const l of lenses) ROLE_PROFILES[l.name] = `${stage.toUpperCase()}-review lens — ${l.perspective}. Low volume, quality-critical → ${heft}.`;
+}
+for (const c of DEFAULT_COUNCIL) {
+  ROLE_PROFILES[c.name] = `Review COUNCIL decider — ${c.perspective} Casts the binding pass/revise vote on contested work → a strong model.`;
+}
+
 const ROLE_ADVICE = ROLE_PROFILES; // picker note reuses the profiles
 
 export interface RoleModelFilter {

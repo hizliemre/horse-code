@@ -136,27 +136,31 @@ describe("loadConfig", () => {
     expect(cfg.roles.coder).toEqual({ models: ["m"], skills: ["tdd", "cs"] });
   });
 
-  it("parses team.members and council.members", () => {
+  it("parses per-stage team sets and council.members", () => {
     const readFile = (p: string) =>
       p === "/home/.horsecode/config.json"
         ? JSON.stringify({
-            team: { members: [{ name: "sec", perspective: "security", models: ["m1"] }] },
+            team: { spec: [{ name: "sec", perspective: "security", models: ["m1"] }] },
             council: { members: [{ name: "risk-judge", perspective: "risk", models: ["m2"] }] },
           })
         : undefined;
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
-    expect(cfg.team?.members[0]).toEqual({ name: "sec", perspective: "security", models: ["m1"] });
+    expect(cfg.team?.spec?.[0]).toEqual({ name: "sec", perspective: "security", models: ["m1"] });
     expect(cfg.council?.members[0]).toEqual({ name: "risk-judge", perspective: "risk", models: ["m2"] });
   });
 
-  it("migrates the legacy council.councilors → team.members (the team was formerly the council)", () => {
-    const readFile = (p: string) =>
-      p === "/home/.horsecode/config.json"
-        ? JSON.stringify({ council: { councilors: [{ name: "sec", perspective: "security", models: ["m1"] }] } })
-        : undefined;
+  it("per-stage team sets are independent — a project may override just one stage", () => {
+    const readFile = (p: string) => {
+      if (p === "/home/.horsecode/config.json")
+        return JSON.stringify({ team: { spec: [{ name: "g-spec", perspective: "s", models: ["m1"] }], plan: [{ name: "g-plan", perspective: "p", models: ["m1"] }] } });
+      if (p === "/proj/.horsecode/config.json")
+        return JSON.stringify({ team: { spec: [{ name: "p-spec", perspective: "s2", models: ["m2"] }] } });
+      return undefined;
+    };
     const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile });
-    expect(cfg.team?.members[0].name).toBe("sec");
-    expect(cfg.council).toBeUndefined(); // legacy key held the team, not the new decider council
+    expect(cfg.team?.spec?.[0].name).toBe("p-spec"); // project wins for the stage it defines
+    expect(cfg.team?.plan?.[0].name).toBe("g-plan"); // the other stage falls back to global
+    expect(cfg.team?.code).toBeUndefined();          // undefined → wiring uses the built-in CODE_TEAM
   });
 
   it("team + council are undefined when the file configures neither", () => {

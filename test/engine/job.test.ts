@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runJob } from "../../src/engine/job.js";
 import type { JobDeps } from "../../src/engine/job.js";
-import { buildTeamRegistry, buildCouncilRegistry } from "../../src/engine/review.js";
+import { reviewBodies } from "../support/review-bodies.js";
 import { WorktreeManager } from "../../src/worktree/manager.js";
 import type { RevisionPRAdapter } from "../../src/adapters/pr.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
@@ -62,7 +62,7 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       if (sys.includes("P-reviewer")) { yield* submit('{"verdict":"pass","notes":[]}'); return; }
       if (sys.includes("Conventional Commits")) { yield* submit(`{"message":"chore: test step"}`); return; }
       if (sys.includes("review COUNCIL")) { yield* submit(`{"vote":"${opts.councilVote ?? "pass"}","rationale":"r"}`); return; } // council decider
-      if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
+      if (sys.includes("review TEAM member")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
         yield* submit(arr[judgeCall] ?? arr[arr.length - 1]);
@@ -122,10 +122,7 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
-    teamRegistry: buildTeamRegistry(team),
-    team,
-    councilRegistry: buildCouncilRegistry(council),
-    council,
+    ...reviewBodies({ spec: team, plan: team, code: team, council }),
     manager,
     prAdapter,
     rounds: 1,

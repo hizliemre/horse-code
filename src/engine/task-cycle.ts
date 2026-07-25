@@ -1,12 +1,12 @@
 import type { Board } from "../board/board.js";
 import { routeTask } from "./routing.js";
 import { runImplementer } from "./implementer.js";
-import { runReviewer } from "./reviewer.js";
-import type { TaskCycleDeps, Verdict, RunnableRole } from "./task-types.js";
+import { runCodeReview, type ReviewDeps } from "./review.js";
+import type { Verdict, RunnableRole } from "./task-types.js";
 
 /** Single-round core with an explicit given role (NO routing): implement → review → Board transitions. */
 export async function runCycleWithRole(
-  deps: TaskCycleDeps,
+  deps: ReviewDeps,
   board: Board,
   taskId: string,
   cwd: string,
@@ -17,7 +17,9 @@ export async function runCycleWithRole(
   await runImplementer(deps, role, board.get(taskId)!, cwd);
   board.move(taskId, "REVIEW", role);
 
-  const v = await runReviewer(deps, board.get(taskId)!, cwd);
+  // Code stage of the same team → council → judge review the docs get (single-shot; the escalation ladder retries).
+  const card = board.get(taskId)!;
+  const v = await runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); });
   if (v.verdict === "pass") {
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });
     board.clearReviewNotes(taskId);
@@ -38,7 +40,7 @@ export async function runCycleWithRole(
 
 /** A task's single-round lifecycle: route → runCycleWithRole. */
 export async function runTaskCycle(
-  deps: TaskCycleDeps,
+  deps: ReviewDeps,
   board: Board,
   taskId: string,
   worktreePath: string,

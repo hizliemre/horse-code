@@ -2,7 +2,8 @@ import type { Board, Card } from "../board/board.js";
 import { routeTask } from "./routing.js";
 import { runCycleWithRole } from "./task-cycle.js";
 import { runEscalationCouncil } from "./council.js";
-import type { TaskCycleDeps, Verdict, RunnableRole } from "./task-types.js";
+import type { Verdict, RunnableRole } from "./task-types.js";
+import type { ReviewDeps } from "./review.js";
 
 export type HumanDecision =
   | { action: "accept" }
@@ -27,7 +28,7 @@ export function autonomousAskHuman(maxRetries = 2): AskHuman {
   };
 }
 
-export interface EscalationDeps extends TaskCycleDeps {
+export interface EscalationDeps extends ReviewDeps {
   rounds: number; // turns per tier (config escalation.rounds; default 3)
   askHuman: AskHuman;
 }

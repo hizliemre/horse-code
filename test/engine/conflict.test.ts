@@ -12,6 +12,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { reviewBodies } from "../support/review-bodies.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 let repo: string;
@@ -45,6 +46,7 @@ function cdeps(provider: MockProvider, manager: ConflictDeps["manager"], opts: C
     approve: async () => true,
     signal: opts.signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
+    ...reviewBodies(),
     rounds: opts.rounds ?? 3,
     askHuman: opts.askHuman ?? (async () => ({ action: "abandon" })),
     manager,

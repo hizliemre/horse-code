@@ -1,8 +1,8 @@
 import { RoleRegistry } from "./agent/roles.js";
 import { PermissionEngine } from "./permission/engine.js";
 import type { PermissionRequest } from "./permission/engine.js";
-import { buildTeamRegistry, buildCouncilRegistry } from "./engine/review.js";
-import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
+import { buildTeamRegistry, buildCouncilRegistry, type ReviewStage } from "./engine/review.js";
+import { REQUIRED_ROLES, DEFAULT_PROMPTS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
 import type { ResolvedConfig, RoleConfig, ReviewerConfig } from "./config/config.js";
 import type { Provider } from "./core/types.js";
 import type { FetchLike } from "./providers/omniroute.js";
@@ -37,8 +37,17 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   const roleRegistry = new RoleRegistry(roles, DEFAULT_PROMPTS, opts.skillRegistry);
 
   const fillModels = (r: ReviewerConfig): ReviewerConfig => ({ ...r, models: r.models.length > 0 ? r.models : [config.model] });
-  const team: ReviewerConfig[] = (config.team?.members ?? DEFAULT_TEAM).map(fillModels);
-  const teamRegistry = buildTeamRegistry(team);
+  // One finder-lens set per review stage (a spec, a plan and code each need different questions asked).
+  const teams: Record<ReviewStage, ReviewerConfig[]> = {
+    spec: (config.team?.spec ?? SPEC_TEAM).map(fillModels),
+    plan: (config.team?.plan ?? PLAN_TEAM).map(fillModels),
+    code: (config.team?.code ?? CODE_TEAM).map(fillModels),
+  };
+  const teamRegistries: Record<ReviewStage, RoleRegistry> = {
+    spec: buildTeamRegistry("spec", teams.spec),
+    plan: buildTeamRegistry("plan", teams.plan),
+    code: buildTeamRegistry("code", teams.code),
+  };
   const council: ReviewerConfig[] = (config.council?.members ?? DEFAULT_COUNCIL).map(fillModels);
   const councilRegistry = buildCouncilRegistry(council);
 
@@ -58,8 +67,8 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     approve: opts.approve,
     signal: opts.signal,
     specKit,
-    teamRegistry,
-    team,
+    teams,
+    teamRegistries,
     councilRegistry,
     council,
     manager: opts.manager,

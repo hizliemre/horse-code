@@ -106,13 +106,11 @@ export async function runUpstream(
   if (!done.has("spec")) {
     emitPhase("specify");
     await runSpecify(p, paths, r.refinedPrompt);
-    const specOut = await runReviewLoop(
-      deps, workdir, specRel,
-      (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
-      askUser, maxRounds,
-      emit,
-      r.language,
-    );
+    const specOut = await runReviewLoop(deps, {
+      stage: "spec", workdir, target: specRel, request: r.refinedPrompt,
+      revise: (fb) => runSpecify(p, paths, r.refinedPrompt, fb),
+      askUser, maxRounds, emit, language: r.language,
+    });
     if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
     // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
     if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
@@ -132,13 +130,11 @@ export async function runUpstream(
   if (!done.has("plan")) {
     emitPhase("plan");
     await runPlan(p, paths);
-    const planOut = await runReviewLoop(
-      deps, workdir, planRel,
-      (fb) => runPlan(p, paths, fb),
-      askUser, maxRounds,
-      emit,
-      r.language,
-    );
+    const planOut = await runReviewLoop(deps, {
+      stage: "plan", workdir, target: planRel, request: r.refinedPrompt,
+      revise: (fb) => runPlan(p, paths, fb),
+      askUser, maxRounds, emit, language: r.language,
+    });
     if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
     if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
     await commitStep(deps, workdir, "add the implementation plan");

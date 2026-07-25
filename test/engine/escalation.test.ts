@@ -13,6 +13,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { reviewBodies, codeReviewPass, codeReviewFail } from "../support/review-bodies.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 let dir: string;
@@ -54,6 +55,7 @@ function edeps(provider: MockProvider, opts: EOpts = {}): EscalationDeps {
     approve: async () => true,
     signal: opts.signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
+    ...reviewBodies(),
     rounds: opts.rounds ?? 3,
     askHuman: opts.askHuman ?? (async () => ({ action: "abandon" })),
   };
@@ -83,8 +85,8 @@ describe("runTaskWithEscalation", () => {
   it("tier progression (N=1): coder fail → senior-coder fail → council pass → DONE", async () => {
     const p = new MockProvider([
       submit('{"role":"coder"}'),                    // route → coder family
-      noopImpl, submit('{"verdict":"fail","notes":["a"]}'),   // tier0 coder fail
-      noopImpl, submit('{"verdict":"fail","notes":["b"]}'),   // tier1 senior-coder fail
+      noopImpl, ...codeReviewFail("a"),   // tier0 coder fail
+      noopImpl, ...codeReviewFail("b"),   // tier1 senior-coder fail
       submit('{"rootCause":"x","plan":["p"]}'),      // council: architect
       writeTurn(), doneTurn,                         // council: senior-coder implement
       submit('{"verdict":"pass","notes":[]}'),       // council: reviewer pass
@@ -104,8 +106,8 @@ describe("runTaskWithEscalation", () => {
   it("designer family (N=1): designer fail → senior-designer takes over", async () => {
     const p = new MockProvider([
       submit('{"role":"designer"}'),
-      noopImpl, submit('{"verdict":"fail","notes":["a"]}'),   // tier0 designer fail
-      noopImpl, submit('{"verdict":"pass","notes":[]}'),      // tier1 senior-designer pass
+      noopImpl, ...codeReviewFail("a"),   // tier0 designer fail
+      noopImpl, ...codeReviewPass(),      // tier1 senior-designer pass
     ]);
     const board = boardWithTask();
     const v = await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
@@ -120,7 +122,7 @@ describe("runTaskWithEscalation", () => {
     const p = new MockProvider([
       submit('{"role":"coder"}'),                                          // route → coder
       [{ type: "error", message: "maximum turn count exceeded (200)" }],   // tier0 implementer THROWS
-      noopImpl, submit('{"verdict":"pass","notes":[]}'),                   // tier1 senior-coder passes
+      noopImpl, ...codeReviewPass(),                   // tier1 senior-coder passes
     ]);
     const board = boardWithTask();
     const v = await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
@@ -146,8 +148,8 @@ describe("runTaskWithEscalation", () => {
     const askHuman: AskHuman = async () => { asked++; return { action: "accept" }; };
     const p = new MockProvider([
       submit('{"role":"coder"}'),
-      noopImpl, submit('{"verdict":"fail","notes":["a"]}'),
-      noopImpl, submit('{"verdict":"fail","notes":["b"]}'),
+      noopImpl, ...codeReviewFail("a"),
+      noopImpl, ...codeReviewFail("b"),
       submit('{"rootCause":"x","plan":["p"]}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":["c"]}'),
     ]);
     const board = boardWithTask();
@@ -163,8 +165,8 @@ describe("runTaskWithEscalation", () => {
     const askHuman: AskHuman = async () => { asked++; return { action: "retry", notes: ["hint-XYZ"] }; };
     const p = new MockProvider([
       submit('{"role":"coder"}'),
-      noopImpl, submit('{"verdict":"fail","notes":["a"]}'),
-      noopImpl, submit('{"verdict":"fail","notes":["b"]}'),
+      noopImpl, ...codeReviewFail("a"),
+      noopImpl, ...codeReviewFail("b"),
       submit('{"rootCause":"x","plan":["p"]}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":["c"]}'), // council round 1 fail
       submit('{"rootCause":"y","plan":["q"]}'), writeTurn(), doneTurn, submit('{"verdict":"pass","notes":[]}'),   // council round 2 pass
     ]);
@@ -181,8 +183,8 @@ describe("runTaskWithEscalation", () => {
     const askHuman: AskHuman = async () => ({ action: "abandon" });
     const p = new MockProvider([
       submit('{"role":"coder"}'),
-      noopImpl, submit('{"verdict":"fail","notes":["a"]}'),
-      noopImpl, submit('{"verdict":"fail","notes":["b"]}'),
+      noopImpl, ...codeReviewFail("a"),
+      noopImpl, ...codeReviewFail("b"),
       submit('{"rootCause":"x","plan":["p"]}'), writeTurn(), doneTurn, submit('{"verdict":"fail","notes":["c"]}'),
     ]);
     const board = boardWithTask();

@@ -29,9 +29,10 @@ export interface ResolvedConfig {
   mode: PermissionMode;
   allowlist: string[];
   roles: Record<string, RoleConfig>;
-  // Two-stage review bodies: the `team` (many lenses) produces findings; the `council` (a small strong panel)
-  // votes on contested docs. Absent → wiring fills in DEFAULT_TEAM / DEFAULT_COUNCIL.
-  team?: { members: ReviewerConfig[] };
+  // Two-stage review bodies. `team` holds the finder lenses PER STAGE (a spec, a plan and code each need
+  // different questions asked); `council` is the small strong panel that votes on contested work. Any absent
+  // set is filled in by wiring from SPEC_TEAM / PLAN_TEAM / CODE_TEAM / DEFAULT_COUNCIL.
+  team?: { spec?: ReviewerConfig[]; plan?: ReviewerConfig[]; code?: ReviewerConfig[] };
   council?: { members: ReviewerConfig[] };
   specKit: { version: string };
   mcp: Record<string, McpServerSpec>;
@@ -73,16 +74,15 @@ const fileSchema = z
         }),
       )
       .optional(),
-    // The review team (finders). `councilors` is the legacy key (the team was formerly called the council).
+    // The review team's finder lenses, one set per stage (any omitted set falls back to the built-in default).
     team: z
-      .object({ members: z.array(reviewerSchema) })
-      .optional(),
-    council: z
       .object({
-        members: z.array(reviewerSchema).optional(),
-        councilors: z.array(reviewerSchema).optional(), // legacy: old configs kept the 15 lenses here
+        spec: z.array(reviewerSchema).optional(),
+        plan: z.array(reviewerSchema).optional(),
+        code: z.array(reviewerSchema).optional(),
       })
       .optional(),
+    council: z.object({ members: z.array(reviewerSchema) }).optional(),
     specKit: z.object({ version: z.string() }).optional(),
     modelSources: z.array(z.string()).optional(),
     mcp: z
@@ -144,11 +144,13 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
   // specKit: "most specific wins" instead of merging (use project's if present).
   merged.specKit = projectSafe.specKit ?? global.specKit ?? DEFAULT_CONFIG.specKit;
 
-  // Review bodies (most-specific wins). Legacy configs kept the TEAM's lenses under `council.councilors`;
-  // migrate them to `team` so the freed-up `council` key can hold the new decider panel.
-  const legacyTeam = projectSafe.council?.councilors ?? global.council?.councilors;
-  const teamMembers = projectSafe.team?.members ?? global.team?.members ?? legacyTeam;
-  merged.team = teamMembers ? { members: teamMembers } : undefined;
+  // Review bodies (most-specific wins, per stage — a project may override just one stage's lenses).
+  const team = {
+    spec: projectSafe.team?.spec ?? global.team?.spec,
+    plan: projectSafe.team?.plan ?? global.team?.plan,
+    code: projectSafe.team?.code ?? global.team?.code,
+  };
+  merged.team = team.spec || team.plan || team.code ? team : undefined;
   const councilMembers = projectSafe.council?.members ?? global.council?.members;
   merged.council = councilMembers ? { members: councilMembers } : undefined;
 

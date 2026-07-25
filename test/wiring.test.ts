@@ -59,9 +59,11 @@ describe("buildJobDeps", () => {
   });
   it("team + council resolve; rounds=3; permission mode from config", async () => {
     const d = await deps(baseConfig({ mode: "ask" }));
-    expect(d.team.length).toBeGreaterThan(0);
+    for (const stage of ["spec", "plan", "code"] as const) {
+      expect(d.teams[stage].length).toBeGreaterThan(0);
+      expect(() => d.teamRegistries[stage].resolve(d.teams[stage][0].name)).not.toThrow();
+    }
     expect(d.council.length).toBeGreaterThan(0);
-    expect(() => d.teamRegistry.resolve(d.team[0].name)).not.toThrow();
     expect(() => d.councilRegistry.resolve(d.council[0].name)).not.toThrow();
     expect(d.rounds).toBe(3);
   });

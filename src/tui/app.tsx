@@ -70,12 +70,18 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Every assignable role: the main roles + the review TEAM lenses + the review COUNCIL deciders (both live in
   // SEPARATE registries). Bootstrap and /roles adjust must cover all of these — else a member stays on "default".
   const REQ = REQUIRED_ROLES as readonly string[];
-  const teamNames = deps0.team.map((c) => c.name);
+  // Review roles live in FOUR separate registries: one finder-lens set per stage (spec/plan/code) + the council.
+  const stageOf = new Map<string, "spec" | "plan" | "code">();
+  for (const s of ["spec", "plan", "code"] as const) for (const c of deps0.teams[s]) stageOf.set(c.name, s);
+  const teamNames = [...stageOf.keys()];
   const councilNames = deps0.council.map((c) => c.name);
   const reviewNames = new Set([...teamNames, ...councilNames]);
   const tunableRoles = (): string[] => [...REQUIRED_ROLES, ...teamNames, ...councilNames];
-  const regFor = (role: string) =>
-    REQ.includes(role) ? deps0.roleRegistry : deps0.council.some((c) => c.name === role) ? deps0.councilRegistry : deps0.teamRegistry;
+  const regFor = (role: string) => {
+    if (REQ.includes(role)) return deps0.roleRegistry;
+    const s = stageOf.get(role);
+    return s ? deps0.teamRegistries[s] : deps0.councilRegistry;
+  };
   const peekRole = (role: string): string => regFor(role).peekModel(role);
   const applyChain = (role: string, chain: string[]): void => regFor(role).setRoleModel(role, chain);
   // /roles → each role + its full model chain (primary + fallbacks). `council` flags review team/council members
@@ -169,7 +175,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // council, coach, implementers…), so e.g. "respond in Turkish" holds through the whole pipeline, not just chat.
   const rulesFromMemory = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
   deps0.roleRegistry.setRules(rulesFromMemory);
-  deps0.teamRegistry.setRules(rulesFromMemory);
+  for (const s of ["spec", "plan", "code"] as const) deps0.teamRegistries[s].setRules(rulesFromMemory);
   deps0.councilRegistry.setRules(rulesFromMemory);
   // Surface any rules carried over from previous sessions on launch, so the user knows what's in effect
   // even when they don't (re)state them this session.

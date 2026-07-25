@@ -16,6 +16,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { ChatEvent } from "../../src/core/types.js";
+import { reviewBodies, codeReviewPass, codeReviewFail } from "../support/review-bodies.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 function submit(argsJson: string): ChatEvent[] {
@@ -49,6 +50,7 @@ function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {
     approve: async () => true,
     signal: opts.signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
+    ...reviewBodies(),
     rounds: opts.rounds ?? 3,
     askHuman: opts.askHuman ?? (async () => ({ action: "abandon" })),
     manager,
@@ -79,7 +81,7 @@ describe("runWaveTask", () => {
       const p = new MockProvider([
         submit('{"role":"coder"}'),
         writeTurn("out.txt", "code"), doneTurn,
-        submit('{"verdict":"pass","notes":[]}'),
+        ...codeReviewPass(),
       ]);
       const board = board1();
       const res = await runWaveTask(wdeps(p, mgr), session, board, "t1");
@@ -98,8 +100,8 @@ describe("runWaveTask", () => {
       const session = await mgr.openSession("main", "job");
       const p = new MockProvider([
         submit('{"role":"coder"}'),
-        writeTurn("out.txt", "half"), doneTurn, submit('{"verdict":"fail","notes":["a"]}'),
-        writeTurn("out.txt", "half2"), doneTurn, submit('{"verdict":"fail","notes":["b"]}'),
+        writeTurn("out.txt", "half"), doneTurn, ...codeReviewFail("a"),
+        writeTurn("out.txt", "half2"), doneTurn, ...codeReviewFail("b"),
         submit('{"rootCause":"x","plan":["p"]}'), writeTurn("out.txt", "half3"), doneTurn, submit('{"verdict":"fail","notes":["c"]}'),
       ]);
       const board = board1();
@@ -135,7 +137,7 @@ describe("runWaveTask", () => {
       const p = new MockProvider([
         submit('{"role":"coder"}'),
         writeTurn("out.txt", "code"), doneTurn,
-        submit('{"verdict":"pass","notes":[]}'),
+        ...codeReviewPass(),
       ]);
       const board = board1();
       const res = await runWaveTask(wdeps(p, stub), {} as WorktreeSession, board, "t1");
@@ -154,7 +156,7 @@ describe("runWaveTask", () => {
       const stub = stubManager(wt, async () => ({ status: "conflict", files: ["shared.txt"] }));
       const resolveConflict = async () => { called++; return { status: "merged" as const }; };
       const p = new MockProvider([
-        submit('{"role":"coder"}'), writeTurn("out.txt", "code"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
+        submit('{"role":"coder"}'), writeTurn("out.txt", "code"), doneTurn, ...codeReviewPass(),
       ]);
       const res = await runWaveTask(wdeps(p, stub, { resolveConflict }), {} as WorktreeSession, board1(), "t1");
       expect(called).toBe(1);
@@ -168,7 +170,7 @@ describe("runWaveTask", () => {
       const stub = stubManager(wt, async () => ({ status: "conflict", files: ["shared.txt"] }));
       const resolveConflict = async () => ({ status: "conflict" as const, files: ["shared.txt"] });
       const p = new MockProvider([
-        submit('{"role":"coder"}'), writeTurn("out.txt", "code"), doneTurn, submit('{"verdict":"pass","notes":[]}'),
+        submit('{"role":"coder"}'), writeTurn("out.txt", "code"), doneTurn, ...codeReviewPass(),
       ]);
       const res = await runWaveTask(wdeps(p, stub, { resolveConflict }), {} as WorktreeSession, board1(), "t1");
       expect(res.status).toBe("conflict");
@@ -182,7 +184,7 @@ describe("runWaveTask", () => {
       const p = new MockProvider([
         submit('{"role":"coder"}'),
         writeTurn("out.txt", "code"), doneTurn,
-        submit('{"verdict":"pass","notes":[]}'),
+        ...codeReviewPass(),
       ]);
       const board = board1();
       const res = await runWaveTask(wdeps(p, stub, { rounds: 0 }), {} as WorktreeSession, board, "t1");

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAskUserTool, runUpstream } from "../../src/engine/upstream.js";
 import type { ReviewDeps } from "../../src/engine/review.js";
-import { buildTeamRegistry, buildCouncilRegistry } from "../../src/engine/review.js";
+import { reviewBodies } from "../support/review-bodies.js";
 import type { ReviewerConfig, RoleConfig } from "../../src/config/config.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
@@ -73,7 +73,7 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
         const arr = opts.councilVotes ?? ["pass"];
         yield* submit(`{"vote":"${arr[councilCall] ?? arr[arr.length - 1]}","rationale":"r"}`); councilCall++; return;
       }
-      if (sys.includes("perspective")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
+      if (sys.includes("review TEAM member")) { yield* submit(`{"concerns":[],"recommendation":"${opts.councilRec ?? "approve"}"}`); return; }
       if (sys.includes("P-judge")) {
         const arr = opts.judge ?? ['{"decision":"pass","feedback":[],"question":""}'];
         yield* submit(arr[judgeCall] ?? arr[arr.length - 1]);
@@ -105,10 +105,7 @@ export function udeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
     approve: async () => true,
     signal: signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
-    teamRegistry: buildTeamRegistry(team),
-    team,
-    councilRegistry: buildCouncilRegistry(council),
-    council,
+    ...reviewBodies({ spec: team, plan: team, code: team, council }),
   };
 }
 

@@ -15,6 +15,7 @@ import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider } from "../../src/core/types.js";
+import { reviewBodies } from "../support/review-bodies.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 // Content-based deterministic provider: responds based on the system prompt (role) + the task title in the message.
@@ -64,6 +65,7 @@ function edeps(mgr: WorktreeManager, prAdapter: PRAdapter, opts: EOpts = {}): Wa
     approve: async () => true,
     signal: opts.signal ?? new AbortController().signal,
     specKit: fakeSpecKit,
+    ...reviewBodies(),
     rounds: opts.rounds ?? 1,
     askHuman: opts.askHuman ?? (async () => ({ action: "abandon" })),
     manager: mgr,

@@ -39,34 +39,68 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "You handle version control for the project. Given a git diff of work just completed, write a single Conventional Commits message: `type(scope): subject`. Types: feat, fix, docs, refactor, test, chore, style, perf, build, ci. Choose the scope from the touched area (e.g. spec, plan, tasks, or a module name) or omit it. The subject is imperative, lowercase, ≤72 chars, no trailing period. Add a short body only if the change genuinely needs explanation. Commit messages are always in English. Return {message} via submit.",
 };
 
-// The review council: independent lenses that each critique the spec/plan from one angle (run in parallel).
-// The review TEAM: many single-angle lenses that each read the doc and produce findings (concerns + a
-// approve/revise recommendation). Breadth is the point — one lens per failure mode.
-export const DEFAULT_TEAM: ReviewerConfig[] = [
-  { name: "security", perspective: "security vulnerabilities, secret leakage, authentication/authorization, input validation", models: [] },
-  { name: "architecture", perspective: "layer violations, dependency direction, module boundaries, overall consistency", models: [] },
-  { name: "testability", perspective: "testability, isolation, dependency injection, coverage of edge cases", models: [] },
-  { name: "correctness", perspective: "logical correctness, edge cases, off-by-one and boundary conditions, invariants", models: [] },
-  { name: "performance", perspective: "algorithmic complexity, hot paths, memory/allocation, scalability under load", models: [] },
-  { name: "error-handling", perspective: "failure modes, error propagation, recovery, retries, partial-failure behavior", models: [] },
-  { name: "concurrency", perspective: "race conditions, deadlocks, atomicity, ordering, shared-state safety", models: [] },
-  { name: "data-integrity", perspective: "data modeling, consistency, migrations, transactions, validation at boundaries", models: [] },
-  { name: "api-design", perspective: "interface/contract design, naming, backward compatibility, ergonomics", models: [] },
-  { name: "maintainability", perspective: "readability, DRY, coupling/cohesion, complexity, future tech-debt", models: [] },
-  { name: "simplicity", perspective: "YAGNI, over-engineering, unnecessary abstraction, scope creep", models: [] },
-  { name: "completeness", perspective: "requirement coverage, missing cases, unspecified behavior, spec gaps", models: [] },
-  { name: "observability", perspective: "logging, metrics, tracing, debuggability, actionable failure signals", models: [] },
-  { name: "dependencies", perspective: "third-party dependencies, supply-chain risk, versioning, licensing", models: [] },
-  { name: "accessibility", perspective: "accessibility (a11y), internationalization (i18n), inclusive UX", models: [] },
+// ── Review teams, one set per STAGE ───────────────────────────────────────────────────────────────────────
+// A lens must only ask questions the artifact under review can answer. A spec states WHAT/WHY (no tech), a
+// plan states HOW, code is the implementation — so each stage gets its own lenses. Names are stage-prefixed
+// to stay globally unique (they double as role names in /roles).
+
+/** SPEC lenses — the doc states WHAT the product must do and WHY, for business stakeholders (no tech). */
+export const SPEC_TEAM: ReviewerConfig[] = [
+  { name: "spec-completeness", perspective: "coverage of the REQUESTED scope: capabilities the user asked for that are missing, or behavior left unspecified", models: [] },
+  { name: "spec-clarity", perspective: "ambiguity: requirements that can be read two ways, vague wording, unresolved NEEDS CLARIFICATION markers", models: [] },
+  { name: "spec-consistency", perspective: "internal contradictions between requirements, acceptance scenarios, and success criteria", models: [] },
+  { name: "spec-scope", perspective: "scope discipline: requirements the user never asked for, gold-plating, scope creep beyond the request", models: [] },
+  { name: "spec-abstraction-leak", perspective: "implementation detail that has leaked into the spec (languages, frameworks, APIs, storage mechanics, code structure) — a spec must stay technology-agnostic", models: [] },
+  { name: "spec-verifiability", perspective: "are success criteria measurable and technology-agnostic, and can each acceptance scenario be tested without knowing the implementation", models: [] },
+  { name: "spec-user-value", perspective: "do the user stories deliver the value the user actually asked for, and is the priority ordering sensible", models: [] },
+  { name: "spec-domain-model", perspective: "key entities, their attributes and relationships — coherent and complete at the domain level, with no implementation detail", models: [] },
+  { name: "spec-privacy", perspective: "requirement-level data handling: what data is stored, who may see it, what must never leak or be retained", models: [] },
+];
+
+/** PLAN lenses — the doc states HOW the approved spec will be built (tech context, architecture, contracts). */
+export const PLAN_TEAM: ReviewerConfig[] = [
+  { name: "plan-spec-conformance", perspective: "traceability to the approved spec: every requirement covered by the plan, and nothing planned that the spec never asked for", models: [] },
+  { name: "plan-architecture", perspective: "layering, module boundaries, dependency direction, overall structural coherence", models: [] },
+  { name: "plan-data-model", perspective: "schema and entity design, relationships, migrations, integrity constraints", models: [] },
+  { name: "plan-api-contracts", perspective: "interface and contract design, naming, backward compatibility, ergonomics", models: [] },
+  { name: "plan-security", perspective: "threat model, authentication/authorization design, input validation, secret handling, injection surfaces", models: [] },
+  { name: "plan-concurrency", perspective: "race conditions, atomicity, ordering, multi-writer/multi-tab safety, shared-state design", models: [] },
+  { name: "plan-resilience", perspective: "failure modes, error propagation, recovery, retries, partial-failure behavior", models: [] },
+  { name: "plan-performance", perspective: "algorithmic complexity, hot paths, resource bounds, scalability of the chosen design", models: [] },
+  { name: "plan-test-strategy", perspective: "how the design will be proven: seams, dependency injection, contract/integration test layers, what each test actually establishes", models: [] },
+  { name: "plan-simplicity", perspective: "YAGNI: over-engineering, unnecessary abstraction, complexity the requested scope does not justify", models: [] },
+  { name: "plan-dependencies", perspective: "third-party choices, supply-chain risk, versioning, licensing", models: [] },
+  { name: "plan-observability", perspective: "logging, metrics, tracing, debuggability, actionable failure signals", models: [] },
+  { name: "plan-structure", perspective: "project structure: directory/file layout, build setup, adherence to existing repo conventions", models: [] },
+  { name: "plan-feasibility", perspective: "can this be built and maintained as described, in reasonable increments, with the effort the request warrants", models: [] },
+];
+
+/** CODE lenses — reviewing the implementation of one approved task. */
+export const CODE_TEAM: ReviewerConfig[] = [
+  { name: "code-plan-conformance", perspective: "does the code implement what the task required — nothing missing, and no extra scope beyond the task", models: [] },
+  { name: "code-correctness", perspective: "logical correctness, edge cases, off-by-one and boundary conditions, invariants", models: [] },
+  { name: "code-security", perspective: "injection, secret leakage, missing authorization checks, unsafe APIs, unvalidated input", models: [] },
+  { name: "code-error-handling", perspective: "swallowed errors, propagation, cleanup on failure, partial-failure behavior", models: [] },
+  { name: "code-concurrency", perspective: "race conditions, deadlocks, atomicity, shared mutable state", models: [] },
+  { name: "code-tests", perspective: "is the new behavior covered, and do the tests actually assert something meaningful (no vacuous tests)", models: [] },
+  { name: "code-data-integrity", perspective: "persistence correctness, transactions, validation at boundaries, migration safety", models: [] },
+  { name: "code-performance", perspective: "hot paths, unnecessary allocation/work, N+1 patterns, obvious inefficiency", models: [] },
+  { name: "code-maintainability", perspective: "naming, structure, complexity, readability, future tech-debt", models: [] },
+  { name: "code-simplicity", perspective: "dead code, duplication, unnecessary abstraction, complexity the task does not justify", models: [] },
+  { name: "code-api-surface", perspective: "public interface shape, backward compatibility, accidental API exposure", models: [] },
+  { name: "code-accessibility", perspective: "accessibility of UI code: keyboard operation, ARIA/semantics, contrast, i18n readiness", models: [] },
+  { name: "code-observability", perspective: "logging/metrics where a failure would otherwise be undiagnosable", models: [] },
+  { name: "code-dependencies", perspective: "newly introduced dependencies: justified, correctly versioned, no supply-chain or licensing problem", models: [] },
+  { name: "code-conventions", perspective: "consistency with the surrounding codebase's idioms, patterns, and style", models: [] },
 ];
 
 // The review COUNCIL: a small, strong panel that VOTES on a contested doc after weighing the team's findings.
 // Each member decides from one high-level judgment lens (not a single narrow failure mode), casting pass/revise
 // with a rationale. Five members → a 4/5 supermajority decides; a split goes to the judge (the final link).
 export const DEFAULT_COUNCIL: ReviewerConfig[] = [
-  { name: "correctness-judge", perspective: "Does the document actually specify a correct, coherent, internally-consistent solution? Weigh the team's correctness/logic/data findings.", models: [] },
+  { name: "correctness-judge", perspective: "Is the work under review correct, coherent and internally consistent? Weigh the team's correctness/logic/data findings.", models: [] },
   { name: "risk-judge", perspective: "What is the real blast radius of shipping this as-is? Weigh security, failure modes, concurrency, and data-integrity findings against likelihood and severity.", models: [] },
-  { name: "completeness-judge", perspective: "Are the requirements fully and unambiguously covered? Weigh the team's completeness, spec-gap, and API-contract findings.", models: [] },
+  { name: "completeness-judge", perspective: "Is what was asked for fully and unambiguously covered? Weigh the team's completeness, gap, and contract findings.", models: [] },
   { name: "user-value-judge", perspective: "Does this deliver the user's actual intent well? Weigh usability, accessibility, and whether the scope serves the request without gold-plating.", models: [] },
   { name: "feasibility-judge", perspective: "Can this be built and maintained as described? Weigh architecture, simplicity, dependencies, and maintainability findings against effort.", models: [] },
 ];

@@ -3,15 +3,19 @@ import { runStructuredRole } from "../agent/structured.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { RoleRegistry } from "../agent/roles.js";
 import { readOnlyRegistry } from "./reviewer.js";
-import type { TaskCycleDeps } from "./task-types.js";
+import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
 
+/** Which artifact is under review — each stage has its OWN finder lenses and its own framing. */
+export type ReviewStage = "spec" | "plan" | "code";
+
 export interface ReviewDeps extends TaskCycleDeps {
   // Two-stage review: the TEAM (many single-angle lenses) produces findings; the COUNCIL (a small strong panel)
-  // votes on a contested doc. Each has its own round-robin registry of named reviewer roles.
-  teamRegistry: RoleRegistry;
-  team: ReviewerConfig[];
+  // votes on contested work. The team's lenses differ PER STAGE — a spec, a plan and code can each only answer
+  // their own kind of question — so both the configs and their round-robin registries are keyed by stage.
+  teams: Record<ReviewStage, ReviewerConfig[]>;
+  teamRegistries: Record<ReviewStage, RoleRegistry>;
   councilRegistry: RoleRegistry;
   council: ReviewerConfig[];
 }
@@ -69,13 +73,46 @@ export const JudgeSchema = z.object({
 
 export interface ReviewOutcome { approved: boolean }
 
-function teamPrompt(perspective: string): string {
+/** What the artifact IS, and which questions therefore belong to this stage (vs a later one). */
+const STAGE_FRAMING: Record<ReviewStage, string> = {
+  spec:
+    "You are reviewing a SPECIFICATION: it states WHAT the product must do and WHY, written for business " +
+    "stakeholders. By design it MUST NOT contain implementation detail (languages, frameworks, APIs, storage " +
+    "mechanics, code structure) — those decisions belong to the LATER plan stage.\n" +
+    "OUT OF SCOPE here: implementation questions (which storage engine, how concurrency is handled, API shapes, " +
+    "libraries, performance tactics). Do NOT ask the spec to answer them and do NOT treat their absence as a " +
+    "defect — that is the plan's job. (The one exception is the abstraction-leak lens, which flags implementation " +
+    "detail that HAS leaked into the spec.)\n" +
+    "SEVERITY: \"critical\" = the spec contradicts itself, or a capability the user explicitly requested is missing " +
+    "or impossible as written. \"medium\" = a real ambiguity or gap that would likely cause the wrong thing to be " +
+    "built. \"low\" = wording/polish. \"The spec does not specify <technical mechanism>\" is NOT a finding.",
+  plan:
+    "You are reviewing an IMPLEMENTATION PLAN: it states HOW the already-approved spec will be built (technical " +
+    "context, architecture, data model, contracts, project structure). This is the right place for technology and " +
+    "mechanism decisions.\n" +
+    "OUT OF SCOPE here: re-litigating WHAT the product should do (the spec is approved), and reviewing code that " +
+    "does not exist yet.\n" +
+    "SEVERITY: \"critical\" = the plan cannot deliver a specified requirement, or has a design flaw that would have " +
+    "to be undone later. \"medium\" = a design weakness worth fixing now. \"low\" = preference/polish.",
+  code:
+    "You are reviewing CODE that implements one approved task.\n" +
+    "OUT OF SCOPE here: re-litigating the approved spec or plan, and demanding refactors beyond this task's scope.\n" +
+    "SEVERITY: \"critical\" = breaks correctness, security or data integrity, or the task's requirement is not " +
+    "actually implemented. \"medium\" = a real defect or risk worth fixing now. \"low\" = style/polish.",
+};
+
+/** Applies to every stage: judge the work against what was ASKED FOR, not against an idealized system. */
+const SCOPE_RULE =
+  "Scale your expectations to the REQUESTED scope: do not hold a small, simple product to enterprise-grade " +
+  "standards it never asked for. Demanding unrequested capability is itself a defect (scope creep), not a finding.";
+
+function teamPrompt(stage: ReviewStage, perspective: string): string {
   return (
-    `You are a review TEAM member. Your perspective: ${perspective}. ` +
-    `Review the given document from this perspective and produce a list of findings — each with a SEVERITY ` +
-    `("critical" = blocks shipping, "medium" = should fix, "low" = minor/nit) and a concise note — plus a ` +
-    `recommendation: "approve" (no blocking issues) or "revise" (needs changes). Report only genuine issues; an ` +
-    `empty findings list with "approve" is the right answer for a clean document. ` +
+    `You are a review TEAM member for the ${stage.toUpperCase()} stage. Your lens: ${perspective}.\n\n` +
+    `${STAGE_FRAMING[stage]}\n\n${SCOPE_RULE}\n\n` +
+    `Produce a list of findings — each with a severity ("critical"/"medium"/"low") and a concise note — plus a ` +
+    `recommendation: "approve" (nothing blocking from your lens) or "revise". Report only genuine issues: an empty ` +
+    `findings list with "approve" is the correct answer for work that is good enough for THIS stage. ` +
     `Write findings in ENGLISH — they are a technical review artifact, not a conversation with the user, ` +
     `so they stay English regardless of any conversational-language rule.`
   );
@@ -83,11 +120,13 @@ function teamPrompt(perspective: string): string {
 
 function councilPrompt(perspective: string): string {
   return (
-    `You are a member of the review COUNCIL — a small, senior decision panel. Your judgment lens: ${perspective}. ` +
-    `You are given the document AND the review team's findings. Weigh them and cast a single vote: "pass" (ship the ` +
-    `document as-is) or "revise" (it needs changes first), with a concise rationale. Do not nitpick — vote "revise" ` +
-    `only for issues that genuinely warrant another pass. Write the rationale in ENGLISH regardless of any ` +
-    `conversational-language rule (it is a technical review artifact).`
+    `You are a member of the review COUNCIL — a small, senior decision panel. Your judgment lens: ${perspective}.\n\n` +
+    `You are given the work under review AND the review team's findings. Weigh them and cast a single vote: ` +
+    `"pass" (ship it as-is for this stage) or "revise" (it needs changes first), with a concise rationale. ` +
+    `Judge it against what was ASKED FOR and against what THIS stage is responsible for — a spec is not expected ` +
+    `to answer implementation questions, and a plan is not expected to re-state requirements. Do not nitpick: vote ` +
+    `"revise" only for issues that genuinely warrant another pass. ${SCOPE_RULE} ` +
+    `Write the rationale in ENGLISH regardless of any conversational-language rule.`
   );
 }
 
@@ -98,30 +137,39 @@ function buildReviewerRegistry(reviewers: ReviewerConfig[], prompt: (p: string) 
   return new RoleRegistry(roles);
 }
 
-/** The 15-lens finder team → each produces concerns + an approve/revise recommendation. */
-export function buildTeamRegistry(team: ReviewerConfig[]): RoleRegistry {
-  return buildReviewerRegistry(team, teamPrompt);
+/** A stage's finder lenses → each produces severity-tagged findings + an approve/revise recommendation. */
+export function buildTeamRegistry(stage: ReviewStage, team: ReviewerConfig[]): RoleRegistry {
+  return buildReviewerRegistry(team, (p) => teamPrompt(stage, p));
 }
 /** The small decider council → each casts a pass/revise vote with a rationale. */
 export function buildCouncilRegistry(council: ReviewerConfig[]): RoleRegistry {
   return buildReviewerRegistry(council, councilPrompt);
 }
 
-/** Runs the team in parallel; each lens reviews the document read-only and produces a named assessment. */
+/**
+ * Runs a STAGE's team in parallel; each lens reviews the target read-only and produces a named assessment.
+ * `target` is the doc path (spec/plan) or a description of the code change; `request` is the user's original
+ * ask — the scope anchor every lens judges against (without it a lens optimizes toward an idealized system).
+ */
 export async function runTeam(
-  deps: ReviewDeps, workdir: string, docPath: string, emit: (ev: ProgressEvent) => void = () => {},
+  deps: ReviewDeps, stage: ReviewStage, workdir: string, target: string, request?: string,
+  emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<Assessment[]> {
+  const team = deps.teams[stage];
+  const registry = deps.teamRegistries[stage];
+  const scope = request ? `\n\nThe user's original request (the scope you must judge against):\n"""\n${request}\n"""` : "";
+  const what = stage === "code" ? `Review the code for: ${target}.` : `Review the "${target}" document.`;
   // Surface each team member as a live sub-agent (they run in parallel) so the user sees the review happening.
-  emit({ kind: "agents", agents: deps.team.map((c) => ({ id: `team:${c.name}`, title: `team: ${c.name}`, model: deps.teamRegistry.peekModel(c.name) })) });
+  emit({ kind: "agents", agents: team.map((c) => ({ id: `team:${c.name}`, title: `team: ${c.name}`, model: registry.peekModel(c.name) })) });
   try {
     return await Promise.all(
-      deps.team.map(async (c): Promise<Assessment> => {
-        const resolved = deps.teamRegistry.resolve(c.name);
+      team.map(async (c): Promise<Assessment> => {
+        const resolved = registry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps),
-          messages: [{ role: "user", content: `Review the "${docPath}" document and evaluate it from this perspective.` }],
+          messages: [{ role: "user", content: `${what} Evaluate it through your lens.${scope}` }],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
@@ -173,9 +221,12 @@ function teamSummaryNote(assessments: Assessment[], label: string): string {
  * rationale. Returns the votes; the caller tallies them (a 4/5-style supermajority decides, else the judge).
  */
 export async function runCouncil(
-  deps: ReviewDeps, workdir: string, docPath: string, assessments: Assessment[], emit: (ev: ProgressEvent) => void = () => {},
+  deps: ReviewDeps, stage: ReviewStage, workdir: string, target: string, assessments: Assessment[],
+  request?: string, emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<CouncilVote[]> {
   const digest = findingsDigest(assessments);
+  const scope = request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : "";
+  const subject = stage === "code" ? `the code for: ${target}` : `the "${target}" ${stage}`;
   emit({ kind: "agents", agents: deps.council.map((c) => ({ id: `council:${c.name}`, title: `council: ${c.name}`, model: deps.councilRegistry.peekModel(c.name) })) });
   try {
     const results = await Promise.all(
@@ -185,7 +236,7 @@ export async function runCouncil(
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps),
-          messages: [{ role: "user", content: `The "${docPath}" document plus the team's findings:\n${digest}\n\nCast your vote (pass/revise) with a rationale.` }],
+          messages: [{ role: "user", content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}\n\nCast your vote (pass/revise) with a rationale.` }],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
@@ -214,17 +265,22 @@ export async function runCouncil(
  * team findings AND the council's split votes, then makes the call (pass/revise/ask-human).
  */
 export async function runJudge(
-  deps: ReviewDeps, workdir: string, docPath: string, assessments: Assessment[], votes: CouncilVote[], emit: (ev: ProgressEvent) => void = () => {},
+  deps: ReviewDeps, stage: ReviewStage, workdir: string, target: string, assessments: Assessment[], votes: CouncilVote[],
+  request?: string, emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<JudgeDecision> {
   const resolved = deps.roleRegistry.resolve("judge");
   const findings = findingsDigest(assessments);
   const council = votes.map((v) => `- ${v.name}: ${v.vote} — ${v.rationale}`).join("\n");
+  const subject = stage === "code" ? `The code for "${target}"` : `The "${target}" ${stage}`;
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content:
-      `The "${docPath}" document is contested. The review team's findings:\n${findings}\n\n` +
-      `The council voted but reached NO supermajority:\n${council}\n\nYou are the final decider. Synthesize and decide (pass/revise/ask-human).` }],
+      `${subject} is contested (the ${stage} review stage).${request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : ""}\n\n` +
+      `The review team's findings:\n${findings}\n\n` +
+      `The council voted but reached NO supermajority:\n${council}\n\n` +
+      `You are the final decider. Judge it against what was asked for and against what THIS stage is responsible ` +
+      `for (a spec answers WHAT/WHY, a plan answers HOW, code is the implementation). Decide (pass/revise/ask-human).` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
   let d: JudgeDecision;
@@ -266,17 +322,23 @@ function tallyCouncil(votes: CouncilVote[]): "pass" | "revise" | "split" {
   return "split";
 }
 
-export async function runReviewLoop(
-  deps: ReviewDeps,
-  workdir: string,
-  docPath: string,
-  revise: (feedback: string[]) => Promise<void>,
-  askUser: AskUser,
-  maxRounds: number,
-  emit: (ev: ProgressEvent) => void = () => {},
-  language?: string, // the user's language (from the refiner) → localize the human-facing escalation prompt
-): Promise<ReviewOutcome> {
-  const label = /plan/i.test(docPath) ? "plan" : "spec";
+export interface ReviewLoopOpts {
+  stage: ReviewStage;          // which artifact is under review → picks the lens set + the framing
+  workdir: string;
+  target: string;              // doc path (spec/plan) or a description of the code change
+  request?: string;            // the user's original ask — the scope anchor every reviewer judges against
+  revise: (feedback: string[]) => Promise<void>;
+  askUser: AskUser;
+  maxRounds: number;
+  emit?: (ev: ProgressEvent) => void;
+  language?: string;           // the user's language (from the refiner) → localize the human-facing escalation
+}
+
+export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promise<ReviewOutcome> {
+  const { stage, workdir, target, request, revise, askUser, maxRounds } = o;
+  const emit = o.emit ?? (() => {});
+  const language = o.language;
+  const label = stage;
   let round = 0;
   // Outer loop: run a batch of up to `maxRounds` council/judge rounds; if none pass, escalate to the human,
   // who may approve as-is, ask for MORE review rounds (another batch), or stop. Only "stop" ends without approval.
@@ -284,8 +346,8 @@ export async function runReviewLoop(
     for (let i = 0; i < maxRounds; i++, round++) {
       // ACTION narrative only: the chat tracks WHO is deciding and the hand-offs (team → council → judge),
       // not what each agent produced. Members' raw findings/votes stay out of the chat flow by design.
-      emit({ kind: "note", text: `🔍 **Reviewing the ${label}** (round ${round + 1}) — the team (${deps.team.length}) is discussing it…` });
-      const assessments = await runTeam(deps, workdir, docPath, emit);
+      emit({ kind: "note", text: `🔍 **Reviewing the ${label}** (round ${round + 1}) — the team (${deps.teams[stage].length}) is discussing it…` });
+      const assessments = await runTeam(deps, stage, workdir, target, request, emit);
       // The whole team has reported → write the consolidated result to chat (per-member verdict + counts).
       if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, label) });
       // Team shortcut-pass — but ONLY when the doc is genuinely CLEAN. Each lens is the SOLE authority on its
@@ -309,7 +371,7 @@ export async function runReviewLoop(
         ? `surfaced ${crit} critical / ${med} medium finding(s)`
         : `is split (${approve}/${assessments.length} approve)`;
       emit({ kind: "note", text: `👥 **Team** ${reason} → handed the decision to the **council** (${deps.council.length} members vote).` });
-      const votes = await runCouncil(deps, workdir, docPath, assessments, emit);
+      const votes = await runCouncil(deps, stage, workdir, target, assessments, request, emit);
       const tally = tallyCouncil(votes);
       const passVotes = votes.filter((v) => v.vote === "pass").length;
 
@@ -323,7 +385,7 @@ export async function runReviewLoop(
       } else {
         // Split vote → the council defers the final call to the judge.
         emit({ kind: "note", text: `🔨 **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
-        decision = await runJudge(deps, workdir, docPath, assessments, votes, emit);
+        decision = await runJudge(deps, stage, workdir, target, assessments, votes, request, emit);
         if (decision.decision === "pass") { emit({ kind: "note", text: `✅ **Judge** approved the ${label}.` }); return { approved: true }; }
       }
 
@@ -351,4 +413,50 @@ export async function runReviewLoop(
     // Unrecognized free text → safest default is to keep reviewing (never force-approve or silently abandon).
     emit({ kind: "note", text: language === "Turkish" ? "🔄 Anlaşılamadı — review'a devam ediliyor." : "🔄 Unclear answer — continuing the review." });
   }
+}
+
+/**
+ * CODE-stage review: runs the code lens team on one task's implementation, then the same
+ * team → council → judge escalation as the doc stages — but SINGLE-SHOT (no revise loop here: the task cycle's
+ * escalation ladder owns retries). Returns the task-cycle Verdict, with the blocking findings as notes.
+ */
+export async function runCodeReview(
+  deps: ReviewDeps, workdir: string, taskTitle: string, request?: string,
+  emit: (ev: ProgressEvent) => void = () => {},
+): Promise<Verdict> {
+  emit({ kind: "note", text: `🔍 **Reviewing the code** for "${taskTitle}" — the team (${deps.teams.code.length}) is discussing it…` });
+  const assessments = await runTeam(deps, "code", workdir, taskTitle, request, emit);
+  if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, "code") });
+
+  const approve = assessments.filter((a) => a.recommendation === "approve").length;
+  const worst = worstSeverity(assessments);
+  const clean = worst === "none" || worst === "low";
+  if (assessments.length && clean && approve / assessments.length >= TEAM_CONSENSUS) {
+    emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the code passed.` });
+    return { verdict: "pass", notes: [] };
+  }
+
+  const crit = severityTotal(assessments, "critical");
+  const med = severityTotal(assessments, "medium");
+  const reason = crit || med ? `surfaced ${crit} critical / ${med} medium finding(s)` : `is split (${approve}/${assessments.length} approve)`;
+  emit({ kind: "note", text: `👥 **Team** ${reason} → handed the decision to the **council** (${deps.council.length} members vote).` });
+  const votes = await runCouncil(deps, "code", workdir, taskTitle, assessments, request, emit);
+  const tally = tallyCouncil(votes);
+  const passVotes = votes.filter((v) => v.vote === "pass").length;
+
+  // Blocking findings become the reviewer notes the implementer must address on the next attempt.
+  const blocking = assessments.flatMap((a) => a.findings.filter((f) => f.severity !== "low").map((f) => `[${f.severity}] ${a.name}: ${f.note}`));
+
+  if (tally === "pass") {
+    emit({ kind: "note", text: `✅ **Council** voted to approve (${passVotes}/${votes.length} pass) → the code passed.` });
+    return { verdict: "pass", notes: [] };
+  }
+  if (tally === "revise") {
+    emit({ kind: "note", text: `🔄 **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the code back.` });
+    return { verdict: "fail", notes: blocking.length ? blocking : votes.filter((v) => v.vote === "revise").map((v) => v.rationale) };
+  }
+  emit({ kind: "note", text: `🔨 **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
+  const d = await runJudge(deps, "code", workdir, taskTitle, assessments, votes, request, emit);
+  if (d.decision === "pass") return { verdict: "pass", notes: [] };
+  return { verdict: "fail", notes: d.feedback.length ? d.feedback : blocking };
 }

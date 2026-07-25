@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_TEAM } from "../src/prompts.js";
+import { REQUIRED_ROLES, DEFAULT_PROMPTS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "../src/prompts.js";
 
 describe("prompts", () => {
   it("every REQUIRED_ROLES entry has a non-empty default prompt (except the spec-kit-driven model-only roles)", () => {
@@ -20,11 +20,39 @@ describe("prompts", () => {
     expect(DEFAULT_PROMPTS["principal-coder"]).toBeDefined();
     expect(DEFAULT_PROMPTS["principal-coder"].length).toBeGreaterThan(0);
   });
-  it("DEFAULT_TEAM has >=1 member; name+perspective are populated", () => {
-    expect(DEFAULT_TEAM.length).toBeGreaterThan(0);
-    for (const c of DEFAULT_TEAM) {
+  it("SPEC_TEAM has >=1 member; name+perspective are populated", () => {
+    expect(SPEC_TEAM.length).toBeGreaterThan(0);
+    for (const c of SPEC_TEAM) {
       expect(c.name.length).toBeGreaterThan(0);
       expect(c.perspective.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("per-stage review lens sets", () => {
+  it("spec/plan/code each have their own lenses, and every lens name is globally unique", () => {
+    const all = [...SPEC_TEAM, ...PLAN_TEAM, ...CODE_TEAM, ...DEFAULT_COUNCIL].map((r) => r.name);
+    expect(new Set(all).size).toBe(all.length); // names double as role names in /roles → must not collide
+    for (const r of [...SPEC_TEAM, ...PLAN_TEAM, ...CODE_TEAM, ...DEFAULT_COUNCIL]) {
+      expect(r.name.length).toBeGreaterThan(0);
+      expect(r.perspective.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("the SPEC set carries the scope/leak guards and NO implementation-only lenses", () => {
+    const names = SPEC_TEAM.map((r) => r.name);
+    expect(names).toContain("spec-scope");            // gold-plating guard
+    expect(names).toContain("spec-abstraction-leak"); // keeps implementation detail out of the spec
+    // Implementation questions belong to the plan stage, so the spec team must not carry those lenses.
+    for (const n of ["spec-concurrency", "spec-performance", "spec-dependencies", "spec-observability"]) {
+      expect(names).not.toContain(n);
+    }
+  });
+
+  it("each stage chains to the previous one (traceability) and keeps a simplicity guard", () => {
+    expect(PLAN_TEAM.map((r) => r.name)).toContain("plan-spec-conformance");
+    expect(CODE_TEAM.map((r) => r.name)).toContain("code-plan-conformance");
+    expect(PLAN_TEAM.map((r) => r.name)).toContain("plan-simplicity");
+    expect(CODE_TEAM.map((r) => r.name)).toContain("code-simplicity");
   });
 });
