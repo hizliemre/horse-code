@@ -90,6 +90,9 @@ export async function tuneRoleModels(opts: {
     `1. Use ONLY exact model ids from the catalog below — never invent one.\n` +
     `2. Every role gets EXACTLY 3 DISTINCT models: primary, fallback 1, fallback 2.\n` +
     `3. Prefer fallbacks on a DIFFERENT source than the primary, so one source's exhaustion drops cleanly.\n` +
+    `3b. A fallback is a SUBSTITUTE, not an upgrade: give it the SAME heft band as the primary whenever a \n` +
+    `same-band model exists on another source. Standing in for a [mid] model with a [strong] or [flagship] \n` +
+    `one silently multiplies cost and latency and defeats the tiering. Only leave the band when no peer exists.\n` +
     `4. Reserve the single most capable/expensive [flagship] model for LOW-VOLUME, high-stakes roles (judge, ` +
     `principal-coder). NEVER put a [flagship] on high-volume or interactive roles (coach, coder, designer) OR ` +
     `on their fallbacks — it is wasteful and slow at that volume.\n` +

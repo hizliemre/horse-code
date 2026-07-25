@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel } from "../../src/tui/role-models.js";
+import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily } from "../../src/tui/role-models.js";
 
 const ALL = [
   "cc/claude-opus-4-8",
@@ -165,5 +165,79 @@ describe("tier eligibility (only real, rankable LLMs get reasoning roles)", () =
     expect(modelBand(by["plan-security"])).toBe("strong");  // plan/code lenses → strong
     expect(modelBand(by["code-correctness"])).toBe("strong");
     expect(by["judge"]).toBe("cc/claude-fable-5");          // flagship for the final authority
+  });
+});
+
+// Observed in the wild: `antigravity/claude-sonnet-4-6` (mid) fell back to `cc/claude-opus-4-8` (strong) even
+// though a same-band model on another source was sitting right there in the catalog.
+describe("a fallback is a substitute, not an upgrade", () => {
+  const catalog = [
+    "cc/claude-opus-4-8",            // strong
+    "cc/claude-sonnet-5",            // mid  — newest of the sonnet family
+    "antigravity/claude-sonnet-4-6", // mid  — older sibling, DIFFERENT source
+    "cx/gpt-5.6-luna-max",           // strong
+    "cc/claude-haiku-4-5",           // fast
+  ];
+  const chainOf = (role: string): string[] =>
+    adjustRoleModels([role], catalog).find((c) => c.role === role)!.models;
+  const src = (m: string): string => m.split("/")[0];
+
+  it("a mid primary falls back to a mid model, not up a band", () => {
+    const chain = chainOf("coach"); // coach is a MID role
+    expect(modelBand(chain[0])).toBe("mid");
+    expect(modelBand(chain[1])).toBe("mid"); // the peer, not the Opus-tier model
+  });
+
+  // Source diversity is still what a fallback is FOR — the failure it survives is an exhausted subscription,
+  // so a same-source fallback would be dead weight. Band closeness only decides AMONG cross-source candidates.
+  it("still prefers a different source", () => {
+    const chain = chainOf("coach");
+    expect(src(chain[1])).not.toBe(src(chain[0]));
+  });
+
+  it("leaves the band when no same-band peer exists, rather than stranding the role", () => {
+    const noPeer = ["antigravity/claude-sonnet-4-6", "cc/claude-opus-4-8", "cx/gpt-5.6-luna-max"];
+    const chain = adjustRoleModels(["coach"], noPeer).find((c) => c.role === "coach")!.models;
+    expect(chain.length).toBeGreaterThan(1); // it still gets fallbacks…
+    expect(chain[1]).not.toBe(chain[0]);      // …just from a neighbouring band
+  });
+
+  it("at equal distance it errs UPWARD — a fallback must still be able to do the work", () => {
+    // primary is mid; a strong and a fast model are both one band away.
+    const models = ["antigravity/claude-sonnet-4-6", "cc/claude-opus-4-8", "cx/claude-haiku-4-5"];
+    const chain = adjustRoleModels(["coach"], models).find((c) => c.role === "coach")!.models;
+    expect(modelBand(chain[1])).toBe("strong");
+  });
+});
+
+// "her zaman her model'in en son versiyonunu seçmeye meyilli olmalı" — a BIAS, not a filter: the older sibling
+// stays available (it is the obvious substitute when the newest is rate-limited), it just never wins first pick.
+describe("prefers the newest release of a family", () => {
+  it("leads with sonnet-5 over sonnet-4-6 for a mid primary", () => {
+    const catalog = ["antigravity/claude-sonnet-4-6", "cc/claude-sonnet-5", "cc/claude-opus-4-8"];
+    const chain = adjustRoleModels(["coach"], catalog).find((c) => c.role === "coach")!.models;
+    expect(baseModel(chain[0])).toBe("claude-sonnet-5");
+  });
+
+  it("keeps the older sibling as a fallback rather than discarding it", () => {
+    const catalog = ["antigravity/claude-sonnet-4-6", "cc/claude-sonnet-5", "cc/claude-opus-4-8"];
+    const chain = adjustRoleModels(["coach"], catalog).find((c) => c.role === "coach")!.models;
+    expect(chain.map(baseModel)).toContain("claude-sonnet-4-6");
+  });
+
+  // The GPT family ignored its version entirely: gpt-5.6-luna-max and gpt-5.5-xhigh both scored 86, so the
+  // OLDER one could win purely on list order.
+  it("ranks gpt-5.6 above gpt-5.5 at equal reasoning effort", () => {
+    expect(capabilityScore("cx/gpt-5.6-max")).toBeGreaterThan(capabilityScore("cx/gpt-5.5-max"));
+  });
+
+  it("the version is a tiebreak, not a tier mover — effort still dominates", () => {
+    expect(capabilityScore("cx/gpt-5.5-max")).toBeGreaterThan(capabilityScore("cx/gpt-5.6-low"));
+    expect(modelBand("cx/gpt-5.6-max")).toBe(modelBand("cx/gpt-5.5-max"));
+  });
+
+  it("modelFamily strips the version but keeps the identity", () => {
+    expect(modelFamily("cc/claude-sonnet-5")).toBe(modelFamily("antigravity/claude-sonnet-4-6"));
+    expect(modelFamily("cc/claude-opus-4-8")).not.toBe(modelFamily("cc/claude-sonnet-5"));
   });
 });

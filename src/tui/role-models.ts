@@ -138,7 +138,9 @@ export function capabilityScore(model: string): number {
   if (WEAK_RE.test(s)) return 20 + effortBump(s); // fast/cheap variants (haiku, flash, gpt-5-mini…)
   if (/fable|mythos/.test(s)) return 100; // Anthropic's most capable
   if (/opus/.test(s)) return 88 + versionBump(s, "opus"); // opus-5 → 93 > opus-4-8 → 92.8 > opus-4-5 → 92.5
-  if (/codex|gpt-5|\bo3\b/.test(s)) return 82 + effortBump(s); // strong coding, effort-aware
+  // The version is a TIEBREAK here, not a tier mover: scaled down so it orders gpt-5.6 above gpt-5.5
+  // without disturbing how this family calibrates against opus/sonnet.
+  if (/codex|gpt-5|\bo3\b/.test(s)) return 82 + effortBump(s) + versionBump(s, "gpt") / 100; // effort- AND version-aware
   if (/sonnet/.test(s)) return 78 + versionBump(s, "sonnet");
   if (/gpt-4|gemini.*pro/.test(s)) return 65;
   if (/deepseek/.test(s)) return 55;
@@ -169,6 +171,36 @@ export function baseModel(model: string): string {
   s = s.replace(/-(ultra|max|xhigh|high|medium|low|free|thinking|preview)\b/g, "");
   s = s.replace(/-\d{6,8}\b/g, ""); // date stamp
   return s.replace(/-+$/, "");
+}
+
+/**
+ * The model FAMILY — the base identity with its version stripped, so `claude-sonnet-5` and `claude-sonnet-4-6`
+ * are both `claude-sonnet`. Used to prefer the newest release of a family for PRIMARY assignments.
+ */
+export function modelFamily(model: string): string {
+  return baseModel(model)
+    .replace(/[-.]v?\d+(?:[-.]\d+)*(?=[-.]|$)/g, "") // version segments (kept anchored so "o3"/"70b" survive)
+    .replace(/[-.]{2,}/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+}
+
+/**
+ * Puts the newest release of each family FIRST, its older siblings after — a bias, not a filter.
+ *
+ * With both `claude-sonnet-5` and `claude-sonnet-4-6` in the catalog, the round-robin that spreads roles over
+ * models was handing out the OLD one for half the slots even though the newer sibling was right there. Ordering
+ * fixes that without shrinking the pool: dropping older versions outright would starve source diversity (fewer
+ * distinct models to spread across) and remove the obvious substitute when the newest is rate-limited.
+ */
+function latestFirst(models: string[]): string[] {
+  const best = new Map<string, string>();
+  for (const m of models) {
+    const key = modelFamily(m);
+    const cur = best.get(key);
+    if (!cur || capabilityScore(m) > capabilityScore(cur)) best.set(key, m);
+  }
+  const isLatest = (m: string): boolean => best.get(modelFamily(m)) === m;
+  return [...models.filter(isLatest), ...models.filter((m) => !isLatest(m))];
 }
 
 /** Keeps the highest-capability instance of each base model (so cc/opus-4-8 and claude/opus-4-8 don't both count). */
@@ -210,20 +242,41 @@ function interleaveBySource(pool: string[]): string[] {
   return out;
 }
 
+const BAND_ORDER: Record<ReturnType<typeof modelBand>, number> = { fast: 0, mid: 1, strong: 2, flagship: 3 };
+
 /**
- * Picks up to `n` fallback models for a primary: prefer a DIFFERENT source (so one source's exhaustion doesn't
- * take out the whole chain), then fill with any distinct model. Never repeats a model already in the chain.
+ * How far a candidate sits from the primary's heft. A fallback is a SUBSTITUTE, not an upgrade: standing in for
+ * a mid model with a flagship one silently multiplies cost and latency, and defeats the tiering that put the
+ * role on a mid model in the first place. At equal distance the STRONGER one wins — a fallback still has to be
+ * able to do the work, so erring upward is safer than erring down.
+ */
+function bandDistance(primary: string, candidate: string): number {
+  const p = BAND_ORDER[modelBand(primary)];
+  const c = BAND_ORDER[modelBand(candidate)];
+  return Math.abs(c - p) * 2 + (c < p ? 1 : 0);
+}
+
+/**
+ * Picks up to `n` fallback models for a primary.
+ *
+ * A DIFFERENT source still leads — that is what a fallback is for, since the failure it exists to survive is a
+ * rate-limited or exhausted subscription, and a same-source fallback would be dead weight against it. Among the
+ * cross-source candidates, though, the CLOSEST heft wins rather than the strongest: the pool is ordered
+ * best-first, so taking the first match used to jump a whole band (a mid primary falling onto an Opus-tier
+ * fallback) even when an exact peer sat further down the same list.
  */
 function pickFallbacks(primary: string, pool: string[], n: number): string[] {
   const chosen: string[] = [];
   const usedModels = new Set([baseModel(primary)]);
   const usedSources = new Set([sourceOf(primary)]);
-  for (const m of pool) { // pass 1: distinct source
+  // Stable: equal band distance keeps the pool's own (capability) order.
+  const byHeft = pool.map((m, i) => ({ m, i })).sort((a, b) => bandDistance(primary, a.m) - bandDistance(primary, b.m) || a.i - b.i).map((x) => x.m);
+  for (const m of byHeft) { // pass 1: distinct source, closest heft
     if (chosen.length >= n) break;
     if (usedModels.has(baseModel(m)) || usedSources.has(sourceOf(m))) continue;
     chosen.push(m); usedModels.add(baseModel(m)); usedSources.add(sourceOf(m));
   }
-  for (const m of pool) { // pass 2: any distinct model (when there aren't enough sources)
+  for (const m of byHeft) { // pass 2: any distinct model (when there aren't enough sources)
     if (chosen.length >= n) break;
     if (usedModels.has(baseModel(m))) continue;
     chosen.push(m); usedModels.add(baseModel(m));
@@ -254,31 +307,37 @@ export function adjustRoleModels(roles: string[], models: string[]): { role: str
   const fast = dedupBest(pick.filter((m) => WEAK_RE.test(m)));
   const capablePool = capable.length ? capable : fast; // no capable models → fall back to fast
   const fastPool = fast.length ? fast : capable; // no fast models → fall back to capable
-  const nonFlagship = capablePool.filter((m) => modelBand(m) !== "flagship");
-  const strongPool = capablePool.filter((m) => modelBand(m) === "strong");
-  const midPool = capablePool.filter((m) => modelBand(m) === "mid");
+  // PRIMARY assignment leads with the newest release of each family; older siblings stay available behind them
+  // (both for the tail of the round-robin and for the FALLBACK chains, where the previous version of a
+  // rate-limited model is exactly the substitute you want).
+  const primaryPool = latestFirst(capablePool);
+  const primaryFast = latestFirst(fastPool);
+  const nonFlagship = primaryPool.filter((m) => modelBand(m) !== "flagship");
+  const strongPool = primaryPool.filter((m) => modelBand(m) === "strong");
+  const midPool = primaryPool.filter((m) => modelBand(m) === "mid");
 
   const wanted = new Set(roles);
   const known = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES, ...FAST_ROLES]);
   const primary = new Map<string, string>();
 
   // Flagship roles: the most capable models, greedy (judge → fable, principal → next-most-capable).
-  const flagSrc = capablePool; // top of the capable pool is the flagship
+  const flagSrc = primaryPool; // top of the capable pool is the flagship
   FLAGSHIP_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, flagSrc[i % flagSrc.length]));
   // Strong roles (+ any unknown role): Opus-tier, source-spread so they don't pile on one subscription.
-  const strongSrc = interleaveBySource(strongPool.length ? strongPool : nonFlagship.length ? nonFlagship : capablePool);
+  const strongSrc = interleaveBySource(strongPool.length ? strongPool : nonFlagship.length ? nonFlagship : primaryPool);
   STRONG_ROLES.filter((r) => wanted.has(r)).concat(roles.filter((r) => !known.has(r)))
     .forEach((r, i) => primary.set(r, strongSrc[i % strongSrc.length]));
   // Mid roles: capable-but-NOT-flagship, source-spread (coach/coder must not get the flagship).
-  const midSrc = interleaveBySource(midPool.length ? midPool : nonFlagship.length ? nonFlagship : capablePool);
+  const midSrc = interleaveBySource(midPool.length ? midPool : nonFlagship.length ? nonFlagship : primaryPool);
   MID_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, midSrc[i % midSrc.length]));
   // Fast roles: cheap models, round-robin.
-  FAST_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, fastPool[i % fastPool.length]));
+  FAST_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, primaryFast[i % primaryFast.length]));
 
   return roles.map((role) => {
-    const head = primary.get(role) ?? capablePool[0];
+    const head = primary.get(role) ?? primaryPool[0];
     // Mid/high-volume roles never fall back onto the flagship either; fast roles lead with cheap models.
-    const capForFb = MID_ROLES.includes(role) ? nonFlagship : capablePool;
+    // NB: drawn from capablePool (all versions), not primaryPool — an older sibling is a fine fallback.
+    const capForFb = MID_ROLES.includes(role) ? capablePool.filter((m) => modelBand(m) !== "flagship") : capablePool;
     const pool = FAST_ROLES.includes(role) ? [...fastPool, ...capForFb] : [...capForFb, ...fastPool];
     return { role, models: [head, ...pickFallbacks(head, pool, FALLBACK_COUNT)] };
   });
