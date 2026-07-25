@@ -14,9 +14,15 @@ export function memoryHints(deps: TaskCycleDeps, query: string, opts: { load?: n
   // Rules are injected globally; selecting them here would duplicate them in every prompt.
   const selectable = all.filter((m) => (m.kind ?? "fact") !== "rule");
   if (!selectable.length) return { message: "", ids: [] };
-  const hits = selectMemories(selectable, query, { load: opts.load ?? 0, ...(opts.role ? { role: opts.role } : {}) });
+  const hits = selectMemories(selectable, query, {
+    load: opts.load ?? 0,
+    ...(opts.role ? { role: opts.role } : {}),
+    ...(deps.injectionLog ? { log: deps.injectionLog } : {}),
+  });
   if (!hits.length) return { message: "", ids: [] };
-  return { message: renderMemoryHints(hits), ids: hits.map((h) => h.id) };
+  const ids = hits.map((h) => h.id);
+  deps.injectionLog?.record(ids, Date.now()); // don't re-send these on the next turn
+  return { message: renderMemoryHints(hits), ids };
 }
 
 /** Credits the memories the model actually referenced in its output (feeds retrieval ranking). */

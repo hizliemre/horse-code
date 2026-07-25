@@ -27,6 +27,8 @@ export interface TaskCycleDeps {
   memory?: () => import("./memory-retrieval.js").MemoryEntry[];
   /** Reinforce a memory the model actually cited this turn (feeds ranking). */
   reinforceMemory?: (id: string) => void;
+  /** Shared per-session record of what was recently injected → stops re-sending the same memory every turn. */
+  injectionLog?: import("./memory-retrieval.js").InjectionLog;
   /** remember_fact tool sink: persist a durable fact the model learned from a tool result. */
   rememberFact?: (fact: string) => void;
   /** Mutable holder for the compaction summary cache (persists across coach turns within a session). */

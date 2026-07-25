@@ -76,7 +76,8 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
   const memories = deps.memory?.() ?? [];
   const selectable = memories.filter((m) => m.kind !== "rule");
   const load = historyTokens(compacted) / COMPACT_MAX_TOKENS;
-  const hits = selectable.length ? selectMemories(selectable, prompt, { load, role: "coach" }) : [];
+  const hits = selectable.length ? selectMemories(selectable, prompt, { load, role: "coach", ...(deps.injectionLog ? { log: deps.injectionLog } : {}) }) : [];
+  deps.injectionLog?.record(hits.map((h) => h.id), Date.now());
   const memoryMsg: Message[] = hits.length ? [{ role: "user", content: renderMemoryHints(hits) }] : [];
   const opts: RoleAgentOptions = {
     provider: deps.provider,

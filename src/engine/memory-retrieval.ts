@@ -84,6 +84,37 @@ export function isExpired(entry: MemoryEntry, now: number): boolean {
 /** Default lifetime per persistence class (ms). `short` is scaffolding: useful this session, not next month. */
 export const SHORT_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Re-injection cooldown. Without it the same memory is re-sent on every turn that mentions its anchor: the
+ * model already saw it, so the repeat buys nothing and costs tokens on every single call.
+ */
+export const INJECT_COOLDOWN_MS = 30 * 60 * 1000;
+
+/**
+ * Tracks what has recently been injected, per consumer. Purely in-memory and per-session: a cooldown that
+ * outlived the process would hide memories from a fresh conversation that has never seen them.
+ */
+export class InjectionLog {
+  private readonly seen = new Map<string, number>();
+  constructor(private readonly cooldownMs = INJECT_COOLDOWN_MS) {}
+
+  /** True while this memory is still "recently shown" and should be skipped. */
+  onCooldown(id: string, now: number): boolean {
+    const at = this.seen.get(id);
+    return at !== undefined && now - at < this.cooldownMs;
+  }
+  record(ids: string[], now: number): void {
+    for (const id of ids) this.seen.set(id, now);
+  }
+  /** Drop the cooldown for a memory whose content changed — the model has not seen the new version. */
+  invalidate(id: string): void {
+    this.seen.delete(id);
+  }
+  clear(): void {
+    this.seen.clear();
+  }
+}
+
 /** Filesystem seam for anchor verification (injectable so the logic stays unit-testable). */
 export interface AnchorFs {
   /** Content fingerprint of a project-relative path, or undefined when it does not exist / is unreadable. */
@@ -148,7 +179,7 @@ export function hintBudget(load: number, max: number): number {
 export function selectMemories(
   entries: MemoryEntry[],
   query: string,
-  opts: { load: number; max?: number; threshold?: number; role?: string; now?: number },
+  opts: { load: number; max?: number; threshold?: number; role?: string; now?: number; log?: InjectionLog },
 ): MemoryEntry[] {
   const budget = hintBudget(opts.load, opts.max ?? 5);
   if (budget === 0) return [];
@@ -158,6 +189,8 @@ export function selectMemories(
     .filter((e) => !e.stale) // an anchored file changed → the claim is no longer trustworthy
     .filter((e) => !isExpired(e, now)) // short-lived scaffolding past its TTL
     .filter((e) => audienceMatches(e, opts.role)) // don't pay for another role's context
+    .filter((e) => !opts.log?.onCooldown(e.id, now)) // already shown recently → re-sending buys nothing
+    .filter((e) => !entries.some((o) => contradicts(o, e))) // a newer same-topic memory says the opposite
     .map((e) => ({ e, score: effectiveScore(query, e) })) // lessons get a small bonus over equal-scored facts
     .filter((x) => x.score >= threshold)
     // ties broken by reinforcement (frequently-cited memories rank higher), then recency.
@@ -183,6 +216,38 @@ export function supersedes(next: MemoryEntry, prev: MemoryEntry): boolean {
   if (minTags >= 2 && sharedTags >= Math.ceil(minTags * 0.6)) return true; // same-topic tags
   if (sharedAnchor && sharedTags >= 1) return true; // same anchor + at least one corroborating tag
   return false;
+}
+
+/**
+ * A memory's lifecycle state, derived (not stored) so it can never drift from the facts:
+ *  - `stale`        — an anchored file changed; the claim was about code that moved on
+ *  - `expired`      — short-lived scaffolding past its TTL
+ *  - `contradicted` — a same-topic memory of the SAME kind says something different and is newer
+ *  - `active`       — injectable
+ */
+export type MemoryState = "active" | "stale" | "expired" | "contradicted";
+
+/** Negation markers — a same-topic memory that flips one of these is contradicting, not merely updating. */
+const NEGATION_RE = /\b(not|never|no longer|don'?t|do not|asla|değil|yok|hiç)\b/i;
+
+/**
+ * Does `later` contradict `earlier`? Same kind + same topic (the supersession test) + opposite polarity.
+ * Supersession already replaces a same-topic memory on WRITE; this catches the pair that survived — e.g. two
+ * memories about the same anchor where one says "X is safe" and a newer one says "X is NOT safe".
+ */
+export function contradicts(later: MemoryEntry, earlier: MemoryEntry): boolean {
+  if ((later.kind ?? "fact") !== (earlier.kind ?? "fact")) return false;
+  if (later.id === earlier.id || later.createdAt <= earlier.createdAt) return false;
+  if (!supersedes(later, earlier)) return false; // not the same topic
+  return NEGATION_RE.test(later.text) !== NEGATION_RE.test(earlier.text);
+}
+
+/** The lifecycle state of one entry, given the whole set (needed to spot contradictions). */
+export function memoryState(entry: MemoryEntry, all: MemoryEntry[], now: number): MemoryState {
+  if (entry.stale) return "stale";
+  if (isExpired(entry, now)) return "expired";
+  if (all.some((other) => contradicts(other, entry))) return "contradicted";
+  return "active";
 }
 
 /** Renders selected memories as a compact hint block for injection into the request. */

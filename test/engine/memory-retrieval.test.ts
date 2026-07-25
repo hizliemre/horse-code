@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints, supersedes, memoryReferenced, type MemoryEntry, fileAnchors, hashAnchors, verifyAnchors, type AnchorFs, isExpired, audienceMatches } from "../../src/engine/memory-retrieval.js";
+import { deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints, supersedes, memoryReferenced, type MemoryEntry, fileAnchors, hashAnchors, verifyAnchors, type AnchorFs, isExpired, audienceMatches, InjectionLog, contradicts, memoryState } from "../../src/engine/memory-retrieval.js";
 
 const entry = (id: string, text: string, over: Partial<MemoryEntry> = {}): MemoryEntry => {
   const anchors = over.anchors ?? deriveAnchors(text);
@@ -172,5 +172,61 @@ describe("audience scoping + persistence/TTL", () => {
     expect(isExpired({ ...base, id: "a", text: "t" }, 10)).toBe(false); // no TTL → never expires
     expect(isExpired({ ...base, id: "a", text: "t", expiresAt: 10 }, 10)).toBe(true); // inclusive
     expect(audienceMatches({ ...base, id: "a", text: "t", audience: [] }, undefined)).toBe(true); // empty = all
+  });
+});
+
+describe("injection cooldown (E)", () => {
+  const e = (id: string): MemoryEntry => ({ id, text: `${id}: src/store.ts holds the adapter`, anchors: ["src/store.ts"], tags: ["store"], createdAt: 0 });
+
+  it("a memory just injected is held back, then returns once the cooldown lapses", () => {
+    const log = new InjectionLog(1000);
+    const q = "src/store.ts";
+    const first = selectMemories([e("a")], q, { load: 0, now: 0, log });
+    expect(first.map((m) => m.id)).toEqual(["a"]);
+    log.record(["a"], 0);
+    expect(selectMemories([e("a")], q, { load: 0, now: 500, log })).toEqual([]);   // still on cooldown
+    expect(selectMemories([e("a")], q, { load: 0, now: 1500, log }).map((m) => m.id)).toEqual(["a"]);
+  });
+
+  it("invalidate re-opens a memory whose content changed; clear resets everything", () => {
+    const log = new InjectionLog(1000);
+    log.record(["a"], 0);
+    expect(log.onCooldown("a", 100)).toBe(true);
+    log.invalidate("a");
+    expect(log.onCooldown("a", 100)).toBe(false);
+    log.record(["b"], 0); log.clear();
+    expect(log.onCooldown("b", 100)).toBe(false);
+  });
+});
+
+describe("lifecycle states (F)", () => {
+  const anchored = (over: Partial<MemoryEntry> & { id: string; text: string; createdAt: number }): MemoryEntry =>
+    ({ anchors: ["src/store.ts"], tags: ["store", "adapter"], ...over });
+
+  it("a newer same-topic memory with opposite polarity contradicts the older one", () => {
+    const old = anchored({ id: "a", text: "the store adapter is safe to call concurrently", createdAt: 1 });
+    const neu = anchored({ id: "b", text: "the store adapter is NOT safe to call concurrently", createdAt: 2 });
+    expect(contradicts(neu, old)).toBe(true);
+    expect(contradicts(old, neu)).toBe(false); // direction matters — only the newer one contradicts
+  });
+
+  it("a same-polarity update is not a contradiction, and neither is a different kind", () => {
+    const a = anchored({ id: "a", text: "the store adapter batches writes", createdAt: 1 });
+    const b = anchored({ id: "b", text: "the store adapter batches writes every 50ms", createdAt: 2 });
+    expect(contradicts(b, a)).toBe(false);
+    const lesson = anchored({ id: "c", text: "the store adapter is NOT safe concurrently", createdAt: 3, kind: "lesson" });
+    expect(contradicts(lesson, a)).toBe(false); // fact vs lesson → different kinds
+  });
+
+  it("memoryState derives the state, and a contradicted memory is not injected", () => {
+    const now = 1000;
+    const old = anchored({ id: "a", text: "the store adapter is safe to call concurrently", createdAt: 1 });
+    const neu = anchored({ id: "b", text: "the store adapter is NOT safe to call concurrently", createdAt: 2 });
+    const all = [old, neu];
+    expect(memoryState(old, all, now)).toBe("contradicted");
+    expect(memoryState(neu, all, now)).toBe("active");
+    expect(memoryState({ ...old, stale: true }, all, now)).toBe("stale");
+    expect(memoryState(anchored({ id: "x", text: "temp", createdAt: 1, expiresAt: 1 }), [], now)).toBe("expired");
+    expect(selectMemories(all, "store adapter concurrency", { load: 0, now }).map((m) => m.id)).toEqual(["b"]);
   });
 });

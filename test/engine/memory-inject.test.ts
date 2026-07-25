@@ -43,3 +43,13 @@ describe("reinforceUsed", () => {
     expect(bumped).toEqual(["a"]);
   });
 });
+
+describe("cooldown through memoryHints", () => {
+  it("the same memory is not re-injected on the next call for the same topic", async () => {
+    const { InjectionLog } = await import("../../src/engine/memory-retrieval.js");
+    const entries = [mem({ id: "a", text: "the store adapter lives in src/store.ts", anchors: ["src/store.ts"], tags: ["store"] })];
+    const d = { memory: () => entries, injectionLog: new InjectionLog() } as unknown as TaskCycleDeps;
+    expect(memoryHints(d, "touching src/store.ts").ids).toEqual(["a"]); // first time: injected
+    expect(memoryHints(d, "touching src/store.ts").ids).toEqual([]);    // still fresh in context
+  });
+});

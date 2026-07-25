@@ -19,6 +19,7 @@ import { REQUIRED_ROLES } from "../prompts.js";
 import { SessionStore } from "../session/store.js";
 import { PinStore } from "../session/pins.js";
 import { MemoryStore } from "../session/memory.js";
+import { memoryState } from "../engine/memory-retrieval.js";
 import type { MemoryEntry } from "../engine/memory-retrieval.js";
 import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
@@ -188,7 +189,12 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // even when they don't (re)state them this session.
   const carried = rulesFromMemory();
   if (carried.length) controller.note(`📌 **Active rules** (${carried.length}): ${carried.join(" · ")}`);
-  const listMemories = (): MemoryEntry[] => memStore.all();
+  // /memory shows the lifecycle state so a memory that stopped being injected is visible, not silently gone.
+  const listMemories = (): (MemoryEntry & { state: string })[] => {
+    const all = memStore.all();
+    const now = Date.now();
+    return all.map((m) => ({ ...m, state: memoryState(m, all, now) }));
+  };
   const addMemory = (text: string): Promise<{ ok: true; entry: MemoryEntry; superseded: string[] } | { ok: false; error: string }> => memStore.add(text);
   const removeMemory = (n: number): Promise<string | undefined> => memStore.remove(n);
   // MCP servers → connect in the background; tools reach the coach once connected (a note reports status).

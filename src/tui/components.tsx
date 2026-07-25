@@ -633,7 +633,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listPins?: () => string[]; // /pins
   addPin?: (text: string) => Promise<{ ok: true; pin: string } | { ok: false; error: string }>; // /pin <text>
   removePin?: (n: number) => Promise<string | undefined>; // /pin rm N
-  listMemories?: () => { text: string; kind?: "fact" | "lesson" | "rule" }[]; // /memories
+  listMemories?: () => { text: string; kind?: "fact" | "lesson" | "rule"; state?: string; audience?: string[] }[]; // /memories
   addMemory?: (text: string) => Promise<{ ok: true; entry: { text: string }; superseded: string[] } | { ok: false; error: string }>; // /remember
   removeMemory?: (n: number) => Promise<string | undefined>; // /forget N
   listMcp?: () => { name: string; ok: boolean; toolCount: number; error?: string }[]; // /mcp
@@ -843,8 +843,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const mem = listMemories?.() ?? [];
     if (mem.length === 0) { controller.note("No memories yet — `/remember <text>` to add one."); return; }
     const mark = (k?: string) => (k === "lesson" ? "📖 " : k === "rule" ? "📌 " : "🧠 ");
-    const rows = mem.map((m, i) => `${i + 1}. ${mark(m.kind)}${m.text}`);
-    controller.note(`**Memories** (this project):\n${rows.join("\n")}\n\n_📌 = rule · 📖 = lesson · 🧠 = fact · \`/forget N\` to remove._`);
+    // A memory that is no longer trustworthy must SAY so — silently withholding it would leave the user
+    // believing the agent still knows something it has stopped using.
+    const flag = (m: { state?: string; audience?: string[] }) => {
+      const parts: string[] = [];
+      if (m.state && m.state !== "active") parts.push(m.state === "stale" ? "⚠ stale (the file it describes changed)" : m.state === "contradicted" ? "⚠ contradicted by a newer note" : "⌛ expired");
+      if (m.audience?.length) parts.push(`for: ${m.audience.join(", ")}`);
+      return parts.length ? ` _(${parts.join(" · ")})_` : "";
+    };
+    const rows = mem.map((m, i) => `${i + 1}. ${mark(m.kind)}${m.text}${flag(m)}`);
+    const inactive = mem.filter((m) => m.state && m.state !== "active").length;
+    const note = inactive ? `\n\n_${inactive} memory(ies) are no longer injected — re-\`/remember\` to refresh, or \`/forget N\`._` : "";
+    controller.note(`**Memories** (this project):\n${rows.join("\n")}\n\n_📌 = rule · 📖 = lesson · 🧠 = fact · \`/forget N\` to remove._${note}`);
   };
   // /remember <text> → store a cross-session fact.
   const doRemember = (text: string): void => {

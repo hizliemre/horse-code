@@ -2,6 +2,7 @@ import { RoleRegistry } from "./agent/roles.js";
 import { PermissionEngine } from "./permission/engine.js";
 import type { PermissionRequest } from "./permission/engine.js";
 import { buildTeamRegistry, buildCouncilRegistry, type ReviewStage } from "./engine/review.js";
+import { InjectionLog } from "./engine/memory-retrieval.js";
 import { REQUIRED_ROLES, DEFAULT_PROMPTS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
 import type { ResolvedConfig, RoleConfig, ReviewerConfig } from "./config/config.js";
 import type { Provider } from "./core/types.js";
@@ -78,6 +79,9 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     approve: opts.approve,
     signal: opts.signal,
     specKit,
+    // One injection log per session: shared by the coach and every role so a memory shown to one agent is
+    // not immediately re-shown to the next.
+    injectionLog: new InjectionLog(),
     teams,
     teamRegistries,
     councilRegistry,
