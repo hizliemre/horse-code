@@ -268,6 +268,7 @@ describe("runReviewLoop", () => {
         "architectural": '{"findings":[],"recommendation":"approve"}',
       },
       councilVotes: allRevise,
+      judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'], // the judge is the last authority — only its ask-human reaches the user
     });
     const notes: string[] = [];
     const out = await runReviewLoop(rdeps(p), { stage: "spec", workdir: dir, target: "spec.md", revise: noRevise, askUser: async () => "Stop", maxRounds: 1, emit: (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); } });
@@ -343,7 +344,7 @@ describe("runReviewLoop", () => {
 
   it("maxRounds exhausted → offers approve / keep-reviewing / stop; approve → approved, stop → not", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const mk = () => reviewProvider({ assessments: teamCritical, councilVotes: allRevise }); // criticals persist → never passes
+    const mk = () => reviewProvider({ assessments: teamCritical, councilVotes: allRevise, judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] }); // judge defers to the user
     let opts: string[] | undefined;
     const ok = await runReviewLoop(rdeps(mk()), { stage: "spec", workdir: dir, target: "spec.md", revise: noRevise, askUser: async (_q, o) => { opts = o?.options; return "approve"; }, maxRounds: 2 });
     expect(opts).toEqual(["Approve as-is", "Keep reviewing (2 more rounds)", "Stop"]);
@@ -358,7 +359,7 @@ describe("runReviewLoop", () => {
 
   it("'keep reviewing' runs another batch of rounds before re-escalating", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const p = reviewProvider({ assessments: teamCritical, councilVotes: allRevise });
+    const p = reviewProvider({ assessments: teamCritical, councilVotes: allRevise, judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] });
     const answers = ["Keep reviewing (1 more rounds)", "Approve as-is"]; let ai = 0;
     let rounds = 0;
     const out = await runReviewLoop(
@@ -376,7 +377,7 @@ describe("runReviewLoop", () => {
 
   it("escalation is a localized selectable choice (Turkish) with the keep-reviewing option", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
-    const mk = () => reviewProvider({ assessments: teamSplit, councilVotes: allRevise });
+    const mk = () => reviewProvider({ assessments: teamCritical, councilVotes: allRevise, judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] });
     let asked = "", opts: string[] | undefined;
     const out = await runReviewLoop(rdeps(mk()), { stage: "spec", workdir: dir, target: "spec.md", revise: noRevise, askUser: async (q, o) => { asked = q; opts = o?.options; return "Mevcut haliyle onayla"; }, maxRounds: 1, language: "Turkish" });
     expect(asked).toMatch(/revizyon turunda onaylanmadı/);
@@ -545,13 +546,13 @@ describe("tiered bar + convergence guard (loop termination)", () => {
     expect(out.deferred?.length).toBeGreaterThan(0);
   });
 
-  it("criticals that don't drop round-over-round stop the batch early (no burning rounds)", async () => {
+  it("the SAME blocking findings surviving a revision → stops revising and hands the JUDGE the final ruling", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const stuck = {
       security: '{"findings":[{"severity":"critical","note":"still broken"}],"recommendation":"revise"}',
       architectural: '{"findings":[{"severity":"critical","note":"still broken"}],"recommendation":"revise"}',
     };
-    const p = reviewProvider({ assessments: stuck, councilVotes: allRevise });
+    const p = reviewProvider({ assessments: stuck, councilVotes: allRevise }); // judge defaults to "pass"
     let rounds = 0;
     const notes: string[] = [];
     const out = await runReviewLoop(rdeps(p), {
@@ -559,9 +560,35 @@ describe("tiered bar + convergence guard (loop termination)", () => {
       revise: noRevise, askUser: async () => "Stop", maxRounds: 5,
       emit: (ev) => { if (ev.kind === "note") { const t = (ev as { text: string }).text; notes.push(t); if (/Reviewing the/.test(t)) rounds++; } },
     });
-    expect(out.approved).toBe(false);
-    expect(rounds).toBe(2); // round 1 revised, round 2 saw no improvement → escalated instead of 5 rounds
+    expect(rounds).toBe(2); // round 1 revised, round 2 saw the identical findings → stopped (not 5 rounds)
     expect(notes.join("\n")).toMatch(/not converging/i);
+    // …and the JUDGE ruled — the user was never asked.
+    expect(notes.join("\n")).toMatch(/Judge\*\* ruled the spec good enough/i);
+    expect(out.approved).toBe(true);
+  });
+
+  it("a CHANGED set of blocking findings is progress — the loop keeps going", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    let call = 0;
+    const p: Provider = {
+      async *chat(req) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        const em = function* (a: string) {
+          yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
+          yield { type: "done", finishReason: "tool_calls" } as const;
+        };
+        if (sys.includes("review COUNCIL")) { yield* em('{"vote":"revise","rationale":"r"}'); return; }
+        if (sys.includes("review TEAM member")) { call++; yield* em(`{"findings":[{"severity":"critical","note":"issue-${call}"}],"recommendation":"revise"}`); return; }
+        yield* em('{"decision":"pass","feedback":[],"question":""}');
+      },
+    };
+    let rounds = 0;
+    await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: noRevise, askUser: async () => "Stop", maxRounds: 3,
+      emit: (ev) => { if (ev.kind === "note" && /Reviewing the/.test((ev as { text: string }).text)) rounds++; },
+    });
+    expect(rounds).toBe(3); // every round surfaced NEW findings → never flagged as stuck, full batch ran
   });
 });
 
@@ -605,5 +632,59 @@ describe("runCodeReview tiered bar (attempt-driven)", () => {
     const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined, () => {}, 3);
     expect(v.verdict).toBe("fail");
     expect(v.notes.some((n) => /sql injection/.test(n))).toBe(true);
+  });
+});
+
+describe("authority ladder: team → council → judge → (only then) human", () => {
+  const noRevise = async () => {};
+  const stuckCritical = {
+    security: '{"findings":[{"severity":"critical","note":"still broken"}],"recommendation":"revise"}',
+    architectural: '{"findings":[{"severity":"critical","note":"still broken"}],"recommendation":"revise"}',
+  };
+
+  it("a stuck review is ruled by the JUDGE — the user is never asked when the judge can decide", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({ assessments: stuckCritical, councilVotes: allRevise }); // judge → pass
+    let asked = 0;
+    const out = await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: noRevise, askUser: async () => { asked++; return "Stop"; }, maxRounds: 3,
+    });
+    expect(out.approved).toBe(true);
+    expect(asked).toBe(0); // autonomous: the judge settled it
+  });
+
+  it("the judge may grant ONE more targeted batch before anyone gives up", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    // judge: "revise" on the first final ruling, "pass" on the second → exactly one extra batch.
+    const p = reviewProvider({
+      assessments: stuckCritical, councilVotes: allRevise,
+      judge: ['{"decision":"revise","feedback":["fix the root cause"],"question":""}', '{"decision":"pass","feedback":[],"question":""}'],
+    });
+    const notes: string[] = [];
+    let asked = 0;
+    const out = await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: noRevise, askUser: async () => { asked++; return "Stop"; }, maxRounds: 1,
+      emit: (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); },
+    });
+    expect(notes.join("\n")).toMatch(/one more targeted attempt is worth it/i);
+    expect(out.approved).toBe(true);
+    expect(asked).toBe(0);
+  });
+
+  it("only the judge's own ask-human reaches the user", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    const p = reviewProvider({
+      assessments: stuckCritical, councilVotes: allRevise,
+      judge: ['{"decision":"ask-human","feedback":[],"question":"Ship without offline support?"}'],
+    });
+    let asked: string[] = [];
+    const out = await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: noRevise, askUser: async (q) => { asked.push(q); return "Stop"; }, maxRounds: 1,
+    });
+    expect(asked.join("\n")).toMatch(/revision rounds|Ship without offline/i); // the user WAS involved
+    expect(out.approved).toBe(false);
   });
 });

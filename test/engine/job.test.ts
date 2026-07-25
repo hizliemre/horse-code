@@ -148,7 +148,8 @@ describe("runJob", () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
-      const p = jobProvider({ intent: "feature", councilRec: "revise", councilVote: "revise" }); // team + council both revise → not approved
+      // team + council revise AND the judge defers to the user (who stops) → not approved
+      const p = jobProvider({ intent: "feature", councilRec: "revise", councilVote: "revise", judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] });
       const res = await runJob(jdeps(p, mgr, fakeAdapter()), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "stop", maxRounds: 1 });
       expect(res.kind).toBe("rejected");
       if (res.kind === "rejected") expect(res.stage).toBe("spec");

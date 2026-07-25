@@ -59,6 +59,15 @@ function nonBlockingNotes(assessments: Assessment[], stage: ReviewStage): string
     .map((f) => `[${stage}][${f.severity}] ${a.name}: ${f.note}`));
 }
 
+/** Stable identity of each BLOCKING finding → lets convergence be judged by content instead of by count. */
+function blockingSignatures(assessments: Assessment[]): Set<string> {
+  const out = new Set<string>();
+  for (const a of assessments) for (const f of a.findings) {
+    if (f.severity === "critical") out.add(`${a.name}::${f.note.trim().toLowerCase().replace(/\s+/g, " ")}`);
+  }
+  return out;
+}
+
 /** Total findings across the team at a given severity → used in the council-handoff note. */
 function severityTotal(assessments: Assessment[], sev: Severity): number {
   return assessments.reduce((n, a) => n + a.findings.filter((f) => f.severity === sev).length, 0);
@@ -288,23 +297,40 @@ export async function runCouncil(
  * Judge = the FINAL link: called only when the council can't reach a supermajority (a split vote). It weighs the
  * team findings AND the council's split votes, then makes the call (pass/revise/ask-human).
  */
+export type JudgeQuestion =
+  | "contested" // the council split on this round → break the tie
+  | "final";    // the loop is stuck/exhausted → the judge is the LAST authority before the user is involved
+
 export async function runJudge(
   deps: ReviewDeps, stage: ReviewStage, workdir: string, target: string, assessments: Assessment[], votes: CouncilVote[],
-  request?: string, emit: (ev: ProgressEvent) => void = () => {},
+  request?: string, emit: (ev: ProgressEvent) => void = () => {}, question: JudgeQuestion = "contested",
+  rounds = 0,
 ): Promise<JudgeDecision> {
   const resolved = deps.roleRegistry.resolve("judge");
   const findings = findingsDigest(assessments);
   const council = votes.map((v) => `- ${v.name}: ${v.vote} — ${v.rationale}`).join("\n");
   const subject = stage === "code" ? `The code for "${target}"` : `The "${target}" ${stage}`;
+  // The FINAL question is what makes this system autonomous: rather than handing a stuck review to the user,
+  // the strongest model rules on it. "ask-human" is reserved for decisions only the user can actually make
+  // (a product/scope choice), never for "this is hard" or "the reviewers disagree".
+  const ask = question === "final"
+    ? `This review is STUCK: ${rounds} revision round(s) have run and the same blocking findings keep surviving, ` +
+      `or the round budget is spent. You are the LAST authority before the user is involved.\n` +
+      `Rule decisively:\n` +
+      `- "pass" — the work is good enough for THIS stage; remaining findings are not real blockers (preferred if true).\n` +
+      `- "revise" — one more TARGETED attempt is genuinely worth it; say exactly what must change.\n` +
+      `- "ask-human" — ONLY if the blocker is a product/scope decision that you cannot make on the user's behalf. ` +
+      `Difficulty, reviewer disagreement or a desire for more polish are NOT reasons to ask the user.`
+    : `You are the final decider on this contested round. Judge it against what was asked for and against what ` +
+      `THIS stage is responsible for (a spec answers WHAT/WHY, a plan answers HOW, code is the implementation). ` +
+      `Decide (pass/revise/ask-human).`;
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content:
       `${subject} is contested (the ${stage} review stage).${request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : ""}\n\n` +
       `The review team's findings:\n${findings}\n\n` +
-      `The council voted but reached NO supermajority:\n${council}\n\n` +
-      `You are the final decider. Judge it against what was asked for and against what THIS stage is responsible ` +
-      `for (a spec answers WHAT/WHY, a plan answers HOW, code is the implementation). Decide (pass/revise/ask-human).` }],
+      `The council's votes:\n${council}\n\n${ask}` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
   let d: JudgeDecision;
@@ -364,8 +390,12 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
   const language = o.language;
   const label = stage;
   let round = 0;
-  let prevCriticals = Number.POSITIVE_INFINITY; // convergence guard: criticals must DROP round over round
+  let prevSignatures = new Set<string>(); // convergence is measured by finding CONTENT, not by count
   let deferralVetoUsed = false; // the council may override a deferral ONCE; after that mediums always defer
+  let batches = 1;              // a "batch" is maxRounds rounds; the judge may grant one more
+  const MAX_BATCHES = 2;
+  let lastAssessments: Assessment[] | undefined; // fed to the judge's final ruling
+  let lastVotes: CouncilVote[] = [];
   // Outer loop: run a batch of up to `maxRounds` council/judge rounds; if none pass, escalate to the human,
   // who may approve as-is, ask for MORE review rounds (another batch), or stop. Only "stop" ends without approval.
   for (;;) {
@@ -426,14 +456,12 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         continue;
       }
 
-      // Not converging? If the critical count didn't drop versus the previous round, more rounds won't help —
-      // stop burning them and take it to the human now.
-      if (round > 0 && crit >= prevCriticals) {
-        emit({ kind: "note", text: `⚠️ **Review is not converging** — ${crit} critical finding(s), no better than the previous round. Taking it to you instead of spending more rounds.` });
-        prevCriticals = crit;
-        break;
-      }
-      prevCriticals = crit;
+      // Convergence, measured by CONTENT not by count: if every blocking finding is one we already saw last
+      // round, the revision achieved nothing and more rounds won't either. A changed set (2 fixed, 2 new) is
+      // still progress, so the loop continues. Detected here but acted on AFTER the council has had its say.
+      const sig = blockingSignatures(assessments);
+      const stuck = round > 0 && sig.size > 0 && [...sig].every((x) => prevSignatures.has(x));
+      prevSignatures = sig;
 
       // Contested → the team hands the decision to the council, which weighs the findings and VOTES. Say WHY:
       // a serious finding surfaced, or the team just split on approval.
@@ -465,14 +493,46 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         }
       }
 
+      lastAssessments = assessments;
+      lastVotes = votes;
+
       let feedback = decision.feedback;
       if (decision.decision === "ask-human") {
         emit({ kind: "note", text: `❓ Judge needs your input: ${decision.question}` });
         const answer = await askUser(decision.question);
         feedback = [...feedback, `Human answer: ${answer}`];
       }
+      // Same blocking findings as last round → revising again is provably futile; go straight to the judge's
+      // final ruling instead of burning the rest of the batch.
+      if (stuck) {
+        emit({ kind: "note", text: `⚠️ **Not converging** — the same blocking findings survived the last revision. Handing it to the **judge** for a final ruling.` });
+        break;
+      }
       emit({ kind: "note", text: `🔄 Revising the ${label} with the feedback…` });
       await revise(feedback);
+    }
+
+    // The batch is over (rounds spent, or the loop was provably stuck). THE JUDGE RULES BEFORE ANY HUMAN — this
+    // is what keeps the system autonomous: the strongest model decides, and only IT can decide that a question
+    // genuinely belongs to the user.
+    if (lastAssessments) {
+      const finalRuling = await runJudge(deps, stage, workdir, target, lastAssessments, lastVotes, request, emit, "final", round);
+      if (finalRuling.decision === "pass") {
+        const deferred = nonBlockingNotes(lastAssessments, stage);
+        emit({ kind: "note", text: `✅ **Judge** ruled the ${label} good enough for this stage.${deferred.length ? ` ${deferred.length} note(s) carried forward.` : ""}` });
+        return { approved: true, deferred };
+      }
+      if (finalRuling.decision === "revise" && batches < MAX_BATCHES) {
+        batches++;
+        emit({ kind: "note", text: `🔄 **Judge** ruled one more targeted attempt is worth it → another ${maxRounds} round(s).` });
+        await revise(finalRuling.feedback);
+        prevSignatures = new Set(); // a judge-directed attempt is a fresh start for convergence tracking
+        continue;
+      }
+      // Judge says the user must decide (or the batch budget is spent) → now, and only now, involve the human.
+      if (finalRuling.decision === "ask-human" && finalRuling.question) {
+        emit({ kind: "note", text: `❓ **Judge** needs a decision only you can make: ${finalRuling.question}` });
+      }
     }
     // Escalation — localized to the user's language (this string is code-generated, not from an LLM, so the
     // "respond in <language>" rule wouldn't reach it). SELECTABLE so the intent is unambiguous — including the

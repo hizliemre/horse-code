@@ -194,7 +194,8 @@ describe("runUpstream", () => {
 
   it("if the spec isn't approved → rejected(spec)", async () => {
     // Team is split (revise) → council convenes; a revise vote → revise; the single round then escalates → stop.
-    const p = upstreamProvider({ intent: "feature", councilRec: "revise", councilVotes: ["revise"] });
+    // The judge is the last authority: only its ask-human hands the decision to the user (who stops).
+    const p = upstreamProvider({ intent: "feature", councilRec: "revise", councilVotes: ["revise"], judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] });
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("spec");
@@ -202,7 +203,7 @@ describe("runUpstream", () => {
 
   it("if the spec is approved but the plan isn't → rejected(plan)", async () => {
     // Team is split on both; the council votes pass for the spec (approved) then revise for the plan (rejected).
-    const p = upstreamProvider({ intent: "feature", councilRec: "revise", councilVotes: ["pass", "revise"] });
+    const p = upstreamProvider({ intent: "feature", councilRec: "revise", councilVotes: ["pass", "revise"], judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] });
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "stop", 1);
     expect(res.kind).toBe("rejected");
     if (res.kind === "rejected") expect(res.stage).toBe("plan");
