@@ -116,3 +116,39 @@ describe("runTaskCycle", () => {
     expect(p.requests[0].messages[0].content).toBe("senior-coder");
   });
 });
+
+describe("acceptance gate blocks a review-passing task that did not do the work", () => {
+  it("criteria unmet → back to TODO with them as notes, NOT done", async () => {
+    const board = new Board();
+    board.addCard({ id: "t1", title: "add the Todo model", acceptance: ["src/models/todo.ts exports a Todo type"] });
+    // router → coder writes → code review passes → the GATE reports the criterion unmet
+    const p = new MockProvider([
+      submit('{"role":"coder"}'),
+      writeTurn(), doneTurn,
+      ...codeReviewPass(),
+      submit(JSON.stringify({ checks: [{ criterion: "src/models/todo.ts exports a Todo type", met: false, evidence: "no such file" }] })),
+    ]);
+    const v = await runTaskCycle(deps(p), board, "t1", dir);
+    expect(v.verdict).toBe("fail");
+    const c = board.get("t1")!;
+    expect(c.column).toBe("TODO");
+    expect(c.stageHistory.some((s) => s.action === "acceptance:failed")).toBe(true);
+    expect(c.stageHistory.some((s) => s.action === "reviewed:pass")).toBe(false); // never marked done
+    expect(c.reviewNotes[0]).toMatch(/Acceptance criterion not met/);
+  });
+
+  it("criteria met → the task completes as before", async () => {
+    const board = new Board();
+    board.addCard({ id: "t1", title: "add the Todo model", acceptance: ["src/models/todo.ts exports a Todo type"] });
+    const p = new MockProvider([
+      submit('{"role":"coder"}'),
+      writeTurn(), doneTurn,
+      ...codeReviewPass(),
+      submit(JSON.stringify({ checks: [{ criterion: "src/models/todo.ts exports a Todo type", met: true, evidence: "found the export" }] })),
+    ]);
+    const v = await runTaskCycle(deps(p), board, "t1", dir);
+    expect(v.verdict).toBe("pass");
+    expect(board.get("t1")!.column).toBe("DONE");
+    expect(board.get("t1")!.stageHistory.some((s) => s.action === "acceptance:passed")).toBe(true);
+  });
+});

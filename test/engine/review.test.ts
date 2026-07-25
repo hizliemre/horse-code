@@ -709,3 +709,61 @@ describe("missing artifact guard", () => {
     expect(notes.join("\n")).toMatch(/produced no file/i);
   });
 });
+
+describe("only the rejecting lenses re-review", () => {
+  const noRevise = async () => {};
+
+  it("a lens that approved is not re-run next round; its verdict is carried", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    // security keeps rejecting; arch approves once and must never be asked again.
+    let archRuns = 0, secRuns = 0;
+    const p: Provider = {
+      async *chat(req) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        const em = function* (a: string) {
+          yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
+          yield { type: "done", finishReason: "tool_calls" } as const;
+        };
+        if (sys.includes("review COUNCIL")) { yield* em('{"vote":"revise","rationale":"r"}'); return; }
+        if (sys.includes("review TEAM member")) {
+          if (sys.includes("architectural")) { archRuns++; yield* em('{"findings":[],"recommendation":"approve"}'); return; }
+          secRuns++;
+          yield* em('{"findings":[{"severity":"critical","note":`still broken ${secRuns}`}],"recommendation":"revise"}'.replace("`still broken ${secRuns}`", `"still broken ${secRuns}"`));
+          return;
+        }
+        yield* em('{"decision":"pass","feedback":[],"question":""}');
+      },
+    };
+    const notes: string[] = [];
+    await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: noRevise, askUser: async () => "Stop", maxRounds: 3,
+      emit: (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); },
+    });
+    expect(archRuns).toBe(1);                 // approved in round 1 → never re-asked
+    expect(secRuns).toBeGreaterThan(1);       // it kept rejecting → it kept reviewing
+    expect(notes.join("\n")).toMatch(/approved last round — carrying their verdict/i);
+  });
+
+  it("a clean sweep that the council still rejects re-reviews in FULL (the team's read was wrong)", async () => {
+    await writeFile(join(dir, "spec.md"), "# spec", "utf8");
+    let teamRuns = 0;
+    const p: Provider = {
+      async *chat(req) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        const em = function* (a: string) {
+          yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: a } } as const;
+          yield { type: "done", finishReason: "tool_calls" } as const;
+        };
+        if (sys.includes("review COUNCIL")) { yield* em('{"vote":"revise","rationale":"r"}'); return; }
+        if (sys.includes("review TEAM member")) { teamRuns++; yield* em('{"findings":[{"severity":"medium","note":"m"}],"recommendation":"approve"}'); return; }
+        yield* em('{"decision":"pass","feedback":[],"question":""}');
+      },
+    };
+    await runReviewLoop(rdeps(p), {
+      stage: "spec", workdir: dir, target: "spec.md",
+      revise: noRevise, askUser: async () => "Stop", maxRounds: 2,
+    });
+    expect(teamRuns).toBeGreaterThanOrEqual(4); // 2 lenses × ≥2 rounds — nothing was carried
+  });
+});

@@ -176,15 +176,23 @@ export function buildCouncilRegistry(council: ReviewerConfig[]): RoleRegistry {
 export async function runTeam(
   deps: ReviewDeps, stage: ReviewStage, workdir: string, target: string, request?: string,
   emit: (ev: ProgressEvent) => void = () => {},
+  carried: Assessment[] = [],
 ): Promise<Assessment[]> {
-  const team = deps.teams[stage];
   const registry = deps.teamRegistries[stage];
+  // A lens that APPROVED last round already said its dimension is fine; re-running all of them every round is
+  // the single biggest cost in the loop. Carry those verdicts forward and re-review only the ones that asked
+  // for changes. (If nothing is carried, this is a normal full pass.)
+  const carriedByName = new Map(carried.map((a) => [a.name, a]));
+  const team = deps.teams[stage].filter((c) => !carriedByName.has(c.name));
+  if (carriedByName.size) {
+    emit({ kind: "note", text: `↩︎ ${carriedByName.size} lens(es) approved last round — carrying their verdict; re-reviewing ${team.length}.` });
+  }
   const scope = request ? `\n\nThe user's original request (the scope you must judge against):\n"""\n${request}\n"""` : "";
   const what = stage === "code" ? `Review the code for: ${target}.` : `Review the "${target}" document.`;
   // Surface each team member as a live sub-agent (they run in parallel) so the user sees the review happening.
   emit({ kind: "agents", agents: team.map((c) => ({ id: `team:${c.name}`, title: `team: ${c.name}`, model: registry.peekModel(c.name) })) });
   try {
-    return await Promise.all(
+    const fresh = await Promise.all(
       team.map(async (c): Promise<Assessment> => {
         const resolved = registry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
@@ -214,6 +222,7 @@ export async function runTeam(
         }
       }),
     );
+    return [...carried, ...fresh]; // carried approvals still count toward the consensus math
   } finally {
     emit({ kind: "agents", agents: [] }); // clear the live-agents panel when the team finishes
   }
@@ -411,8 +420,15 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         emit({ kind: "note", text: `⚠️ **${label} not found** at \`${target}\` — nothing to review. The authoring phase produced no file.` });
         return { approved: false };
       }
-      emit({ kind: "note", text: `🔍 **Reviewing the ${label}** (round ${round + 1}) — the team (${deps.teams[stage].length}) is discussing it…` });
-      const assessments = await runTeam(deps, stage, workdir, target, request, emit);
+      // Only the lenses that asked for changes re-review: an approving lens already cleared its dimension, and
+      // re-running the whole team every round was the loop's dominant cost. If the previous round was a clean
+      // sweep (every lens approved but the council still said revise), nothing is carried — the team's read was
+      // wrong, so it re-reviews in full.
+      const approvedLast = (lastAssessments ?? []).filter((a) => a.recommendation === "approve");
+      const carry = round > 0 && approvedLast.length < (lastAssessments?.length ?? 0) ? approvedLast : [];
+      emit({ kind: "note", text: `🔍 **Reviewing the ${label}** (round ${round + 1}) — the team (${deps.teams[stage].length - carry.length}) is discussing it…` });
+      const assessments = await runTeam(deps, stage, workdir, target, request, emit, carry);
+      lastAssessments = assessments; // every exit path (shortcut, deferral, council) must leave this current
       // The whole team has reported → write the consolidated result to chat (per-member verdict + counts).
       if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, label) });
       const approve = assessments.filter((a) => a.recommendation === "approve").length;
@@ -502,7 +518,6 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
         }
       }
 
-      lastAssessments = assessments;
       lastVotes = votes;
 
       let feedback = decision.feedback;

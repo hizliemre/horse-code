@@ -14,6 +14,8 @@ export interface Card {
   column: Column;
   worktree?: string;
   deps: string[];
+  /** Concrete, checkable statements that must hold before this card may enter DONE. */
+  acceptance: string[];
   reviewNotes: string[];
   attempts: number;
   stageHistory: StageEvent[];
@@ -36,6 +38,7 @@ const cardSchema = z.object({
   column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE"]),
   worktree: z.string().optional(),
   deps: z.array(z.string()),
+  acceptance: z.array(z.string()).default([]), // default: boards persisted before the gate existed still load
   reviewNotes: z.array(z.string()),
   attempts: z.number(),
   stageHistory: z.array(stageEventSchema),
@@ -60,13 +63,14 @@ export class Board {
     for (const c of cards) this.cards.set(c.id, cloneCard(c));
   }
 
-  addCard(input: { id: string; title: string; deps?: string[] }): Card {
+  addCard(input: { id: string; title: string; deps?: string[]; acceptance?: string[] }): Card {
     if (this.cards.has(input.id)) throw new Error(`card already exists: ${input.id}`);
     const card: Card = {
       id: input.id,
       title: input.title,
       column: "TODO",
       deps: input.deps ? [...input.deps] : [],
+      acceptance: input.acceptance ? [...input.acceptance] : [],
       reviewNotes: [],
       attempts: 0,
       stageHistory: [],

@@ -7,7 +7,7 @@ describe("Board core", () => {
     const c = b.addCard({ id: "t1", title: "ilk", deps: ["x"] });
     expect(c).toEqual({
       id: "t1", title: "ilk", column: "TODO",
-      deps: ["x"], reviewNotes: [], attempts: 0, stageHistory: [],
+      deps: ["x"], acceptance: [], reviewNotes: [], attempts: 0, stageHistory: [],
     });
   });
 

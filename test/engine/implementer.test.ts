@@ -28,7 +28,7 @@ function deps(provider: MockProvider): TaskCycleDeps {
   };
 }
 const card = (over: Partial<Card> = {}): Card => ({
-  id: "t1", title: "write file", column: "IN-PROGRESS", deps: [], reviewNotes: [], attempts: 0, stageHistory: [], ...over,
+  id: "t1", title: "write file", column: "IN-PROGRESS", deps: [], acceptance: [], reviewNotes: [], attempts: 0, stageHistory: [], ...over,
 });
 function writeThenDone(): ChatEvent[][] {
   return [

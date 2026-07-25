@@ -3,6 +3,7 @@ import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 import { routeTask } from "./routing.js";
 import { runImplementer } from "./implementer.js";
 import { runCodeReview, type ReviewDeps } from "./review.js";
+import { verifyAcceptance } from "./acceptance.js";
 import type { Verdict, RunnableRole } from "./task-types.js";
 
 /**
@@ -53,7 +54,18 @@ export async function runCycleWithRole(
   // `attempts` drives the tiered bar: the first review of a task is the thorough pass, later attempts (the code
   // has already been revised for reviewer notes) are blocked only by CRITICAL findings.
   const v = await runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
+  // The review says the code is GOOD; the gate says the code does WHAT WAS ASKED. A task that quietly
+  // implemented half the requirement passes review — only the criteria catch that.
   if (v.verdict === "pass") {
+    const gate = await verifyAcceptance(deps, board.get(taskId)!, cwd, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); });
+    if (!gate.passed) {
+      board.appendStage(taskId, { role: "code-reviewer", action: "acceptance:failed", note: gate.unmet.join("; ") });
+      board.clearReviewNotes(taskId);
+      for (const n of gate.unmet) board.addReviewNote(taskId, `Acceptance criterion not met: ${n}`);
+      board.move(taskId, "TODO", "code-reviewer");
+      return { verdict: "fail", notes: gate.unmet };
+    }
+    board.appendStage(taskId, { role: "code-reviewer", action: "acceptance:passed" });
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });
     // Non-blocking findings ride the board to the end of the run, where the PR revision pass adjudicates them
     // in one go on the MERGED result — instead of forcing another full re-implementation of this task.

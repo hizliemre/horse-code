@@ -17,7 +17,7 @@ function submitTurn(argsJson: string): ChatEvent[] {
   ];
 }
 const card = (title: string): Card => ({
-  id: "t1", title, column: "TODO", deps: [], reviewNotes: [], attempts: 0, stageHistory: [],
+  id: "t1", title, column: "TODO", deps: [], acceptance: [], reviewNotes: [], attempts: 0, stageHistory: [],
 });
 function deps(provider: MockProvider, hasRouter = true, signal?: AbortSignal): TaskCycleDeps {
   const roles: Record<string, RoleConfig> = hasRouter

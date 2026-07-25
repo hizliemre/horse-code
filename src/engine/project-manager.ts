@@ -7,6 +7,12 @@ const taskSchema = z.object({
   id: z.string(),
   title: z.string(),
   deps: z.array(z.string()),
+  /**
+   * Acceptance criteria: what must be OBSERVABLY true when this task is done — each one checkable against the
+   * worktree (a file exists and exports X, a command succeeds, a behavior is covered by a test). Without them
+   * "done" is whatever the implementer says it is; with them, completion is verified rather than asserted.
+   */
+  acceptance: z.array(z.string()).default([]),
 });
 
 // Note: superRefine validates dep INTEGRITY (duplicate id, dangling dep); ACYCLICITY is not
@@ -32,6 +38,6 @@ export const TasksSchema = z
 export async function runProjectManager(opts: RoleAgentOptions): Promise<Board> {
   const { tasks } = await runStructuredRole(opts, TasksSchema);
   const board = new Board();
-  for (const t of tasks) board.addCard({ id: t.id, title: t.title, deps: t.deps });
+  for (const t of tasks) board.addCard({ id: t.id, title: t.title, deps: t.deps, acceptance: t.acceptance });
   return board;
 }
