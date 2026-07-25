@@ -168,6 +168,8 @@ export async function runUpstream(
   if (!done.has("tasks")) {
     emitPhase("tasks");
     await runTasks(p, paths, carryOver);
+    // The board is built by reading this file — an empty/missing task list would silently produce no work.
+    await ensureWritten(paths.tasks, relative(workdir, paths.tasks), "tasks", () => runTasks(p, paths, carryOver));
     await commitStep(deps, workdir, "break the plan into tasks");
     mark("tasks");
   }

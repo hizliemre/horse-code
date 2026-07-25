@@ -219,3 +219,29 @@ describe("runWaveTask", () => {
     ).rejects.toThrow(/unknown task/);
   });
 });
+
+describe("an implementer that writes nothing", () => {
+  it("is NOT reviewed or merged — the task must not be marked done having done nothing", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      // The coder answers in prose and never writes a file, on every attempt.
+      const p = new MockProvider([
+        submit('{"role":"coder"}'),
+        doneTurn, doneTurn, doneTurn, doneTurn, doneTurn, doneTurn, doneTurn, doneTurn,
+      ]);
+      const board = board1();
+      const res = await runWaveTask(wdeps(p, mgr, { rounds: 1 }), session, board, "t1");
+      expect(res.status).toBe("task-failed");            // never silently "merged"
+      const stages = board.get("t1")!.stageHistory;
+      expect(stages.some((s) => s.action === "no-changes")).toBe(true);
+      expect(stages.some((s) => s.action === "merged")).toBe(false);
+      // …and no code review was ever run on the empty worktree.
+      const sys = p.requests.map((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : ""));
+      expect(sys.some((x) => x.includes("review TEAM member"))).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
