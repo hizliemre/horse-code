@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildTeamRegistry, buildCouncilRegistry, runTeam, runCouncil, runJudge, runReviewLoop, runCodeReview,
+  REVIEW_MAX_TURNS,
   type ReviewDeps,
 } from "../../src/engine/review.js";
 import type { ReviewerConfig, RoleConfig } from "../../src/config/config.js";
@@ -918,4 +919,68 @@ describe("review agents have a voice, not a pen", () => {
     await runTeam(d, "code", dir, "target");
     expect(written).toEqual([]);
   });
+});
+
+// The team runs in parallel, so a round lasts as long as its SLOWEST member. Observed in the wild: three
+// lenses finished in 2-8 minutes while four sat at 17.5 minutes with no way out.
+describe("a stuck reviewer cannot hold the round hostage", () => {
+  it("a lens that never returns is reported as timed out and blocks with a critical finding", async () => {
+    const hang: Provider = {
+      async *chat(req, signal) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        if (sys.includes("security vulnerabilities")) {
+          // Never answers; only an abort ends it — exactly what a stuck model looks like.
+          await new Promise((_r, rej) => signal?.addEventListener("abort", () => rej(new Error("aborted"))));
+        }
+        yield* reviewProvider({}).chat(req, signal);
+      },
+    };
+    const statuses: string[] = [];
+    const out = await runTeam({ ...rdeps(hang), reviewTimeoutMs: 300 }, "code", dir, "target", undefined, (ev) => {
+      if (ev.kind === "agent-result") statuses.push(ev.status);
+    });
+    const stuck = out.find((a) => a.name === "security")!;
+    expect(stuck.recommendation).toBe("revise"); // fail-safe: an unchecked dimension never passes silently
+    expect(stuck.findings[0].severity).toBe("critical");
+    expect(stuck.findings[0].note).toMatch(/did not finish within its .*budget/);
+    expect(statuses).toContain("⚠ UNVERIFIED (timed out)");
+    // The healthy lens still reported — it was not dragged down with the stuck one.
+    expect(out.find((a) => a.name === "arch")?.recommendation).toBe("approve");
+  }, 20_000);
+
+  it("a genuine job cancellation still propagates (it is not swallowed as a timeout)", async () => {
+    const ac = new AbortController();
+    const hang: Provider = {
+      async *chat(req, signal) {
+        ac.abort();
+        await new Promise((_r, rej) => signal?.addEventListener("abort", () => rej(new Error("aborted"))));
+        yield { type: "done", finishReason: "stop" };
+      },
+    };
+    await expect(runTeam(rdeps(hang, ac.signal), "code", dir, "target")).rejects.toThrow();
+  });
+
+  it("reviewers get a bounded tool budget — an exploring lens stops well short of the 50-turn default", async () => {
+    let securityCalls = 0;
+    // A lens that would happily grep forever. Without a budget it runs to the 50-turn default on every one of
+    // the chain's passes; with one it stops early and is asked to submit what it has.
+    const looping: Provider = {
+      async *chat(req, signal) {
+        const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
+        if (sys.includes("security vulnerabilities")) {
+          securityCalls++;
+          const nudged = req.messages.some((m) => typeof m.content === "string" && /entire tool-call budget/i.test(m.content));
+          if (nudged) { yield* reviewProvider({}).chat(req, signal); return; } // gives up and submits
+          yield { type: "tool-call", toolCall: { id: `t${securityCalls}`, name: "grep", arguments: '{"pattern":"x"}' } };
+          yield { type: "done", finishReason: "tool_calls" };
+          return;
+        }
+        yield* reviewProvider({}).chat(req, signal);
+      },
+    };
+    const out = await runTeam(rdeps(looping), "code", dir, "target");
+    expect(securityCalls).toBeLessThanOrEqual(REVIEW_MAX_TURNS + 2); // the budget, plus the submit nudge
+    // …and it still produced a real assessment rather than being written off as unverified.
+    expect(out.find((a) => a.name === "security")?.findings.some((f) => /UNVERIFIED/.test(f.note))).toBe(false);
+  }, 30_000);
 });

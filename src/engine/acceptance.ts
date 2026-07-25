@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { runStructuredRole } from "../agent/structured.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
-import { readOnlyRegistry } from "./reviewer.js";
+import { readOnlyRegistry, CODE_REVIEW_MAX_TURNS, CODE_REVIEW_TIMEOUT_MS } from "./reviewer.js";
 import type { Card } from "../board/board.js";
 import type { ReviewDeps } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
@@ -48,7 +48,9 @@ export async function verifyAcceptance(
     messages: [{ role: "user", content:
       `Task: "${card.title}".\n\nAcceptance criteria:\n${card.acceptance.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\n` +
       `Check each one against the worktree and report met/unmet with the evidence you saw.` }],
-    permission: deps.permission, approve: deps.approve, cwd, signal: deps.signal,
+    permission: deps.permission, approve: deps.approve, cwd,
+    signal: AbortSignal.any([deps.signal, AbortSignal.timeout(CODE_REVIEW_TIMEOUT_MS)]),
+    maxTurns: CODE_REVIEW_MAX_TURNS,
   };
   let checks: CriterionCheck[];
   try {

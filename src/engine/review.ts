@@ -21,6 +21,8 @@ export interface ReviewDeps extends TaskCycleDeps {
   teamRegistries: Record<ReviewStage, RoleRegistry>;
   councilRegistry: RoleRegistry;
   council: ReviewerConfig[];
+  /** Wall-clock ceiling per reviewer; defaults to REVIEW_TIMEOUT_MS. Lowered by tests, raisable for slow models. */
+  reviewTimeoutMs?: number;
 }
 /** Structured choices for a question → the TUI renders a selectable checkbox/radio list. */
 export interface AskOpts { options?: string[]; multiSelect?: boolean }
@@ -124,6 +126,29 @@ const STAGE_FRAMING: Record<ReviewStage, string> = {
     "actually implemented. \"medium\" = a real defect or risk worth fixing now. \"low\" = style/polish.",
 };
 
+/**
+ * Tool-call budget for one reviewer. A lens reads the artifact, greps a few things and writes its findings —
+ * a healthy pass is under ten turns. The 50-turn default was never meant for this: it let a single lens explore
+ * for a quarter of an hour while the whole round waited on it. Exceeding it is no longer fatal (the lens is
+ * asked to submit what it has), so this is a budget rather than a cliff.
+ */
+export const REVIEW_MAX_TURNS = 15;
+
+/**
+ * Wall-clock ceiling for one reviewer. The team runs in parallel, so a round lasts as long as its SLOWEST
+ * member: without this, one stuck reviewer holds every finished one hostage indefinitely (observed: three
+ * lenses done in 2-8 min, four still running at 17.5 min with no way out).
+ */
+export const REVIEW_TIMEOUT_MS = 3 * 60 * 1000;
+
+/**
+ * A per-reviewer signal that trips on the job being cancelled OR on the reviewer running out of time. Both
+ * are aborts, but they mean different things: the caller distinguishes them by checking which one fired.
+ */
+function reviewerSignal(deps: ReviewDeps): AbortSignal {
+  return AbortSignal.any([deps.signal, AbortSignal.timeout(deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS)]);
+}
+
 /** Applies to every stage: judge the work against what was ASKED FOR, not against an idealized system. */
 const SCOPE_RULE =
   "Scale your expectations to the REQUESTED scope: do not hold a small, simple product to enterprise-grade " +
@@ -204,12 +229,14 @@ export async function runTeam(
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
         const hints = hintsByLens.get(c.name)!;
         const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}` };
+        const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps, { propose: true }),
           proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
-          permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+          permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
+          maxTurns: REVIEW_MAX_TURNS,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
         try {
@@ -228,8 +255,12 @@ export async function runTeam(
           // Silently dropping it would let the review approve a dimension NOBODY checked (e.g. correctness /
           // data-integrity). Return a BLOCKING critical finding instead → the shortcut can't pass over the gap
           // and the council must adjudicate it. (Root cause is usually an unavailable/misassigned model chain.)
-          emit({ kind: "agent-result", id: `team:${c.name}`, status: "⚠ UNVERIFIED (no response)", ...tok });
-          return { name: c.name, recommendation: "revise", findings: [{ severity: "critical", note: `The "${c.name}" lens could not complete its review (no response from its model chain) — this dimension is UNVERIFIED and must be re-checked (check the model assigned to it).` }] };
+          // A timeout is reported as such: "it never answered" and "it ran past three minutes" have different
+          // fixes (a broken model chain vs. a lens that needs a cheaper model or a narrower artifact).
+          const timedOut = signal.aborted;
+          const why = timedOut ? `did not finish within its ${Math.round((deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS) / 1000)}s budget` : "got no response from its model chain";
+          emit({ kind: "agent-result", id: `team:${c.name}`, status: timedOut ? "⚠ UNVERIFIED (timed out)" : "⚠ UNVERIFIED (no response)", ...tok });
+          return { name: c.name, recommendation: "revise", findings: [{ severity: "critical", note: `The "${c.name}" lens could not complete its review (${why}) — this dimension is UNVERIFIED and must be re-checked (check the model assigned to it).` }] };
         }
       }),
     );
@@ -292,12 +323,14 @@ export async function runCouncil(
         const tok = { promptTokens: 0, completionTokens: 0 };
         const hints = hintsByMember.get(c.name)!;
         const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` };
+        const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           tools: readOnlyRegistry(deps, { propose: true }),
           proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, vote] : [vote],
-          permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+          permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
+          maxTurns: REVIEW_MAX_TURNS,
           onUsage: (u) => { tok.promptTokens += u.promptTokens; tok.completionTokens += u.completionTokens; },
         };
         try {
@@ -310,8 +343,9 @@ export async function runCouncil(
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
           // Fail-SAFE: a decider that can't vote counts as a conservative REVISE (we can't confirm the doc is
           // fine), never silently dropped — otherwise a shrunk council could accidentally reach a "pass".
-          emit({ kind: "agent-result", id: `council:${c.name}`, status: "⚠ UNVERIFIED (no response)", ...tok });
-          return { name: c.name, vote: "revise", rationale: `The "${c.name}" decider could not vote (no response) — counted as revise to be safe.` };
+          const timedOut = signal.aborted;
+          emit({ kind: "agent-result", id: `council:${c.name}`, status: timedOut ? "⚠ UNVERIFIED (timed out)" : "⚠ UNVERIFIED (no response)", ...tok });
+          return { name: c.name, vote: "revise", rationale: `The "${c.name}" decider could not vote (${timedOut ? "timed out" : "no response"}) — counted as revise to be safe.` };
         }
       }),
     );
@@ -362,7 +396,8 @@ export async function runJudge(
     tools: readOnlyRegistry(deps, { propose: true }),
     proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "judge") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, brief] : [brief],
-    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: reviewerSignal(deps),
+    maxTurns: REVIEW_MAX_TURNS,
   };
   let d: JudgeDecision;
   try {

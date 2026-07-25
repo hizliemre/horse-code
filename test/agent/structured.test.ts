@@ -72,7 +72,9 @@ describe("runStructuredRole", () => {
   it("throws if submit is never called and nothing can be salvaged (after retries)", async () => {
     const p = new MockProvider([[{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }]]);
     await expect(runStructuredRole(opts(p), schema)).rejects.toThrow(/submit was not called/);
-    expect(p.requests).toHaveLength(3); // maxAttempts passes before giving up
+    // Two nudges per model, not three: a model that ignored `submit` twice almost never converts on a third
+    // pass, and each extra pass re-sends the whole (by then large) conversation.
+    expect(p.requests).toHaveLength(2);
   });
 
   it("primary answers only in prose → falls to the FALLBACK model, which submits → success", async () => {
@@ -131,5 +133,29 @@ describe("runStructuredRole", () => {
     const names = p.requests[0].tools.map((t) => t.name);
     expect(names).toContain("noop");
     expect(names).toContain("submit");
+  });
+});
+
+// Running out of tool budget is not a model defect — the conversation already holds everything the role read.
+// Treating it as a hard error made a 15-turn cap WORSE than none: it discarded the work and repeated it on
+// every fallback model.
+describe("runStructuredRole — a spent turn budget is not a model failure", () => {
+  it("asks the same model to submit what it has instead of falling to the next one", async () => {
+    // Pass 1: burns its 1-turn budget on a tool call → "maximum turn count exceeded".
+    // Pass 2 (the nudge): submits.
+    const loop: ChatEvent[] = [
+      { type: "tool-call", toolCall: { id: "t", name: "noop", arguments: "{}" } },
+      { type: "done", finishReason: "tool_calls" },
+    ];
+    const submit: ChatEvent[] = [
+      { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: '{"decision":"pass"}' } },
+      { type: "done", finishReason: "tool_calls" },
+    ];
+    const p = new MockProvider([loop, submit]);
+    const o = { ...opts(p), maxTurns: 1, fallbacks: ["f1"] };
+    expect(await runStructuredRole(o, schema)).toEqual({ decision: "pass" });
+    // The second request went to the SAME model — the fallback was never touched.
+    expect(p.requests.map((r) => r.model)).toEqual(["m", "m"]);
+    expect(p.requests[1].messages.some((m) => typeof m.content === "string" && /entire tool-call budget/i.test(m.content))).toBe(true);
   });
 });

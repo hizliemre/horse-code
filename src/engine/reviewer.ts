@@ -12,6 +12,15 @@ import { proposeMemoryTool } from "../tools/propose-memory.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 
+/**
+ * Budget for the agents that inspect real CODE (the per-task reviewer, the acceptance gate). Wider than a
+ * document lens — they may open several files — but bounded: an unbounded read loop re-sends everything it has
+ * read on every turn, which is how one reviewer burned 1.9M prompt tokens for 21k of output.
+ */
+export const CODE_REVIEW_MAX_TURNS = 25;
+/** Wall-clock ceiling, so one stuck reviewer cannot hold a task open indefinitely. */
+export const CODE_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
+
 export const VerdictSchema = z.object({
   verdict: z.enum(["pass", "fail"]),
   notes: z.array(z.string()),
@@ -50,7 +59,8 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
     permission: deps.permission,
     approve: deps.approve,
     cwd,
-    signal: deps.signal,
+    signal: AbortSignal.any([deps.signal, AbortSignal.timeout(CODE_REVIEW_TIMEOUT_MS)]),
+    maxTurns: CODE_REVIEW_MAX_TURNS,
   };
   const verdict = await runStructuredRole(opts, VerdictSchema);
   reinforceUsed(deps, hints.ids, verdict.notes.join(" "), "code-reviewer");

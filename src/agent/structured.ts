@@ -61,10 +61,19 @@ function extractStructured<T>(text: string, schema: z.ZodType<T>): T | undefined
  * valid submit we (1) try to salvage JSON from the final text, then (2) nudge the model to actually call
  * submit and retry — up to `maxAttempts` passes — before giving up.
  */
+/**
+ * A role that ran out of tool budget has not FAILED — it explored too long. Detected so the chain does not
+ * treat it as a broken model and re-run the same work on every fallback.
+ */
+const TURN_LIMIT_RE = /maximum turn count exceeded/i;
+
 export async function runStructuredRole<T>(
   opts: RoleAgentOptions,
   schema: z.ZodType<T>,
-  maxAttempts = 3,
+  // Two nudges per model, not three: with a 3-model chain that is 6 full passes instead of 9, and the third
+  // nudge almost never converted a model that had already ignored `submit` twice — it just re-sent the whole
+  // (by then very large) conversation one more time.
+  maxAttempts = 2,
 ): Promise<T> {
   const handle = buildSubmitTool(schema);
   const registry = new ToolRegistry();
@@ -98,7 +107,18 @@ export async function runStructuredRole<T>(
       const salvaged = extractStructured(lastText, schema);
       if (salvaged !== undefined) return salvaged;
 
-      if (errored !== undefined) { lastError = errored; break; } // this model erred → stop nudging, try the next
+      if (errored !== undefined) {
+        // Out of turns is not a model defect: the conversation already holds everything it read. Ask it to
+        // submit what it has instead of discarding the work and repeating it on the next model.
+        if (TURN_LIMIT_RE.test(errored) && attempt < maxAttempts - 1) {
+          messages.push({ role: "assistant", content: lastText });
+          messages.push({ role: "user", content:
+            "You have used your entire tool-call budget. Call `submit` NOW with the findings you already have. " +
+            "Do not read, grep or inspect anything else." });
+          continue;
+        }
+        lastError = errored; break; // a genuine model error → stop nudging, try the next model
+      }
       // Prose instead of a tool call → nudge THIS model to call submit, then retry it.
       messages.push({ role: "assistant", content: lastText });
       messages.push({
