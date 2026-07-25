@@ -18,6 +18,9 @@ export interface Checkpoint {
   language: string;    // the user's language (English name, e.g. "Turkish") → review/escalation localization
   featureSlug: string; // the specs/NNN-… dir to reuse (so resume doesn't create a fresh numbered feature)
   done: UpstreamPhase[];
+  /** Deferred (non-blocking) findings accumulated so far — they must survive a restart or the later stages
+   *  would never see what earlier reviews chose not to block on. */
+  carryOver?: string[];
 }
 
 function checkpointPath(worktreeRoot: string): string {

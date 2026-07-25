@@ -15,6 +15,9 @@ import { runRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
 import { appendReviewNotes } from "./review-notes.js";
+import { saveBoard, loadBoard } from "../board/persist.js";
+import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import type { Column } from "../board/board.js";
 import { dirname, join } from "node:path";
 
@@ -126,9 +129,21 @@ export async function runJob(
     await deps.manager.commitMerge(session, "hc: spec + plan"); // spec/plan → baseBranch (goes into the PR)
 
     emit({ kind: "phase", phase: "board" });
-    const board = await runProjectManager(pmOpts(deps, workdir, up.tasksPath));
+    // The board carries the ONLY record of which tasks are already implemented and merged. Without persisting
+    // it, a resumed run rebuilds an empty board and re-implements every finished task. It lives next to the
+    // checkpoint (outside the git tree) and is rewritten on every mutation.
+    const boardPath = join(session.root, "board.json");
+    let board: Board;
+    if (existsSync(boardPath)) {
+      board = await loadBoard(boardPath);
+      const done = board.list().filter((c) => c.column === "DONE").length;
+      emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` });
+    } else {
+      board = await runProjectManager(pmOpts(deps, workdir, up.tasksPath));
+      await saveBoard(board, boardPath);
+    }
     emit({ kind: "board", cards: snapshotBoard(board) });
-    board.onChange = () => emit({ kind: "board", cards: snapshotBoard(board) });
+    board.onChange = () => { emit({ kind: "board", cards: snapshotBoard(board) }); void saveBoard(board, boardPath).catch(() => { /* persistence is best-effort */ }); };
     // The chat shows task progress as ACTIONS (transitions), not a kanban board. One note per real column move.
     board.onMove = (card, _from, to) => emit({ kind: "note", text: `📋 **${card.title}** → ${columnAction(to)}` });
 
@@ -159,6 +174,7 @@ export async function runJob(
     emit({ kind: "phase", phase: "report" });
     const report = await runCoachReport(deps, session, board);
     clearCheckpoint(session.root); // whole job succeeded → nothing left to resume
+    await rm(join(session.root, "board.json"), { force: true }).catch(() => { /* best-effort */ });
     emit({ kind: "phase", phase: "done" });
     return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {

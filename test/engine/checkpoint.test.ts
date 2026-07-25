@@ -60,3 +60,12 @@ describe("isContinuePrompt", () => {
     expect(isContinuePrompt("implement session persistence")).toBe(false);
   });
 });
+
+describe("checkpoint carries the deferred notes", () => {
+  it("round-trips carryOver so a restart does not lose earlier reviews' non-blocking findings", async () => {
+    dir = await mkdtemp(join(tmpdir(), "hc-cp-"));
+    const cp: Checkpoint = { ...sample, carryOver: ["[spec][medium] spec-scope: trim the v1 surface"] };
+    writeCheckpoint(dir, cp);
+    expect(readCheckpoint(dir)?.carryOver).toEqual(["[spec][medium] spec-scope: trim the v1 surface"]);
+  });
+});

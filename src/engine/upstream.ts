@@ -87,7 +87,10 @@ export async function runUpstream(
   const paths = scaffoldFeature(workdir, slug);
   const specRel = relative(workdir, paths.spec);
   const planRel = relative(workdir, paths.plan);
-  const save = (): void => writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, language: r.language, featureSlug: slug, done: [...done] });
+  // Deferred (non-blocking) findings accumulated across stages — restored from the checkpoint so a restart
+  // does not lose what earlier reviews chose not to block on.
+  let carryOver: string[] = prior?.carryOver ?? [];
+  const save = (): void => writeCheckpoint(root, { rawPrompt: prompt, refinedPrompt: r.refinedPrompt, title: r.title, language: r.language, featureSlug: slug, done: [...done], carryOver });
   const mark = (phase: UpstreamPhase): void => { done.add(phase); save(); };
   if (done.size > 0) emit({ kind: "note", text: `⏩ Resuming — already done: ${[...done].join(", ")}. Continuing from the next phase.` });
   // Seed the checkpoint immediately so even a crash before the first phase completes leaves a resumable marker.
@@ -119,9 +122,6 @@ export async function runUpstream(
     mark("constitution");
   }
 
-  // Medium/low findings the spec review deferred (instead of spending another revision round on them) travel
-  // to the plan phase as known, non-blocking context. Empty on a resumed run that skipped the spec phase.
-  let carryOver: string[] = [];
 
   // Specify → council/judge review loop (revise = re-run specify with feedback).
   if (!done.has("spec")) {
@@ -143,6 +143,7 @@ export async function runUpstream(
     if (!specOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "spec" };
     // Accumulate (never overwrite): a later stage should see everything earlier stages chose not to block on.
     carryOver = [...carryOver, ...(specOut.deferred ?? [])];
+    save(); // deferred notes must survive a restart, not just live in this process
     if (appendReviewNotes(paths.dir, specOut.deferred ?? [])) emit({ kind: "note", text: `📝 ${specOut.deferred!.length} deferred spec note(s) recorded in \`${relative(workdir, paths.dir)}/review-notes.md\`.` });
     // Approved but the file doesn't exist (specify didn't write it, judge passed anyway): don't hand H a nonexistent path.
     if (!existsSync(paths.spec)) throw new Error(`specify did not produce a spec: ${specRel}`);
@@ -174,6 +175,7 @@ export async function runUpstream(
     });
     if (!planOut.approved) return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "rejected", stage: "plan" };
     carryOver = [...carryOver, ...(planOut.deferred ?? [])]; // spec + plan deferrals both reach the task breakdown
+    save();
     if (appendReviewNotes(paths.dir, planOut.deferred ?? [])) emit({ kind: "note", text: `📝 ${planOut.deferred!.length} deferred plan note(s) recorded in \`${relative(workdir, paths.dir)}/review-notes.md\`.` });
     if (!existsSync(paths.plan)) throw new Error(`plan did not produce a plan: ${planRel}`);
     await commitStep(deps, workdir, "add the implementation plan");

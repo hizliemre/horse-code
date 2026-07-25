@@ -40,8 +40,12 @@ export async function runWave(
   taskIds: string[],
   blocked: Set<string>,
 ): Promise<WaveOutcome> {
-  const skipped = taskIds.filter((t) => board.get(t)!.deps.some((d) => blocked.has(d)));
-  const runnable = taskIds.filter((t) => !skipped.includes(t));
+  // A task already in DONE was implemented and merged by an earlier (interrupted) run — re-running it would
+  // redo the whole implementation. Treat it as merged and move on.
+  const alreadyDone = taskIds.filter((t) => board.get(t)!.column === "DONE");
+  const rest = taskIds.filter((t) => !alreadyDone.includes(t));
+  const skipped = rest.filter((t) => board.get(t)!.deps.some((d) => blocked.has(d)));
+  const runnable = rest.filter((t) => !skipped.includes(t));
   for (const t of skipped) {
     board.appendStage(t, { role: "team-lead", action: "skipped", note: "dependency failed" });
   }
@@ -67,7 +71,7 @@ export async function runWave(
   );
 
   return {
-    merged: results.filter((r) => r.status === "merged").map((r) => r.t),
+    merged: [...alreadyDone, ...results.filter((r) => r.status === "merged").map((r) => r.t)],
     failed: results.filter((r) => r.status !== "merged").map((r) => r.t),
     skipped,
   };
