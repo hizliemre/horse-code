@@ -98,10 +98,24 @@ export function filterModelsForRole(role: string, all: string[], exclude: string
 const effortBump = (s: string): number =>
   /-(ultra|max|xhigh)/.test(s) ? 4 : /-high/.test(s) ? 3 : /-medium/.test(s) ? 2 : /-low/.test(s) ? 1 : 0;
 
-/** Version bump from a "4-8" / "4.6" style version in the id (opus-4-8 > opus-4-5). */
-const versionBump = (s: string): number => {
-  const m = s.match(/(\d)[-.](\d)\b/);
-  return m ? Number(m[1]) + Number(m[2]) / 10 : 0;
+/**
+ * Version bump read from the id, ANCHORED to the model family: "opus-4-8" → 4.8, "sonnet-4.6" → 4.6, and —
+ * critically — a bare major release like "opus-5" → 5.0. Reading a bare major as 0 would rank a brand-new
+ * `opus-5` (88.0) BELOW the older `opus-4-8` (92.8), so a new generation would never get picked. Anchoring to
+ * the family name also stops a date suffix ("opus-4-5-20251101") from being read as the version.
+ */
+const versionBump = (s: string, family?: string): number => {
+  if (family) {
+    const m = s.match(new RegExp(`${family}[-_. ]?(\\d+)(?:[-.](\\d+))?`));
+    if (m) {
+      const major = Number(m[1]);
+      const minor = m[2] === undefined ? 0 : Number(m[2]);
+      // A 4-digit "major" is a date (…-20251101), not a version → fall through to the generic scan.
+      if (major < 100) return major + (minor < 10 ? minor / 10 : minor / 100);
+    }
+  }
+  const g = s.match(/(\d)[-.](\d)\b/); // generic fallback: ids that put the version before the family name
+  return g ? Number(g[1]) + Number(g[2]) / 10 : 0;
 };
 
 /** Capability score from the model id (higher = more capable). Knows the real Claude/OpenAI families. */
@@ -109,9 +123,9 @@ export function capabilityScore(model: string): number {
   const s = model.toLowerCase();
   if (WEAK_RE.test(s)) return 20 + effortBump(s); // fast/cheap variants (haiku, flash, gpt-5-mini…)
   if (/fable|mythos/.test(s)) return 100; // Anthropic's most capable
-  if (/opus/.test(s)) return 88 + versionBump(s); // opus-4-8 → 92.8 > opus-4-5 → 92.5
+  if (/opus/.test(s)) return 88 + versionBump(s, "opus"); // opus-5 → 93 > opus-4-8 → 92.8 > opus-4-5 → 92.5
   if (/codex|gpt-5|\bo3\b/.test(s)) return 82 + effortBump(s); // strong coding, effort-aware
-  if (/sonnet/.test(s)) return 78 + versionBump(s);
+  if (/sonnet/.test(s)) return 78 + versionBump(s, "sonnet");
   if (/gpt-4|gemini.*pro/.test(s)) return 65;
   if (/deepseek/.test(s)) return 55;
   return 50; // unknown → assume mid

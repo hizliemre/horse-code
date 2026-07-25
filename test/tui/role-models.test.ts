@@ -40,6 +40,16 @@ describe("capabilityScore", () => {
     expect(capabilityScore("cc/claude-opus-4-8")).toBeGreaterThan(capabilityScore("cx/gpt-5.6-sol-high"));
   });
 
+  it("a bare major release outranks the older dotted versions of the same family (opus-5 > opus-4-8)", () => {
+    // Regression: the version was only read from a "4-8"/"4.6" pattern, so a brand-new "opus-5" scored 0 on
+    // version and landed BELOW opus-4-8 — a new generation would never be assigned to any role.
+    expect(capabilityScore("cc/claude-opus-5")).toBeGreaterThan(capabilityScore("cc/claude-opus-4-8"));
+    expect(capabilityScore("cc/claude-sonnet-5")).toBeGreaterThan(capabilityScore("cc/claude-sonnet-4-6"));
+    // A date suffix must not be mistaken for the version.
+    expect(capabilityScore("cc/claude-opus-4-5-20251101")).toBeLessThan(capabilityScore("cc/claude-opus-4-8"));
+    expect(capabilityScore("cc/claude-opus-4-5-20251101")).toBeGreaterThan(capabilityScore("cc/claude-sonnet-5"));
+  });
+
   it("Gemini is capable (not fast) but Gemini-flash IS fast", () => {
     expect(capabilityScore("antigravity/gemini-3.1-pro-high")).toBeGreaterThan(30); // not fast
     expect(capabilityScore("antigravity/gemini-3.5-flash-high")).toBeLessThan(30); // flash → fast tier
