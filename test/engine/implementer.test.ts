@@ -97,3 +97,46 @@ describe("runImplementer reports per-agent usage", () => {
     await expect(runImplementer(ideps(p), "coder", card(), dir)).resolves.toBeUndefined();
   });
 });
+
+// The 200-turn budget does not bound TIME: one card was observed running 378 minutes because nothing said
+// when to stop. Every write is committed as it happens, so a stopped attempt keeps its partial work.
+describe("one implementation attempt is bounded in wall-clock time", () => {
+  const hang = (): Provider => ({
+    async *chat(_req, signal) {
+      await new Promise((_r, rej) => signal?.addEventListener("abort", () => rej(new Error("aborted"))));
+      yield { type: "done", finishReason: "stop" };
+    },
+  });
+
+  it("stops an attempt that runs past its budget and says so", async () => {
+    const d = { ...ideps(hang()), implementerTimeoutMs: 150 };
+    await expect(runImplementer(d, "coder", card(), dir)).rejects.toThrow(/ran past its .*budget/);
+  });
+
+  it("tells the next tier to CONTINUE from the partial work, not start over", async () => {
+    const d = { ...ideps(hang()), implementerTimeoutMs: 150 };
+    await expect(runImplementer(d, "coder", card(), dir)).rejects.toThrow(/continue from there/i);
+  });
+
+  // A timeout is a failed attempt; a Ctrl-C is a cancellation. They must not be conflated.
+  it("a real cancellation still propagates as one", async () => {
+    const ac = new AbortController();
+    const d = { ...ideps(hang()), signal: ac.signal, implementerTimeoutMs: 60_000 };
+    const p = runImplementer(d, "coder", card(), dir);
+    ac.abort();
+    // Whatever the underlying error is, it must NOT be rewritten into "ran past its budget" — that would
+    // send a cancelled job up the escalation ladder as if the model had been too slow.
+    await expect(p).rejects.toThrow();
+    await expect(p).rejects.not.toThrow(/ran past its/);
+  });
+
+  it("a healthy attempt is unaffected", async () => {
+    const ok: Provider = {
+      async *chat() {
+        yield { type: "text-delta", text: "done" };
+        yield { type: "done", finishReason: "stop" };
+      },
+    };
+    await expect(runImplementer({ ...ideps(ok), implementerTimeoutMs: 60_000 }, "coder", card(), dir)).resolves.toBeUndefined();
+  });
+});

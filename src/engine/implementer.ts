@@ -12,6 +12,18 @@ import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 // to per-task error isolation in runWaveTask, fails ONLY that task instead of crashing the whole job.
 const IMPLEMENTER_MAX_TURNS = 200;
 
+/**
+ * Wall-clock ceiling for ONE implementation attempt.
+ *
+ * The turn budget alone does not bound time: a task was observed running for 378 minutes — over six hours on a
+ * single card — because nothing said when to stop. Generous enough that a real scaffold-and-test task finishes
+ * comfortably, small enough that a stuck one hands over to the next tier the same day.
+ *
+ * Nothing written is lost when it fires: every write is committed to the task worktree as it happens, so the
+ * partial work stays and the next tier continues from it.
+ */
+export const IMPLEMENTER_TIMEOUT_MS = 20 * 60 * 1000;
+
 /** Runs the implementer role with worktree-scoped tools + a new-vs-returning message. */
 export async function runImplementer(
   deps: TaskCycleDeps,
@@ -38,6 +50,9 @@ export async function runImplementer(
   // blind to them and kept re-learning the same things.
   const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role });
 
+  // A timeout here is NOT a cancellation: the job is fine, this one attempt ran too long. The two are
+  // distinguished below so a genuine Ctrl-C still propagates as a cancellation.
+  const budget = AbortSignal.timeout(deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS);
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
@@ -54,10 +69,18 @@ export async function runImplementer(
     permission: deps.permission,
     approve: deps.approve,
     cwd,
-    signal: deps.signal,
+    signal: AbortSignal.any([deps.signal, budget]),
     onActivity: deps.onActivity,
     onLiveActivity: deps.onLiveActivity,
     onWrite: (path) => commitFile(deps, cwd, path).then(() => {}), // per-write conventional commit in the task worktree
   };
-  await runToCompletion(opts);
+  try {
+    await runToCompletion(opts);
+  } catch (e) {
+    if (deps.signal.aborted || !budget.aborted) throw e; // a real cancel, or a real error → unchanged
+    // Surfaced as a failed ATTEMPT (the escalation ladder catches it and moves up a tier), with a note that
+    // says what happened so the next tier does not simply repeat it.
+    const mins = Math.round((deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS) / 60_000);
+    throw new Error(`the implementer ran past its ${mins}-minute budget for a single attempt and was stopped. Whatever it wrote is committed and kept — continue from there rather than starting over.`);
+  }
 }

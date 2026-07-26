@@ -17,6 +17,8 @@ export interface TaskCycleDeps {
   onActivity?: (a: ToolActivity) => void;
   /** Live "writing <file> · N chars" progress while a tool call is still being generated (long writes). */
   onLiveActivity?: (label: string) => void;
+  /** Wall-clock ceiling for one implementation attempt; defaults to IMPLEMENTER_TIMEOUT_MS. Lowered by tests. */
+  implementerTimeoutMs?: number;
   /**
    * Live progress sink. The REVIEW path threaded its own `emit` down its call chain, so per-agent metering
    * landed there; the implementer path had no such channel and its rows showed a bare clock. This is that
