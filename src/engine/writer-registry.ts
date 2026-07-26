@@ -9,7 +9,7 @@ import { globTool } from "../tools/glob.js";
 import { buildSkillTool } from "../skills/apply.js";
 import type { SkillRegistry } from "../skills/registry.js";
 import type { AskUser } from "./review.js";
-import { looksLikeChoices, type NormalizedQuestion } from "./normalize-question.js";
+import { looksLikeChoices, extractChoicesFrom, type NormalizedQuestion } from "./normalize-question.js";
 
 const askUserParams = z.object({
   question: z.string(),
@@ -55,13 +55,22 @@ export function buildAskUserTool(
       const { question, options, multiSelect } = parsed.data;
       // If the model didn't pass structured options but the text looks like it embeds choices, extract them
       // (via `normalize`) so the user gets a real selectable list instead of a wall of prose.
-      if ((!options || options.length === 0) && normalize && looksLikeChoices(question)) {
-        try {
-          const n = await normalize(question);
-          if (n.options.length > 0) {
-            return { content: await askUser(n.question, { options: n.options, multiSelect: n.multiSelect }), isError: false };
-          }
-        } catch { /* normalizer failed → fall through to the raw question */ }
+      if ((!options || options.length === 0) && looksLikeChoices(question)) {
+        // The question already lists its choices — read them rather than paying a model to restate them.
+        const found = extractChoicesFrom(question);
+        if (found.choices.length >= 2) {
+          // The trimmed question, so the list is not printed twice — once as prose, once as the list.
+          return { content: await askUser(found.question, { options: found.choices }), isError: false };
+        }
+        // Only prose that hides its choices needs a model.
+        if (normalize) {
+          try {
+            const n = await normalize(question);
+            if (n.options.length > 0) {
+              return { content: await askUser(n.question, { options: n.options, multiSelect: n.multiSelect }), isError: false };
+            }
+          } catch { /* normalizer failed → fall through to the raw question */ }
+        }
       }
       return { content: await askUser(question, { options, multiSelect }), isError: false };
     },

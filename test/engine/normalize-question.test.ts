@@ -50,12 +50,36 @@ describe("normalizeQuestion", () => {
 describe("buildAskUserTool with normalize", () => {
   const capture = () => { const seen: { q: string; opts?: (string | { label: string })[] }[] = []; return { seen, ask: async (q: string, o?: { options?: (string | { label: string })[] }) => { seen.push({ q, opts: o?.options }); return "answer"; } }; };
 
-  it("embedded choices + no options → normalize extracts a selectable list", async () => {
+  /**
+   * A question that already lists its choices is READ, not sent to a model: the structuring work is done,
+   * and paying a call to restate it added a delay and a silent failure mode.
+   */
+  it("embedded choices + no options → the list is read without a model", async () => {
     const { seen, ask } = capture();
-    const normalize = async () => ({ question: "Which platform?", options: ["Web (recommended)", "Desktop"], multiSelect: false });
-    const tool = buildAskUserTool(ask, normalize);
+    let normalized = 0;
+    const tool = buildAskUserTool(ask, async () => { normalized++; return { question: "x", options: ["a"], multiSelect: false }; });
     await tool.run({ question: "Which platform?\n| A | Web |\n| B | Desktop |" }, ctx);
+    expect(normalized).toBe(0);
+    expect(seen[0].opts).toEqual([{ label: "A", description: "Web" }, { label: "B", description: "Desktop" }]);
+  });
+
+  /** Printing the table AND the list makes the reader check whether the two differ. */
+  it("removes the consumed list from the question", async () => {
+    const { seen, ask } = capture();
+    await buildAskUserTool(ask).run({ question: "Which platform?\n| A | Web |\n| B | Desktop |" }, ctx);
     expect(seen[0].q).toBe("Which platform?");
+  });
+
+  it("falls back to a model only when the choices are hidden in prose", async () => {
+    const { seen, ask } = capture();
+    let normalized = 0;
+    const normalize = async () => {
+      normalized++;
+      return { question: "Which platform?", options: ["Web (recommended)", "Desktop"], multiSelect: false };
+    };
+    await buildAskUserTool(ask, normalize)
+      .run({ question: "Should we choose the web option or the desktop one? Recommended: web." }, ctx);
+    expect(normalized).toBe(1);
     expect(seen[0].opts).toEqual(["Web (recommended)", "Desktop"]);
   });
 
@@ -79,13 +103,15 @@ describe("buildAskUserTool with normalize", () => {
 
   it("normalizer returns no options / throws → falls back to the raw question", async () => {
     const { seen, ask } = capture();
+    // Prose the reader cannot structure either — nothing to extract, so the model is the only hope.
+    const prose = "Which option do you recommend here, and why is it better than the alternative?";
     const tool = buildAskUserTool(ask, async () => ({ question: "x", options: [], multiSelect: false }));
-    await tool.run({ question: "Pick:\nA) one\nB) two" }, ctx);
-    expect(seen[0].q).toContain("Pick:"); // raw question, no options extracted
+    await tool.run({ question: prose }, ctx);
+    expect(seen[0].q).toBe(prose); // raw question, no options extracted
     expect(seen[0].opts).toBeUndefined();
 
     const t2 = buildAskUserTool(ask, async () => { throw new Error("boom"); });
-    await t2.run({ question: "Pick:\nA) one\nB) two" }, ctx);
-    expect(seen[1].q).toContain("Pick:"); // normalizer threw → raw question
+    await t2.run({ question: prose }, ctx);
+    expect(seen[1].q).toBe(prose); // normalizer threw → raw question
   });
 });

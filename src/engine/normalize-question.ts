@@ -46,3 +46,53 @@ export async function normalizeQuestion(deps: TaskCycleDeps, raw: string): Promi
     permission: deps.permission, approve: deps.approve, cwd: ".", signal: deps.signal,
   }, NormalizedQuestionSchema);
 }
+
+/**
+ * Pulls the choices out of a question that already lists them, without a model.
+ *
+ * An agent that embeds its options in a markdown table has already done the structuring work; asking a model
+ * to redo it adds a call, a delay and a failure mode to something that can simply be read. And that failure
+ * mode was silent: when the normalizer threw or returned nothing, the question fell through as free text and
+ * nobody could tell whether it had run.
+ *
+ * Deterministic, so it either finds the options or plainly does not.
+ */
+export interface ExtractedChoices {
+  choices: { label: string; description?: string }[];
+  /** The question with the consumed list removed — showing it twice makes the reader check whether it differs. */
+  question: string;
+}
+
+/** The choices only, for callers that do not need the trimmed question. */
+export function extractChoices(text: string): { label: string; description?: string }[] {
+  return extractChoicesFrom(text).choices;
+}
+
+export function extractChoicesFrom(text: string): ExtractedChoices {
+  const lines = text.split("\n");
+
+  // A markdown table: rows are `| A | what it means |`. The header and separator are not choices.
+  const rows = lines
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith("|") && l.endsWith("|") && !/^\|[\s|:-]+\|$/.test(l))
+    .map((l) => l.slice(1, -1).split("|").map((c) => c.trim()));
+  const body = rows.filter((cells) => cells.length >= 2 && cells[0] && cells[1])
+    // The first row is a header when its cells name the columns rather than being a choice.
+    .filter((cells, i) => !(i === 0 && /^(option|seçenek|choice|alternatif)$/i.test(cells[0])));
+  if (body.length >= 2) {
+    // Drop every table line, not only the rows kept: the header and separator are part of the same table.
+    const question = lines.filter((l) => !/^\s*\|.*\|\s*$/.test(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    return { choices: body.map((cells) => ({ label: cells[0], description: cells.slice(1).join(" — ") })), question };
+  }
+
+  // A lettered list: `A) …` / `B. …`, one per line.
+  const isLettered = (l: string): RegExpExecArray | null => /^\s*([A-Ea-e])[).\-:]\s+(\S.*)$/.exec(l.trim());
+  const lettered = lines.map(isLettered).filter((m): m is RegExpExecArray => !!m)
+    .map((m) => ({ label: `${m[1].toUpperCase()} — ${m[2]}` }));
+  if (lettered.length >= 2) {
+    const question = lines.filter((l) => !isLettered(l)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    return { choices: lettered, question };
+  }
+
+  return { choices: [], question: text };
+}

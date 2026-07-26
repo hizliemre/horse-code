@@ -155,11 +155,17 @@ describe("a paragraph-long question wraps rather than overflowing", () => {
     expect(narrow).toBeGreaterThan(wide);
   });
 
-  /** Nothing is dropped: every word of the question survives the wrap. */
-  it("keeps the whole question", () => {
-    const joined = flattenMarkdown(PARAGRAPH, pendingBodyWidth(80))
-      .map((l) => l.map((s) => s.text).join("")).join(" ");
-    expect(joined).toContain("httpResource");
-    expect(joined).toContain("single biggest architectural decision");
+  /**
+   * Nothing is dropped: every word survives the wrap.
+   *
+   * Asserted on the WORDS, not on the spacing — a wrap boundary leaves whatever whitespace it leaves, and a
+   * test that breaks when the wrap lands one character earlier is testing the wrap position rather than the
+   * property that matters.
+   */
+  it("keeps every word of the question", () => {
+    const words = (t: string): string[] => t.split(/\s+/).filter(Boolean);
+    const rendered = flattenMarkdown(PARAGRAPH, pendingBodyWidth(80))
+      .map((l) => l.map((s) => s.text).join(" ")).join(" ");
+    expect(words(rendered)).toEqual(words(PARAGRAPH));
   });
 });

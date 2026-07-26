@@ -41,7 +41,8 @@ const PENDING_STYLE = {
 
 /** Width of the pending-question box (shared by the renderer + the fullscreen height math → same wrap → same line count). */
 export function pendingWidth(cols: number): number {
-  return Math.max(20, cols - 2);
+  // -4: the two-column indent of the block itself, plus the terminal's own margin.
+  return Math.max(20, cols - 4);
 }
 /** Body wrap width: the box width minus the 2-space hanging indent under the header. */
 export function pendingBodyWidth(cols: number): number {
@@ -58,7 +59,10 @@ export function PendingQuestion({ text, cols }: { text: string; cols: number }):
   const width = pendingWidth(cols);
   const lines = flattenMarkdown(body, pendingBodyWidth(cols));
   return (
-    <Box flexDirection="column" width={width}>
+    // Indented as a whole: the header sat flush at the left margin while the transcript around it is
+    // indented, so the question read as a separate thing bolted on rather than part of the conversation.
+    // The body keeps its offset from the header, so the two still nest.
+    <Box flexDirection="column" width={width} paddingLeft={2}>
       <Text color={s.color} bold>{`${s.icon} ${s.label}`}</Text>
       <Box flexDirection="column" paddingLeft={2}>
         {lines.map((line, i) => (
