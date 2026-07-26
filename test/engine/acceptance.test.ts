@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyAcceptance } from "../../src/engine/acceptance.js";
@@ -41,7 +41,10 @@ const provider = (checks: unknown): Provider => ({
 describe("verifyAcceptance (the completion gate)", () => {
   it("passes trivially when the task promised nothing (plans that predate the gate still run)", async () => {
     const res = await verifyAcceptance(gdeps(provider([])), card([]), dir);
-    expect(res).toEqual({ passed: true, unmet: [] });
+    expect(res.passed).toBe(true);
+    expect(res.unmet).toEqual([]);
+    // A directory with no manifest has no suite to run, and that is not a failure.
+    expect(res.tests).toEqual({ ran: false, passed: true });
   });
 
   it("passes when every criterion is met, and reports it", async () => {
@@ -77,5 +80,69 @@ describe("verifyAcceptance (the completion gate)", () => {
     const res = await verifyAcceptance(gdeps(broken), card(["src/models/todo.ts exports a Todo type"]), dir);
     expect(res.passed).toBe(false);
     expect(res.unmet[0]).toMatch(/not verified/);
+  });
+});
+
+/**
+ * The gate used to read only. Every reviewing agent in this pipeline has read/grep/glob and nothing else, so
+ * the whole quality apparatus answered "does this diff look right?" and none of it could answer "does it
+ * work?" — the question that matters when changing code that already exists.
+ */
+describe("the gate runs the project's own tests", () => {
+  const withPkg = async (script: string): Promise<string> => {
+    const d = await mkdtemp(join(tmpdir(), "hc-gate-"));
+    await writeFile(join(d, "package.json"), JSON.stringify({ scripts: { test: script } }), "utf8");
+    return d;
+  };
+
+  it("blocks a task when the suite is red, whatever the criteria say", async () => {
+    const d = await withPkg("node -e \"process.exit(1)\"");
+    // The provider would happily report every criterion met; the suite overrules it.
+    const p = provider([{ criterion: "c", met: true, evidence: "looks fine" }]);
+    const res = await verifyAcceptance(gdeps(p), card(["c"]), d);
+    expect(res.passed).toBe(false);
+    expect(res.tests).toMatchObject({ ran: true, passed: false });
+    await rm(d, { recursive: true, force: true });
+  });
+
+  /**
+   * A card that promised nothing used to pass trivially. That reasoning holds for criteria and not for the
+   * suite: a task can break something it never mentioned.
+   */
+  it("blocks a task with NO criteria when the suite is red", async () => {
+    const d = await withPkg("node -e \"process.exit(1)\"");
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    expect(res.passed).toBe(false);
+    await rm(d, { recursive: true, force: true });
+  });
+
+  it("reports the failure output, so a pre-existing red suite can be told apart from a new one", async () => {
+    const d = await withPkg("node -e \"console.log('FAILED: unrelated_test'); process.exit(1)\"");
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    expect(res.unmet[0]).toContain("FAILED: unrelated_test");
+    await rm(d, { recursive: true, force: true });
+  });
+
+  it("lets a green suite through and records that it ran", async () => {
+    const d = await withPkg("node -e \"process.exit(0)\"");
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    expect(res.passed).toBe(true);
+    expect(res.tests).toMatchObject({ ran: true, passed: true });
+    await rm(d, { recursive: true, force: true });
+  });
+
+  // A project that does not test has not broken anything by not testing.
+  it("skips a project with no suite rather than failing it", async () => {
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), dir);
+    expect(res.passed).toBe(true);
+    expect(res.tests?.ran).toBe(false);
+  });
+
+  it("ignores npm's placeholder script", async () => {
+    const d = await withPkg('echo "Error: no test specified" && exit 1');
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    expect(res.passed).toBe(true);
+    expect(res.tests?.ran).toBe(false);
+    await rm(d, { recursive: true, force: true });
   });
 });

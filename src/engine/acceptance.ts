@@ -5,9 +5,15 @@ import { readOnlyRegistry, CODE_REVIEW_MAX_TURNS, CODE_REVIEW_TIMEOUT_MS } from 
 import type { Card } from "../board/board.js";
 import type { ReviewDeps } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
+import { runProjectTests, describeTestRun } from "./test-runner.js";
 
 export interface CriterionCheck { criterion: string; met: boolean; evidence: string }
-export interface AcceptanceResult { passed: boolean; unmet: string[] }
+export interface AcceptanceResult {
+  passed: boolean;
+  unmet: string[];
+  /** What the project's own test suite did, when it has one. */
+  tests?: { ran: boolean; passed: boolean; command?: string };
+}
 
 const AcceptanceSchema = z.object({
   checks: z.array(z.object({
@@ -39,7 +45,34 @@ const PROMPT =
 export async function verifyAcceptance(
   deps: ReviewDeps, card: Card, cwd: string, emit: (ev: ProgressEvent) => void = () => {},
 ): Promise<AcceptanceResult> {
-  if (!card.acceptance.length) return { passed: true, unmet: [] };
+  /**
+   * The suite runs FIRST, and it runs even when the card promised nothing.
+   *
+   * A card with no criteria used to pass trivially — nothing was promised, so nothing could be unmet. That
+   * reasoning holds for criteria and not for the suite: a task can break something it never mentioned, and
+   * "it promised nothing" is no reason to let a red suite through.
+   */
+  const tests = await runProjectTests(cwd);
+  if (!tests.skipped) {
+    emit({ kind: "note", text: tests.passed
+      ? `✅ **Tests passed** for "${card.title}" — \`${tests.command}\``
+      : `❌ **Tests FAILED** for "${card.title}" — \`${tests.command}\`${tests.timedOut ? " (timed out)" : ""}` });
+    if (!tests.passed) {
+      // Reported with the OUTPUT, not as a verdict: a suite that was already red before this task is not
+      // this task's fault, and the escalation path needs to be able to tell the difference.
+      return {
+        passed: false,
+        unmet: [
+          `The project's test suite fails (\`${tests.command}\`)${tests.timedOut ? " — it timed out" : ""}. ` +
+          `Nothing may enter DONE while it is red.\n${tests.output.slice(-4000)}`,
+          ...card.acceptance.map((c) => `${c} (not assessed — the suite is red)`),
+        ],
+        tests: { ran: true, passed: false, ...(tests.command ? { command: tests.command } : {}) },
+      };
+    }
+  }
+  const testEvidence = { ran: !tests.skipped, passed: tests.passed, ...(tests.command ? { command: tests.command } : {}) };
+  if (!card.acceptance.length) return { passed: true, unmet: [], tests: testEvidence };
   const resolved = deps.roleRegistry.resolve("code-reviewer");
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
@@ -47,7 +80,8 @@ export async function verifyAcceptance(
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content:
       `Task: "${card.title}".\n\nAcceptance criteria:\n${card.acceptance.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\n` +
-      `Check each one against the worktree and report met/unmet with the evidence you saw.` }],
+      `Check each one against the worktree and report met/unmet with the evidence you saw.\n\n` +
+      `${describeTestRun(tests)}` }],
     permission: deps.permission, approve: deps.approve, cwd,
     signal: AbortSignal.any([deps.signal, AbortSignal.timeout(CODE_REVIEW_TIMEOUT_MS)]),
     maxTurns: CODE_REVIEW_MAX_TURNS,
@@ -60,7 +94,11 @@ export async function verifyAcceptance(
     // Fail-SAFE: an unverifiable gate must not wave the task through — that is exactly the silent-success
     // failure the gate exists to prevent.
     emit({ kind: "note", text: `⚠️ **Acceptance gate** could not run for "${card.title}" — treating the criteria as unmet.` });
-    return { passed: false, unmet: card.acceptance.map((c) => `${c} (not verified: the gate did not run)`) };
+    return {
+      passed: false,
+      unmet: card.acceptance.map((c) => `${c} (not verified: the gate did not run)`),
+      tests: testEvidence,
+    };
   }
   // A criterion the gate never reported on is NOT satisfied — silence is not evidence.
   const byCriterion = new Map(checks.map((c) => [c.criterion.trim().toLowerCase(), c]));
@@ -72,8 +110,9 @@ export async function verifyAcceptance(
     else if (!hit.met) unmet.push(`${c} — ${hit.evidence}`);
   }
   const passed = unmet.length === 0;
+  const result = { passed, unmet, tests: testEvidence };
   emit({ kind: "note", text: passed
     ? `✅ **Acceptance gate** — all ${card.acceptance.length} criteria verified for "${card.title}".`
     : `⛔ **Acceptance gate** — ${unmet.length}/${card.acceptance.length} criteria NOT met for "${card.title}".` });
-  return { passed, unmet };
+  return result;
 }
