@@ -687,7 +687,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -715,6 +715,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
   migrate?: () => Promise<string>; // /migrate
+  addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
@@ -950,11 +951,22 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     removeMemory(n).then((r) => controller.note(r ? `Forgot: ${r}` : `No memory #${n}.`));
   };
   // /mcp → show connected MCP servers + tool counts.
-  const doMcp = (): void => {
+  const doMcp = (arg = ""): void => {
+    const add = /^add\s+(.+)$/is.exec(arg.trim());
+    if (add) {
+      if (!addMcp) { controller.note("MCP installation is not available."); return; }
+      controller.note("Working out the server configuration, then starting it to check it actually works…");
+      addMcp(add[1]).then((r) => controller.note(r), (e) => controller.note(`Install failed: ${e instanceof Error ? e.message : String(e)}`));
+      return;
+    }
+    if (arg.trim().toLowerCase() === "add") {
+      controller.note("Usage: `/mcp add <url|command>` — e.g. `/mcp add https://angular.dev/ai/mcp` or `/mcp add npx -y @angular/cli mcp`");
+      return;
+    }
     const servers = listMcp?.() ?? [];
     if (servers.length === 0) { controller.note("No MCP servers configured (add an `mcp` block to config.json)."); return; }
     const rows = servers.map((s) => s.ok ? `- ✅ **${s.name}** — ${s.toolCount} tools` : `- ❌ **${s.name}** — ${s.error ?? "not connected"}`);
-    controller.note(`**MCP servers:**\n${rows.join("\n")}`);
+    controller.note(`**MCP servers:**\n${rows.join("\n")}\n\n_\`/mcp add <url|command>\` to install another._`);
   };
   // /sources [refresh] → show the connected model sources; refresh re-probes omniroute.
   const doSources = (arg: string): void => {
@@ -1073,7 +1085,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/memories") doMemories();
     else if (c.name === "/remember") doRemember("");
     else if (c.name === "/forget") doForget("");
-    else if (c.name === "/mcp") doMcp();
+    else if (c.name === "/mcp") doMcp("");
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");
     else if (c.name === "/graph") doGraph("");
@@ -1386,6 +1398,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /sources refresh (argument form).
               if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
               if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSkills(trimmed.slice("/skills".length).trim()); return; }
+              if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMcp(trimmed.slice("/mcp".length).trim()); return; }
               if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); doGraph(trimmed.slice("/graph".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
               if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMode(trimmed.slice("/mode".length).trim()); return; }

@@ -51,3 +51,16 @@ export async function saveRoleSkills(home: string, assignments: Record<string, s
   });
   return ok ? names.length : 0;
 }
+
+/**
+ * Records an MCP server in the global config.
+ *
+ * Merged by name so re-adding one re-points it rather than accumulating a second entry that would fight the
+ * first for the same tool prefix.
+ */
+export async function saveMcpServer(home: string, name: string, spec: unknown): Promise<boolean> {
+  return patchConfig(home, (current) => ({
+    ...current,
+    mcp: { ...objectField(current, "mcp"), [name]: spec },
+  }));
+}

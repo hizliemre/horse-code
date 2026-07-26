@@ -18,7 +18,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/remember", desc: "Remember a fact across sessions (/remember <text>)" },
   { name: "/memories", desc: "List remembered facts (/forget N to remove)" },
   { name: "/forget", desc: "Forget a remembered fact (/forget N)" },
-  { name: "/mcp", desc: "Show connected MCP servers and their tools" },
+  { name: "/mcp", desc: "Connected MCP servers (/mcp add <url|command> installs one and verifies it)" },
   { name: "/sources", desc: "Show your connected model sources (/sources refresh re-detects)" },
   { name: "/migrate", desc: "Bring a project from Claude Code / Codex / Cursor into horse-code (rules, memory, skills)" },
   { name: "/graph", desc: "Project code graph (/graph build · /graph trace) — what calls what, blast radius, per-file intent" },

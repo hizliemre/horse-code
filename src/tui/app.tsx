@@ -68,6 +68,7 @@ export interface RunTuiReplOpts {
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
   migrate?: () => Promise<string>; // /migrate
+  addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
@@ -162,6 +163,61 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
+  /**
+   * `/mcp add` — install a server from the page that documents it, or from the command that page tells you
+   * to run.
+   *
+   * Verified by starting it before anything is written. A config entry that does not work is worse than no
+   * entry: it fails at startup, in a place the user is not looking, and every agent silently loses the tools
+   * it was supposed to gain.
+   */
+  const addMcp = async (input: string): Promise<string> => {
+    const { parseCommand, parseConfigBlock, extractFromPage, verify } = await import("../mcp/install.js");
+    const { saveMcpServer } = await import("../config/save-skills.js");
+    let cand = parseCommand(input) ?? parseConfigBlock(input);
+    if (!cand) {
+      const url = input.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        return "Give a URL, a config block, or the command itself — e.g. `/mcp add https://angular.dev/ai/mcp` or `/mcp add npx -y @angular/cli mcp`.";
+      }
+      let html: string;
+      try {
+        const res = await fetch(url, { headers: { "User-Agent": "horse-code" }, signal: AbortSignal.timeout(30_000) });
+        if (!res.ok) return `Could not read ${url} (HTTP ${res.status}).`;
+        html = await res.text();
+      } catch (e) {
+        return `Could not read ${url} — ${e instanceof Error ? e.message : String(e)}`;
+      }
+      controller.note(`Read ${url}. Working out the server configuration…`);
+      cand = await extractFromPage({
+        provider: deps.provider,
+        model: deps0.roleRegistry.peekModel("architect") || opts.model || "",
+        url, html,
+      });
+      if (!cand) return `That page does not state an MCP server command I could read. Paste the command or the config block instead.`;
+    }
+    const shown = "command" in cand.spec ? `\`${cand.spec.command.join(" ")}\`` : `\`${cand.spec.url}\``;
+    controller.note(`**${cand.name}** → ${shown}\n_from ${cand.source}_\n\nStarting it to check…`);
+    const v = await verify(cand.spec, cand.name);
+    if (!v.ok) {
+      return `**${cand.name}** did not work: ${v.error}.\n\nNothing was written. The command was ${shown} — ` +
+        `check it against the documentation, or pass it directly with \`/mcp add <command>\`.`;
+    }
+    // Read-only is the server's OWN claim, per tool. Guessing it would either withhold safe tools from every
+    // agent or hand a mutating one to all of them.
+    const ro = v.tools.filter((t) => t.readOnly).length;
+    await saveMcpServer(homedir(), cand.name, cand.spec);
+    const names = v.tools.slice(0, 8).map((t) => `\`${t.name}\``).join(", ");
+    const more = v.tools.length > 8 ? ` +${v.tools.length - 8} more` : "";
+    const reach = ro === v.tools.length
+      ? "All of them are read-only, so every agent gets them."
+      : ro
+        ? `${ro} are marked read-only and reach every agent; the rest are exec-level and reach the coach.`
+        : "None are marked read-only, so they reach the coach only. Add `\"readOnly\": true` to the server in " +
+          "your config if you know it cannot mutate anything, and every agent will get them.";
+    return `**${cand.name}** installed — ${v.tools.length} tool(s): ${names}${more}\n\n${reach}\n\n_Restart to connect it._`;
+  };
+
   /**
    * `/migrate` — bring another tool's accumulated setup across.
    *
@@ -459,7 +515,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} addMcp={addMcp}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
