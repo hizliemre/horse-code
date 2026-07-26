@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classify, chunkProse, batches, groupForReview, MAX_CHUNK_CHARS } from "../../src/migrate/extract.js";
+import { classify, chunkProse, batches, groupForReview, consolidateRules, MAX_CHUNK_CHARS } from "../../src/migrate/extract.js";
 import { extractAll } from "../../src/migrate/extract.js";
 import type { Finding } from "../../src/migrate/discover.js";
 import type { Provider } from "../../src/core/types.js";
@@ -169,5 +169,91 @@ describe("groupForReview", () => {
     expect(g.rules).toHaveLength(2);
     expect(g.facts).toHaveLength(1);
     expect(g.skipped).toHaveLength(1);
+  });
+});
+
+/**
+ * Consolidation exists because of a measurement: a real 53 KB instruction document produced 168 rule
+ * candidates, which would have been roughly 15 KB of text inlined into every prompt forever — and would
+ * have buried the rules that matter among the process detail.
+ */
+describe("consolidateRules", () => {
+  const cands = (n: number) => Array.from({ length: n }, (_, i) => ({
+    text: `rule ${i}`, disposition: "rule" as const, reason: "r", source: "CLAUDE.md",
+  }));
+
+  it("does nothing when the list is already small enough", async () => {
+    let called = false;
+    const spy = { chat: async function* () { called = true; yield { type: "text-delta" as const, text: "x" }; } } as unknown as Provider;
+    const got = await consolidateRules({ provider: spy, model: "m", candidates: cands(5), max: 25 });
+    expect(called).toBe(false);
+    expect(got.rules).toHaveLength(5);
+  });
+
+  it("reduces a large list to the cap", async () => {
+    const provider = canned('```json\n{"rules":["merged A","merged B"],"demoted":["rule 3"]}\n```');
+    const got = await consolidateRules({ provider, model: "m", candidates: cands(40), max: 25 });
+    expect(got.rules.map((r) => r.text)).toEqual(["merged A", "merged B"]);
+  });
+
+  /** Demoting is not discarding: process detail is real knowledge, it just belongs where it is recalled. */
+  it("keeps demoted candidates as facts rather than dropping them", async () => {
+    const provider = canned('```json\n{"rules":["merged"],"demoted":["rule 3","rule 7"]}\n```');
+    const got = await consolidateRules({ provider, model: "m", candidates: cands(40), max: 25 });
+    expect(got.demoted.map((d) => d.text)).toEqual(["rule 3", "rule 7"]);
+    expect(got.demoted.every((d) => d.disposition === "fact")).toBe(true);
+  });
+
+  it("never exceeds the cap even when more come back", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => `r${i}`);
+    const provider = canned(`\`\`\`json\n${JSON.stringify({ rules: many, demoted: [] })}\n\`\`\``);
+    const got = await consolidateRules({ provider, model: "m", candidates: cands(80), max: 25 });
+    expect(got.rules).toHaveLength(25);
+  });
+
+  /** A large number is information; a silent truncation is not. */
+  it("returns the candidates unchanged when the call fails", async () => {
+    const got = await consolidateRules({ provider: failing(), model: "m", candidates: cands(40), max: 25 });
+    expect(got.rules).toHaveLength(40);
+    expect(got.demoted).toEqual([]);
+  });
+
+  it("returns them unchanged when nothing usable comes back", async () => {
+    const got = await consolidateRules({ provider: canned('```json\n{"rules":[]}\n```'), model: "m", candidates: cands(40) });
+    expect(got.rules).toHaveLength(40);
+  });
+
+  it("tells the model to merge rather than drop, and not to invent", async () => {
+    let seen = "";
+    const spy = {
+      chat: async function* (req: { messages: { content: string }[] }) {
+        seen = req.messages.map((m) => m.content).join("\n");
+        yield { type: "text-delta" as const, text: '```json\n{"rules":["a"],"demoted":[]}\n```' };
+      },
+    } as unknown as Provider;
+    await consolidateRules({ provider: spy, model: "m", candidates: cands(40) });
+    expect(seen).toMatch(/MERGE candidates that say the same thing/);
+    expect(seen).toMatch(/Demoting is not discarding/);
+    expect(seen).toMatch(/Do NOT invent a rule/);
+  });
+});
+
+describe("the rule bar", () => {
+  /**
+   * The bar that turned 168 candidates into 40: a standing directive must still need saying on a task that
+   * has nothing to do with where it came from. Procedure fails that test.
+   */
+  it("makes the every-task test explicit and sends procedure to facts", async () => {
+    let seen = "";
+    const spy = {
+      chat: async function* (req: { messages: { content: string }[] }) {
+        seen = req.messages.map((m) => m.content).join("\n");
+        yield { type: "text-delta" as const, text: '```json\n{"items":[]}\n```' };
+      },
+    } as unknown as Provider;
+    await classify({ provider: spy, model: "m", body: "b", source: "s" });
+    expect(seen).toMatch(/would this still need saying on a task that has nothing to do with/);
+    expect(seen).toMatch(/Process detail does NOT/);
+    expect(seen).toMatch(/a long list of them is itself a defect/);
   });
 });

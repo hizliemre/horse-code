@@ -4,7 +4,7 @@ import type { Provider } from "../core/types.js";
 import type { MemoryStore } from "../session/memory.js";
 import { discover, summarize, hasAnything } from "./discover.js";
 import type { Finding } from "./discover.js";
-import { extractAll, groupForReview } from "./extract.js";
+import { extractAll, groupForReview, consolidateRules, MAX_RULES } from "./extract.js";
 import type { Candidate } from "./extract.js";
 
 /**
@@ -42,6 +42,11 @@ export interface MigrateResult {
 }
 
 const YES = /^(yes|import|copy|evet)/i;
+
+/** Entries of one kind currently in the store — the basis for reporting what actually landed. */
+function countKind(store: MemoryStore, kind: "rule" | "fact"): number {
+  return store.all().filter((m) => (m.kind ?? "fact") === kind).length;
+}
 
 /** Up to this many examples are shown per group; enough to judge the batch, short enough to read. */
 const SAMPLE = 6;
@@ -82,12 +87,37 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
       deps.note(`⚠️ ${extraction.failed.length} could not be read: ` +
         extraction.failed.slice(0, 3).map((f) => `\`${f.source}\``).join(", "));
     }
-    const { rules, facts, skipped } = groupForReview(extraction);
-    result.skipped = skipped.length;
+    const raw = groupForReview(extraction);
+    result.skipped = raw.skipped.length;
+
+    /**
+     * Consolidation, before the user is asked anything.
+     *
+     * A real 53 KB instruction document yielded 168 rule candidates. Asking "import 168 rules?" is not a
+     * real question — nobody can evaluate it, and yes would put roughly 15 KB into every prompt forever.
+     * The pile is reduced first, so the question is about a list the user can actually read.
+     */
+    let rules = raw.rules;
+    const facts = [...raw.facts];
+    if (rules.length > MAX_RULES) {
+      deps.note(`${rules.length} rule candidates — consolidating, since every rule is inlined into every prompt forever.`);
+      const c = await consolidateRules({
+        provider: deps.provider, model: deps.model, candidates: rules,
+        ...(deps.signal ? { signal: deps.signal } : {}),
+      });
+      if (c.rules.length < rules.length) {
+        deps.note(`Consolidated **${rules.length} → ${c.rules.length}** rules` +
+          `${c.demoted.length ? `, and moved ${c.demoted.length} piece(s) of process detail to facts` : ""}.`);
+        rules = c.rules;
+        facts.push(...c.demoted);
+      } else {
+        deps.note(`⚠️ Consolidation did not run — you are being asked about all ${rules.length} candidates.`);
+      }
+    }
 
     if (rules.length) {
       const answer = await deps.ask(
-        `**${rules.length} standing rule(s)** were found. A rule goes into EVERY agent's instructions, ` +
+        `**${rules.length} standing rule(s)**. A rule goes into EVERY agent's instructions, ` +
         `for every task, permanently.\n\n${sample(rules)}\n\nImport them?`,
         { options: [
           { label: "Yes — import all", description: `${rules.length} rules become permanent memory` },
@@ -95,7 +125,12 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
         ] },
       );
       if (YES.test(answer.trim())) {
-        for (const c of rules) if ((await deps.memStore.add(c.text, "rule")).ok) result.rules++;
+        // Counted from the STORE, not from successful adds: memory supersedes near-duplicates, so an add can
+        // succeed while replacing another. Reporting the offer instead of the outcome told the user they had
+        // 168 rules when they had 124.
+        const before = countKind(deps.memStore, "rule");
+        for (const c of rules) await deps.memStore.add(c.text, "rule");
+        result.rules = countKind(deps.memStore, "rule") - before;
       } else result.declined.push("rules");
     }
 
@@ -109,13 +144,16 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
         ] },
       );
       if (YES.test(answer.trim())) {
-        for (const c of facts) if ((await deps.memStore.add(c.text, "fact")).ok) result.facts++;
+        const before = countKind(deps.memStore, "fact");
+        for (const c of facts) await deps.memStore.add(c.text, "fact");
+        result.facts = countKind(deps.memStore, "fact") - before;
       } else result.declined.push("facts");
     }
 
     // Reported without being asked about: the user needs to see what was left behind, and re-adding a rule
     // by hand is easy while discovering a silent omission months later is not.
-    if (skipped.length) {
+    if (raw.skipped.length) {
+      const skipped = raw.skipped;
       const why = skipped.slice(0, SAMPLE).map((c) => `- ~~${c.text.slice(0, 90)}~~ — ${c.reason}`).join("\n");
       deps.note(`**Left behind (${skipped.length})** — these only meant something in the original tool:\n${why}` +
         (skipped.length > SAMPLE ? `\n- _…and ${skipped.length - SAMPLE} more_` : "") +

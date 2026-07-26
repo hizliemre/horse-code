@@ -49,11 +49,17 @@ const CLASSIFY = (body: string): string =>
   `Below is instruction material from a project that was developed with another coding assistant. It is being ` +
   `moved into a different assistant, which has its OWN tools, commands and agent model.\n\n` +
   `Classify every distinct instruction into exactly one of:\n\n` +
-  `**rule** — a standing directive about how to work that should govern every agent, in any tool: language ` +
-  `requirements, commit conventions, things never to do, review standards, style mandates. It must make ` +
-  `sense with no knowledge of the original tool.\n` +
-  `**fact** — durable knowledge about this project or user: stack, architecture decisions, service names, ` +
-  `preferences. True regardless of who is working.\n` +
+  `**rule** — a standing directive that must be obeyed on EVERY task, forever. Before choosing this, apply ` +
+  `the test: would this still need saying on a task that has nothing to do with the section it came from? ` +
+  `Language requirements, commit conventions, things never to do, security mandates pass that test. Process ` +
+  `detail does NOT: "in phase 3 the implementer does X", "the plan document contains these sections", "run ` +
+  `this before that" describe a procedure, and a procedure belongs in the knowledge that is recalled when ` +
+  `relevant, not in the instructions of every agent on every task.\n` +
+  `A rule is inlined into every prompt permanently, so a long list of them is itself a defect: expect only a ` +
+  `handful from any document, and classify the rest as fact.\n` +
+  `**fact** — durable knowledge about this project or user, INCLUDING its processes and conventions: stack, ` +
+  `architecture decisions, workflow phases, service names, preferences. Recalled when relevant. This is the ` +
+  `right home for most of what looks instructional.\n` +
   `**skip** — anything that only means something in the original tool: named tools, slash commands, ` +
   `subagent types, file paths of that tool's own config, its plugin or hook system. Also skip anything ` +
   `stale, empty, or purely descriptive of the document itself.\n\n` +
@@ -219,4 +225,84 @@ export function groupForReview(e: Extraction): { rules: Candidate[]; facts: Cand
     facts: e.candidates.filter((c) => c.disposition === "fact"),
     skipped: e.candidates.filter((c) => c.disposition === "skip"),
   };
+}
+
+
+/**
+ * How many standing rules a project may end up with.
+ *
+ * Not a style preference. Every rule is inlined into every agent's prompt on every task, forever, so the
+ * list is a permanent tax on the whole system. Migrating a real 53 KB instruction document produced 168
+ * rule candidates — which would have been roughly 15 KB of text in every single call, and would have made
+ * the genuinely important rules impossible to see among the process detail.
+ */
+export const MAX_RULES = 25;
+
+/** Consolidated output: the rules that survived, and what was demoted rather than dropped. */
+export interface Consolidation {
+  rules: Candidate[];
+  /** Candidates that were process detail after all — kept, as facts. */
+  demoted: Candidate[];
+}
+
+const CONSOLIDATE = (items: string[], max: number): string =>
+  `Below are ${items.length} candidate standing rules extracted from one project's instruction documents. ` +
+  `They overlap heavily and many are procedure rather than principle.\n\n` +
+  `Produce AT MOST ${max} rules. Each one is inlined into every agent's instructions on every task, ` +
+  `forever, so the list is a permanent cost and must earn its size.\n\n` +
+  `How to decide:\n` +
+  `- MERGE candidates that say the same thing differently into one rule that covers both. Losing a ` +
+  `distinction that matters is worse than a slightly longer rule.\n` +
+  `- KEEP what would still need saying on a task unrelated to where it came from: language requirements, ` +
+  `commit and branch conventions, security mandates, review standards, things never to do.\n` +
+  `- DEMOTE the rest. Procedure ("in phase 3…", "the document contains these sections", step ordering) is ` +
+  `real knowledge but belongs where it is recalled when relevant, not in every prompt. Demoting is not ` +
+  `discarding — say which ones, and they are kept as facts.\n` +
+  `- Do NOT invent a rule that is not in the list, and do not weaken one into a vague slogan.\n\n` +
+  `Answer with a fenced json block:\n` +
+  `{"rules":["<the consolidated rule>", …],"demoted":["<the exact original text>", …]}\n\n` +
+  `Candidates:\n${items.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
+
+/**
+ * Reduces a pile of rule candidates to a list a project can actually carry.
+ *
+ * Runs across ALL candidates at once, because that is the only vantage point from which the duplication is
+ * visible: a per-chunk classifier reading one section cannot know that six other sections said the same
+ * thing in different words.
+ *
+ * On failure the candidates are returned unchanged — the caller then still shows the user a number, and a
+ * large number is information rather than a silent truncation.
+ */
+export async function consolidateRules(opts: {
+  provider: Provider;
+  model: string;
+  candidates: Candidate[];
+  max?: number;
+  signal?: AbortSignal;
+}): Promise<Consolidation> {
+  const max = opts.max ?? MAX_RULES;
+  if (opts.candidates.length <= max) return { rules: opts.candidates, demoted: [] };
+
+  const texts = opts.candidates.map((c) => c.text);
+  try {
+    const out = await ask(opts.provider, opts.model, CONSOLIDATE(texts, max), opts.signal);
+    const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(out);
+    const parsed = JSON.parse(fence ? fence[1] : out.slice(out.indexOf("{"))) as { rules?: unknown; demoted?: unknown };
+    const rules = Array.isArray(parsed.rules) ? parsed.rules.filter((r): r is string => typeof r === "string") : [];
+    if (!rules.length) throw new Error("no rules came back");
+    const demotedText = new Set(Array.isArray(parsed.demoted)
+      ? parsed.demoted.filter((d): d is string => typeof d === "string") : []);
+    return {
+      // The consolidated text is new, so the source is the whole set rather than any one file.
+      rules: rules.slice(0, max).map((text) => ({
+        text, disposition: "rule" as const, reason: "consolidated", source: "migration",
+      })),
+      // Anything the model named as demoted is kept as a fact; anything it simply did not mention was
+      // merged into a surviving rule and is already represented.
+      demoted: opts.candidates.filter((c) => demotedText.has(c.text))
+        .map((c) => ({ ...c, disposition: "fact" as const, reason: "process detail, kept as knowledge" })),
+    };
+  } catch {
+    return { rules: opts.candidates, demoted: [] };
+  }
 }

@@ -111,13 +111,19 @@ describe("runProjectTests", () => {
     expect(r.output).toMatch(/could not run the suite/);
   });
 
+  /**
+   * Sized to exceed the in-flight trim threshold (4x the cap) and nothing more. An earlier version printed
+   * 200,000 lines, which passed alone and timed out under the parallel load of the full suite — a slow test
+   * that fails only when run with everything else is worse than no test.
+   */
   it("keeps only the tail of a chatty suite", async () => {
-    await pkg({ test: `node -e "for(let i=0;i<200000;i++)console.log('noise'+i); process.exit(1)"` });
+    const lines = Math.ceil((MAX_TEST_OUTPUT * 5) / 10); // ~10 chars per line
+    await pkg({ test: `node -e "for(let i=0;i<${lines};i++)console.log('noise'+i); process.exit(1)"` });
     const r = await runProjectTests(dir);
     expect(r.output.length).toBeLessThanOrEqual(MAX_TEST_OUTPUT + 200);
     // The tail is what matters: failures are printed last.
-    expect(r.output).toContain("noise199999");
-  }, 60_000);
+    expect(r.output).toContain(`noise${lines - 1}`);
+  }, 30_000);
 
   it("closes stdin so a suite that asks a question cannot hang", async () => {
     await pkg({ test: `node -e "const c=require('fs').readFileSync(0,'utf8'); process.exit(c?1:0)"` });
