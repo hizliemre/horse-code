@@ -21,6 +21,11 @@ export const DEFAULT_ROLE_SKILLS: Record<string, string[]> = {
   // supplies the SHAPE (phases, story grouping, [P] markers); it says almost nothing about what makes an
   // individual task executable. That is what this skill adds.
   "project-manager": ["writing-plans"],
+  // The UI roles get design direction inlined for the same reason the coders get TDD: the code-accessibility
+  // and code-maintainability lenses can reject a templated, default-looking interface, but they cannot teach
+  // one. This skill is self-contained (no sibling reference files), which is what makes it safe to inline.
+  designer: ["frontend-design"],
+  "senior-designer": ["frontend-design"],
   // NB: systematic-debugging is shipped but attached to NO role — it is only needed when something is stuck,
   // so it stays in the discoverable listing every role already receives and is fetched with the `skill` tool.
 };
@@ -77,7 +82,11 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "one), every file you write is committed as you write it, and there is no separate agent to hand off to — " +
     "you take the task to green yourself.",
   designer:
-    "Implement the UI/UX task in the worktree. Focus on the user interface and experience; work with read/write/edit.",
+    "Implement the UI/UX task in the worktree. Focus on the user interface and experience; work with " +
+    "read/write/edit.\n\n" +
+    "The `frontend-design` skill above governs the LOOK: aesthetic direction, typography, and choices that do " +
+    "not read as templated defaults. Follow the project's existing visual language where there is one — a " +
+    "distinctive design that fights the surrounding product is worse than a plain one that fits it.",
   "senior-coder":
     "Take over the task the coder got stuck on; implement it with a more careful approach. Take the reviewer " +
     "notes and previous attempts into account.\n\n" +
@@ -86,7 +95,10 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "test fails or behaviour is unexplained. The `test-driven-development` skill above still governs how you " +
     "write the fix — reproduce the failure in a test first, then make it pass.",
   "senior-designer":
-    "Take over the UI/UX task the designer got stuck on; implement it more carefully.",
+    "Take over the UI/UX task the designer got stuck on; implement it more carefully.\n\n" +
+    "A previous attempt already failed, so establish WHY before redesigning — the `systematic-debugging` skill " +
+    "is available via the `skill` tool when the failure is behavioural rather than visual. The " +
+    "`frontend-design` skill above still governs the look.",
   architect:
     "Analyze the root cause of a repeatedly failing task or a merge conflict, and produce a concrete solution " +
     "plan. Return {rootCause, plan} via submit.\n\n" +

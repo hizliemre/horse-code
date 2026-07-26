@@ -1,7 +1,14 @@
 # Bundled skills
 
-Every `SKILL.md` here is a **verbatim copy** from the `superpowers` plugin, version **6.1.1**
-(`superpowers/skills/<name>/SKILL.md`).
+Every `SKILL.md` here is a **verbatim copy** from upstream:
+
+| skill | source | licence |
+|---|---|---|
+| `brainstorming` | superpowers 6.1.1 | plugin |
+| `test-driven-development` | superpowers 6.1.1 | plugin |
+| `writing-plans` | superpowers 6.1.1 | plugin |
+| `systematic-debugging` | superpowers 6.1.1 | plugin |
+| `frontend-design` | [anthropics/skills](https://github.com/anthropics/skills) | Apache-2.0 (`LICENSE.txt` shipped alongside) |
 
 Do not edit them. Byte-identical is what makes them re-syncable when the upstream skill changes — a local
 tweak would either be silently overwritten on the next sync, or quietly diverge and stay.
@@ -12,6 +19,7 @@ tweak would either be silently overwritten on the next sync, or quietly diverge 
 | `test-driven-development` | `coder`, `senior-coder` | mandatory |
 | `writing-plans` | `project-manager` | mandatory |
 | `systematic-debugging` | — | discoverable |
+| `frontend-design` | `designer`, `senior-designer` | mandatory |
 
 **Mandatory** skills are inlined into the role's system prompt (`applySkills`). **Discoverable** ones appear
 only as a one-line entry in the listing every role receives, and are fetched on demand with the `skill` tool —
@@ -38,6 +46,22 @@ task executable — exact paths, a real test cycle, no placeholders — and that
 
 A project may replace any of these by defining a skill of the same name in `<project>/.horsecode/skills/`.
 Built-ins load first and the registry is keyed by name, so the project's version wins.
+
+## The one-file limit
+
+The loader reads `<name>/SKILL.md` and nothing else. That rules out **multi-file skills** — ones whose
+SKILL.md is a dispatcher that routes to sibling reference documents. Several good design/accessibility skills
+are built that way, so this is the thing to fix before adopting them:
+
+- [`pbakaus/impeccable`](https://github.com/pbakaus/impeccable) (Apache-2.0) — its SKILL.md points at
+  `reference/` **29 times** across ~40 documents. Shipping the entry point alone would leave dangling
+  pointers.
+- [`nextlevelbuilder/ui-ux-pro-max-skill`](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (MIT) —
+  not one skill but seven, and two of them (`ui-styling` at 5.7 MB, `ui-ux-pro-max` at 1.7 MB) are libraries.
+  Cherry-picking a single self-contained one (e.g. `design-system`) is the only sane path.
+- [`AccessLint/skills`](https://github.com/AccessLint/skills) — a plugin of three skills that additionally
+  depend on an MCP server (`mcp__accesslint__*`) and the `@accesslint/cli`. It also carries **no licence**,
+  which has to be settled before any of it is vendored here.
 
 ## Not adopted
 

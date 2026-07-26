@@ -94,9 +94,16 @@ describe("the shipped skills reach the roles that need them", () => {
     return r;
   };
 
-  it("ships all four", async () => {
+  it("ships the expected set", async () => {
     const names = (await reg()).list().map((s) => s.name).sort();
-    expect(names).toEqual(["brainstorming", "systematic-debugging", "test-driven-development", "writing-plans"]);
+    expect(names).toEqual([
+      "brainstorming", "frontend-design", "systematic-debugging", "test-driven-development", "writing-plans",
+    ]);
+  });
+
+  it("the UI roles get design direction, for the same reason the coders get TDD", () => {
+    expect(DEFAULT_ROLE_SKILLS.designer).toEqual(["frontend-design"]);
+    expect(DEFAULT_ROLE_SKILLS["senior-designer"]).toEqual(["frontend-design"]);
   });
 
   it("the code-writing roles get the test discipline; the task list gets the planning discipline", () => {
