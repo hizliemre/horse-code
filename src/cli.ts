@@ -10,7 +10,7 @@ import { registerBuiltinSkills } from "./skills/builtin.js";
 import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl } from "./skills/external.js";
 import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
-import { planFor, runTraces, describePlan } from "./engine/trace-run.js";
+import { planFor, runTraces, describePlan, buildBrief } from "./engine/trace-run.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
@@ -269,11 +269,17 @@ export async function main(argv: string[]): Promise<void> {
       };
       const runTracesFn = async (): Promise<string> => {
         const files = await traceableFiles();
+        // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
+        // the whole run again.
+        const docs = await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd);
+        const brief = await buildBrief({
+          cwd, provider, model: tracerModel(), files: docs.stdout.split("\n").filter(Boolean),
+        });
         const plan = await planFor(cwd, files);
         const res = await runTraces({
           cwd, provider, model: tracerModel(), plan, liveFiles: new Set(files),
         });
-        const bits = [`**Traces written: ${res.written}**`];
+        const bits = [`${brief.message}\n\n**Traces written: ${res.written}**`];
         if (res.upToDate) bits.push(`${res.upToDate} already current`);
         if (res.pruned.length) bits.push(`${res.pruned.length} removed for deleted files`);
         if (res.wroteGitignore) bits.push("\n\n_Added .gitignore rules: traces are committed, the AST cache is not._");

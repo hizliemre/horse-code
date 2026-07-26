@@ -182,6 +182,11 @@ export class RoleRegistry {
     };
   }
 
+  /** The skills already attached to a role — what task-level routing must not inline a second time. */
+  skillsFor(roleName: string): string[] {
+    return this.roles[roleName]?.skills ?? [];
+  }
+
   resolve(roleName: string): ResolvedRole {
     const role = this.roles[roleName];
     if (!role) throw new Error(`undefined role: ${roleName}`);

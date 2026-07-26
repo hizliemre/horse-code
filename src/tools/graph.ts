@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import { loadGraphSync } from "../engine/project-graph.js";
 import { readTraceSync } from "../engine/trace.js";
+import { readBriefSync } from "../engine/project-brief.js";
 import type { ProjectGraph, GraphNode, GraphEdge } from "../engine/project-graph.js";
 
 /**
@@ -223,12 +224,22 @@ export const graphTraceTool: Tool = {
   name: "graph_trace",
   description:
     "What a source file is responsible for and what to be careful of when changing it, in the product's " +
-    "terms. Far cheaper than reading the file. Use it to orient before opening unfamiliar code.",
+    "terms. Far cheaper than reading the file. Use it to orient before opening unfamiliar code. " +
+    "Pass \"project\" instead of a path to get the project brief: what the product is, its domain vocabulary, " +
+    "and the business rules the code must not violate. Read that FIRST in an unfamiliar codebase.",
   permissionLevel: "safe",
   parameters: z.object({ file: z.string().describe("Repo-relative path, e.g. \"src/config/config.ts\"") }),
   describe: (args) => ({ allowKey: "graph:trace", preview: `graph_trace ${JSON.stringify(args)}`.slice(0, 120) }),
   async run(args, ctx) {
     const file = String((args as { file?: unknown }).file ?? "");
+    // The project brief is what this file is answerable AGAINST: without the domain vocabulary a per-file
+    // note reads as mechanics. It is small and it is the same for every file, so it rides along.
+    if (/^(project|_project|\.)$/i.test(file)) {
+      const brief = readBriefSync(ctx.cwd);
+      return brief
+        ? { content: brief, isError: false }
+        : { content: "No project brief yet — it is written by `/graph trace`, a user action.", isError: true };
+    }
     const body = readTraceSync(ctx.cwd, file);
     if (body) return { content: body, isError: false };
     return {

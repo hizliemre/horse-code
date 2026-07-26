@@ -163,13 +163,19 @@ export async function planTraces(
 }
 
 /** The instruction one tracer follows. Kept here so the estimate and the request cannot drift apart. */
-export function tracePrompt(job: TraceJob): string {
+export function tracePrompt(job: TraceJob, brief?: string): string {
   const rel = [
     job.symbols.length ? `Defines: ${job.symbols.join(", ")}` : "",
     job.usedBy.length ? `Used by: ${job.usedBy.join(", ")}` : "Used by: nothing else in this repo",
     job.uses.length ? `Uses: ${job.uses.join(", ")}` : "",
   ].filter(Boolean).join("\n");
-  return `Write a short reference note about ONE source file, for an engineer who has never seen this codebase ` +
+  // The brief is what lets a trace say what a file is FOR rather than what it does. Without it every tracer
+  // would either re-read the project's documentation itself or guess — the first expensive, the second worse.
+  const context = brief
+    ? `What this project IS, from its own documentation — use this vocabulary and these rules; do not ` +
+      `contradict them and do not repeat them back:\n${brief}\n\n---\n\n`
+    : "";
+  return `${context}Write a short reference note about ONE source file, for an engineer who has never seen this codebase ` +
     `and is about to change it.\n\n` +
     `Answer, in at most 150 words total, under these exact headings:\n` +
     `**Purpose** — what this file is responsible for, in one or two sentences. Say what it is FOR in the ` +

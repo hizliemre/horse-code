@@ -4,6 +4,7 @@ import {
 } from "./trace.js";
 import type { TraceJob, TracePlan } from "./trace.js";
 import { loadGraph } from "./project-graph.js";
+import { briefForPrompt, gatherBriefInput, briefPrompt, saveBrief } from "./project-brief.js";
 
 /** How many tracers run at once. Enough to finish a repo quickly, few enough not to trip provider rate limits. */
 export const TRACE_CONCURRENCY = 6;
@@ -38,12 +39,12 @@ export function describePlan(plan: TracePlan, model: string): string {
 }
 
 /** Runs one tracer. Returns the written body, or throws with a reason the caller reports. */
-async function traceOne(provider: Provider, model: string, job: TraceJob, signal: AbortSignal): Promise<string> {
+async function traceOne(provider: Provider, model: string, job: TraceJob, signal: AbortSignal, brief?: string): Promise<string> {
   const req: ChatRequest = {
     model,
     messages: [
       { role: "system", content: "You write terse, factual reference notes about source files. You never speculate." },
-      { role: "user", content: tracePrompt(job) },
+      { role: "user", content: tracePrompt(job, brief) },
     ],
     tools: [],
   };
@@ -76,6 +77,7 @@ export async function runTraces(opts: {
   const { cwd, plan } = opts;
   const signal = opts.signal ?? new AbortController().signal;
   const index = await loadTraceIndex(cwd);
+  const brief = briefForPrompt(cwd); // read once, not per file
   const failed: { file: string; error: string }[] = [];
   let written = 0;
   let done = 0;
@@ -86,7 +88,7 @@ export async function runTraces(opts: {
       const job = queue.shift();
       if (!job || signal.aborted) return;
       try {
-        const body = await traceOne(opts.provider, opts.model, job, signal);
+        const body = await traceOne(opts.provider, opts.model, job, signal, brief);
         index.traces[job.file] = await saveTrace(cwd, job, body, opts.model);
         written++;
       } catch (e) {
@@ -108,4 +110,45 @@ export async function runTraces(opts: {
 /** Builds the plan for a working directory — the step that runs before asking the user anything. */
 export async function planFor(cwd: string, files: string[]): Promise<TracePlan> {
   return planTraces(cwd, files, await loadGraph(cwd), await loadTraceIndex(cwd));
+}
+
+/**
+ * Builds the project brief — the one call that establishes what the product is, before any file is traced.
+ *
+ * Runs first and separately because everything after it depends on it: a trace written without the brief
+ * describes mechanics, and rewriting all of them later costs the whole run again.
+ */
+export async function buildBrief(opts: {
+  cwd: string;
+  provider: Provider;
+  model: string;
+  files: string[];
+  signal?: AbortSignal;
+}): Promise<{ ok: boolean; message: string }> {
+  const input = await gatherBriefInput(opts.cwd, opts.files);
+  if (!input) {
+    return { ok: false, message: "No documentation found (README, docs/, specs/) — traces will describe the code without product context." };
+  }
+  const signal = opts.signal ?? new AbortController().signal;
+  const req: ChatRequest = {
+    model: opts.model,
+    messages: [
+      { role: "system", content: "You write factual project briefings from documentation. You never invent facts the documents do not state." },
+      { role: "user", content: briefPrompt(input) },
+    ],
+    tools: [],
+  };
+  let out = "";
+  try {
+    for await (const ev of opts.provider.chat(req, signal)) {
+      if (ev.type === "text-delta") out += ev.text;
+      else if (ev.type === "error") throw new Error(ev.message);
+    }
+  } catch (e) {
+    return { ok: false, message: `Project brief failed (${e instanceof Error ? e.message : String(e)}) — tracing can still run without it.` };
+  }
+  const body = out.replace(/<\/?think>/gi, "").trim();
+  if (!body) return { ok: false, message: "The brief came back empty — tracing can still run without it." };
+  await saveBrief(opts.cwd, body, { hash: input.hash, sources: input.sources.map((s) => s.file), writtenAt: Date.now(), model: opts.model });
+  return { ok: true, message: `**Project brief** written from ${input.sources.length} document(s): ${input.sources.slice(0, 6).map((s) => `\`${s.file}\``).join(", ")}` };
 }

@@ -4,6 +4,8 @@ import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
 import { memoryHints } from "./memory-inject.js";
+import { routeSkills } from "../skills/route.js";
+import { applySkills } from "../skills/apply.js";
 import { contextTools } from "./task-types.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 
@@ -53,6 +55,20 @@ export async function runImplementer(
   // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
   // blind to them and kept re-learning the same things.
   const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role });
+  /**
+   * Skills this particular task needs, matched from what it asks for.
+   *
+   * A discoverable skill only helps if the agent notices it and fetches it, which is a coin toss; attaching it
+   * to the role instead puts it in every prompt including the tasks it has nothing to say about. Matching the
+   * task against each skill's own "use when…" description resolves both: a UI task gets the design skill
+   * inlined, a queue-migration task does not.
+   */
+  const attached = deps.roleRegistry.skillsFor(role);
+  const routed = routeSkills(`${task.title} ${task.reviewNotes.join(" ")}`, deps.skillRegistry, attached, { role });
+  const systemPrompt = routed.length
+    ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
+    : resolved.systemPrompt;
+  if (routed.length) deps.note?.(`📎 \`${role}\` · ${routed.map((m) => `**${m.name}**`).join(", ")} — matched: ${routed[0].hits.slice(0, 6).join(", ")}`);
 
   // A timeout here is NOT a cancellation: the job is fine, this one attempt ran too long. The two are
   // distinguished below so a genuine Ctrl-C still propagates as a cancellation.
@@ -60,6 +76,7 @@ export async function runImplementer(
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
+    systemPrompt,
     ...(chain.length ? { model: chain[0], fallbacks: chain.slice(1) } : {}),
     tools,
     maxTurns: IMPLEMENTER_MAX_TURNS,

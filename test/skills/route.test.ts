@@ -1,0 +1,117 @@
+import { describe, it, expect } from "vitest";
+import { routeSkills, scoreSkill, MATCH_BAR, MAX_ROUTED } from "../../src/skills/route.js";
+import { SkillRegistry } from "../../src/skills/registry.js";
+
+/** impeccable's real description, abridged — the text routing has to work against in practice. */
+const IMPECCABLE =
+  "Use when the user wants to design, redesign, shape, critique, audit, polish, or otherwise improve a " +
+  "frontend interface. Covers websites, landing pages, dashboards, product UI, app shells, components, " +
+  "forms, settings, onboarding, and empty states. Handles UX review, visual hierarchy, accessibility, " +
+  "responsive behavior, theming, typography, spacing, layout, color, motion, and reusable design systems. " +
+  "Not for backend-only or non-UI tasks.";
+
+const DEBUG = "Use when debugging a failing test, a crash, or unexpected behaviour — root-cause analysis.";
+
+const registry = (): SkillRegistry => {
+  const r = new SkillRegistry();
+  r.register({ name: "impeccable", description: IMPECCABLE, content: "IMPECCABLE-BODY" });
+  r.register({ name: "systematic-debugging", description: DEBUG, content: "DEBUG-BODY" });
+  return r;
+};
+
+const route = (task: string, role?: string, already: string[] = []) =>
+  routeSkills(task, registry(), already, role ? { role } : {}).map((m) => m.name);
+
+describe("routing a design task to the design skill", () => {
+  it.each([
+    "Redesign the settings dashboard — the layout feels cluttered and typography is inconsistent",
+    "Build the empty state for the invoices table with better visual hierarchy",
+    "Make the pricing page bolder, fix the spacing and the color contrast",
+  ])("routes %o", (task) => {
+    expect(route(task, "designer")).toContain("impeccable");
+  });
+
+  /**
+   * The role is part of what is being asked. "Add a dark theme toggle to the onboarding screens" is thin on
+   * its own; handed to `designer` it is unambiguously interface work.
+   */
+  it("counts the role as signal", () => {
+    const task = "Add a dark theme toggle to the onboarding screens";
+    expect(route(task, "designer")).toContain("impeccable");
+  });
+});
+
+describe("keeping it off work it does not cover", () => {
+  it.each([
+    "Fix the null pointer crash in the payment retry loop",
+    "Add a database index to speed up the orders query",
+    "Refactor the auth middleware to use the new token format",
+    "Write the API endpoint for creating a subscription",
+    "Parse the CSV import and validate the row schema",
+    "Add retry with exponential backoff to the webhook sender",
+  ])("does not route %o to a design skill", (task) => {
+    expect(route(task, "coder")).not.toContain("impeccable");
+  });
+
+  /**
+   * The skill's own "Not for …" clause is a veto, not a penalty. Without honouring it, the rest of the
+   * description would happily match a backend task that merely mentions the word.
+   */
+  it("obeys the skill's own exclusion clause even when the rest matches", () => {
+    const task = "Redesign the backend-only export pipeline: layout of the output, typography of the report";
+    expect(route(task, "coder")).not.toContain("impeccable");
+  });
+});
+
+describe("word matching", () => {
+  // A suffix-stripper turns "theming" into "them", which then fails to match "theme". Prefix matching with a
+  // dropped trailing -e is what makes these line up.
+  it.each([
+    ["theme", "theming"],
+    ["screens", "screen"],
+    ["designer", "design"],
+    ["state", "states"],
+  ])("treats %o and %o as the same word", (a, b) => {
+    expect(scoreSkill(`the ${a} work`, `Use when ${b} matters`).score).toBe(1);
+  });
+
+  it("does not collide unrelated short words", () => {
+    expect(scoreSkill("format the code", "Use when forms need work").score).toBe(0);
+  });
+
+  it("counts a repeated word once, so one term cannot carry a skill in", () => {
+    expect(scoreSkill("design design design design", "Use when design matters").score).toBe(1);
+  });
+
+  it("an empty task matches nothing", () => {
+    expect(scoreSkill("", IMPECCABLE).score).toBe(0);
+  });
+});
+
+describe("bounds", () => {
+  it("never inlines a skill the role already carries", () => {
+    const task = "Redesign the dashboard layout and typography";
+    expect(route(task, "designer", ["impeccable"])).not.toContain("impeccable");
+  });
+
+  it("inlines at most MAX_ROUTED, however many match", () => {
+    const r = new SkillRegistry();
+    for (let i = 0; i < 6; i++) r.register({ name: `s${i}`, description: IMPECCABLE, content: "b" });
+    const got = routeSkills("Redesign the dashboard layout typography spacing color", r);
+    expect(got.length).toBeLessThanOrEqual(MAX_ROUTED);
+  });
+
+  it("stays below the bar for a passing mention", () => {
+    expect(routeSkills("Rename the design_tokens table column", registry())).toEqual([]);
+  });
+
+  it("reports WHY it matched, so a routing decision can be explained", () => {
+    const m = routeSkills("Redesign the dashboard layout and typography", registry(), [], { role: "designer" });
+    expect(m[0].hits.length).toBeGreaterThanOrEqual(MATCH_BAR);
+    expect(m[0].hits).toContain("layout");
+  });
+
+  it("an empty registry is not an error", () => {
+    expect(routeSkills("anything", new SkillRegistry())).toEqual([]);
+  });
+});
