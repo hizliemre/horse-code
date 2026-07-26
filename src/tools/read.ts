@@ -12,13 +12,16 @@ const params = z.object({
 });
 
 /**
- * Cap on how much of a file one call may return (~15k tokens).
+ * Cap on how much of a file one call may return (~7.5k tokens).
  *
  * An uncapped read is the most expensive thing an agent can do here: the whole file enters the conversation and
  * is then re-sent on EVERY subsequent turn, so one large read is billed dozens of times over. A review lens
  * that pulled in a big file was observed spending 1.9M prompt tokens to produce 21k of output.
+ *
+ * Deliberately tighter than "one big file": paging costs one extra call, while an over-large read costs its
+ * whole size again on every turn that follows. An agent that needs more asks for the next window.
  */
-export const MAX_READ_CHARS = 60_000;
+export const MAX_READ_CHARS = 30_000;
 
 /** Cuts `lines` down to the char budget; returns the kept slice and how many lines were dropped. */
 function fit(lines: string[], budget: number): { kept: string[]; dropped: number } {

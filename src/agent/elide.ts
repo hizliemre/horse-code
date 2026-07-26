@@ -12,8 +12,13 @@ import type { Message } from "../core/types.js";
 // the `tool` messages that answer them. Dropping or merging messages breaks that pairing and the provider
 // rejects the request outright. Eliding only the BODY keeps every id, role and ordering intact.
 
-/** Tool results this recent are kept verbatim — the agent is usually still working with them. */
-export const KEEP_RECENT_RESULTS = 4;
+/**
+ * Tool results this recent are kept verbatim — the agent is usually still working with them.
+ *
+ * Two, not four: the working set of an agent mid-edit is the file it just read and the command it just ran.
+ * Anything older it has already acted on, and each retained result is re-billed on every remaining turn.
+ */
+export const KEEP_RECENT_RESULTS = 2;
 /** Below this size a tool result is not worth eliding; the stub would barely be smaller. */
 export const ELIDE_MIN_CHARS = 1_500;
 
