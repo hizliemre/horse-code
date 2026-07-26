@@ -20,6 +20,8 @@ import { helpSections } from "./help.js";
 import { wordLeft, wordRight, lineStart, lineEnd } from "./input-edit.js";
 import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
 import { shouldCollapsePaste, pasteToken, expandPasteTokens } from "./paste.js";
+import type { AskChoice } from "../engine/review.js";
+import { asChoice } from "../engine/review.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -82,20 +84,27 @@ export function choiceHeight(optionCount: number): number {
  * selected option text(s) joined by "; ".
  */
 export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: {
-  options: string[];
+  options: (string | AskChoice)[];
   multiSelect: boolean;
   cols: number;
   onSubmit: (answer: string) => void;
   onEscape?: () => void; // Esc → dismiss the selector (App falls back to a free-text answer)
 }): React.ReactElement {
+  const choices = options.map(asChoice);
   const [cursor, setCursor] = useState(0);
   const [checked, setChecked] = useState<Set<number>>(new Set());
+  // A free-text note attached to the answer. Some choices need a qualifier the options cannot enumerate
+  // ("B, but keep the old adapter") — without it the user has to Esc out and lose the structured choice.
+  const [note, setNote] = useState("");
+  const [noting, setNoting] = useState(false);
   // Source-of-truth refs updated synchronously per keystroke (React 19 defers re-renders under load, so
   // reading render-derived state in the handler would go stale). setState only drives the visual.
   const cursorRef = useRef(0);
   const checkedRef = useRef<Set<number>>(new Set());
-  const cfg = useRef({ options, multiSelect, onSubmit, onEscape });
-  cfg.current = { options, multiSelect, onSubmit, onEscape };
+  const noteRef = useRef("");
+  const notingRef = useRef(false);
+  const cfg = useRef({ choices, multiSelect, onSubmit, onEscape });
+  cfg.current = { choices, multiSelect, onSubmit, onEscape };
 
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   useEffect(() => {
@@ -103,18 +112,38 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
     if (isRawModeSupported && setRawMode) setRawMode(true);
     const onData = (chunk: Buffer | string): void => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      const { options: opts, multiSelect: multi, onSubmit: submitCb, onEscape: escCb } = cfg.current;
-      const kkEsc = parseKittyKey(s);
-      // Esc (and Ctrl+C — treated as Esc inside a panel) → dismiss to free-text, never exit the app.
-      if (s === "\x1b" || s === "\x03" || s === "\x1b[99;5u" || kkEsc?.type === "escape") { escCb?.(); return; }
+      const { choices: opts, multiSelect: multi, onSubmit: submitCb, onEscape: escCb } = cfg.current;
+      const kk = parseKittyKey(s);
+      const isEsc = s === "\x1b" || s === "\x03" || s === "\x1b[99;5u" || kk?.type === "escape";
+      const isEnter = s === "\r" || kk?.type === "enter";
+
+      // While typing a note the list keys are OFF: every character belongs to the note.
+      if (notingRef.current) {
+        if (isEsc) {
+          // Discard, as the footer promises — leaving the text behind would silently attach a note the user
+          // just cancelled.
+          noteRef.current = ""; setNote("");
+          notingRef.current = false; setNoting(false);
+          return;
+        }
+        if (isEnter) { notingRef.current = false; setNoting(false); return; } // confirm → back to the list
+        if (s === "\x7f" || s === "\b") { noteRef.current = noteRef.current.slice(0, -1); setNote(noteRef.current); return; }
+        if (s >= " " && !s.startsWith("\x1b")) { noteRef.current += s; setNote(noteRef.current); }
+        return;
+      }
+
+      if (isEsc) { escCb?.(); return; }
       const submit = (): void => {
         const picks = multi
-          ? (checkedRef.current.size ? [...checkedRef.current].sort((a, b) => a - b).map((i) => opts[i]) : [opts[cursorRef.current]])
-          : [opts[cursorRef.current]];
-        submitCb(picks.filter(Boolean).join("; "));
+          ? (checkedRef.current.size ? [...checkedRef.current].sort((a, b) => a - b).map((i) => opts[i]?.label) : [opts[cursorRef.current]?.label])
+          : [opts[cursorRef.current]?.label];
+        const answer = picks.filter(Boolean).join("; ");
+        const n = noteRef.current.trim();
+        submitCb(n ? `${answer}\n\nNote: ${n}` : answer);
       };
       if (s === "\x1b[A" || s === "\x1bOA") { cursorRef.current = Math.max(0, cursorRef.current - 1); setCursor(cursorRef.current); return; }
       if (s === "\x1b[B" || s === "\x1bOB") { cursorRef.current = Math.min(opts.length - 1, cursorRef.current + 1); setCursor(cursorRef.current); return; }
+      if (s === "n" || s === "N") { notingRef.current = true; setNoting(true); return; }
       if (s === " ") {
         if (multi) {
           const nx = new Set(checkedRef.current);
@@ -123,26 +152,67 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
         } else submit();
         return;
       }
-      const kk = parseKittyKey(s);
-      if (s === "\r" || kk?.type === "enter") { submit(); return; }
+      if (isEnter) { submit(); return; }
     };
     stdin.on("data", onData);
     return () => { stdin.off("data", onData); };
   }, [stdin, setRawMode, isRawModeSupported]);
 
   const w = Math.max(24, cols - 2);
-  return (
-    <Box flexDirection="column" width={w} borderStyle="round" borderColor="cyan" paddingX={1}>
-      {options.map((opt, i) => {
+  const preview = choices[cursor]?.preview;
+  // Side-by-side only when there is room; a narrow terminal stacks the preview under the list instead of
+  // squeezing both into unreadable columns.
+  const sideBySide = !!preview && w >= 80;
+  const listW = sideBySide ? Math.floor(w * 0.4) : w;
+  const previewW = w - listW - 3;
+  const hint = (multiSelect ? "↑/↓ move · space toggle · Enter submit" : "↑/↓ move · space/Enter select")
+    + " · n to add notes · Esc to type";
+
+  const list = (
+    <Box flexDirection="column" width={listW}>
+      {choices.map((c, i) => {
         const isSel = i === cursor;
         const mark = multiSelect ? (checked.has(i) ? "[x] " : "[ ] ") : (isSel ? "◉ " : "○ ");
         return (
-          <Text key={i} wrap="truncate-end">
-            <Text color={isSel ? "cyan" : undefined} inverse={isSel}>{`${isSel ? "› " : "  "}${mark}${opt}`}</Text>
-          </Text>
+          <Box key={i} flexDirection="column">
+            <Text wrap="truncate-end">
+              <Text color={isSel ? "cyan" : undefined} inverse={isSel}>{`${isSel ? "› " : "  "}${mark}${c.label}`}</Text>
+            </Text>
+            {c.description ? <Text dimColor wrap="truncate-end">{`      ${c.description}`}</Text> : null}
+          </Box>
         );
       })}
-      <Text dimColor wrap="truncate-end">{(multiSelect ? "↑/↓ move · space toggle · Enter submit" : "↑/↓ move · space/Enter select") + " · Esc to type"}</Text>
+    </Box>
+  );
+
+  return (
+    <Box flexDirection="column" width={w} borderStyle="round" borderColor="cyan" paddingX={1}>
+      {sideBySide ? (
+        <Box flexDirection="row">
+          {list}
+          <Box flexDirection="column" width={previewW} marginLeft={2} borderStyle="round" borderColor="gray" paddingX={1}>
+            {(preview ?? "").split("\n").map((line, i) => <Text key={i} dimColor wrap="truncate-end">{line}</Text>)}
+          </Box>
+        </Box>
+      ) : (
+        <>
+          {list}
+          {preview ? (
+            <Box flexDirection="column" marginTop={1} borderStyle="round" borderColor="gray" paddingX={1}>
+              {preview.split("\n").map((line, i) => <Text key={i} dimColor wrap="truncate-end">{line}</Text>)}
+            </Box>
+          ) : null}
+        </>
+      )}
+      <Text wrap="truncate-end">
+        <Text dimColor>{"Notes: "}</Text>
+        {noting
+          ? <Text color="cyan">{`${note}▌`}</Text>
+          : note
+            ? <Text>{note}</Text>
+            : <Text dimColor italic>press n to add notes</Text>}
+      </Text>
+      <Text dimColor wrap="truncate-end">{noting ? "Enter to confirm the note · Esc to discard it" : hint}</Text>
     </Box>
   );
 }

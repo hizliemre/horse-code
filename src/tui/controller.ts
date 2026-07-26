@@ -1,5 +1,5 @@
 import type { BoardCardView, ProgressEvent } from "../engine/progress.js";
-import type { AskOpts } from "../engine/review.js";
+import type { AskOpts, AskChoice } from "../engine/review.js";
 import type { ToolActivity } from "../core/types.js";
 import type { UsageSample } from "../providers/meter.js";
 import { phaseNarration } from "./labels.js";
@@ -37,7 +37,7 @@ export interface TuiState {
   phase: string;
   detail?: string;
   cards: BoardCardView[];
-  pending?: { question: string; options?: string[]; multiSelect?: boolean };
+  pending?: { question: string; options?: (string | AskChoice)[]; multiSelect?: boolean };
   mode?: "input" | "running" | "picker";
   transcript: TranscriptItem[];
   queued: number; // prompts typed while a job is running, waiting to run next

@@ -403,7 +403,7 @@ describe("runReviewLoop", () => {
   it("maxRounds exhausted → offers approve / keep-reviewing / stop; approve → approved, stop → not", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const mk = () => reviewProvider({ assessments: teamCritical, councilVotes: allRevise, judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] }); // judge defers to the user
-    let opts: string[] | undefined;
+    let opts: (string | { label: string })[] | undefined;
     const ok = await runReviewLoop(rdeps(mk()), { stage: "spec", workdir: dir, target: "spec.md", revise: noRevise, askUser: async (_q, o) => { opts = o?.options; return "approve"; }, maxRounds: 2 });
     expect(opts).toEqual(["Approve as-is", "Keep reviewing (2 more rounds)", "Stop"]);
     expect(ok.approved).toBe(true);
@@ -436,7 +436,7 @@ describe("runReviewLoop", () => {
   it("escalation is a localized selectable choice (Turkish) with the keep-reviewing option", async () => {
     await writeFile(join(dir, "spec.md"), "# spec", "utf8");
     const mk = () => reviewProvider({ assessments: teamCritical, councilVotes: allRevise, judge: ['{"decision":"ask-human","feedback":[],"question":"Which scope?"}'] });
-    let asked = "", opts: string[] | undefined;
+    let asked = "", opts: (string | { label: string })[] | undefined;
     const out = await runReviewLoop(rdeps(mk()), { stage: "spec", workdir: dir, target: "spec.md", revise: noRevise, askUser: async (q, o) => { asked = q; opts = o?.options; return "Mevcut haliyle onayla"; }, maxRounds: 1, language: "Turkish" });
     expect(asked).toMatch(/revizyon turunda onaylanmadı/);
     expect(opts).toEqual(["Mevcut haliyle onayla", "Review'a devam et (1 tur daha)", "Durdur"]);

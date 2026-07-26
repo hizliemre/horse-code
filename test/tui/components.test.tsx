@@ -397,4 +397,86 @@ describe("Ink components", () => {
     expect(submitted).toBe("/0");
     unmount();
   });
+
+  // A one-line label cannot convey "which approach should we build" — the preview panel carries the trade-offs
+  // the choice actually turns on, and the note carries the qualifier the options cannot enumerate.
+  it("ChoiceInput: shows the focused option's preview and moves it with the cursor", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const opts = [
+      { label: "Repository port", description: "swap to a real API in one place", preview: "A) port\n+ one seam\n- more setup" },
+      { label: "Direct calls", description: "fastest to write", preview: "B) direct\n+ fastest\n- changes everywhere" },
+    ];
+    const { stdin, lastFrame, unmount } = render(<ChoiceInput options={opts} multiSelect={false} cols={120} onSubmit={() => {}} />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("Repository port"); i++) await sleep(15);
+    expect(strip(lastFrame())).toContain("+ one seam");        // the focused option's preview
+    expect(strip(lastFrame())).toContain("swap to a real API"); // and its description
+    await sleep(50);
+    stdin.write("\x1b[B");
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("+ fastest"); i++) await sleep(15);
+    expect(strip(lastFrame())).toContain("- changes everywhere");
+    unmount();
+  });
+
+  it("ChoiceInput: `n` opens a note that rides along with the answer", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let answer: string | undefined;
+    const opts = [{ label: "Repository port" }, { label: "Direct calls" }];
+    const { stdin, lastFrame, unmount } = render(<ChoiceInput options={opts} multiSelect={false} cols={100} onSubmit={(a) => { answer = a; }} />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("press n to add notes"); i++) await sleep(15);
+    await sleep(50);
+    stdin.write("n"); await sleep(30);
+    for (const ch of "keep the old adapter") { stdin.write(ch); await sleep(4); }
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("keep the old adapter"); i++) await sleep(15);
+    stdin.write("\r"); await sleep(40); // confirm the note → back to the list
+    stdin.write("\r");                   // submit the selection
+    for (let i = 0; i < 200 && answer === undefined; i++) await sleep(15);
+    expect(answer).toBe("Repository port\n\nNote: keep the old adapter");
+    unmount();
+  });
+
+  // While typing a note the list keys must be OFF, or "n" and arrows would silently move the selection.
+  it("ChoiceInput: typing a note does not move the selection", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let answer: string | undefined;
+    const opts = [{ label: "First" }, { label: "Second" }];
+    const { stdin, lastFrame, unmount } = render(<ChoiceInput options={opts} multiSelect={false} cols={100} onSubmit={(a) => { answer = a; }} />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("First"); i++) await sleep(15);
+    await sleep(50);
+    stdin.write("n"); await sleep(30);
+    for (const ch of "nnn") { stdin.write(ch); await sleep(6); } // would otherwise re-trigger note mode
+    stdin.write("\r"); await sleep(40);
+    stdin.write("\r");
+    for (let i = 0; i < 200 && answer === undefined; i++) await sleep(15);
+    expect(answer).toBe("First\n\nNote: nnn");
+    unmount();
+  });
+
+  it("ChoiceInput: Esc while noting discards the note but keeps the choice", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let answer: string | undefined;
+    const opts = [{ label: "Only" }];
+    const { stdin, lastFrame, unmount } = render(<ChoiceInput options={opts} multiSelect={false} cols={100} onSubmit={(a) => { answer = a; }} onEscape={() => {}} />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("Only"); i++) await sleep(15);
+    await sleep(50);
+    stdin.write("n"); await sleep(30);
+    for (const ch of "oops") { stdin.write(ch); await sleep(5); }
+    stdin.write("\x1b"); await sleep(40); // discard the note, stay in the list
+    stdin.write("\r");
+    for (let i = 0; i < 200 && answer === undefined; i++) await sleep(15);
+    expect(answer).toBe("Only"); // the abandoned note is not attached
+    unmount();
+  });
+
+  it("ChoiceInput: plain string options still work (nothing had to change at the call sites)", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let answer: string | undefined;
+    const { stdin, lastFrame, unmount } = render(<ChoiceInput options={["Yes", "No"]} multiSelect={false} cols={70} onSubmit={(a) => { answer = a; }} />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("Yes"); i++) await sleep(15);
+    await sleep(50);
+    stdin.write("\r");
+    for (let i = 0; i < 200 && answer === undefined; i++) await sleep(15);
+    expect(answer).toBe("Yes");
+    unmount();
+  });
+
 });

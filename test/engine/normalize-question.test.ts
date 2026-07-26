@@ -48,7 +48,7 @@ describe("normalizeQuestion", () => {
 });
 
 describe("buildAskUserTool with normalize", () => {
-  const capture = () => { const seen: { q: string; opts?: string[] }[] = []; return { seen, ask: async (q: string, o?: { options?: string[] }) => { seen.push({ q, opts: o?.options }); return "answer"; } }; };
+  const capture = () => { const seen: { q: string; opts?: (string | { label: string })[] }[] = []; return { seen, ask: async (q: string, o?: { options?: (string | { label: string })[] }) => { seen.push({ q, opts: o?.options }); return "answer"; } }; };
 
   it("embedded choices + no options → normalize extracts a selectable list", async () => {
     const { seen, ask } = capture();

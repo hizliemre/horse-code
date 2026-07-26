@@ -24,8 +24,26 @@ export interface ReviewDeps extends TaskCycleDeps {
   /** Wall-clock ceiling per reviewer; defaults to REVIEW_TIMEOUT_MS. Lowered by tests, raisable for slow models. */
   reviewTimeoutMs?: number;
 }
+/**
+ * One selectable answer. A bare string is still accepted everywhere and means `{ label }` — the richer form is
+ * for choices the user cannot judge from a one-line label alone (which approach to build, which trade-off to
+ * accept), where the `preview` is rendered beside the list as the cursor moves.
+ */
+export interface AskChoice {
+  label: string;
+  /** One line under the label: what this option means, or what happens if it is chosen. */
+  description?: string;
+  /** Longer content shown in a panel next to the list while this option is focused. */
+  preview?: string;
+}
+
 /** Structured choices for a question → the TUI renders a selectable checkbox/radio list. */
-export interface AskOpts { options?: string[]; multiSelect?: boolean }
+export interface AskOpts { options?: (string | AskChoice)[]; multiSelect?: boolean }
+
+/** Normalizes the mixed option form to {@link AskChoice}. */
+export function asChoice(o: string | AskChoice): AskChoice {
+  return typeof o === "string" ? { label: o } : o;
+}
 export type AskUser = (question: string, opts?: AskOpts) => Promise<string>;
 
 export type Severity = "critical" | "medium" | "low";
