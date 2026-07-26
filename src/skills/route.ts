@@ -69,6 +69,32 @@ function exclusions(description: string): string[] {
   return m ? terms(m[1]) : [];
 }
 
+/**
+ * A skill that says it must be asked for by name.
+ *
+ * `pick-ui-library` ends its description with "Only runs when explicitly invoked; it does not trigger on its
+ * own." Auto-routing it would break the contract the author wrote into the metadata — so the same sentence
+ * that would let us match it is the sentence that forbids it.
+ */
+export function isExplicitOnly(description: string): boolean {
+  return /\bonly\s+(runs?|use[sd]?|invoke[sd]?)\b[^.]*\bexplicit/i.test(description)
+    || /\bdoes\s+not\s+trigger\s+on\s+its\s+own\b/i.test(description)
+    || /\bonly\s+when\s+explicitly\s+(invoked|asked|requested)\b/i.test(description);
+}
+
+/**
+ * A skill that plans or audits but refuses to write code.
+ *
+ * Several of these say so plainly — "Read-only on source code", "it proposes motion with exact values, it
+ * does not implement it", "it plans improvements, it does not apply them". Handing one to an agent whose
+ * whole job this turn is to implement puts the agent under two contradictory instructions, and the way that
+ * failure shows up is an implementer that produces nothing. They are still right for a reviewer or a planner.
+ */
+export function isNonImplementing(description: string): boolean {
+  return /\bread[- ]only\b/i.test(description)
+    || /\bdoes\s+not\s+(implement|apply|execute|write)\b/i.test(description);
+}
+
 /** How much of a skill's vocabulary a task has to hit before the skill is worth its place in the prompt. */
 export const MATCH_BAR = 3;
 /** Never inline more than this many routed skills — each one is a full document in the prompt. */
@@ -110,7 +136,7 @@ export function routeSkills(
   task: string,
   registry: SkillRegistry,
   already: string[] = [],
-  opts: { bar?: number; max?: number; role?: string } = {},
+  opts: { bar?: number; max?: number; role?: string; implementing?: boolean } = {},
 ): SkillMatch[] {
   const bar = opts.bar ?? MATCH_BAR;
   const have = new Set(already);
@@ -120,6 +146,10 @@ export function routeSkills(
   const subject = opts.role ? `${opts.role} ${task}` : task;
   return registry.list()
     .filter((s) => !have.has(s.name))
+    // Both vetoes come from the skill's own description. Matching a skill on its words while ignoring the
+    // words that say when NOT to use it would be reading half the metadata.
+    .filter((s) => !isExplicitOnly(s.description))
+    .filter((s) => !(opts.implementing && isNonImplementing(s.description)))
     .map((s) => ({ name: s.name, ...scoreSkill(subject, s.description) }))
     .filter((m) => m.score >= bar)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))

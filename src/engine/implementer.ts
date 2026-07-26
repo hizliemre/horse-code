@@ -64,7 +64,7 @@ export async function runImplementer(
    * inlined, a queue-migration task does not.
    */
   const attached = deps.roleRegistry.skillsFor(role);
-  const routed = routeSkills(`${task.title} ${task.reviewNotes.join(" ")}`, deps.skillRegistry, attached, { role });
+  const routed = routeSkills(`${task.title} ${task.reviewNotes.join(" ")}`, deps.skillRegistry, attached, { role, implementing: true });
   const systemPrompt = routed.length
     ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
     : resolved.systemPrompt;

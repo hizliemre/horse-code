@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { routeSkills, scoreSkill, MATCH_BAR, MAX_ROUTED } from "../../src/skills/route.js";
+import { routeSkills, scoreSkill, isExplicitOnly, isNonImplementing, MATCH_BAR, MAX_ROUTED } from "../../src/skills/route.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 /** impeccable's real description, abridged — the text routing has to work against in practice. */
@@ -113,5 +113,65 @@ describe("bounds", () => {
 
   it("an empty registry is not an error", () => {
     expect(routeSkills("anything", new SkillRegistry())).toEqual([]);
+  });
+});
+
+/**
+ * Both vetoes below read the skill's OWN description. Matching a skill on its words while ignoring the words
+ * that say when not to use it would be reading half the metadata.
+ */
+describe("a skill that says it must be asked for by name", () => {
+  const EXPLICIT = "Pick the right library for a frontend task from a curated list — charts, toasts, " +
+    "styling, and more. Only runs when explicitly invoked; it does not trigger on its own.";
+
+  it("is never routed automatically, however well it matches", () => {
+    const r = new SkillRegistry();
+    r.register({ name: "pick-ui-library", description: EXPLICIT, content: "b" });
+    expect(routeSkills("Which library should I use for charts and toasts and styling?", r)).toEqual([]);
+  });
+
+  it.each([
+    "Only runs when explicitly invoked; it does not trigger on its own.",
+    "Use only when explicitly requested by the user.",
+    "This does not trigger on its own.",
+  ])("recognises the phrasing %o", (d) => { expect(isExplicitOnly(d)).toBe(true); });
+
+  it("does not mistake an ordinary description for one", () => {
+    expect(isExplicitOnly("Use when the user wants to design an interface.")).toBe(false);
+  });
+});
+
+describe("a skill that refuses to write code", () => {
+  const PLANNER = "Survey a codebase's animation code and produce a prioritized audit and implementation " +
+    "plans. Read-only on source code — it plans improvements, it does not apply them. Use when the user " +
+    "asks to improve the animation and motion of an app.";
+
+  const reg = (): SkillRegistry => {
+    const r = new SkillRegistry();
+    r.register({ name: "improve-animations", description: PLANNER, content: "b" });
+    return r;
+  };
+  const task = "Improve the animation and motion of the app";
+
+  /**
+   * Handing a "do not implement" skill to an agent whose whole job this turn is to implement puts it under
+   * two contradictory instructions, and that failure shows up as an implementer that produces nothing.
+   */
+  it("is kept away from an agent that is there to implement", () => {
+    expect(routeSkills(task, reg(), [], { implementing: true })).toEqual([]);
+  });
+
+  it("still reaches a reviewer or a planner, where it is exactly right", () => {
+    expect(routeSkills(task, reg(), [], { implementing: false }).map((m) => m.name)).toEqual(["improve-animations"]);
+  });
+
+  it.each([
+    "Read-only on source code — it plans improvements.",
+    "It proposes motion with exact values, it does not implement it.",
+    "It audits; it does not apply them.",
+  ])("recognises the phrasing %o", (d) => { expect(isNonImplementing(d)).toBe(true); });
+
+  it("does not mistake an implementing skill for one", () => {
+    expect(isNonImplementing("Use when building gesture-driven UI and spring animations.")).toBe(false);
   });
 });
