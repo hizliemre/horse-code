@@ -74,6 +74,29 @@ export function PendingQuestion({ text, cols }: { text: string; cols: number }):
 }
 
 /**
+ * Wraps plain text to a width, breaking on spaces.
+ *
+ * Shared by the render and the height calculation, which is the point: an option that wraps to three lines
+ * has to be reserved three rows, and the only way those two stay in step is for them to be the same code.
+ */
+export function wrapPlain(text: string, width: number): string[] {
+  const w = Math.max(8, width);
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    let line = "";
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      if (!line.length) line = word;
+      else if (line.length + 1 + word.length <= w) line += ` ${word}`;
+      else { out.push(line); line = word; }
+      // A single word longer than the column is cut rather than pushing the box wider.
+      while (line.length > w) { out.push(line.slice(0, w)); line = line.slice(w); }
+    }
+    out.push(line);
+  }
+  return out.length ? out : [""];
+}
+
+/**
  * Total rows a ChoiceInput occupies — counted from what it actually draws.
  *
  * This said `optionCount + 3`, from a version that drew one row per option and had no notes line. It then
@@ -87,8 +110,14 @@ export function PendingQuestion({ text, cols }: { text: string; cols: number }):
 export function choiceHeight(options: (string | AskChoice)[], cols = 80): number {
   const choices = options.map((o) => (typeof o === "string" ? { label: o } : o));
   const w = Math.max(24, cols - 2);
-  // One row for the label, plus one for a description when there is one.
-  const listRows = choices.reduce((n, c) => n + 1 + (c.description ? 1 : 0), 0);
+  const hasAnyPreview = choices.some((c) => c.preview);
+  const listW = hasAnyPreview && w >= 80 ? Math.floor(w * 0.4) : w;
+  // Options WRAP rather than truncate, so a long one takes several rows — and an option the user cannot
+  // read is not a choice they can make.
+  const listRows = choices.reduce(
+    (n, c) => n + wrapPlain(c.label, listW - 4).length + (c.description ? wrapPlain(c.description, listW - 6).length : 0),
+    0,
+  );
 
   // The preview belongs to the focused option, so the tallest one is what has to fit.
   const previewRows = choices.reduce((n, c) => Math.max(n, c.preview ? c.preview.split("\n").length : 0), 0);
@@ -201,10 +230,18 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
         const mark = multiSelect ? (checked.has(i) ? "[x] " : "[ ] ") : (isSel ? "◉ " : "○ ");
         return (
           <Box key={i} flexDirection="column">
-            <Text wrap="truncate-end">
-              <Text color={isSel ? "cyan" : undefined} inverse={isSel}>{`${isSel ? "› " : "  "}${mark}${c.label}`}</Text>
-            </Text>
-            {c.description ? <Text dimColor wrap="truncate-end">{`      ${c.description}`}</Text> : null}
+            {wrapPlain(c.label, listW - 4).map((line, k) => (
+              <Text key={k}>
+                <Text color={isSel ? "cyan" : undefined} inverse={isSel}>
+                  {k === 0 ? `${isSel ? "› " : "  "}${mark}${line}` : `      ${line}`}
+                </Text>
+              </Text>
+            ))}
+            {c.description
+              ? wrapPlain(c.description, listW - 6).map((line, k) => (
+                <Text key={`d${k}`} dimColor>{`      ${line}`}</Text>
+              ))
+              : null}
           </Box>
         );
       })}

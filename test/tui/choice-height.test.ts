@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { choiceHeight } from "../../src/tui/components.js";
+import { choiceHeight, wrapPlain } from "../../src/tui/components.js";
 
 /**
  * The layout reserved fewer rows than the component painted, so Ink drew over the region above it: the
@@ -66,5 +66,63 @@ describe("choiceHeight matches what ChoiceInput draws", () => {
     ];
     expect(choiceHeight(opts, 100)).toBe(6 + FIXED);
     expect(choiceHeight(opts, 100)).toBeGreaterThan(3 + 3); // the old formula
+  });
+});
+
+/**
+ * An option the user cannot read is not a choice they can make.
+ *
+ * Options were truncated to the list column — 40% of the width when a preview is present — so three long
+ * options all ended in "…" and none of them said enough to choose between. They wrap now, which means the
+ * height has to count the wrapped rows or the box goes back to painting over the question above it.
+ */
+describe("long options wrap rather than truncate", () => {
+  const LONG = "Build a DataProvider interface. v1 ships a LocalStorageProvider. Design and stub an HttpProvider "
+    + "behind the same interface so the swap is a one-line change later.";
+
+  it("reserves more than one row for an option that wraps", () => {
+    const one = choiceHeight([{ label: "short" }], 100);
+    const many = choiceHeight([{ label: LONG }], 100);
+    expect(many).toBeGreaterThan(one);
+  });
+
+  it("reserves more rows in a narrow list column than a wide one", () => {
+    const withPreview = [{ label: LONG, preview: "x" }];
+    // With a preview the list gets 40% of the width, so the same text wraps to more rows.
+    expect(choiceHeight(withPreview, 100)).toBeGreaterThan(choiceHeight([{ label: LONG }], 100));
+  });
+
+  it("counts a wrapped description too", () => {
+    const a = choiceHeight([{ label: "x" }], 100);
+    const b = choiceHeight([{ label: "x", description: LONG }], 100);
+    expect(b - a).toBeGreaterThan(1);
+  });
+});
+
+describe("wrapPlain", () => {
+  it("breaks on spaces within the width", () => {
+    expect(wrapPlain("one two three four", 9)).toEqual(["one two", "three", "four"]);
+  });
+
+  it("keeps a short line whole", () => {
+    expect(wrapPlain("short", 40)).toEqual(["short"]);
+  });
+
+  /** A single word longer than the column is cut rather than pushing the box wider than the terminal. */
+  it("cuts a word that cannot fit", () => {
+    expect(wrapPlain("aaaaaaaaaaaa", 10)).toEqual(["aaaaaaaaaa", "aa"]);
+  });
+
+  /** A column narrower than this cannot hold a readable word, so the width has a floor. */
+  it("never wraps narrower than the floor", () => {
+    expect(wrapPlain("aaaaaaaaaaaa", 2)).toEqual(["aaaaaaaa", "aaaa"]);
+  });
+
+  it("preserves explicit line breaks", () => {
+    expect(wrapPlain("a\nb", 40)).toEqual(["a", "b"]);
+  });
+
+  it("empty text is one empty line, not none", () => {
+    expect(wrapPlain("", 40)).toEqual([""]);
   });
 });
