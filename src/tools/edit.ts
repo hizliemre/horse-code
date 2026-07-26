@@ -12,7 +12,10 @@ const params = z.object({
 
 export const editFileTool: Tool = {
   name: "edit_file",
-  description: "Performs an exact string replacement in a file. oldString must be unique (otherwise replaceAll is required).",
+  description:
+    "Performs an exact string replacement in a file. oldString must match the file's REAL bytes — strip the " +
+    "`<number>\\t` prefix that read_file adds for display, or nothing will match. oldString must be unique " +
+    "(otherwise replaceAll is required); a miss is reported as an error, never a silent no-op.",
   permissionLevel: "write",
   parameters: params,
   describe(rawArgs) {

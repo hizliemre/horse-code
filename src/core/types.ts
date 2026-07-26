@@ -42,6 +42,11 @@ export interface ToolContext {
   signal: AbortSignal;
   onActivity?: (a: ToolActivity) => void; // optional live-activity sink (file writes/edits)
   remember?: (fact: string) => void; // persist a durable fact learned from a tool result (remember_fact tool)
+  /**
+   * Absolute paths this agent has READ during this run. `write_file` refuses to overwrite an existing file
+   * that is not in here: an agent that has not looked at a file cannot know what it is destroying.
+   */
+  readFiles?: Set<string>;
   // Queue a memory PROPOSAL (propose_memory tool). Returns whether it was queued. Writes nothing: review
   // agents propose, and a single trusted curator decides what is actually stored.
   proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean;

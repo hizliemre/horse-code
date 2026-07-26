@@ -2,7 +2,24 @@ import { spawn } from "node:child_process";
 import { z } from "zod";
 import type { Tool, ToolResult } from "../core/types.js";
 
-const params = z.object({ command: z.string() });
+const params = z.object({
+  command: z.string(),
+  /** Milliseconds before the command is killed. Defaults to DEFAULT_TIMEOUT_MS, capped at MAX_TIMEOUT_MS. */
+  timeout: z.number().int().positive().optional(),
+});
+
+/**
+ * Default wall-clock budget for one command.
+ *
+ * There was NO timeout at all: `ng serve`, `npm run watch`, a stalled install — or any command that reads
+ * stdin — blocked forever. A single task was observed running 378 minutes, and the only thing that ever
+ * stopped it was the (much later) implementer budget.
+ */
+export const DEFAULT_TIMEOUT_MS = 120_000;
+/** Upper bound a caller may ask for. A genuinely long build says so explicitly; nothing runs unbounded. */
+export const MAX_TIMEOUT_MS = 600_000;
+/** Grace period between SIGTERM and SIGKILL, so a process gets a chance to clean up. */
+const KILL_GRACE_MS = 2_000;
 
 /**
  * Cap on how much command output enters the conversation (~8k tokens).
@@ -27,7 +44,11 @@ export function clampOutput(body: string, max = MAX_SHELL_CHARS): string {
 
 export const shellTool: Tool = {
   name: "shell",
-  description: "Runs a shell command (in the cwd context). Returns stdout+stderr and the exit code.",
+  description:
+    "Runs a shell command (in the cwd context). Returns stdout+stderr and the exit code. Runs NON-INTERACTIVELY " +
+    "(stdin is closed) — pass non-interactive flags (e.g. --yes, --no-input) or the command will fail rather " +
+    "than wait for input. Killed after `timeout` ms (default 120000, max 600000); do not start long-running " +
+    "watchers or dev servers.",
   permissionLevel: "exec",
   parameters: params,
   describe(rawArgs) {
@@ -46,7 +67,9 @@ export const shellTool: Tool = {
     return new Promise<ToolResult>((resolvePromise) => {
       let child;
       try {
-        child = spawn(a.command, { cwd: ctx.cwd, shell: true, signal: ctx.signal });
+        // stdin is CLOSED, not piped: a command that asks a question (npm init, a package manager's y/n)
+        // otherwise waits on input that will never come, and the whole agent stalls behind it.
+        child = spawn(a.command, { cwd: ctx.cwd, shell: true, signal: ctx.signal, stdio: ["ignore", "pipe", "pipe"] });
       } catch (e) {
         resolvePromise({
           content: `shell error: ${e instanceof Error ? e.message : String(e)}`,
@@ -54,19 +77,34 @@ export const shellTool: Tool = {
         });
         return;
       }
+      const budget = Math.min(a.timeout ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
       let out = "";
       let err = "";
+      let timedOut = false;
+      let killer: NodeJS.Timeout | undefined;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGTERM");
+        // Escalate if it ignores SIGTERM — otherwise "timed out" would still leave the process running.
+        killer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+        killer.unref?.();
+      }, budget);
+      timer.unref?.(); // a pending timer must never keep the process alive on its own
+      const done = (): void => { clearTimeout(timer); if (killer) clearTimeout(killer); };
       child.stdout?.on("data", (d) => (out += d.toString()));
       child.stderr?.on("data", (d) => (err += d.toString()));
       child.on("error", (e) => {
+        done();
         resolvePromise({ content: `shell error: ${e.message}`, isError: true });
       });
       child.on("close", (code) => {
+        done();
         const body = clampOutput([out, err].filter((s) => s.length).join("\n").trimEnd());
-        resolvePromise({
-          content: `$ ${a.command}\n${body}\n(exit ${code ?? "null"})`,
-          isError: code !== 0,
-        });
+        // Whatever it printed before being killed is kept — a timed-out build's output is usually the point.
+        const tail = timedOut
+          ? `\n(killed after ${Math.round(budget / 1000)}s — it was still running. Use a non-interactive, terminating command; do not start watchers or dev servers.)`
+          : `\n(exit ${code ?? "null"})`;
+        resolvePromise({ content: `$ ${a.command}\n${body}${tail}`, isError: timedOut || code !== 0 });
       });
     });
   },

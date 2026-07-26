@@ -16,6 +16,7 @@ export interface ToolExecDeps {
   signal: AbortSignal;
   onActivity?: (a: import("../core/types.js").ToolActivity) => void; // live file-write/edit activity → UI
   remember?: (fact: string) => void; // remember_fact tool → persist a durable fact
+  readFiles?: Set<string>; // files read this run → gates blind overwrites in write_file
   proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean; // propose_memory tool → curator queue
   onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit (sequential)
 }
@@ -101,7 +102,7 @@ export async function* executeToolCalls(
   const autoPlans = plans.filter((p) => p.kind === "run");
   for (const p of autoPlans) yield { type: "tool.request", toolCall: p.call };
   const autoResults = await Promise.all(
-    autoPlans.map((p) => p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity, remember: deps.remember, proposeMemory: deps.proposeMemory })),
+    autoPlans.map((p) => p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity, remember: deps.remember, proposeMemory: deps.proposeMemory, readFiles: deps.readFiles })),
   );
   for (let k = 0; k < autoPlans.length; k++) {
     const p = autoPlans[k];
@@ -133,7 +134,7 @@ export async function* executeToolCalls(
       ok = await deps.approve(p.req!);
     }
     const result = ok
-      ? await p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity, remember: deps.remember, proposeMemory: deps.proposeMemory })
+      ? await p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity, remember: deps.remember, proposeMemory: deps.proposeMemory, readFiles: deps.readFiles })
       : errResult(p.call.name, "user denied");
     results[p.index] = { id: p.call.id, name: p.call.name, result };
     yield { type: "tool.result", toolCallId: p.call.id, result };

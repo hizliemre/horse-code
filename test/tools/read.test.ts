@@ -15,10 +15,12 @@ afterEach(async () => {
 });
 
 describe("read_file", () => {
-  it("returns the contents of an existing file", async () => {
-    await writeFile(join(dir, "a.txt"), "hello", "utf8");
+  // Line-numbered, cat -n style: without it an agent cannot cite WHERE something is, and a windowed read
+  // gives no anchor for the next offset. The number is display only — edit_file matches the real bytes.
+  it("returns the contents of an existing file, line-numbered", async () => {
+    await writeFile(join(dir, "a.txt"), "hello\nworld", "utf8");
     const res = await readFileTool.run({ path: "a.txt" }, ctx());
-    expect(res).toEqual({ content: "hello", isError: false });
+    expect(res).toEqual({ content: "1\thello\n2\tworld", isError: false });
   });
 
   it("returns isError:true for a nonexistent file (does not throw)", async () => {
@@ -50,6 +52,7 @@ describe("read_file — size cap and paging", () => {
     expect(res.content.length).toBeLessThan(MAX_READ_CHARS + 500); // cap + footer
     expect(res.content).toContain("read_file: lines 1-");
     expect(res.content).toContain("of 2000");
+    expect(res.content).toMatch(/^ *1\t/); // right-aligned to the widest number in the window
   });
 
   // Without this an agent cannot tell a short file from a truncated one, and reasons about content it never saw.
@@ -66,7 +69,8 @@ describe("read_file — size cap and paging", () => {
   it("offset + limit return that window, and only that window", async () => {
     await writeFile(join(dir, "a.txt"), "l1\nl2\nl3\nl4\nl5", "utf8");
     const res = await readFileTool.run({ path: "a.txt", offset: 2, limit: 2 }, ctx());
-    expect(res.content).toContain("l2\nl3");
+    // Numbers continue from the window's real position — that is the whole point of paging.
+    expect(res.content).toContain("2\tl2\n3\tl3");
     expect(res.content).not.toContain("l4");
     expect(res.content).toContain("lines 2-3 of 5");
   });
@@ -78,9 +82,11 @@ describe("read_file — size cap and paging", () => {
     expect(res.content).toMatch(/past the end/);
   });
 
-  it("a file under the cap is still returned byte-for-byte (the common case is unchanged)", async () => {
-    const content = "hello\nworld\n";
-    await writeFile(join(dir, "s.txt"), content, "utf8");
-    expect(await readFileTool.run({ path: "s.txt" }, ctx())).toEqual({ content, isError: false });
+  it("a file under the cap comes back whole — every line, in order, nothing dropped", async () => {
+    await writeFile(join(dir, "s.txt"), "hello\nworld\n", "utf8");
+    const res = await readFileTool.run({ path: "s.txt" }, ctx());
+    expect(res.isError).toBe(false);
+    // Strip the display prefix → the original file, byte for byte.
+    expect(res.content.split("\n").map((l) => l.replace(/^\s*\d+\t/, "")).join("\n")).toBe("hello\nworld\n");
   });
 });

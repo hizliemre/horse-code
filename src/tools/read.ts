@@ -23,6 +23,18 @@ const params = z.object({
  */
 export const MAX_READ_CHARS = 30_000;
 
+/**
+ * Prefixes each line with its 1-based number, `cat -n` style.
+ *
+ * Without it an agent has no way to say WHERE something is: it cannot cite a location back, and a windowed
+ * read gives no anchor for the next `offset`. The number is presentation only — the tool description tells the
+ * model not to carry it into an edit, because `edit_file` matches the file's real bytes.
+ */
+function numbered(lines: string[], startLine: number): string {
+  const width = String(startLine + lines.length - 1).length;
+  return lines.map((l, i) => `${String(startLine + i).padStart(width, " ")}\t${l}`).join("\n");
+}
+
 /** Cuts `lines` down to the char budget; returns the kept slice and how many lines were dropped. */
 function fit(lines: string[], budget: number): { kept: string[]; dropped: number } {
   let used = 0;
@@ -36,9 +48,10 @@ function fit(lines: string[], budget: number): { kept: string[]; dropped: number
 export const readFileTool: Tool = {
   name: "read_file",
   description:
-    "Reads a file (path relative to cwd or absolute). Large files come back truncated; pass `offset` (1-based " +
-    "line) and `limit` (line count) to read a specific range. Read only what you need — every line you read " +
-    "stays in your context for the rest of the turn.",
+    "Reads a file (path relative to cwd or absolute). Output is LINE-NUMBERED as `<number>\\t<content>` — the " +
+    "number is a reading aid, NOT part of the file: never include it in an edit_file oldString or a write_file " +
+    "body. Large files come back truncated; pass `offset` (1-based line) and `limit` (line count) to read a " +
+    "specific range. Read only what you need — every line you read stays in your context for the rest of the turn.",
   permissionLevel: "safe",
   parameters: params,
   async run(rawArgs, ctx) {
@@ -50,32 +63,40 @@ export const readFileTool: Tool = {
       };
     }
     const args = parsed.data;
+    const abs = resolve(ctx.cwd, args.path);
+    // Registered BEFORE the await, not after: auto-approved tool calls in one turn run in PARALLEL, so a
+    // read+write issued together would otherwise race and the write would be refused at random. Recording the
+    // intent is enough — the guard exists to catch a write with NO read at all, not to police ordering.
+    ctx.readFiles?.add(abs);
     let raw: string;
     try {
-      raw = await readFile(resolve(ctx.cwd, args.path), "utf8");
+      raw = await readFile(abs, "utf8");
     } catch (e) {
       return {
         content: `read_file error: ${e instanceof Error ? e.message : String(e)}`,
         isError: true,
       };
     }
-    // A small file, requested whole, is returned verbatim — the overwhelmingly common case, unchanged.
-    if (args.offset === undefined && args.limit === undefined && raw.length <= MAX_READ_CHARS) {
-      return { content: raw, isError: false };
-    }
     const all = raw.split("\n");
+    // A small file, requested whole: numbered, no footer — there is nothing to page.
+    if (args.offset === undefined && args.limit === undefined && raw.length <= MAX_READ_CHARS) {
+      return { content: numbered(all, 1), isError: false };
+    }
     const start = (args.offset ?? 1) - 1;
     if (start >= all.length) {
       return { content: `read_file: offset ${args.offset} is past the end of the file (${all.length} lines).`, isError: true };
     }
     const window = args.limit !== undefined ? all.slice(start, start + args.limit) : all.slice(start);
+    // The budget is on what actually ENTERS the context, so it is applied to the NUMBERED output — the prefix
+    // is real bytes too. Fit on the raw text first, then shed lines until the rendered form fits.
     const { kept } = fit(window, MAX_READ_CHARS);
+    while (kept.length > 1 && numbered(kept, start + 1).length > MAX_READ_CHARS) kept.pop();
     const last = start + kept.length;
     // The footer is the affordance: without it an agent cannot tell a short file from a truncated one, and
     // would reason confidently about content it never saw.
     const footer = last < all.length
       ? `\n\n[read_file: lines ${start + 1}-${last} of ${all.length}. Re-read with {"path":"${args.path}","offset":${last + 1}} for the rest.]`
       : `\n\n[read_file: lines ${start + 1}-${last} of ${all.length}.]`;
-    return { content: kept.join("\n") + footer, isError: false };
+    return { content: numbered(kept, start + 1) + footer, isError: false };
   },
 };

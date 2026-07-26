@@ -24,8 +24,14 @@ function submit(argsJson: string): ChatEvent[] {
     { type: "done", finishReason: "tool_calls" },
   ];
 }
+/**
+ * Read THEN write — the resolver is handed only the conflicted file NAMES, so it must look at a file before
+ * replacing it. Overwriting a conflicted file blind would destroy one side of the merge, which is exactly what
+ * write_file's read-before-overwrite guard refuses. Both calls ride the SAME turn, as a model would issue them.
+ */
 function writeTurn(path: string, content: string): ChatEvent[] {
   return [
+    { type: "tool-call", toolCall: { id: "r", name: "read_file", arguments: JSON.stringify({ path }) } },
     { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: JSON.stringify({ path, content }) } },
     { type: "done", finishReason: "tool_calls" },
   ];

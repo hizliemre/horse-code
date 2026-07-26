@@ -39,6 +39,8 @@ function fmtChars(n: number): string {
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
   const working: Message[] = [{ role: "system", content: opts.systemPrompt }, ...opts.messages];
   const schemas = opts.tools.schemas();
+  // One log per agent run: reading a file in an EARLIER run says nothing about what it holds now.
+  const readFiles = new Set<string>();
   const maxTurns = opts.maxTurns ?? 50;
   let turn = 0;
 
@@ -141,6 +143,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       onActivity: opts.onActivity,
       remember: opts.remember,
       proposeMemory: opts.proposeMemory,
+      readFiles,
       onWrite: opts.onWrite,
     });
     for (const r of results) {
