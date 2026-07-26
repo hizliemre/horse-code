@@ -134,3 +134,43 @@ export function briefForPrompt(cwd: string): string | undefined {
   const body = b.replace(/^# Project brief\s*/, "").trim();
   return body.length > MAX_BRIEF_IN_PROMPT ? `${body.slice(0, MAX_BRIEF_IN_PROMPT)}…` : body;
 }
+
+export interface BriefStatus {
+  built: boolean;
+  /** True when the documents it was built from have changed since. */
+  stale: boolean;
+  sources: string[];
+  builtAt?: number;
+  /** Documents that are new or changed since the brief — what makes it stale, so the claim is checkable. */
+  changed: string[];
+}
+
+/**
+ * Whether the brief still describes the project.
+ *
+ * A brief that silently rots is worse than none: it is committed, it reads as established fact, and every
+ * trace written after it inherits whatever it got wrong. The graph already tracks its own freshness; this is
+ * the same obligation for the half that cost tokens to produce.
+ */
+export async function briefStatus(cwd: string, files: string[]): Promise<BriefStatus> {
+  const meta = await loadBriefMeta(cwd);
+  if (!meta || !readBriefSync(cwd)) return { built: false, stale: false, sources: [], changed: [] };
+  const now = await gatherBriefInput(cwd, files);
+  if (!now) return { built: true, stale: false, sources: meta.sources, ...(meta.writtenAt ? { builtAt: meta.writtenAt } : {}), changed: [] };
+  const stale = now.hash !== meta.hash;
+  // Naming WHICH documents moved turns "stale" from an assertion into something the user can check.
+  const before = new Set(meta.sources);
+  const changed = stale
+    ? [...now.sources.filter((s) => !before.has(s.file)).map((s) => s.file),
+       ...meta.sources.filter((f) => !now.sources.some((s) => s.file === f)).map((f) => `${f} (gone)`)]
+    : [];
+  return {
+    built: true,
+    stale,
+    sources: meta.sources,
+    ...(meta.writtenAt ? { builtAt: meta.writtenAt } : {}),
+    // An edit inside an unchanged set of files changes the hash without changing the list; say so rather
+    // than reporting an empty reason.
+    changed: stale && !changed.length ? ["the documents were edited"] : changed,
+  };
+}

@@ -10,6 +10,7 @@ import { registerBuiltinSkills } from "./skills/builtin.js";
 import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl } from "./skills/external.js";
 import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
+import { briefStatus } from "./engine/project-brief.js";
 import { planFor, runTraces, describePlan, buildBrief } from "./engine/trace-run.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
@@ -235,9 +236,20 @@ export async function main(argv: string[]): Promise<void> {
         const fresh = st.stale
           ? `\n\n⚠️ **Stale** — changed since it was built: ${st.staleBecause.map((f) => `\`${f}\``).join(", ")}. Run \`/graph build\`.`
           : "\n\n✓ Up to date with the working tree.";
-        return `**Project graph** — ${st.nodes} symbols, ${st.edges} relationships, built ${age}.${fresh}\n\n_Every agent can query it: \`graph_impact\` (blast radius), \`graph_find\`, \`graph_context\`, \`graph_overview\`._`;
+        // The brief cost tokens, so its freshness is reported with the same care as the graph's — a stale
+        // brief is inherited by every trace written after it.
+        const bs = await briefStatus(cwd, await traceableDocs());
+        const briefLine = !bs.built
+          ? "\n\n**Project brief:** not written — `/graph trace` writes it (this is the part that costs tokens)."
+          : bs.stale
+            ? `\n\n**Project brief:** ⚠️ stale — ${bs.changed.slice(0, 3).map((c) => `\`${c}\``).join(", ")}. \`/graph trace\` rewrites it.`
+            : `\n\n**Project brief:** ✓ current, from ${bs.sources.length} document(s).`;
+        return `**Project graph** — ${st.nodes} symbols, ${st.edges} relationships, built ${age}.${fresh}${briefLine}\n\n_Every agent can query it: \`graph_impact\` (blast radius), \`graph_trace\`, \`graph_find\`, \`graph_context\`, \`graph_overview\`._`;
       };
       const buildGraphText = async (): Promise<string> => (await buildProjectGraph(cwd)).message;
+      /** Everything git tracks or would track — the pool the brief's documents are chosen from. */
+      const traceableDocs = async (): Promise<string[]> =>
+        (await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd)).stdout.split("\n").filter(Boolean);
       // Which files are worth a trace: tracked or newly added source, never generated or vendored output.
       const traceableFiles = async (): Promise<string[]> => {
         const r = await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd);
@@ -271,10 +283,7 @@ export async function main(argv: string[]): Promise<void> {
         const files = await traceableFiles();
         // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
         // the whole run again.
-        const docs = await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd);
-        const brief = await buildBrief({
-          cwd, provider, model: tracerModel(), files: docs.stdout.split("\n").filter(Boolean),
-        });
+        const brief = await buildBrief({ cwd, provider, model: tracerModel(), files: await traceableDocs() });
         const plan = await planFor(cwd, files);
         const res = await runTraces({
           cwd, provider, model: tracerModel(), plan, liveFiles: new Set(files),

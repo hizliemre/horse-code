@@ -4,7 +4,8 @@ import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
 import { memoryHints } from "./memory-inject.js";
-import { routeSkills } from "../skills/route.js";
+import { routeSkills, filesForTask } from "../skills/route.js";
+import { loadGraphSync } from "./project-graph.js";
 import { applySkills } from "../skills/apply.js";
 import { contextTools } from "./task-types.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
@@ -64,7 +65,10 @@ export async function runImplementer(
    * inlined, a queue-migration task does not.
    */
   const attached = deps.roleRegistry.skillsFor(role);
-  const routed = routeSkills(`${task.title} ${task.reviewNotes.join(" ")}`, deps.skillRegistry, attached, { role, implementing: true });
+  const subject = `${task.title} ${task.acceptance.join(" ")} ${task.reviewNotes.join(" ")}`;
+  const routed = routeSkills(subject, deps.skillRegistry, attached, {
+    role, implementing: true, files: filesForTask(subject, loadGraphSync(cwd)),
+  });
   const systemPrompt = routed.length
     ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
     : resolved.systemPrompt;

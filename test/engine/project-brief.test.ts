@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   selectDocs, gatherBriefInput, briefPrompt, saveBrief, loadBriefMeta, readBriefSync, briefForPrompt,
-  MAX_DOC_CHARS, MAX_BRIEF_IN_PROMPT,
+  MAX_DOC_CHARS, MAX_BRIEF_IN_PROMPT, briefStatus,
 } from "../../src/engine/project-brief.js";
 import { buildBrief } from "../../src/engine/trace-run.js";
 import { tracePrompt } from "../../src/engine/trace.js";
@@ -161,5 +161,90 @@ describe("buildBrief", () => {
     const r = await buildBrief({ cwd, provider: canned("  "), model: "m", files: ["README.md"] });
     expect(r.ok).toBe(false);
     expect(readBriefSync(cwd)).toBeUndefined();
+  });
+});
+
+/**
+ * The brief costs tokens and is committed, so a silent rot is the expensive failure: it reads as established
+ * fact and every trace written after it inherits whatever it got wrong.
+ */
+describe("briefStatus — the brief must not rot silently", () => {
+  const build = async () => {
+    await write("README.md", "we sell widgets");
+    await buildBrief({ cwd, provider: canned("**What it is** widgets"), model: "m", files: ["README.md"] });
+  };
+
+  it("reports not-built before anything is written", async () => {
+    expect(await briefStatus(cwd, ["README.md"])).toMatchObject({ built: false, stale: false });
+  });
+
+  it("is current right after it is written", async () => {
+    await build();
+    expect(await briefStatus(cwd, ["README.md"])).toMatchObject({ built: true, stale: false });
+  });
+
+  it("goes stale when a source document is edited, and says the documents moved", async () => {
+    await build();
+    await write("README.md", "we sell widgets AND gadgets now");
+    const st = await briefStatus(cwd, ["README.md"]);
+    expect(st.stale).toBe(true);
+    expect(st.changed).toEqual(["the documents were edited"]);
+  });
+
+  it("names a document that appeared", async () => {
+    await build();
+    await write("docs/domain.md", "a widget is a thing");
+    const st = await briefStatus(cwd, ["README.md", "docs/domain.md"]);
+    expect(st.stale).toBe(true);
+    expect(st.changed).toContain("docs/domain.md");
+  });
+
+  it("names a document that disappeared", async () => {
+    await write("README.md", "widgets");
+    await write("docs/domain.md", "definitions");
+    await buildBrief({ cwd, provider: canned("b"), model: "m", files: ["README.md", "docs/domain.md"] });
+    await rm(join(cwd, "docs/domain.md"));
+    const st = await briefStatus(cwd, ["README.md"]);
+    expect(st.changed.some((c) => c.includes("docs/domain.md"))).toBe(true);
+  });
+
+  // Losing all documentation should not be reported as "the brief is wrong" — it is the last good one.
+  it("does not call it stale when the documents vanish entirely", async () => {
+    await build();
+    await rm(join(cwd, "README.md"));
+    expect((await briefStatus(cwd, []))).toMatchObject({ built: true, stale: false });
+  });
+});
+
+describe("buildBrief does not re-buy an unchanged brief", () => {
+  /** Tracing runs often; the brief has to be paid once per documentation change, not once per run. */
+  it("skips the call when the documents have not moved", async () => {
+    await write("README.md", "widgets");
+    let calls = 0;
+    const counting = { chat: async function* () { calls++; yield { type: "text-delta" as const, text: "b" }; } } as unknown as Provider;
+    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    const second = await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    expect(calls).toBe(1);
+    expect(second.skipped).toBe(true);
+    expect(second.ok).toBe(true);
+  });
+
+  it("rewrites once a document changes", async () => {
+    await write("README.md", "widgets");
+    let calls = 0;
+    const counting = { chat: async function* () { calls++; yield { type: "text-delta" as const, text: "b" }; } } as unknown as Provider;
+    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    await write("README.md", "widgets and gadgets");
+    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    expect(calls).toBe(2);
+  });
+
+  it("force rewrites even when nothing changed", async () => {
+    await write("README.md", "widgets");
+    let calls = 0;
+    const counting = { chat: async function* () { calls++; yield { type: "text-delta" as const, text: "b" }; } } as unknown as Provider;
+    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"], force: true });
+    expect(calls).toBe(2);
   });
 });

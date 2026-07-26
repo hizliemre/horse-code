@@ -30,8 +30,22 @@ const STOP = new Set([
 /** A term long enough to mean something. Two-letter tokens match everything and nothing. */
 const MIN_TERM = 3;
 
+/**
+ * Splits identifiers into words.
+ *
+ * Code names things `CheckoutFlow`, `retry_payment`, `OnboardingScreen`. Lower-casing those whole leaves one
+ * long token that matches nothing a human writes, so a task saying "checkout flow" failed to reach
+ * `CheckoutFlow` — the exact case file-path routing exists to catch.
+ */
+function splitIdentifiers(text: string): string {
+  return text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")   // checkoutFlow → checkout Flow
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2") // HTTPServer   → HTTP Server
+    .replace(/[_./-]+/g, " ");
+}
+
 function terms(text: string): string[] {
-  return (text.toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) ?? [])
+  return (splitIdentifiers(text).toLowerCase().match(/[a-z][a-z0-9]{2,}/g) ?? [])
     .filter((t) => t.length >= MIN_TERM && !STOP.has(t));
 }
 
@@ -152,14 +166,17 @@ export function routeSkills(
   task: string,
   registry: SkillRegistry,
   already: string[] = [],
-  opts: { bar?: number; max?: number; role?: string; implementing?: boolean } = {},
+  opts: { bar?: number; max?: number; role?: string; implementing?: boolean; files?: string[] } = {},
 ): SkillMatch[] {
   const bar = opts.bar ?? MATCH_BAR;
   const have = new Set(already);
   // The ROLE is part of what is being asked. "Add a dark theme toggle" is ambiguous on its own; the same
   // sentence handed to `designer` is unambiguously interface work, and the skill's own exclusion clause is
   // what stops the role from dragging it onto work it does not cover.
-  const subject = opts.role ? `${opts.role} ${task}` : task;
+  // Directory names are evidence in their own right: a path through `components/` says what kind of work
+  // this is even when the title does not.
+  const paths = (opts.files ?? []).join(" ");
+  const subject = [opts.role ?? "", task, paths, expandExtensions(opts.files ?? [])].filter(Boolean).join(" ");
   return registry.list()
     .filter((s) => !have.has(s.name))
     // Both vetoes come from the skill's own description. Matching a skill on its words while ignoring the
@@ -173,4 +190,73 @@ export function routeSkills(
     // review while `impeccable` — which lists every UI concern there is — took the slot on incidental hits.
     .sort((a, b) => b.score - a.score || b.density - a.density || a.name.localeCompare(b.name))
     .slice(0, opts.max ?? MAX_ROUTED);
+}
+
+/**
+ * Translates a file extension into the words that describe it.
+ *
+ * An extension is the single strongest signal a path carries — `.tsx` has meant "interface component" for
+ * years — and it is the one signal no skill description contains, because descriptions are written in
+ * English ("frontend", "interface", "UI") and paths are written in file extensions. Without this bridge the
+ * strongest evidence is the evidence that never matches.
+ *
+ * A small table of facts about file types, not a table of judgements about skills: `.tsx` is a component
+ * whatever anyone thinks, so it does not drift the way a category mapping would.
+ */
+const EXT_WORDS: Record<string, string> = {
+  tsx: "frontend interface component web",
+  jsx: "frontend interface component web",
+  vue: "frontend interface component web",
+  svelte: "frontend interface component web",
+  css: "frontend interface styling web",
+  scss: "frontend interface styling web",
+  html: "frontend interface web",
+  sql: "database migration",
+  proto: "protocol schema",
+};
+
+export function expandExtensions(files: string[]): string {
+  const words = new Set<string>();
+  for (const f of files) {
+    const ext = f.split(".").pop()?.toLowerCase();
+    if (ext && EXT_WORDS[ext]) for (const w of EXT_WORDS[ext].split(" ")) words.add(w);
+  }
+  return [...words].join(" ");
+}
+
+/**
+ * The files a task is likely to touch, resolved through the code graph.
+ *
+ * Routing on the task title alone is thin: "Add dark mode" is three words, and a title says nothing about
+ * where the work lands. The graph does. Resolving the title's terms to graph symbols yields their source
+ * paths, and a path is strong evidence of what kind of work this is — `src/components/Onboarding.tsx` says
+ * interface far more reliably than any wording of the title.
+ *
+ * The paths are fed back in as plain text rather than mapped to categories through a table of our own,
+ * because the vocabulary already lines up: skill descriptions talk about components, forms, dashboards and
+ * styles, and so do real directory names. A table would be one more thing to keep in step with reality.
+ */
+export function filesForTask(
+  task: string,
+  graph: { nodes: { label: string; source_file?: string }[] } | undefined,
+  max = 8,
+): string[] {
+  if (!graph) return [];
+  const taskTerms = new Set(terms(task));
+  if (!taskTerms.size) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of graph.nodes) {
+    if (!n.source_file || seen.has(n.source_file)) continue;
+    // A symbol counts as referenced only on a whole-word match. Substring matching over a thousand node
+    // labels would tie almost every task to almost every file.
+    // Matched with the same word-equality the rest of routing uses, so "onboarding" reaches an
+    // `OnboardingScreen` — exact set membership would not.
+    const label = terms(n.label);
+    if (!label.some((l) => [...taskTerms].some((t) => sameWord(t, l)))) continue;
+    seen.add(n.source_file);
+    out.push(n.source_file);
+    if (out.length >= max) break;
+  }
+  return out;
 }

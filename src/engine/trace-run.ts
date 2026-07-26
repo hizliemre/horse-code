@@ -4,7 +4,7 @@ import {
 } from "./trace.js";
 import type { TraceJob, TracePlan } from "./trace.js";
 import { loadGraph } from "./project-graph.js";
-import { briefForPrompt, gatherBriefInput, briefPrompt, saveBrief } from "./project-brief.js";
+import { briefForPrompt, gatherBriefInput, briefPrompt, saveBrief, briefStatus } from "./project-brief.js";
 
 /** How many tracers run at once. Enough to finish a repo quickly, few enough not to trip provider rate limits. */
 export const TRACE_CONCURRENCY = 6;
@@ -124,7 +124,17 @@ export async function buildBrief(opts: {
   model: string;
   files: string[];
   signal?: AbortSignal;
-}): Promise<{ ok: boolean; message: string }> {
+  /** Rewrite even when the documents have not changed. */
+  force?: boolean;
+}): Promise<{ ok: boolean; message: string; skipped?: boolean }> {
+  // Re-deriving an unchanged brief spends the same tokens for the same paragraphs. Tracing runs often; this
+  // has to be paid once per change to the documentation, not once per run.
+  if (!opts.force) {
+    const st = await briefStatus(opts.cwd, opts.files);
+    if (st.built && !st.stale) {
+      return { ok: true, skipped: true, message: `Project brief is current (${st.sources.length} document(s)) — not rewritten.` };
+    }
+  }
   const input = await gatherBriefInput(opts.cwd, opts.files);
   if (!input) {
     return { ok: false, message: "No documentation found (README, docs/, specs/) — traces will describe the code without product context." };

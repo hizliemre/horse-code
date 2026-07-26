@@ -10,7 +10,8 @@ import { applySkills, buildSkillTool } from "../skills/apply.js";
 import { rememberFactTool } from "../tools/remember.js";
 import { proposeMemoryTool } from "../tools/propose-memory.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
-import { routeSkills } from "../skills/route.js";
+import { routeSkills, filesForTask } from "../skills/route.js";
+import { loadGraphSync } from "./project-graph.js";
 import { contextTools } from './task-types.js';
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 
@@ -54,7 +55,9 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
   const hints = memoryHints(deps, task.title, { role: "code-reviewer" });
   // A reviewer is exactly where a read-only auditing skill belongs — the skills an implementer must not be
   // handed, because they refuse to write code, are the ones that judge it best.
-  const routed = routeSkills(task.title, deps.skillRegistry, deps.roleRegistry.skillsFor("code-reviewer"), { role: "code-reviewer" });
+  const routed = routeSkills(task.title, deps.skillRegistry, deps.roleRegistry.skillsFor("code-reviewer"), {
+    role: "code-reviewer", files: filesForTask(task.title, loadGraphSync(cwd)),
+  });
   if (routed.length) deps.note?.(`📎 \`code-reviewer\` · ${routed.map((m) => `**${m.name}**`).join(", ")}`);
   const ask = { role: "user" as const, content:
     `Review the CODE that implements task "${task.title}" — correctness, tests, and implementation quality.\n` +

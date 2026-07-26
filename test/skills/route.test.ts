@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { routeSkills, scoreSkill, isExplicitOnly, isNonImplementing, MATCH_BAR, MAX_ROUTED } from "../../src/skills/route.js";
+import { routeSkills, scoreSkill, isExplicitOnly, isNonImplementing, filesForTask, expandExtensions, MATCH_BAR, MAX_ROUTED } from "../../src/skills/route.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 /** impeccable's real description, abridged — the text routing has to work against in practice. */
@@ -212,5 +212,69 @@ describe("ties break on how tight the fit is, not on the alphabet", () => {
 
   it("density is zero when nothing matched", () => {
     expect(scoreSkill("nothing relevant here", NARROW).density).toBe(0);
+  });
+});
+
+/**
+ * Routing on the title alone is thin — "Add dark mode" is three words. The graph knows where the work lands,
+ * and a path is stronger evidence of the kind of work than any wording of the title.
+ */
+describe("file paths as routing signal", () => {
+  const graph = {
+    nodes: [
+      { label: "CheckoutFlow", source_file: "src/components/checkout/CheckoutFlow.tsx" },
+      { label: "retryPayment", source_file: "src/server/payments/retry.ts" },
+      { label: "orders", source_file: "src/db/migrations/003_orders.sql" },
+    ],
+  };
+
+  // Code names things CheckoutFlow; humans write "checkout flow". Without splitting the identifier the two
+  // never meet, which was the exact case this feature exists to catch.
+  it("resolves a task to files across camelCase names", () => {
+    expect(filesForTask("Make the checkout flow less confusing", graph))
+      .toEqual(["src/components/checkout/CheckoutFlow.tsx"]);
+  });
+
+  it("resolves snake_case and lowercase names too", () => {
+    expect(filesForTask("Fix retry payment backoff", graph)).toContain("src/server/payments/retry.ts");
+  });
+
+  it("returns nothing when the task names nothing in the graph", () => {
+    expect(filesForTask("update the deployment pipeline", graph)).toEqual([]);
+  });
+
+  it("is not an error without a graph", () => {
+    expect(filesForTask("anything", undefined)).toEqual([]);
+  });
+
+  it("caps how many files it reports", () => {
+    const many = { nodes: Array.from({ length: 50 }, (_, i) => ({ label: "widget", source_file: `src/w${i}.tsx` })) };
+    expect(filesForTask("widget", many, 4)).toHaveLength(4);
+  });
+
+  /**
+   * An extension is the strongest signal a path carries and the one no description contains — descriptions
+   * are written in English ("frontend", "interface"), paths in file extensions.
+   */
+  it("translates extensions into the words descriptions actually use", () => {
+    expect(expandExtensions(["src/a.tsx"])).toMatch(/frontend/);
+    expect(expandExtensions(["db/x.sql"])).toMatch(/database/);
+    expect(expandExtensions(["src/a.ts"])).toBe("");
+  });
+
+  it("routes a UI task the title alone would have missed", () => {
+    const r = new SkillRegistry();
+    r.register({ name: "impeccable", description: IMPECCABLE, content: "b" });
+    const task = "Make the checkout flow less confusing";
+    expect(routeSkills(task, r, [], { role: "designer" })).toEqual([]);
+    expect(routeSkills(task, r, [], { role: "designer", files: filesForTask(task, graph) }).map((m) => m.name))
+      .toEqual(["impeccable"]);
+  });
+
+  it("does not route a backend task even with its paths", () => {
+    const r = new SkillRegistry();
+    r.register({ name: "impeccable", description: IMPECCABLE, content: "b" });
+    const task = "Fix retryPayment so it backs off";
+    expect(routeSkills(task, r, [], { role: "coder", files: filesForTask(task, graph) })).toEqual([]);
   });
 });
