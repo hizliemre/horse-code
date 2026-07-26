@@ -31,7 +31,7 @@ export async function registerBuiltinSkills(registry: SkillRegistry, dirs = cand
       // Only a directory that actually holds skill folders counts — an unrelated `skills` dir higher up the
       // tree must not be adopted just because the path resolved.
       const entries = await readdir(dir, { withFileTypes: true });
-      const found: { name: string; description: string; content: string }[] = [];
+      const found: { name: string; description: string; content: string; dir: string }[] = [];
       for (const e of entries) {
         if (!e.isDirectory()) continue;
         let raw: string;
@@ -39,7 +39,7 @@ export async function registerBuiltinSkills(registry: SkillRegistry, dirs = cand
         const { parseFrontmatter } = await import("./frontmatter.js");
         const { name, description, body } = parseFrontmatter(raw);
         if (!name || !description) continue; // a malformed built-in is skipped, never fatal
-        found.push({ name, description, content: body });
+        found.push({ name, description, content: body, dir: join(dir, e.name) });
       }
       if (!found.length) continue;
       for (const s of found) registry.register(s);

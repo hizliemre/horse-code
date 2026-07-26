@@ -22,7 +22,8 @@ describe("SkillRegistry.loadFromDir", () => {
     await writeSkill("tdd", "---\nname: tdd\ndescription: TDD\n---\ntdd body");
     const r = new SkillRegistry();
     await r.loadFromDir(dir);
-    expect(r.get("tdd")).toEqual({ name: "tdd", description: "TDD", content: "tdd body" });
+    // `dir` is recorded so a dispatcher skill's supporting documents can be fetched on demand.
+    expect(r.get("tdd")).toEqual({ name: "tdd", description: "TDD", content: "tdd body", dir: join(dir, "tdd") });
   });
 
   it("skips a directory without SKILL.md", async () => {

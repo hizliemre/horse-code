@@ -5,7 +5,17 @@ import { parseFrontmatter } from "./frontmatter.js";
 export interface Skill {
   name: string;
   description: string;
+  /** The SKILL.md body — the entry point, and the only part ever inlined into a prompt. */
   content: string;
+  /**
+   * Absolute path to the skill's own directory, when it has one.
+   *
+   * Good skills are often DISPATCHERS: a small SKILL.md that routes to sibling reference documents
+   * ("see reference/critique.md"). Those documents are read from here ON DEMAND rather than loaded up
+   * front — some reference trees run to megabytes, and inlining or even holding them in memory would cost
+   * far more than the guidance is worth on any single call.
+   */
+  dir?: string;
 }
 
 export class SkillRegistry {
@@ -42,7 +52,7 @@ export class SkillRegistry {
       if (!name || !description) {
         throw new Error(`skill ${e.name}: missing frontmatter (name/description)`);
       }
-      this.register({ name, description, content: body });
+      this.register({ name, description, content: body, dir: join(dir, e.name) });
     }
   }
 }

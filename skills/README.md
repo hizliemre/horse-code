@@ -47,11 +47,17 @@ task executable — exact paths, a real test cycle, no placeholders — and that
 A project may replace any of these by defining a skill of the same name in `<project>/.horsecode/skills/`.
 Built-ins load first and the registry is keyed by name, so the project's version wins.
 
-## The one-file limit
+## Dispatcher skills
 
-The loader reads `<name>/SKILL.md` and nothing else. That rules out **multi-file skills** — ones whose
-SKILL.md is a dispatcher that routes to sibling reference documents. Several good design/accessibility skills
-are built that way, so this is the thing to fix before adopting them:
+A skill may be a **dispatcher**: a small `SKILL.md` that routes to sibling documents ("see
+`reference/critique.md`"). The loader records each skill's directory, and the `skill` tool reads those
+documents on demand — `skill({name, file})`.
+
+On demand is the point. A dispatcher's entry point is small enough to sit in a prompt while its reference
+tree can run to megabytes; loading the tree up front would cost far more on every call than the guidance is
+worth on the rare call that needs it. Paths are contained to the skill's own directory and capped in size.
+
+## Still not adopted, and why
 
 - [`pbakaus/impeccable`](https://github.com/pbakaus/impeccable) (Apache-2.0) — its SKILL.md points at
   `reference/` **29 times** across ~40 documents. Shipping the entry point alone would leave dangling
