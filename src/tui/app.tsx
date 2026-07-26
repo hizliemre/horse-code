@@ -20,6 +20,7 @@ import { SessionStore } from "../session/store.js";
 import { PinStore } from "../session/pins.js";
 import { MemoryStore } from "../session/memory.js";
 import { ModelHealth } from "../engine/model-health.js";
+import { saveRoleChains } from "../config/save-roles.js";
 import { memoryState } from "../engine/memory-retrieval.js";
 import { memoryNote } from "../engine/memory-inject.js";
 import type { MemoryEntry } from "../engine/memory-retrieval.js";
@@ -89,6 +90,15 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   };
   const peekRole = (role: string): string => regFor(role).peekModel(role);
   const applyChain = (role: string, chain: string[]): void => regFor(role).setRoleModel(role, chain);
+  /**
+   * Applies AND persists a chain. Only deliberate choices (`/roles adjust`, `/roles setmodel`) are written —
+   * the first-run bootstrap heuristic is intentionally NOT, because it is a guess made to get the session
+   * moving and freezing it to disk would outlive the reason for it.
+   */
+  const applyChainPersisted = (role: string, chain: string[]): void => {
+    applyChain(role, chain);
+    void saveRoleChains(homedir(), [{ role, models: chain }]);
+  };
   // /roles → each role + its full model chain (primary + fallbacks). `council` flags review team/council members
   // so the UI can group them. `model` = chain head, reflects /model.
   const listRoles = (): { name: string; model: string; models: string[]; council?: boolean; decider?: boolean }[] =>
@@ -162,8 +172,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const { chains } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames, onReason: append });
       for (const { role, models: ch } of chains) applyChain(role, ch);
       controller.endBusy();
+      const saved = await saveRoleChains(homedir(), chains);
       const rows = chains.map(({ role, models: ch }) => `- \`${role}\` → ${ch[0] ?? "—"}${ch.slice(1).map((m) => `  ↳ ${m}`).join("")}`);
-      controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_\`/roles setmodel\` to fine-tune any chain._`);
+      controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_${saved ? `Saved to your config — future sessions start with these. ` : ""}\`/roles setmodel\` to fine-tune any chain._`);
       return;
     } catch (e) {
       controller.endBusy();
@@ -324,7 +335,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChain} listRoles={listRoles} adjustRoles={adjustRoles}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
