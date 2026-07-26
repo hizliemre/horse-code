@@ -175,3 +175,42 @@ describe("a skill that refuses to write code", () => {
     expect(isNonImplementing("Use when building gesture-driven UI and spring animations.")).toBe(false);
   });
 });
+
+describe("ties break on how tight the fit is, not on the alphabet", () => {
+  /** A description written for one job. */
+  const NARROW = "Reviews animation and motion code against a high craft bar. Approval is earned.";
+  /** A description that lists every surface it might ever cover. */
+  const BROAD = IMPECCABLE;
+
+  const both = (): SkillRegistry => {
+    const r = new SkillRegistry();
+    r.register({ name: "zz-narrow", description: NARROW, content: "b" });
+    r.register({ name: "aa-broad", description: BROAD, content: "b" });
+    return r;
+  };
+
+  it("scores the share of a skill's own vocabulary that was hit", () => {
+    const narrow = scoreSkill("review the animation motion code", NARROW);
+    const broad = scoreSkill("review the animation motion code", BROAD);
+    expect(narrow.density).toBeGreaterThan(broad.density);
+  });
+
+  /**
+   * The bug this fixes: on an animation review three skills tied at three hits, and sorting by name put the
+   * one written for reviewing last, where the result cap dropped it. A sprawling description collects
+   * incidental hits on almost any interface task; a narrow one only when that is the job.
+   */
+  it("puts the tighter fit first even when the alphabet says otherwise", () => {
+    const got = routeSkills("review the animation motion code", both(), [], { max: 1 });
+    expect(got.map((m) => m.name)).toEqual(["zz-narrow"]);
+  });
+
+  it("raw hits still win over density — a broad skill that matches a lot is the right answer", () => {
+    const got = routeSkills("redesign the dashboard layout typography spacing color onboarding", both());
+    expect(got[0].name).toBe("aa-broad");
+  });
+
+  it("density is zero when nothing matched", () => {
+    expect(scoreSkill("nothing relevant here", NARROW).density).toBe(0);
+  });
+});

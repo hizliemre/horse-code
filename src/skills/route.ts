@@ -97,14 +97,29 @@ export function isNonImplementing(description: string): boolean {
 
 /** How much of a skill's vocabulary a task has to hit before the skill is worth its place in the prompt. */
 export const MATCH_BAR = 3;
-/** Never inline more than this many routed skills — each one is a full document in the prompt. */
-export const MAX_ROUTED = 2;
+/**
+ * Never inline more than this many routed skills — each one is a full document in the prompt.
+ *
+ * Three rather than two because a genuine near-tie was losing: on an animation review, two planning skills
+ * scored 4 and 3 while the skill written for reviewing scored 3, and the alphabetical tie-break dropped it.
+ * The cost is real — these documents run from 8 KB to 27 KB each — so this is a ceiling, not a target, and
+ * the match bar is what keeps most tasks well under it.
+ */
+export const MAX_ROUTED = 3;
 
 export interface SkillMatch {
   name: string;
   /** Distinct description terms the task hit — the reason, so a routing decision can be explained. */
   hits: string[];
   score: number;
+  /**
+   * Share of the skill's own vocabulary that the task hit.
+   *
+   * Separates a tight fit from a broad one at the same raw score. A sprawling description that lists every
+   * surface it might ever cover will collect three incidental hits on almost any interface task; a short
+   * description written for one job collects three only when that is the job.
+   */
+  density: number;
 }
 
 /**
@@ -113,18 +128,19 @@ export interface SkillMatch {
  * Scoring counts DISTINCT description terms the task mentions, not total occurrences: a task repeating
  * "design" ten times is one signal, not ten, and rewarding repetition would let a single word carry a skill in.
  */
-export function scoreSkill(task: string, description: string): { score: number; hits: string[] } {
+export function scoreSkill(task: string, description: string): { score: number; hits: string[]; density: number } {
   const taskTerms = new Set(terms(task));
-  if (!taskTerms.size) return { score: 0, hits: [] };
+  if (!taskTerms.size) return { score: 0, hits: [], density: 0 };
 
   const task_ = [...taskTerms];
   const excluded = exclusions(description);
   // The exclusion clause is a veto, not a penalty: the skill said this is not its work.
-  if (excluded.some((e) => task_.some((t) => sameWord(t, e)))) return { score: 0, hits: [] };
+  if (excluded.some((e) => task_.some((t) => sameWord(t, e)))) return { score: 0, hits: [], density: 0 };
 
   const body = description.replace(/\bnot\s+for\s+[^.]+/i, "");
-  const hits = [...new Set(terms(body))].filter((d) => task_.some((t) => sameWord(t, d)));
-  return { score: hits.length, hits };
+  const vocab = [...new Set(terms(body))];
+  const hits = vocab.filter((d) => task_.some((t) => sameWord(t, d)));
+  return { score: hits.length, hits, density: vocab.length ? hits.length / vocab.length : 0 };
 }
 
 /**
@@ -152,6 +168,9 @@ export function routeSkills(
     .filter((s) => !(opts.implementing && isNonImplementing(s.description)))
     .map((s) => ({ name: s.name, ...scoreSkill(subject, s.description) }))
     .filter((m) => m.score >= bar)
-    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    // Ties break on DENSITY, not on the alphabet. Three skills tying at three hits is common, and picking
+    // between them by name is picking at random: it is what kept `review-animations` out of an animation
+    // review while `impeccable` — which lists every UI concern there is — took the slot on incidental hits.
+    .sort((a, b) => b.score - a.score || b.density - a.density || a.name.localeCompare(b.name))
     .slice(0, opts.max ?? MAX_ROUTED);
 }
