@@ -6,6 +6,7 @@ import { loadConfig } from "./config/config.js";
 import { OmniRouteProvider } from "./providers/omniroute.js";
 import { listOmniRouteModels } from "./providers/models.js";
 import { SkillRegistry } from "./skills/registry.js";
+import { registerBuiltinSkills } from "./skills/builtin.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
@@ -110,6 +111,9 @@ export async function main(argv: string[]): Promise<void> {
   });
   const provider = new OmniRouteProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey });
   const skillRegistry = new SkillRegistry();
+  // Built-ins FIRST, the project's own second: the registry is keyed by name, so a project skill with the
+  // same name deliberately replaces the shipped one.
+  await registerBuiltinSkills(skillRegistry);
   const skillsDir = join(cwd, ".horsecode", "skills");
   if (existsSync(skillsDir)) await skillRegistry.loadFromDir(skillsDir);
   const manager = new WorktreeManager({ repoRoot: cwd });

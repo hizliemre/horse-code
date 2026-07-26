@@ -141,3 +141,41 @@ describe("rules reach EVERY agent (wired at the composition root)", () => {
     expect(d.councilRegistry.resolve(d.council[0].name).systemPrompt).toContain("brand new rule");
   });
 });
+
+// The METHOD lives in an editable skill file; the role prompt only binds it to this pipeline. Attaching it as
+// a MANDATORY skill is what inlines it into the brainstormer's system prompt.
+describe("default role skills", () => {
+  it("gives the brainstormer its skill, inlined as mandatory", async () => {
+    const reg = new SkillRegistry();
+    reg.register({ name: "brainstorming", description: "d", content: "EXPLORE BEFORE PROPOSING" });
+    const d = await buildJobDeps({
+      config: baseConfig(), provider: fakeProvider, skillRegistry: reg,
+      manager: new WorktreeManager({ repoRoot: "/tmp" }),
+      prAdapter: logPRAdapter(() => {}), askHuman: async () => ({ action: "abandon" }),
+      approve: async () => true, signal: new AbortController().signal,
+      home, fetch: fakeFetch,
+    });
+    expect(d.roleRegistry.resolve("brainstormer").systemPrompt).toContain("EXPLORE BEFORE PROPOSING");
+  });
+
+  // applySkills THROWS on an unknown mandatory skill, so a checkout without the bundled skills would fail to
+  // resolve the role at all — the pipeline must still run.
+  it("drops a default skill that is not installed instead of breaking the role", async () => {
+    const d = await deps(baseConfig()); // empty skill registry
+    expect(() => d.roleRegistry.resolve("brainstormer")).not.toThrow();
+  });
+
+  it("a user-configured role is taken as written — no skills are forced on it", async () => {
+    const reg = new SkillRegistry();
+    reg.register({ name: "brainstorming", description: "d", content: "SHOULD NOT APPEAR" });
+    const d = await buildJobDeps({
+      config: baseConfig({ roles: { brainstormer: { models: ["m"], systemPrompt: "mine" } } }),
+      provider: fakeProvider, skillRegistry: reg,
+      manager: new WorktreeManager({ repoRoot: "/tmp" }),
+      prAdapter: logPRAdapter(() => {}), askHuman: async () => ({ action: "abandon" }),
+      approve: async () => true, signal: new AbortController().signal,
+      home, fetch: fakeFetch,
+    });
+    expect(d.roleRegistry.resolve("brainstormer").systemPrompt).not.toContain("SHOULD NOT APPEAR");
+  });
+});

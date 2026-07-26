@@ -4,7 +4,7 @@ import type { PermissionRequest } from "./permission/engine.js";
 import { buildTeamRegistry, buildCouncilRegistry, type ReviewStage } from "./engine/review.js";
 import { InjectionLog } from "./engine/memory-retrieval.js";
 import { ProposalQueue } from "./engine/memory-proposals.js";
-import { REQUIRED_ROLES, DEFAULT_PROMPTS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
+import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_ROLE_SKILLS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
 import type { ResolvedConfig, RoleConfig, ReviewerConfig } from "./config/config.js";
 import type { Provider } from "./core/types.js";
 import type { FetchLike } from "./providers/omniroute.js";
@@ -36,7 +36,11 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   const { config } = opts;
   const roles: Record<string, RoleConfig> = {};
   for (const name of REQUIRED_ROLES) {
-    roles[name] = config.roles[name] ?? { models: [config.model] };
+    // A role the user configured is taken as written (they may deliberately want no skills); an unconfigured
+    // one gets its default skill set. A skill that is not installed is dropped rather than throwing — the
+    // pipeline must still run in a checkout without the bundled skills.
+    const defaults = DEFAULT_ROLE_SKILLS[name]?.filter((s) => opts.skillRegistry.get(s));
+    roles[name] = config.roles[name] ?? { models: [config.model], ...(defaults?.length ? { skills: defaults } : {}) };
   }
   const roleRegistry = new RoleRegistry(roles, DEFAULT_PROMPTS, opts.skillRegistry);
 
