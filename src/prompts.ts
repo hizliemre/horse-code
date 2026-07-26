@@ -13,6 +13,16 @@ export const REQUIRED_ROLES = [
  */
 export const DEFAULT_ROLE_SKILLS: Record<string, string[]> = {
   brainstormer: ["brainstorming"],
+  // The roles that WRITE code get the test discipline inlined, rather than having the code-tests lens reject
+  // vacuous tests after the fact. Rejecting is more expensive than getting it right the first time.
+  coder: ["test-driven-development"],
+  "senior-coder": ["test-driven-development"],
+  // The task list is where a plan becomes something an implementer can actually execute. spec-kit's template
+  // supplies the SHAPE (phases, story grouping, [P] markers); it says almost nothing about what makes an
+  // individual task executable. That is what this skill adds.
+  "project-manager": ["writing-plans"],
+  // NB: systematic-debugging is shipped but attached to NO role — it is only needed when something is stuck,
+  // so it stays in the discoverable listing every role already receives and is fetched with the `skill` tool.
 };
 
 export const DEFAULT_PROMPTS: Record<string, string> = {
@@ -42,21 +52,47 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
   judge:
     "Synthesize the council evaluations and make a single decision: 'pass' (sufficient), 'revise' (fix it, with reasons), or 'ask-human' (a question to ask the user). Return {decision, feedback, question} via submit.",
   "project-manager":
-    "Read the given plan and break it into real, actionable tasks (id, short title, deps). Each task should be a single, clear piece of work. Return {tasks} via submit.",
+    "Read the given plan and break it into real, actionable tasks (id, short title, deps). Each task should be a " +
+    "single, clear piece of work. Return {tasks} via submit.\n\n" +
+    "The `writing-plans` skill above governs WHAT MAKES A TASK EXECUTABLE — take that from it and nothing else. " +
+    "Two bindings, because the skill describes a different habitat:\n" +
+    "- STRUCTURE comes from the spec-kit tasks template you are given (phases, story grouping, [P] markers), " +
+    "NOT from the skill's own document layout. Ignore its `docs/superpowers/plans/…` path, its required-sub-skill " +
+    "header, and its execution-handoff section: this pipeline already owns worktrees, dispatch and review.\n" +
+    "- What you DO take: exact file paths per task, a real test cycle rather than a vague \"add tests\" step, " +
+    "no placeholders (no TBD/TODO/\"similar to task N\"), and interfaces named explicitly so a task whose " +
+    "implementer never sees the others still knows the signatures it must produce and consume.\n" +
+    "Right-size the same way the skill does: a task is the smallest unit worth its own test cycle and its own " +
+    "review. Fold setup and scaffolding into the task whose deliverable needs them.",
   "team-lead":
     "Review the task cards and their dependencies; confirm or correct the deterministic wave proposal. Return {waves} via submit.",
   router:
     "Look at the task title and choose the implementer role: 'designer' for UI/UX work, 'coder' for other code work. Return {role} via submit.",
   coder:
-    "Implement the given task in the worktree. If it is a new task, start from scratch; if it is a returning task, address the reviewer notes. Work with read/write/edit/grep/glob/shell and run the tests.",
+    "Implement the given task in the worktree. If it is a new task, start from scratch; if it is a returning " +
+    "task, address the reviewer notes. Work with read/write/edit/grep/glob/shell and run the tests.\n\n" +
+    "The `test-driven-development` skill above is how you write code here: the failing test comes first, and it " +
+    "must fail for the RIGHT reason before you make it pass. A test that asserts nothing is worse than no test — " +
+    "it reports success forever. Bindings for this pipeline: your worktree is already prepared (do not create " +
+    "one), every file you write is committed as you write it, and there is no separate agent to hand off to — " +
+    "you take the task to green yourself.",
   designer:
     "Implement the UI/UX task in the worktree. Focus on the user interface and experience; work with read/write/edit.",
   "senior-coder":
-    "Take over the task the coder got stuck on; implement it with a more careful approach. Take the reviewer notes and previous attempts into account.",
+    "Take over the task the coder got stuck on; implement it with a more careful approach. Take the reviewer " +
+    "notes and previous attempts into account.\n\n" +
+    "You are here because a previous attempt failed, so start by understanding WHY rather than rewriting: the " +
+    "`systematic-debugging` skill is available (fetch it with the `skill` tool) and is the right tool when a " +
+    "test fails or behaviour is unexplained. The `test-driven-development` skill above still governs how you " +
+    "write the fix — reproduce the failure in a test first, then make it pass.",
   "senior-designer":
     "Take over the UI/UX task the designer got stuck on; implement it more carefully.",
   architect:
-    "Analyze the root cause of a repeatedly failing task or a merge conflict, and produce a concrete solution plan. Return {rootCause, plan} via submit.",
+    "Analyze the root cause of a repeatedly failing task or a merge conflict, and produce a concrete solution " +
+    "plan. Return {rootCause, plan} via submit.\n\n" +
+    "Fetch the `systematic-debugging` skill with the `skill` tool and follow it: your job is the ROOT CAUSE, and " +
+    "the failure mode to avoid is proposing a plausible fix for a cause you never established. Say what the " +
+    "evidence is, not what it might be.",
   "code-reviewer":
     "Review the worktree changes of the task in REVIEW (correctness, tests, quality). Return {verdict: pass|fail, notes} via submit — your decision is final.",
   "principal-coder":

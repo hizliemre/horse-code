@@ -84,3 +84,45 @@ describe("the shipped brainstorming skill", () => {
     expect(DEFAULT_ROLE_SKILLS.brainstormer).toEqual(["brainstorming"]);
   });
 });
+
+// The point of shipping these is that the WRITING roles get the discipline inlined, instead of a review lens
+// rejecting the result afterwards. Rejecting costs a whole extra round; getting it right the first time does not.
+describe("the shipped skills reach the roles that need them", () => {
+  const reg = async (): Promise<SkillRegistry> => {
+    const r = new SkillRegistry();
+    await registerBuiltinSkills(r);
+    return r;
+  };
+
+  it("ships all four", async () => {
+    const names = (await reg()).list().map((s) => s.name).sort();
+    expect(names).toEqual(["brainstorming", "systematic-debugging", "test-driven-development", "writing-plans"]);
+  });
+
+  it("the code-writing roles get the test discipline; the task list gets the planning discipline", () => {
+    expect(DEFAULT_ROLE_SKILLS.coder).toEqual(["test-driven-development"]);
+    expect(DEFAULT_ROLE_SKILLS["senior-coder"]).toEqual(["test-driven-development"]);
+    expect(DEFAULT_ROLE_SKILLS["project-manager"]).toEqual(["writing-plans"]);
+  });
+
+  // Only needed when something is stuck — inlining it into every prompt would be pure waste.
+  it("systematic-debugging is DISCOVERABLE, not attached to any role", async () => {
+    expect((await reg()).get("systematic-debugging")).toBeDefined();
+    for (const skills of Object.values(DEFAULT_ROLE_SKILLS)) {
+      expect(skills).not.toContain("systematic-debugging");
+    }
+  });
+
+  // spec-kit's own plan template already governs plan.md; a second template there would fight it. The skill's
+  // contribution is what makes an individual TASK executable.
+  it("writing-plans is bound to the task list, not to the planner", () => {
+    expect(DEFAULT_ROLE_SKILLS.planner).toBeUndefined();
+  });
+
+  it("each shipped skill carries the frontmatter the loader requires", async () => {
+    for (const s of (await reg()).list()) {
+      expect(s.name).toBeTruthy();
+      expect(s.description.length).toBeGreaterThan(20);
+    }
+  });
+});
