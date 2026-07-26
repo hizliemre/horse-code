@@ -73,9 +73,35 @@ export function PendingQuestion({ text, cols }: { text: string; cols: number }):
   );
 }
 
-/** Total rows a ChoiceInput occupies: border(2) + one row per option + hint(1). */
-export function choiceHeight(optionCount: number): number {
-  return optionCount + 3;
+/**
+ * Total rows a ChoiceInput occupies — counted from what it actually draws.
+ *
+ * This said `optionCount + 3`, from a version that drew one row per option and had no notes line. It then
+ * grew a description row per option, a notes row, and a preview panel, and none of them were added here. The
+ * component reserved less space than it painted, so Ink drew over the region above it: the question the user
+ * was answering got overwritten, and option text collided mid-line with the option below.
+ *
+ * Kept beside the render deliberately. The two must agree, and the only way to notice they have stopped is
+ * to have them where a change to one is visibly a change to the other.
+ */
+export function choiceHeight(options: (string | AskChoice)[], cols = 80): number {
+  const choices = options.map((o) => (typeof o === "string" ? { label: o } : o));
+  const w = Math.max(24, cols - 2);
+  // One row for the label, plus one for a description when there is one.
+  const listRows = choices.reduce((n, c) => n + 1 + (c.description ? 1 : 0), 0);
+
+  // The preview belongs to the focused option, so the tallest one is what has to fit.
+  const previewRows = choices.reduce((n, c) => Math.max(n, c.preview ? c.preview.split("\n").length : 0), 0);
+  const hasPreview = previewRows > 0;
+  const sideBySide = hasPreview && w >= 80;
+
+  const body = sideBySide
+    // Side by side: the row is as tall as whichever column is taller; the preview carries its own border.
+    ? Math.max(listRows, previewRows + 2)
+    // Stacked: the list, then a margin, then the bordered preview underneath it.
+    : listRows + (hasPreview ? previewRows + 3 : 0);
+
+  return 2 /* border */ + body + 1 /* notes */ + 1 /* hint */;
 }
 
 /**
@@ -1298,9 +1324,15 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const pendingLines = state.pending
       ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingBodyWidth(size.cols)).length
       : 0;
-    // Reserved unconditionally while a job runs: a row that appears and disappears resizes the status
-    // box under the progress indicator, and the indicator reads as stuttering rather than the row as arriving.
-    const liveH = progressLine ? 1 : 0;
+    /**
+     * Only present while something is actually being written.
+     *
+     * This was reserved unconditionally, to stop the row resizing the status box and making the progress
+     * indicator read as stuttering. That was one fix too many: the stutter came from the row FLASHING for
+     * every tool's argument generation, and restricting it to file writes already removed that. Keeping the
+     * reservation as well bought nothing and cost a permanent blank line between the indicator and the input.
+     */
+    const liveH = progressLine && state.liveActivity ? 1 : 0;
     const statusH = (progressLine || doneLine ? 1 : 0) + liveH + pendingLines; // progress/done(1) + live + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     // A pending choice question replaces the free-text input with a ChoiceInput selector.
@@ -1313,7 +1345,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       : helpOpen
         ? inputMarginTop + helpH
         : choiceActive
-          ? inputMarginTop + choiceHeight(choiceOptions.length)
+          ? inputMarginTop + choiceHeight(choiceOptions, size.cols)
           : 2 + inputMarginTop + inputH; // border(2) + marginTop + inputH
     const metricsH = state.meta ? 1 : 0;
     const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
@@ -1337,7 +1369,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         {showStatus ? (
           <Box flexDirection="column">
             {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} /></Box> : null}
-            {progressLine ? <Box paddingLeft={2}><Text color="#1a9fd8" wrap="truncate-end">{state.liveActivity ? `  ✎ ${state.liveActivity}` : " "}</Text></Box> : null}
+            {progressLine && state.liveActivity ? <Box paddingLeft={2}><Text color="#1a9fd8" wrap="truncate-end">{`  ✎ ${state.liveActivity}`}</Text></Box> : null}
             {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
           </Box>
