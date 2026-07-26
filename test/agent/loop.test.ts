@@ -148,15 +148,32 @@ describe("runRoleAgent live activity", () => {
     expect(labels).toContain("writing constitution.md · 1.4k chars"); // basename + humanized size
   });
 
-  it("clears the live-activity label when the turn's generation ends (no stale 'grep · N chars')", async () => {
+  /**
+   * A tool with no file to write gets no live label at all.
+   *
+   * Its argument is generated in milliseconds, so the label only ever flashed — and because the row it
+   * occupies resizes the status box, every flash made the progress indicator itself look like it stuttered.
+   * These tools report into the chat once they have actually run, which is the record worth keeping.
+   */
+  it("shows no live label for a tool that writes no file", async () => {
     const p = new MockProvider([[
       { type: "tool-progress", name: "grep", chars: 68 },
       { type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" },
     ]]);
     const labels: string[] = [];
     await drain(runRoleAgent(opts(p, { onLiveActivity: (l) => labels.push(l) })));
-    expect(labels).toContain("grep · 68 chars"); // shown while generating
-    expect(labels.at(-1)).toBe(""); // …then cleared once generation finishes, so it can't linger
+    expect(labels.filter(Boolean)).toEqual([]);
+  });
+
+  it("clears the label when the turn's generation ends, so a write label cannot linger", async () => {
+    const p = new MockProvider([[
+      { type: "tool-progress", name: "write_file", chars: 900, path: "a/b.ts" },
+      { type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" },
+    ]]);
+    const labels: string[] = [];
+    await drain(runRoleAgent(opts(p, { onLiveActivity: (l) => labels.push(l) })));
+    expect(labels).toContain("writing b.ts · 900 chars");
+    expect(labels.at(-1)).toBe("");
   });
 });
 

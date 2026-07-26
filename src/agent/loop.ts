@@ -99,9 +99,12 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
         } else if (ev.type === "tool-call") {
           toolCalls.push(ev.toolCall);
         } else if (ev.type === "tool-progress") {
-          // Model is still generating this tool call's args → surface live progress (e.g. writing a big file).
-          const file = ev.path ? ev.path.split("/").pop() : undefined;
-          opts.onLiveActivity?.(file ? `writing ${file} · ${fmtChars(ev.chars)}` : `${ev.name} · ${fmtChars(ev.chars)}`);
+          // Model is still generating this tool call's args → surface live progress for a FILE WRITE, where
+          // the wait is long enough to need feedback. A read or a search generates its tiny argument in
+          // milliseconds, so a line for it only flashed — and every flash resized the status box, which is
+          // what made the progress indicator itself appear to stutter. Those tools now report into the chat
+          // once they have actually run, which is the record worth keeping anyway.
+          if (ev.path) opts.onLiveActivity?.(`writing ${ev.path.split("/").pop()} · ${fmtChars(ev.chars)}`);
         } else if (ev.type === "usage") {
           yield { type: "usage", promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
           opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, model: activeModel });

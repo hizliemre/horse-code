@@ -29,9 +29,21 @@ export interface ToolResult {
 
 /** A file-touching tool's activity, surfaced in the chat flow (Claude Code-style: name + target + preview). */
 export interface ToolActivity {
-  tool: string;      // "write" | "edit"
-  target: string;    // the file path (relative to cwd)
-  lines: number;     // lines written / changed
+  tool: string;      // "write" | "edit" | any tool name
+  target: string;    // the file path (relative to cwd), or a short description of what the call asked for
+  lines: number;     // lines written / changed; 0 for a tool that does not touch a file
+  /**
+   * One-line outcome for a tool that produced no file diff — a lookup, a search, a command.
+   *
+   * Its presence is what distinguishes the two renderings: with a `summary` the activity is a single chat
+   * line, without one it is a header plus a content preview. Every executed tool lands in the chat either
+   * way. They used to appear only in a transient line UNDER the progress indicator and then vanish, which
+   * lost the record of what an agent actually did and made the indicator itself jump as the line came and
+   * went.
+   */
+  summary?: string;
+  /** False when the call failed — rendered so a failing tool is not mistaken for a successful one. */
+  ok?: boolean;
   preview?: string[]; // first lines of the written / changed content (shown under the header; for an edit, the ADDED lines)
   startLine?: number; // 1-based line number the preview begins at (write → 1; edit → where the change starts)
   removed?: string[]; // edit only: the REPLACED (old) lines → rendered as a - / + diff against `preview`

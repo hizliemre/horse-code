@@ -109,6 +109,17 @@ export function flattenMarkdown(text: string, width: number): StyledLine[] {
 /** A file write/edit rendered inline in the chat flow (Claude Code-style): header + a preview of the content. */
 export function flattenTool(a: import("../core/types.js").ToolActivity, cols: number): StyledLine[] {
   const width = Math.max(20, cols - 2);
+  // A tool that changed no file gets one compact line: what it was asked, and what came back.
+  if (a.summary !== undefined) {
+    const head = `${a.tool}(${a.target})`;
+    const avail = Math.max(10, width - head.length - 6);
+    const tail = a.summary.length > avail ? `${a.summary.slice(0, avail - 1)}…` : a.summary;
+    return [[
+      { text: `${GLYPHS.msgBullet} `, color: a.ok === false ? "red" : "#1a9fd8" },
+      { text: head, bold: true },
+      ...(tail ? [{ text: `  · ${tail}`, dim: true }] : []),
+    ]];
+  }
   const verb = a.tool === "edit" ? "Update" : "Write";
   const header: StyledLine = [
     { text: `${GLYPHS.msgBullet} `, color: "#1a9fd8" },

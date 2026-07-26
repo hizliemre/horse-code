@@ -41,6 +41,54 @@ function errResult(name: string, msg: string): ToolResult {
  * Filters and runs tool-calls through permission checks. Allows run in parallel, asks run sequentially.
  * Emits AgentEvent; returns results IN CALL ORDER (one result per call).
  */
+
+/** The argument worth showing in the chat line — the one that says what the call was actually about. */
+function callSubject(args: Record<string, unknown> | undefined): string {
+  if (!args) return "";
+  for (const key of ["path", "file", "file_path", "symbol", "pattern", "query", "command", "name", "url", "question"]) {
+    const v = args[key];
+    if (typeof v === "string" && v.trim()) return v.length > 60 ? `${v.slice(0, 59)}…` : v;
+  }
+  const first = Object.values(args).find((v) => typeof v === "string" && v.trim());
+  return typeof first === "string" ? (first.length > 60 ? `${first.slice(0, 59)}…` : first) : "";
+}
+
+/** A one-line account of what came back, for a tool that produced no file diff. */
+function outcome(result: import("../core/types.js").ToolResult): string {
+  const line = (result.content ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+}
+
+/**
+ * Runs one tool and makes sure it leaves a record in the chat.
+ *
+ * `write_file`/`edit_file` report themselves, with a diff. Everything else — reads, searches, shell, graph
+ * lookups — reported nothing, so it surfaced only in the transient line under the progress indicator and then
+ * vanished: the record of what an agent did was lost, and the indicator visibly jumped as that line came and
+ * went. Anything that did not report itself gets a compact line here instead.
+ */
+async function runTool(
+  tool: { name: string; run: (args: Record<string, unknown>, ctx: import("../core/types.js").ToolContext) => Promise<import("../core/types.js").ToolResult> },
+  args: Record<string, unknown>,
+  deps: ToolExecDeps,
+): Promise<import("../core/types.js").ToolResult> {
+  let reported = false;
+  const onActivity = deps.onActivity
+    ? (a: import("../core/types.js").ToolActivity): void => { reported = true; deps.onActivity?.(a); }
+    : undefined;
+  const result = await tool.run(args, {
+    cwd: deps.cwd, signal: deps.signal, onActivity, remember: deps.remember,
+    proposeMemory: deps.proposeMemory, readFiles: deps.readFiles,
+  });
+  if (!reported) {
+    deps.onActivity?.({
+      tool: tool.name, target: callSubject(args), lines: 0,
+      summary: outcome(result), ok: !result.isError,
+    });
+  }
+  return result;
+}
+
 export async function* executeToolCalls(
   calls: ToolCall[],
   deps: ToolExecDeps,
@@ -102,7 +150,7 @@ export async function* executeToolCalls(
   const autoPlans = plans.filter((p) => p.kind === "run");
   for (const p of autoPlans) yield { type: "tool.request", toolCall: p.call };
   const autoResults = await Promise.all(
-    autoPlans.map((p) => p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity, remember: deps.remember, proposeMemory: deps.proposeMemory, readFiles: deps.readFiles })),
+    autoPlans.map((p) => runTool(p.tool!, p.args!, deps)),
   );
   for (let k = 0; k < autoPlans.length; k++) {
     const p = autoPlans[k];
@@ -134,7 +182,7 @@ export async function* executeToolCalls(
       ok = await deps.approve(p.req!);
     }
     const result = ok
-      ? await p.tool!.run(p.args!, { cwd: deps.cwd, signal: deps.signal, onActivity: deps.onActivity, remember: deps.remember, proposeMemory: deps.proposeMemory, readFiles: deps.readFiles })
+      ? await runTool(p.tool!, p.args!, deps)
       : errResult(p.call.name, "user denied");
     results[p.index] = { id: p.call.id, name: p.call.name, result };
     yield { type: "tool.result", toolCallId: p.call.id, result };
