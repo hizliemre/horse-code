@@ -248,10 +248,53 @@ export class WorktreeManager {
     }
   }
 
+  /** Whether a remote exists — the difference between a pull request being delivery and being impossible. */
+  async hasRemote(session: WorktreeSession, remote = "origin"): Promise<boolean> {
+    return (await this.git(["remote", "get-url", remote], session.baseWorktree)).code === 0;
+  }
+
   async push(session: WorktreeSession, remote = "origin"): Promise<void> {
     const check = await this.git(["remote", "get-url", remote], session.baseWorktree);
     if (check.code !== 0) return; // no remote → local-only, skip push
     await this.run(["push", remote, session.baseBranch], session.baseWorktree);
+  }
+
+  /**
+   * Lands the finished work on the branch the job started from, in the main working copy.
+   *
+   * Without this, a project with no git remote gets nothing: `push` is a no-op and a pull request has
+   * nowhere to go, so every completed task sits on `hc/<job>/base` — invisible from the repository root.
+   * A user who watched thirty tasks succeed then finds an empty directory and cannot run the project.
+   *
+   * A pull request is delivery when there is a remote to open it against. When there is not, merging is.
+   *
+   * Refuses rather than forces. A dirty working copy or a checkout on some other branch means the user has
+   * something in progress, and overwriting that to deliver would be a worse failure than not delivering:
+   * the branch still exists and the caller reports how to merge it by hand.
+   */
+  async deliverLocally(session: WorktreeSession, targetBranch: string): Promise<
+    { ok: true; commits: number } | { ok: false; why: string }
+  > {
+    const dirty = await this.git(["status", "--porcelain"], this.repoRoot);
+    if (dirty.code !== 0) return { ok: false, why: "the repository could not be read" };
+    if (dirty.stdout.split("\n").some((l) => l.trim() && !l.startsWith("??"))) {
+      return { ok: false, why: "the working copy has uncommitted changes" };
+    }
+    const head = await this.git(["symbolic-ref", "--short", "HEAD"], this.repoRoot);
+    const current = head.stdout.trim();
+    if (head.code !== 0 || !current) return { ok: false, why: "the repository is not on a branch" };
+    if (current !== targetBranch) return { ok: false, why: `the repository is on \`${current}\`, not \`${targetBranch}\`` };
+
+    const count = await this.git(["rev-list", "--count", `${targetBranch}..${session.baseBranch}`], this.repoRoot);
+    const commits = Number(count.stdout.trim()) || 0;
+    if (!commits) return { ok: true, commits: 0 }; // already contains it — nothing to do, and not a failure
+
+    // --no-ff keeps the job visible as one merge; a fast-forward would scatter hundreds of task commits
+    // into the branch with no record of what they belonged to.
+    const merged = await this.git(
+      ["merge", "--no-ff", "-m", `hc: ${session.jobSlug}`, session.baseBranch], this.repoRoot);
+    if (merged.code !== 0) return { ok: false, why: "the merge did not apply cleanly" };
+    return { ok: true, commits };
   }
 
   async openPR(

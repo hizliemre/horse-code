@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { parseArgs, renderResult, shouldUseTui } from "../src/cli.js";
 
+const DELIVERY = { branch: "hc/job/base", worktree: "/tmp/wt" };
+
 describe("parseArgs", () => {
   it("prompt + flags", () => {
     expect(parseArgs(["Add X", "--branch", "dev", "--rounds", "2"])).toEqual({ prompt: "Add X", fromBranch: "dev", rounds: 2 });
@@ -23,7 +25,7 @@ describe("renderResult", () => {
   it("done → report + PR url", () => {
     const out = renderResult({
       kind: "done", report: "report",
-      wave: { status: "completed", session: {} as never, pr: { url: "http://pr" }, waves: [] },
+      wave: { status: "completed", session: {} as never, pr: { url: "http://pr" }, waves: [], delivery: DELIVERY },
       session: {} as never,
     });
     expect(out).toContain("report");
@@ -32,7 +34,7 @@ describe("renderResult", () => {
   it("renderResult done: writes the revision status", () => {
     const out = renderResult({
       kind: "done", report: "report",
-      wave: { status: "completed", session: {} as never, pr: { url: "http://pr" }, waves: [] },
+      wave: { status: "completed", session: {} as never, pr: { url: "http://pr" }, waves: [], delivery: DELIVERY },
       revision: { status: "approved", rounds: 0 },
       session: {} as never,
     });

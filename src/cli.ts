@@ -24,6 +24,7 @@ import { MemoryStore } from "./session/memory.js";
 import { memoryNote } from "./engine/memory-inject.js";
 import { runJob } from "./engine/job.js";
 import type { JobResult, JobDeps } from "./engine/job.js";
+import type { Delivery } from "./engine/wave-engine.js";
 import { runInit } from "./init.js";
 import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 
@@ -62,15 +63,38 @@ export function parseArgs(argv: string[]): CliArgs {
   };
 }
 
+/**
+ * Where the work is, in every outcome.
+ *
+ * A run that produced twenty-one working tasks once reported only "Status: partial" — the code sat on a
+ * branch nobody knew existed, the repository root was empty, and from the outside that is indistinguishable
+ * from having built nothing. Whatever else a report says, it says where the code is and how to get it.
+ */
+export function describeDelivery(d: Delivery): string {
+  if (d.mergedInto) {
+    return `Merged into \`${d.mergedInto}\` — the files are in your working copy.`;
+  }
+  return [
+    `**The work is on branch \`${d.branch}\`** — not in your working copy yet.`,
+    d.notMerged ? `Not merged: ${d.notMerged}.` : "",
+    "",
+    "To bring it in:",
+    "```",
+    `git merge --no-ff ${d.branch}`,
+    "```",
+    `Or inspect it first: \`git diff HEAD...${d.branch}\` · worktree: \`${d.worktree}\``,
+  ].filter((l) => l !== undefined).join("\n");
+}
+
 export function renderResult(res: JobResult): string {
   if (res.kind === "chat") return res.response;
   if (res.kind === "rejected") return `Not approved (stopped at the ${res.stage} stage).`;
-  const pr =
+  const outcome =
     res.wave.status === "completed"
-      ? `PR: ${res.wave.pr.url}`
+      ? (res.wave.pr ? `PR: ${res.wave.pr.url}` : "all tasks completed")
       : `Partial: ${res.wave.failed.length} failed, ${res.wave.skipped.length} skipped`;
   const rev = res.revision ? `\nrevision: ${res.revision.status}` : "";
-  return `${res.report}\n\nStatus: ${res.wave.status} — ${pr}${rev}`;
+  return `${res.report}\n\nStatus: ${res.wave.status} — ${outcome}${rev}\n\n${describeDelivery(res.wave.delivery)}`;
 }
 
 // TUI opens only when both stdin and stdout are a TTY: if stdin is piped (echo x | hcode)

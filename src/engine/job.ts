@@ -194,7 +194,7 @@ export async function runJob(
     let revision: RevisionResult | undefined;
     let deferredAll: string[] = [];
     if (wave.status === "completed") {
-      emit({ kind: "phase", phase: "pr", detail: wave.pr.url });
+      emit({ kind: "phase", phase: "pr", detail: wave.pr?.url ?? wave.delivery.mergedInto ?? wave.delivery.branch });
       const prDiff = await deps.manager.diff(session, opts.fromBranch);
       // Non-blocking code findings the per-task reviews deferred: a passed task has no further attempt, so the
       // PR revision pass is where they are adjudicated — once, on the merged result.

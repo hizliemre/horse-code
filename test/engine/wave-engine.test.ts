@@ -172,7 +172,7 @@ describe("runWaveEngine", () => {
       const res = await runWaveEngine(edeps(mgr, adapter), board, { fromBranch: "main", jobName: "job" });
       expect(res.status).toBe("completed");
       expect(adapter.calls).toBe(1);
-      if (res.status === "completed") expect(res.pr.url).toBe("http://pr/1");
+      if (res.status === "completed") expect(res.pr?.url).toBe("http://pr/1");
       expect(res.waves).toEqual([["t1"], ["t2"]]);
     } finally {
       await rm(repo, { recursive: true, force: true });

@@ -77,9 +77,27 @@ export async function runWave(
   };
 }
 
+/**
+ * How the finished work reached the user.
+ *
+ * Carried on every outcome, including a partial one. A run that produced twenty-one working tasks and told
+ * the user only "partial" left the work on a branch nobody knew existed — the code was fine, the delivery
+ * was missing, and from the outside those are indistinguishable from a failure.
+ */
+export interface Delivery {
+  /** The branch every completed task was merged into. Always present: it is where the work IS. */
+  branch: string;
+  /** The worktree it was built in, still on disk. */
+  worktree: string;
+  /** Set when the work was merged into the branch the job started from. */
+  mergedInto?: string;
+  /** Why it was not merged, when it was not — so the report can say what to do instead. */
+  notMerged?: string;
+}
+
 export type WaveEngineResult =
-  | { status: "completed"; session: WorktreeSession; pr: { url: string }; waves: string[][] }
-  | { status: "partial"; session: WorktreeSession; failed: string[]; skipped: string[]; waves: string[][] };
+  | { status: "completed"; session: WorktreeSession; pr?: { url: string }; delivery: Delivery; waves: string[][] }
+  | { status: "partial"; session: WorktreeSession; failed: string[]; skipped: string[]; delivery: Delivery; waves: string[][] };
 
 function teamLeadOpts(deps: WaveEngineDeps, session: WorktreeSession): RoleAgentOptions {
   const tl = deps.roleRegistry.resolve("team-lead");
@@ -111,17 +129,39 @@ export async function runWaves(
     // successful merges were committed to base → the next wave derives from the updated base (D automatic)
   }
 
-  if (failed.length === 0 && skipped.length === 0) {
+  const delivery: Delivery = { branch: session.baseBranch, worktree: session.baseWorktree };
+  const clean = failed.length === 0 && skipped.length === 0;
+
+  if (clean) {
     await deps.manager.push(session);
-    const body = "Completed tasks:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
-    const pr = await deps.manager.openPR(session, deps.prAdapter, {
-      base: opts.base,
-      title: opts.prTitle ?? `hc: ${session.jobSlug}`,
-      body,
-    });
-    return { status: "completed", session, pr, waves };
+    // A pull request is delivery when there is a remote to open it against.
+    const remote = await deps.manager.hasRemote(session);
+    if (remote) {
+      const body = "Completed tasks:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
+      const pr = await deps.manager.openPR(session, deps.prAdapter, {
+        base: opts.base,
+        title: opts.prTitle ?? `hc: ${session.jobSlug}`,
+        body,
+      });
+      return { status: "completed", session, pr, delivery, waves };
+    }
+    // No remote: merging into the branch the job started from IS the delivery. Doing nothing here is what
+    // left a finished project invisible at the repository root.
+    const landed = await deps.manager.deliverLocally(session, opts.base);
+    if (landed.ok) delivery.mergedInto = opts.base;
+    else delivery.notMerged = landed.why;
+    return { status: "completed", session, delivery, waves };
   }
-  return { status: "partial", session, failed, skipped, waves };
+
+  /**
+   * A partial run is NOT merged automatically.
+   *
+   * Some tasks failed, and folding failed work into the user's branch without asking would be a worse
+   * error than leaving it on its own. But it is reported with the branch and the command, because the
+   * successful tasks are real work the user paid for and must be able to reach.
+   */
+  delivery.notMerged = "the run was partial — merge it yourself once you have looked at what failed";
+  return { status: "partial", session, failed, skipped, delivery, waves };
 }
 
 /** Deterministic outer loop: openSession → runWaves (backward-compatible wrapper). */
