@@ -687,7 +687,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -714,6 +714,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
+  migrate?: () => Promise<string>; // /migrate
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
@@ -972,6 +973,11 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const list = info.sources.length ? info.sources.map((s) => `- ${s}`).join("\n") : "- (all)";
     controller.note(`**Model sources** (${how}):\n${list}\n\n_\`/sources refresh\` to re-probe your connected subscriptions._`);
   };
+  // /migrate → discover another tool's setup, then decide group by group what comes across.
+  const doMigrate = (): void => {
+    if (!migrate) { controller.note("Migration is not available."); return; }
+    migrate().then((r) => controller.note(r), (e) => controller.note(`Migration failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
   // /graph [build] → the project's code graph: what exists, whether it is fresh, and rebuilding it.
   const doGraph = (arg: string): void => {
     if (!graphStatus || !buildGraph) { controller.note("The project graph is not available."); return; }
@@ -1071,6 +1077,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");
     else if (c.name === "/graph") doGraph("");
+    else if (c.name === "/migrate") doMigrate();
     else if (c.name === "/mode") doMode("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();

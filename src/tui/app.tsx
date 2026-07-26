@@ -67,6 +67,7 @@ export interface RunTuiReplOpts {
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
+  migrate?: () => Promise<string>; // /migrate
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
@@ -161,6 +162,26 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
+  /**
+   * `/migrate` — bring another tool's accumulated setup across.
+   *
+   * Driven from here because it needs the things only the REPL has: a provider, the shared memory store, and
+   * a way to ask the user a question and wait for the answer.
+   */
+  const migrate = async (): Promise<string> => {
+    if (!opts.memStore) return "Migration needs the memory store, which is not available in this session.";
+    const { runMigration, describeResult } = await import("../migrate/run.js");
+    const r = await runMigration({
+      cwd: process.cwd(), home: homedir(), provider: deps.provider,
+      // The tuner keeps `architect` on a strong model, and this is a judgement task: a rule imported wrongly
+      // is applied to every task from then on.
+      model: deps0.roleRegistry.peekModel("architect") || opts.model || "",
+      memStore: opts.memStore,
+      ask: (q, o) => controller.ask(q, o),
+      note: (t) => controller.note(t),
+    });
+    return describeResult(r);
+  };
   /**
    * Keeps the code graph in step with the code after a job changes files.
    *
@@ -404,7 +425,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
