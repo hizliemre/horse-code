@@ -7,7 +7,8 @@ import { OmniRouteProvider } from "./providers/omniroute.js";
 import { listOmniRouteModels } from "./providers/models.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { registerBuiltinSkills } from "./skills/builtin.js";
-import { externalSkillsDir, syncSkillSources } from "./skills/external.js";
+import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl } from "./skills/external.js";
+import { saveSkillSource } from "./config/save-skills.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
@@ -180,10 +181,29 @@ export async function main(argv: string[]): Promise<void> {
         }
       };
       // /skills — what is loaded and which roles it reaches; update re-installs the repo-sourced ones.
+      // What a role EFFECTIVELY uses, which is not the defaults table: a role that declares its own list
+      // overrides it, and declaring an empty list opts out entirely. Reporting the defaults here would have
+      // this command describe an assignment that never reaches an agent.
+      const effectiveRoleSkills = (skill: string): string[] =>
+        Object.keys(DEFAULT_ROLE_SKILLS)
+          .concat(Object.keys(config.roles))
+          .filter((r, i, a) => a.indexOf(r) === i)
+          .filter((r) => (config.roles[r]?.skills ?? DEFAULT_ROLE_SKILLS[r] ?? []).includes(skill));
       const listSkills = () => skillRegistry.list().map((s) => ({
         ...s,
-        roles: Object.entries(DEFAULT_ROLE_SKILLS).filter(([, sk]) => sk.includes(s.name)).map(([r]) => r),
+        roles: effectiveRoleSkills(s.name),
       }));
+      // /skills add <github-url> — install it now, record it so it survives the session, load it in place.
+      const addSkill = async (url: string): Promise<string> => {
+        const src = parseSkillUrl(url);
+        if (!src) return `Not a GitHub URL: \`${url}\`\n\n_Expected something like \`https://github.com/owner/repo\` or a link to the directory holding SKILL.md._`;
+        const r = await installSkillSource(home, src);
+        await saveSkillSource(home, src);
+        await skillRegistry.loadFromDir(externalSkillsDir(home));
+        const s = skillRegistry.get(src.name);
+        const desc = s ? `\n\n> ${s.description}` : "";
+        return `Installed **${src.name}** from \`${src.repo}\`${src.path ? `/${src.path}` : ""} at \`${r.sha.slice(0, 8)}\`.${desc}\n\n_Discoverable by every agent. \`/roles adjust\` assigns it to the roles it fits; \`/skills update\` re-installs it from upstream._`;
+      };
       const updateSkills = async (): Promise<string> => {
         if (!config.skillSources.length) {
           return "No external skill sources configured. Add them under `skillSources` in your config.";
@@ -204,6 +224,7 @@ export async function main(argv: string[]): Promise<void> {
         memStore,
         listSkills,
         updateSkills,
+        addSkill,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
         formatResult: renderResult,
         model: config.model,

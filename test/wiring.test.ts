@@ -166,17 +166,33 @@ describe("default role skills", () => {
     expect(() => d.roleRegistry.resolve("brainstormer")).not.toThrow();
   });
 
-  it("a user-configured role is taken as written — no skills are forced on it", async () => {
+  /**
+   * Configuring a role no longer means "and therefore no skills".
+   *
+   * It used to: any role present in the config was taken as written. That coupling broke the moment
+   * `/roles adjust` started persisting `{models}` for every role — from then on every role counted as
+   * configured and every default skill silently vanished. Setting a custom prompt says nothing about skills
+   * either, so `skills` is now honoured only when the role actually declares it.
+   */
+  const withBrainstormer = async (role: Record<string, unknown>): Promise<string> => {
     const reg = new SkillRegistry();
-    reg.register({ name: "brainstorming", description: "d", content: "SHOULD NOT APPEAR" });
+    reg.register({ name: "brainstorming", description: "d", content: "SKILL-BODY" });
     const d = await buildJobDeps({
-      config: baseConfig({ roles: { brainstormer: { models: ["m"], systemPrompt: "mine" } } }),
+      config: baseConfig({ roles: { brainstormer: role as never } }),
       provider: fakeProvider, skillRegistry: reg,
       manager: new WorktreeManager({ repoRoot: "/tmp" }),
       prAdapter: logPRAdapter(() => {}), askHuman: async () => ({ action: "abandon" }),
       approve: async () => true, signal: new AbortController().signal,
       home, fetch: fakeFetch,
     });
-    expect(d.roleRegistry.resolve("brainstormer").systemPrompt).not.toContain("SHOULD NOT APPEAR");
+    return d.roleRegistry.resolve("brainstormer").systemPrompt;
+  };
+
+  it("configuring a role without mentioning skills keeps its defaults", async () => {
+    expect(await withBrainstormer({ models: ["m"], systemPrompt: "mine" })).toContain("SKILL-BODY");
+  });
+
+  it("declaring an empty list is how a role opts out", async () => {
+    expect(await withBrainstormer({ models: ["m"], systemPrompt: "mine", skills: [] })).not.toContain("SKILL-BODY");
   });
 });

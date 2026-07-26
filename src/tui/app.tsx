@@ -5,7 +5,7 @@ import { makeAskUser } from "../terminal.js";
 import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
 import { tuneRoleModels } from "../engine/role-tuner.js";
-import { mostCapable, adjustRoleModels } from "./role-models.js";
+import { mostCapable, adjustRoleModels, ROLE_PROFILES } from "./role-models.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { firewallProvider } from "../providers/firewall.js";
@@ -21,6 +21,9 @@ import { PinStore } from "../session/pins.js";
 import { MemoryStore } from "../session/memory.js";
 import { ModelHealth } from "../engine/model-health.js";
 import { saveRoleChains } from "../config/save-roles.js";
+import { saveRoleSkills } from "../config/save-skills.js";
+import { tuneRoleSkills } from "../engine/skill-tuner.js";
+import { scanRepo } from "../engine/scan-repo.js";
 import { memoryState } from "../engine/memory-retrieval.js";
 import { memoryNote } from "../engine/memory-inject.js";
 import type { MemoryEntry } from "../engine/memory-retrieval.js";
@@ -60,6 +63,7 @@ export interface RunTuiReplOpts {
   sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // current source allowlist
   listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
+  addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
   memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }
@@ -152,6 +156,45 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
+  /**
+   * Second half of `/roles adjust`: which SKILLS each role should carry, for THIS project.
+   *
+   * Runs after the model chains and never blocks them — a role with the right model and a stale skill list is
+   * far better than a failed adjust. The repository is scanned first so the assignment rests on facts rather
+   * than on the tuner's impression of what the project is.
+   */
+  const adjustSkills = async (roleNames: string[], tuner: string): Promise<void> => {
+    const skills = opts.listSkills?.() ?? [];
+    if (!skills.length) return;
+    const project = await scanRepo(process.cwd());
+    controller.note(`🔎 **Project scan** — skills are assigned from this, not from a guess:\n${project.summary.split("\n").map((l) => `- ${l}`).join("\n")}`);
+    const append = controller.streamNote("");
+    controller.startBusy("assigning skills", tuner);
+    try {
+      const { assignments, withheld, reasoning } = await tuneRoleSkills({
+        provider: deps.provider, tuner, skills, roles: roleNames, roleProfiles: ROLE_PROFILES, project,
+        onReason: append,
+      });
+      controller.endBusy();
+      if (!Object.keys(assignments).length) { controller.note(reasoning); return; }
+      const saved = await saveRoleSkills(homedir(), assignments);
+      const given = Object.entries(assignments).filter(([, s]) => s.length);
+      const rows = given.length
+        ? given.map(([role, s]) => `- \`${role}\` → ${s.map((x) => `**${x}**`).join(", ")}`).join("\n")
+        : "- (none — no skill fits this project)";
+      // Withheld assignments are reported, never silently dropped: a skill that vanished without a reason
+      // reads as a bug, and the reason is the whole value of scanning the repo.
+      const held = withheld.length
+        ? `\n\n**Withheld:**\n${withheld.map((w) => `- \`${w.role}\` ✗ ${w.skill} — ${w.because}`).join("\n")}`
+        : "";
+      const rest = skills.map((s) => s.name).filter((n) => !given.some(([, list]) => list.includes(n)));
+      const disc = rest.length ? `\n\n_Still discoverable on demand by every agent: ${rest.map((n) => `\`${n}\``).join(", ")}._` : "";
+      controller.note(`**Skills assigned:**\n${rows}${held}${disc}\n\n_${saved ? "Saved to your config. " : ""}Override any role with \`"skills": []\` in your config to opt it out._`);
+    } catch (e) {
+      controller.endBusy();
+      controller.note(`Skill assignment error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
   // /roles adjust → a capable model reasons through role→model assignments (rationale shown in chat), then
   // the validated 3-model chains are applied to every role. Falls back to the heuristic on any failure.
   const adjustRoles = async (): Promise<void> => {
@@ -177,6 +220,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const saved = await saveRoleChains(homedir(), chains);
       const rows = chains.map(({ role, models: ch }) => `- \`${role}\` → ${ch[0] ?? "—"}${ch.slice(1).map((m) => `  ↳ ${m}`).join("")}`);
       controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_${saved ? `Saved to your config — future sessions start with these. ` : ""}\`/roles setmodel\` to fine-tune any chain._`);
+      await adjustSkills(roleNames, tuner);
       return;
     } catch (e) {
       controller.endBusy();
@@ -337,7 +381,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}

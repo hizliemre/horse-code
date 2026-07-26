@@ -36,11 +36,21 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   const { config } = opts;
   const roles: Record<string, RoleConfig> = {};
   for (const name of REQUIRED_ROLES) {
-    // A role the user configured is taken as written (they may deliberately want no skills); an unconfigured
-    // one gets its default skill set. A skill that is not installed is dropped rather than throwing — the
-    // pipeline must still run in a checkout without the bundled skills.
-    const defaults = DEFAULT_ROLE_SKILLS[name]?.filter((s) => opts.skillRegistry.get(s));
-    roles[name] = config.roles[name] ?? { models: [config.model], ...(defaults?.length ? { skills: defaults } : {}) };
+    // Skills and models are configured INDEPENDENTLY, so the two must merge rather than one replacing the
+    // other. Taking a configured role as written looks reasonable until you notice that `/roles adjust`
+    // persists `{models}` for every role: from then on every role counted as "configured", and every default
+    // skill silently vanished — the tuner quietly unassigned every skill in the product.
+    //
+    // So `skills` is honoured only when the role actually DECLARES it. Declaring it empty is the supported way
+    // to say "this role writes no tests" (or wants no design skill): `"coder": { "skills": [] }` beats an
+    // opt-out flag because it reads as what it does and survives a re-tune.
+    //
+    // A skill that is not installed is dropped rather than throwing — the pipeline must still run in a
+    // checkout without the bundled skills.
+    const cfg = config.roles[name];
+    const declared = cfg?.skills;
+    const skills = (declared ?? DEFAULT_ROLE_SKILLS[name] ?? []).filter((s) => opts.skillRegistry.get(s));
+    roles[name] = { ...(cfg ?? { models: [config.model] }), ...(skills.length ? { skills } : { skills: [] }) };
   }
   const roleRegistry = new RoleRegistry(roles, DEFAULT_PROMPTS, opts.skillRegistry);
 

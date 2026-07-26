@@ -47,6 +47,31 @@ function validRepo(repo: string): boolean {
   return /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo);
 }
 
+/**
+ * Turns a GitHub URL into a source declaration.
+ *
+ * Accepts what a user actually pastes: the repo root, a `tree`/`blob` link deep inside it, with or without a
+ * trailing `SKILL.md`. The skill's NAME is taken from the directory that holds SKILL.md, because that is what
+ * the loader keys on — not from the repo, which may hold many skills.
+ */
+export function parseSkillUrl(url: string): SkillSource | undefined {
+  const m = url.trim().replace(/\/+$/, "").match(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)\/([^/]+)(?:\/(?:tree|blob)\/([^/]+)(?:\/(.*))?)?$/i);
+  if (!m) return undefined;
+  const [, owner, repoName, ref, rawPath] = m;
+  const repo = `${owner}/${repoName.replace(/\.git$/, "")}`;
+  // A link straight to the file is the same skill as a link to its directory.
+  const path = (rawPath ?? "").replace(/\/?SKILL\.md$/i, "");
+  const name = path ? path.split("/").filter(Boolean).pop()! : repoName.replace(/\.git$/, "");
+  return {
+    name,
+    repo,
+    ...(path ? { path } : {}),
+    // A branch name in a tree URL is where the user was browsing, not necessarily a pin they want. Only keep
+    // it when it is not the obvious default, so "update" keeps following the branch.
+    ...(ref && ref !== "main" && ref !== "master" && ref !== "HEAD" ? { ref } : {}),
+  };
+}
+
 /** Runs a command, resolving with its exit code and output. */
 function run(cmd: string, args: string[], cwd?: string): Promise<{ code: number; err: string }> {
   return new Promise((resolve) => {

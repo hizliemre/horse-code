@@ -687,7 +687,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -711,6 +711,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   refreshSources?: () => Promise<string[]>; // /sources refresh → re-probe connected sources
   listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
+  addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -967,8 +968,22 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const list = info.sources.length ? info.sources.map((s) => `- ${s}`).join("\n") : "- (all)";
     controller.note(`**Model sources** (${how}):\n${list}\n\n_\`/sources refresh\` to re-probe your connected subscriptions._`);
   };
-  // /skills [update] → list what is loaded; update re-installs the externally-sourced ones from upstream.
+  // /skills [add <url> | update] → list what is loaded; add installs one from a repo; update re-installs them.
   const doSkills = (arg: string): void => {
+    const add = /^add\s+(\S+)/i.exec(arg.trim());
+    if (add) {
+      if (!addSkill) { controller.note("Skill installation is not available."); return; }
+      controller.note(`Installing from ${add[1]}…`);
+      addSkill(add[1]).then(
+        (r) => controller.note(r),
+        (e) => controller.note(`Install failed: ${e instanceof Error ? e.message : String(e)}`),
+      );
+      return;
+    }
+    if (arg.trim().toLowerCase() === "add") {
+      controller.note("Usage: `/skills add <github-url>` — e.g. `/skills add https://github.com/anthropics/skills/tree/main/skills/frontend-design`");
+      return;
+    }
     if (arg.trim().toLowerCase() === "update") {
       if (!updateSkills) { controller.note("Skill installation is not available."); return; }
       controller.note("Updating externally-sourced skills from upstream…");
@@ -981,7 +996,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const all = listSkills?.() ?? [];
     if (!all.length) { controller.note("No skills loaded."); return; }
     const rows = all.map((s) => `- **${s.name}**${s.roles.length ? ` → \`${s.roles.join("`, `")}\`` : " _(discoverable)_"}\n  ${s.description}`);
-    controller.note(`**Skills** (${all.length}):\n${rows.join("\n")}\n\n_\`/skills update\` re-installs the ones sourced from a repo._`);
+    controller.note(`**Skills** (${all.length}):\n${rows.join("\n")}\n\n_\`/skills add <github-url>\` to install one · \`/skills update\` re-installs the ones sourced from a repo._`);
   };
   // /mode [ask|acceptEdits|auto] → show or set the permission mode.
   const MODE_DESC: Record<string, string> = {
