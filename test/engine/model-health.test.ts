@@ -149,3 +149,42 @@ describe("ModelHealth.refresh — a quota limit is temporary, not a life sentenc
     expect(main.isQuarantined("dead-a")).toBe(true);
   });
 });
+
+// Only a TOTAL chain collapse used to trigger a re-assignment. A merely-degraded model therefore stayed at the
+// head of a dozen chains and each of them slid past it on every call, forever.
+describe("ModelHealth.watch — benching one model moves every role off it at once", () => {
+  it("re-chains all affected roles the moment a model is benched, without any chain collapsing", async () => {
+    const { health, main, lenses } = setup();
+    health.watch();
+    main.markExhausted("dead-a", "429 rate limit");
+    await new Promise((r) => setTimeout(r, 5)); // the sweep is fire-and-forget
+    expect(main.rawChain("coach")).not.toContain("dead-a");
+    expect(main.rawChain("judge")).not.toContain("dead-a");
+    expect(lenses.rawChain("code-security")).not.toContain("dead-a");
+  });
+
+  it("repeated structural failures reach the same sweep", async () => {
+    const { health, main } = setup();
+    health.watch();
+    for (let i = 0; i < RoleRegistry.STRUCTURAL_STRIKES; i++) main.markStructuralFailure("dead-a", "prose");
+    await new Promise((r) => setTimeout(r, 5));
+    expect(main.rawChain("coach")).not.toContain("dead-a");
+  });
+
+  it("reports the bench so the user can see WHY a model vanished", async () => {
+    const { health, main, notes } = setup();
+    health.watch();
+    main.markExhausted("dead-a", "429 rate limit");
+    await new Promise((r) => setTimeout(r, 5));
+    expect(notes.join("\n")).toMatch(/Benched/);
+    expect(notes.join("\n")).toMatch(/429 rate limit/);
+  });
+
+  it("does nothing when no role was using the model", async () => {
+    const { health, main, notes } = setup();
+    health.watch();
+    main.markExhausted("never-assigned", "429");
+    await new Promise((r) => setTimeout(r, 5));
+    expect(notes.join("\n")).not.toMatch(/Benched/);
+  });
+});

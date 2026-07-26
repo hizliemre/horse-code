@@ -10,6 +10,7 @@ export interface ResolvedRole {
   fallbacks: string[];
   systemPrompt: string;
   onExhausted: (model: string, reason?: string) => void;
+  onStructuralFailure: (model: string, reason?: string) => void;
   onFallback?: (from: string, to: string, reason: string) => void;
 }
 
@@ -20,6 +21,10 @@ export class RoleRegistry {
   // reason and the time so a coordinator can report them and later re-probe whether the limit has reset.
   private readonly quarantine = new Map<string, { at: number; reason: string }>();
   private notify?: (msg: string) => void; // fallback UI note sink (wired once the controller exists)
+  private onQuarantine?: (model: string, reason: string) => void; // a model was benched → re-chain who used it
+  // Models that answered in prose instead of calling the submit tool. Not a transport error, so nothing ever
+  // benched them: the chain quietly slid to the fallback on EVERY call, forever, in every role that held them.
+  private readonly strikes = new Map<string, number>();
   private rulesProvider?: () => string[]; // durable behavioral rules → appended to EVERY role's prompt
 
   constructor(
@@ -62,9 +67,36 @@ export class RoleRegistry {
     else this.roleOverrides.delete(roleName);
   }
 
+  /** Wire the quarantine hook: whatever benches a model, every role still holding it must be re-assigned. */
+  setOnQuarantine(fn: (model: string, reason: string) => void): void {
+    this.onQuarantine = fn;
+  }
+
   /** Mark a model spent — every chain skips it from now on, until it is released. */
   markExhausted(model: string, reason = "unavailable", now = Date.now()): void {
-    if (model && !this.quarantine.has(model)) this.quarantine.set(model, { at: now, reason });
+    if (!model || this.quarantine.has(model)) return;
+    this.quarantine.set(model, { at: now, reason });
+    this.onQuarantine?.(model, reason);
+  }
+
+  /**
+   * How many structured failures a model gets before it is benched. One miss can be a genuinely hard prompt;
+   * a pattern is the model. Low, because every strike costs a full wasted pass in every role that holds it.
+   */
+  static readonly STRUCTURAL_STRIKES = 2;
+
+  /**
+   * Records that a model finished a turn WITHOUT producing the structured result it was asked for (prose
+   * instead of a tool call). This is not "unavailable" — the transport was fine — so it never reached the
+   * retryable path that benches a model, and the chain slid to the fallback on every single call instead.
+   * Returns the strike count; at the threshold the model is quarantined like any other spent one.
+   */
+  markStructuralFailure(model: string, reason = "no valid structured result"): number {
+    if (!model) return 0;
+    const n = (this.strikes.get(model) ?? 0) + 1;
+    this.strikes.set(model, n);
+    if (n >= RoleRegistry.STRUCTURAL_STRIKES) this.markExhausted(model, reason);
+    return n;
   }
 
   /** Models currently quarantined, with why and when — surfaced to the user and re-probed before an adjust. */
@@ -78,6 +110,7 @@ export class RoleRegistry {
 
   /** Put a model back in play (its quota reset, or the user forced it). */
   release(model: string): boolean {
+    this.strikes.delete(model); // a released model starts clean; its old strikes describe a state that passed
     return this.quarantine.delete(model);
   }
 
@@ -137,14 +170,15 @@ export class RoleRegistry {
    * The chain (primary + fallbacks) and session-fallback hooks for a role, WITHOUT its system prompt —
    * for callers that supply their own prompt (e.g. spec-kit phases). resolve() layers the prompt on top.
    */
-  fallbackOpts(roleName: string): Pick<ResolvedRole, "model" | "fallbacks" | "onExhausted" | "onFallback"> {
+  fallbackOpts(roleName: string): Pick<ResolvedRole, "model" | "fallbacks" | "onExhausted" | "onStructuralFailure" | "onFallback"> {
     const chain = this.chain(roleName);
     const notify = this.notify;
     return {
       model: chain[0] ?? "",
       fallbacks: chain.slice(1),
       onExhausted: (m, reason) => this.markExhausted(m, reason ?? "unavailable"),
-      onFallback: notify ? (from, to, reason) => notify(`⤵ ${from} unavailable (${reason}) — falling back to ${to}`) : undefined,
+      onStructuralFailure: (m, reason) => this.markStructuralFailure(m, reason),
+      onFallback: notify ? (from, to, reason) => notify(`⤵ \`${from}\` → \`${to}\` — ${reason}`) : undefined,
     };
   }
 

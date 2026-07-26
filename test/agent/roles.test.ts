@@ -200,3 +200,54 @@ describe("RoleRegistry.chainFor — parallel workers spread across the chain", (
     expect(one.chainFor("coder", 3)).toEqual(["a/m1"]);
   });
 });
+
+// The message in the wild was "structured: previous model returned no valid result" — NOT a 429. The transport
+// was fine, so nothing ever benched the model, and every role holding it slid past it on every single call.
+describe("a model that will not produce structured output gets benched too", () => {
+  const reg = (): RoleRegistry => new RoleRegistry({
+    coach: { models: ["bad/m", "good/m"], systemPrompt: "P" },
+    judge: { models: ["bad/m", "other/m"], systemPrompt: "P" },
+  });
+
+  it("one miss is tolerated — a single hard prompt is not a verdict on the model", () => {
+    const r = reg();
+    r.markStructuralFailure("bad/m", "prose");
+    expect(r.isQuarantined("bad/m")).toBe(false);
+  });
+
+  it("a PATTERN benches it, with the real reason recorded", () => {
+    const r = reg();
+    for (let i = 0; i < RoleRegistry.STRUCTURAL_STRIKES; i++) r.markStructuralFailure("bad/m", "prose");
+    expect(r.isQuarantined("bad/m")).toBe(true);
+    expect(r.quarantined()[0].reason).toBe("prose");
+    expect(r.chain("coach")).toEqual(["good/m"]); // and it drops out of the chain immediately
+  });
+
+  it("benching fires the hook ONCE, so every role still holding it can be re-assigned", () => {
+    const r = reg();
+    const benched: string[] = [];
+    r.setOnQuarantine((m) => benched.push(m));
+    for (let i = 0; i < RoleRegistry.STRUCTURAL_STRIKES + 3; i++) r.markStructuralFailure("bad/m", "prose");
+    expect(benched).toEqual(["bad/m"]);
+  });
+
+  it("the hook also fires for an ordinary retryable exhaustion", () => {
+    const r = reg();
+    const benched: [string, string][] = [];
+    r.setOnQuarantine((m, why) => benched.push([m, why]));
+    r.markExhausted("bad/m", "429 rate limit");
+    expect(benched).toEqual([["bad/m", "429 rate limit"]]);
+  });
+
+  it("releasing a model clears its strikes — its record described a state that has passed", () => {
+    const r = reg();
+    for (let i = 0; i < RoleRegistry.STRUCTURAL_STRIKES; i++) r.markStructuralFailure("bad/m", "prose");
+    r.release("bad/m");
+    r.markStructuralFailure("bad/m", "prose");
+    expect(r.isQuarantined("bad/m")).toBe(false); // starts counting again from one
+  });
+
+  it("rolesUsing finds every role that must be moved off it", () => {
+    expect(reg().rolesUsing("bad/m").sort()).toEqual(["coach", "judge"]);
+  });
+});

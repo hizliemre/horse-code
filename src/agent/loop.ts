@@ -23,6 +23,7 @@ export interface RoleAgentOptions {
   remember?: (fact: string) => void; // remember_fact tool → persist a durable fact
   proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean; // propose_memory tool → curator queue
   onExhausted?: (model: string, reason?: string) => void; // a model hit a retryable error → mark it spent
+  onStructuralFailure?: (model: string, reason?: string) => void; // model answered in prose → strike against it
   onFallback?: (from: string, to: string, reason: string) => void; // fell from one model to the next → UI note
   onLiveActivity?: (label: string) => void; // live "writing <file> · N chars" while a tool call is generated
   onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit

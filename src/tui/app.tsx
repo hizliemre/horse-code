@@ -110,6 +110,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     ...(opts.probeModel ? { probe: opts.probeModel } : {}),
     note: (m) => controller.note(m),
   });
+  health.watch(); // any benched model → every role still holding it is re-assigned at once
 
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.

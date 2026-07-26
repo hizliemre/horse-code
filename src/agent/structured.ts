@@ -129,7 +129,10 @@ export async function runStructuredRole<T>(
       });
     }
     if (opts.signal.aborted) throw new Error("cancelled");
-    // this model won't produce a valid result → the outer loop moves to the next model in the chain
+    // This model would not produce a structured result. Report it: the transport was fine, so nothing else
+    // benches it, and without this the chain slides past it on every single call for the rest of the session.
+    opts.onStructuralFailure?.(model, "answered in prose instead of calling submit");
+    // the outer loop moves to the next model in the chain
   }
 
   // Every model in the chain failed: surface the last hard error if there was one, else the no-submit message.

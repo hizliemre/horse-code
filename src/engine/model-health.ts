@@ -50,6 +50,31 @@ export class ModelHealth {
   /** Serializes healing: a whole review team failing at once must not trigger 14 concurrent re-assignments. */
   private queue: Promise<unknown> = Promise.resolve();
 
+  /**
+   * Registers the sweep with every registry, so a model benched for ANY reason — a 429, or repeated prose
+   * where a structured result was required — immediately takes every role that still holds it off it. Without
+   * this, only a TOTAL chain collapse triggered a re-assignment, so a merely-degraded model stayed at the head
+   * of a dozen chains and each of them slid past it on every call.
+   */
+  watch(): void {
+    for (const r of this.port.registries()) r.setOnQuarantine((m, reason) => { void this.sweep(m, reason); });
+  }
+
+  /** Re-chains every role still holding `model`. Fire-and-forget: healing must never block the caller. */
+  private async sweep(model: string, reason: string): Promise<void> {
+    return this.serialize(async () => {
+      const affected = new Set<string>();
+      for (const r of this.port.registries()) for (const role of r.rolesUsing(model)) affected.add(role);
+      if (!affected.size) return;
+      const healthy = await this.healthyModels();
+      if (!healthy.length) return;
+      const moved = this.reassign([...affected], healthy);
+      if (moved.length) {
+        this.note(`⛔ **Benched** \`${model}\` (${reason.slice(0, 100)}) — re-assigned ${moved.length} role(s) that were using it.`);
+      }
+    });
+  }
+
   constructor(opts: ModelHealthOpts) {
     this.port = opts.port;
     this.listModels = opts.listModels;
