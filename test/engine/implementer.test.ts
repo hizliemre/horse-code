@@ -9,7 +9,8 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import type { Card, Board } from "../../src/board/board.js";
-import type { ChatEvent } from "../../src/core/types.js";
+import type { ChatEvent, Provider } from "../../src/core/types.js";
+import type { ProgressEvent } from "../../src/engine/progress.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 let dir: string;
@@ -27,6 +28,9 @@ function deps(provider: MockProvider): TaskCycleDeps {
     specKit: fakeSpecKit,
   };
 }
+const ideps = (provider: Provider, onProgress?: (ev: ProgressEvent) => void): TaskCycleDeps =>
+  ({ ...deps(provider as MockProvider), provider, ...(onProgress ? { onProgress } : {}) });
+
 const card = (over: Partial<Card> = {}): Card => ({
   id: "t1", title: "write file", column: "IN-PROGRESS", deps: [], acceptance: [], reviewNotes: [], attempts: 0, stageHistory: [], ...over,
 });
@@ -53,5 +57,43 @@ describe("runImplementer", () => {
     const msg = p.requests[0].messages.map((m) => m.content).join("\n");
     expect(msg).toContain("RETURNING");
     expect(msg).toContain("fix the test");
+  });
+});
+
+// Review lenses metered themselves because their own `emit` was threaded down the review call chain; the
+// implementer path had no such channel, so its rows showed a bare clock. Both now feed the same renderer.
+describe("runImplementer reports per-agent usage", () => {
+  it("streams a cumulative total keyed by the CARD id, plus a rename when its chain slides", async () => {
+    const events: ProgressEvent[] = [];
+    const p: Provider = {
+      async *chat(req) {
+        yield { type: "usage", promptTokens: 1000, completionTokens: 50 };
+        if (!req.messages.some((m) => m.role === "tool")) {
+          yield { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: '{"path":"a.txt","content":"x"}' } };
+          yield { type: "done", finishReason: "tool_calls" };
+          return;
+        }
+        yield { type: "text-delta", text: "done" };
+        yield { type: "done", finishReason: "stop" };
+      },
+    };
+    await runImplementer(ideps(p, (ev) => events.push(ev)), "coder", card(), dir);
+    const usage = events.filter((e) => e.kind === "agent-usage");
+    expect(usage.length).toBeGreaterThanOrEqual(2);
+    expect(usage.every((e) => e.kind === "agent-usage" && e.id === "t1")).toBe(true);
+    // Cumulative, not per-call — the row shows a total.
+    const last = usage.at(-1)!;
+    expect(last.kind === "agent-usage" && last.promptTokens).toBe(2000);
+  });
+
+  it("is silent when no progress sink is wired (headless runs are unaffected)", async () => {
+    const p: Provider = {
+      async *chat() {
+        yield { type: "usage", promptTokens: 10, completionTokens: 1 };
+        yield { type: "text-delta", text: "ok" };
+        yield { type: "done", finishReason: "stop" };
+      },
+    };
+    await expect(runImplementer(ideps(p), "coder", card(), dir)).resolves.toBeUndefined();
   });
 });

@@ -63,6 +63,10 @@ export class TuiController {
   private inbox: string[] = []; // "by-the-way" notes typed mid-run → folded into the running coach turn
   private listeners = new Set<() => void>();
   private agentStarts = new Map<string, number>(); // card id → when it entered IN-PROGRESS (our clock)
+  // Board-backed rows are REBUILT from the card list on every board change, so anything learned about a row
+  // between rebuilds (its running token spend, the model actually serving it) would be lost each time.
+  private agentTokens = new Map<string, { promptTokens: number; completionTokens: number }>();
+  private agentModels = new Map<string, string>();
   private lastNarrated?: string; // last spec-kit phase narrated into the flow (dedup)
   private now: () => number;
 
@@ -102,9 +106,9 @@ export class TuiController {
     // A sub-agent finished → stamp its result on that row (and freeze its timer) the moment it lands, so
     // early finishers show their verdict + finding counts immediately instead of all at once.
     // The chain slid → rename the row to whichever model is actually serving it now.
-    else if (ev.kind === "agent-model") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, model: ev.model } : a) };
+    else if (ev.kind === "agent-model") { this.agentModels.set(ev.id, ev.model); this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, model: ev.model } : a) }; }
     // Running total, no status/doneAt: the row keeps ticking, it just also shows what it has spent so far.
-    else if (ev.kind === "agent-usage") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) };
+    else if (ev.kind === "agent-usage") { this.agentTokens.set(ev.id, { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens }); this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) }; }
     else if (ev.kind === "agent-result") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, status: ev.status, doneAt: this.now(), promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) };
     // note: a live transcript line from deep in the pipeline (council findings, judge decision).
     else if (ev.kind === "note") this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: ev.text }] };
@@ -121,7 +125,7 @@ export class TuiController {
     return agents.map((a) => {
       let startedAt = this.agentStarts.get(a.id);
       if (startedAt === undefined) { startedAt = this.now(); this.agentStarts.set(a.id, startedAt); }
-      return { id: a.id, title: a.title, model: a.model, startedAt };
+      return { id: a.id, title: a.title, model: a.model, startedAt, ...this.agentTokens.get(a.id) };
     });
   }
 
@@ -133,7 +137,9 @@ export class TuiController {
     return inProgress.map((c) => {
       let startedAt = this.agentStarts.get(c.id);
       if (startedAt === undefined) { startedAt = this.now(); this.agentStarts.set(c.id, startedAt); } // newly started
-      return { id: c.id, title: c.title, model: c.model, startedAt };
+      if (c.model) this.agentModels.set(c.id, c.model);
+      const model = c.model || this.agentModels.get(c.id);
+      return { id: c.id, title: c.title, ...(model ? { model } : {}), startedAt, ...this.agentTokens.get(c.id) };
     });
   }
 

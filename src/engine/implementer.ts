@@ -23,6 +23,10 @@ export async function runImplementer(
 ): Promise<void> {
   const resolved = deps.roleRegistry.resolve(role);
   const chain = deps.roleRegistry.chainFor(role, slot);
+  // Per-agent metering, exactly as the review lenses do it — the live row shows what this worker is spending
+  // WHILE it spends it, and renames itself if its chain slides to another model.
+  const tok = { promptTokens: 0, completionTokens: 0 };
+  let serving = chain[0] ?? "";
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
 
@@ -41,6 +45,12 @@ export async function runImplementer(
     tools,
     maxTurns: IMPLEMENTER_MAX_TURNS,
     messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content }] : [{ role: "user", content }],
+    onUsage: (u) => {
+      tok.promptTokens += u.promptTokens;
+      tok.completionTokens += u.completionTokens;
+      if (u.model && u.model !== serving) { serving = u.model; deps.onProgress?.({ kind: "agent-model", id: task.id, model: serving }); }
+      deps.onProgress?.({ kind: "agent-usage", id: task.id, ...tok });
+    },
     permission: deps.permission,
     approve: deps.approve,
     cwd,

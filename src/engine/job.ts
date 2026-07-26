@@ -139,6 +139,7 @@ export async function runJob(
         "project. Tell me what to work on and I'll start it, or re-send the original request to pick it up." };
     }
   }
+  deps.onProgress = emit; // implementers report per-agent usage/model through the same channel as reviews
   try {
     emit({ kind: "phase", phase: "upstream" });
     const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images, resume);

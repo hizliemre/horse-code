@@ -17,6 +17,12 @@ export interface TaskCycleDeps {
   onActivity?: (a: ToolActivity) => void;
   /** Live "writing <file> · N chars" progress while a tool call is still being generated (long writes). */
   onLiveActivity?: (label: string) => void;
+  /**
+   * Live progress sink. The REVIEW path threaded its own `emit` down its call chain, so per-agent metering
+   * landed there; the implementer path had no such channel and its rows showed a bare clock. This is that
+   * channel, so both kinds of agent feed the SAME row renderer with the same data.
+   */
+  onProgress?: (ev: import("./progress.js").ProgressEvent) => void;
   /** Persistent chat-flow note sink (wired to the TUI) — e.g. each auto-commit surfaces here. */
   note?: (text: string) => void;
   /** "By-the-way" note source: the coach loop polls it each turn to fold in mid-run guidance. */
