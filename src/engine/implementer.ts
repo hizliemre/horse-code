@@ -4,6 +4,7 @@ import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
 import { memoryHints } from "./memory-inject.js";
+import { contextTools } from "./task-types.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 
 // A real coding task (scaffold a project, write code + tests, iterate until green) legitimately needs far
@@ -41,6 +42,9 @@ export async function runImplementer(
   let serving = chain[0] ?? "";
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
+  // Project knowledge (e.g. a code-graph server): what calls this, what a change here can reach. Without it
+  // the implementer edits a file with no idea what depends on it.
+  for (const t of contextTools(deps)) tools.register(t);
 
   const returning = task.reviewNotes.length > 0;
   const content = returning

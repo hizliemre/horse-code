@@ -24,6 +24,7 @@ import { saveRoleChains } from "../config/save-roles.js";
 import { saveRoleSkills } from "../config/save-skills.js";
 import { tuneRoleSkills } from "../engine/skill-tuner.js";
 import { scanRepo } from "../engine/scan-repo.js";
+import { graphStatus, buildProjectGraph } from "../engine/project-graph.js";
 import { memoryState } from "../engine/memory-retrieval.js";
 import { memoryNote } from "../engine/memory-inject.js";
 import type { MemoryEntry } from "../engine/memory-retrieval.js";
@@ -64,6 +65,8 @@ export interface RunTuiReplOpts {
   listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
+  graphStatus?: () => Promise<string>; // /graph
+  buildGraph?: () => Promise<string>; // /graph build
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
   memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }
@@ -156,6 +159,24 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
+  /**
+   * Keeps the code graph in step with the code after a job changes files.
+   *
+   * A graph that silently goes stale is worse than no graph: an agent asking "what calls this" would get an
+   * answer that was true an hour ago and trust it. The rebuild is incremental AST parsing behind a SHA256
+   * cache — seconds, no tokens — which is what makes doing it automatically affordable.
+   *
+   * Only refreshes a graph that ALREADY exists. Building the first one is a deliberate act, not something a
+   * job should decide to spend the user's time on.
+   */
+  const refreshGraphIfStale = async (): Promise<void> => {
+    try {
+      const before = await graphStatus(process.cwd());
+      if (!before.built || !before.stale) return;
+      const r = await buildProjectGraph(process.cwd());
+      if (r.ok) controller.note(`🔄 Code graph refreshed — ${r.nodes} symbols, ${r.edges} relationships.`);
+    } catch { /* the graph is an aid, never a reason to fail a finished job */ }
+  };
   /**
    * Second half of `/roles adjust`: which SKILLS each role should carry, for THIS project.
    *
@@ -381,7 +402,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
@@ -415,6 +436,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
           images: images.length ? images : undefined,
         });
         controller.endRun(opts.formatResult(res), res.refinedPrompt);
+        void refreshGraphIfStale();
         if (res.kind === "chat") {
           if (res.nextSteps?.length) controller.setNextSteps(res.nextSteps); // coach follow-ups → /next
           const sup = (s: string[]) => (s.length ? ` _(replaced: ${s.join("; ")})_` : "");

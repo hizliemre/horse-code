@@ -9,6 +9,7 @@ import { SkillRegistry } from "./skills/registry.js";
 import { registerBuiltinSkills } from "./skills/builtin.js";
 import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl } from "./skills/external.js";
 import { saveSkillSource } from "./config/save-skills.js";
+import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
@@ -219,12 +220,31 @@ export async function main(argv: string[]): Promise<void> {
         const tail = changed.length ? "\n\n_Restart to pick up a changed skill in already-built prompts._" : "";
         return `**Skill sources:**\n${lines.join("\n")}${tail}`;
       };
+      // /graph — the project's code graph. Reported with its FRESHNESS, because a stale graph that looks
+      // authoritative is worse than none: an agent would trust callers that have since moved.
+      const graphStatusText = async (): Promise<string> => {
+        const st = await graphStatus(cwd);
+        if (!st.built) {
+          const py = await graphifyPython();
+          return py
+            ? "No code graph yet. `/graph build` — AST parsing only, no tokens, a few seconds.\n\n_Without it every agent works blind: it can grep for a name but cannot tell what calls it._"
+            : "No code graph, and graphify is not installed.\n\n`uv tool install graphifyy` (or `pipx install graphifyy`), then `/graph build`.\n\n_MIT, pure tree-sitter AST parsing — no API key, no tokens._";
+        }
+        const age = st.builtAt ? `${Math.round((Date.now() - st.builtAt) / 60_000)} min ago` : "unknown";
+        const fresh = st.stale
+          ? `\n\n⚠️ **Stale** — changed since it was built: ${st.staleBecause.map((f) => `\`${f}\``).join(", ")}. Run \`/graph build\`.`
+          : "\n\n✓ Up to date with the working tree.";
+        return `**Project graph** — ${st.nodes} symbols, ${st.edges} relationships, built ${age}.${fresh}\n\n_Every agent can query it: \`graph_impact\` (blast radius), \`graph_find\`, \`graph_context\`, \`graph_overview\`._`;
+      };
+      const buildGraphText = async (): Promise<string> => (await buildProjectGraph(cwd)).message;
       await runTuiRepl({
         buildDeps,
         memStore,
         listSkills,
         updateSkills,
         addSkill,
+        graphStatus: graphStatusText,
+        buildGraph: buildGraphText,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
         formatResult: renderResult,
         model: config.model,

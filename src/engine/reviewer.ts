@@ -10,6 +10,7 @@ import { buildSkillTool } from "../skills/apply.js";
 import { rememberFactTool } from "../tools/remember.js";
 import { proposeMemoryTool } from "../tools/propose-memory.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
+import { contextTools } from './task-types.js';
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 
 /**
@@ -26,16 +27,22 @@ export const VerdictSchema = z.object({
   notes: z.array(z.string()),
 });
 
-/** Reviewer's read-only toolset: read/grep/glob + skill (NO write/edit/shell). Coach also gets remember_fact + MCP tools. */
+/**
+ * Reviewer's read-only toolset: read/grep/glob + skill (NO write/edit/shell), plus every read-only MCP tool.
+ *
+ * `opts.mcp` additionally grants the tools that can MUTATE — only the coach gets those.
+ */
 export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean; propose?: boolean; mcp?: boolean } = {}): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
   r.register(grepTool);
   r.register(globTool);
   r.register(buildSkillTool(deps.skillRegistry));
+  for (const t of contextTools(deps)) r.register(t);
   if (opts.remember) r.register(rememberFactTool);
   // Review agents get a voice, not a pen: propose_memory queues a signal for the curator, it never writes.
   if (opts.propose) r.register(proposeMemoryTool);
+  // The mutating ones, on top — registering a read-only tool twice is a no-op the registry absorbs.
   if (opts.mcp) for (const t of deps.mcpTools?.() ?? []) r.register(t);
   return r;
 }

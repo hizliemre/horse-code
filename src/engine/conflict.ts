@@ -6,6 +6,7 @@ import type { EscalationDeps } from "./escalation.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
 import { runReviewer } from "./reviewer.js";
+import { contextTools } from "./task-types.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { readFileTool } from "../tools/read.js";
 import { writeFileTool } from "../tools/write.js";
@@ -29,6 +30,7 @@ function resolverRegistry(deps: ConflictDeps): ToolRegistry {
   r.register(grepTool);
   r.register(globTool);
   r.register(buildSkillTool(deps.skillRegistry));
+  for (const t of contextTools(deps)) r.register(t);
   return r;
 }
 

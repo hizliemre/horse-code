@@ -9,13 +9,19 @@ export function mcpToolName(server: string, tool: string): string {
   return `mcp__${safe(server)}__${safe(tool)}`;
 }
 
-/** Wraps one MCP tool as a horse-code Tool (exec-level → goes through the approval gate). */
+/**
+ * Wraps one MCP tool as a horse-code Tool.
+ *
+ * A read-only tool is `safe`: it cannot change anything, so stopping the user to approve a graph lookup buys
+ * no safety and costs the autonomy the pipeline is for. Everything else stays `exec` and goes through the
+ * approval gate.
+ */
 export function mcpToolAdapter(conn: McpConnection, tool: McpTool): Tool {
   const name = mcpToolName(conn.name, tool.name);
   return {
     name,
     description: `[MCP:${conn.name}] ${tool.description ?? tool.name}`,
-    permissionLevel: "exec",
+    permissionLevel: tool.readOnly ? "safe" : "exec",
     parameters: z.record(z.string(), z.unknown()), // unused — rawSchema is what the model sees
     rawSchema: tool.inputSchema, // MCP provides a JSON Schema; send it verbatim
     describe: (args) => ({ allowKey: `mcp:${conn.name}:${tool.name}`, preview: `mcp ${conn.name}/${tool.name} ${JSON.stringify(args)}`.slice(0, 200) }),
@@ -39,7 +45,16 @@ export interface McpStatus {
 
 export interface McpBundle {
   connections: McpConnection[];
+  /** Every adapted tool. Only the agent trusted with exec-level tools should be given this whole set. */
   tools: Tool[];
+  /**
+   * The subset that only reads.
+   *
+   * These go to EVERY agent. An agent that cannot see the project it is changing is the problem this exists
+   * to solve: a coder about to edit a function needs to know what calls it, and a reviewer needs to know what
+   * a change can reach. Withholding a read-only lookup from them buys nothing.
+   */
+  readOnlyTools: Tool[];
   status: McpStatus[];
   closeAll(): Promise<void>;
 }
@@ -62,6 +77,7 @@ export async function connectAllMcp(specs: Record<string, McpServerSpec>): Promi
   return {
     connections,
     tools,
+    readOnlyTools: tools.filter((t) => t.permissionLevel === "safe"),
     status: results.map((r) => r.status),
     async closeAll() { await Promise.all(connections.map((c) => c.close())); },
   };

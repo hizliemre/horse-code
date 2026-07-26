@@ -1,5 +1,6 @@
-node_modules/
-dist/
+.DS_Store
 .horsecode/
 *.log
-.DS_Store
+dist/
+graphify-out
+node_modules/

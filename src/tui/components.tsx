@@ -687,7 +687,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -712,6 +712,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
+  graphStatus?: () => Promise<string>; // /graph
+  buildGraph?: () => Promise<string>; // /graph build
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -968,6 +970,16 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const list = info.sources.length ? info.sources.map((s) => `- ${s}`).join("\n") : "- (all)";
     controller.note(`**Model sources** (${how}):\n${list}\n\n_\`/sources refresh\` to re-probe your connected subscriptions._`);
   };
+  // /graph [build] → the project's code graph: what exists, whether it is fresh, and rebuilding it.
+  const doGraph = (arg: string): void => {
+    if (!graphStatus || !buildGraph) { controller.note("The project graph is not available."); return; }
+    if (arg.trim().toLowerCase() === "build") {
+      controller.note("Building the project code graph (AST parsing — no tokens spent)…");
+      buildGraph().then((r) => controller.note(r), (e) => controller.note(`Graph build failed: ${e instanceof Error ? e.message : String(e)}`));
+      return;
+    }
+    graphStatus().then((r) => controller.note(r), (e) => controller.note(`Graph status failed: ${e instanceof Error ? e.message : String(e)}`));
+  };
   // /skills [add <url> | update] → list what is loaded; add installs one from a repo; update re-installs them.
   const doSkills = (arg: string): void => {
     const add = /^add\s+(\S+)/i.exec(arg.trim());
@@ -1033,6 +1045,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/mcp") doMcp();
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");
+    else if (c.name === "/graph") doGraph("");
     else if (c.name === "/mode") doMode("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
@@ -1339,6 +1352,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /sources refresh (argument form).
               if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
               if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSkills(trimmed.slice("/skills".length).trim()); return; }
+              if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); doGraph(trimmed.slice("/graph".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
               if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.

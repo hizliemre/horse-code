@@ -1,3 +1,4 @@
+import { GRAPH_TOOLS } from "../tools/graph.js";
 import type { Provider, ToolActivity } from "../core/types.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { RoleRegistry } from "../agent/roles.js";
@@ -85,4 +86,28 @@ export interface Verdict {
   deferred?: string[];
   verdict: "pass" | "fail";
   notes: string[];
+}
+
+/**
+ * Every read-only tool that helps an agent understand the project it is working in.
+ *
+ * The code-graph lookups plus whatever read-only MCP servers are connected. Handed to EVERY agent, because an
+ * agent that cannot see the project it is changing is the failure this exists to fix: a coder about to edit a
+ * function needs to know what calls it, and a reviewer needs to know how far a change reaches.
+ */
+export function contextTools(deps: { mcpTools?: () => import("../core/types.js").Tool[] }): import("../core/types.js").Tool[] {
+  return [...GRAPH_TOOLS, ...mcpReadTools(deps)];
+}
+
+/**
+ * The MCP tools that only read — the ones every agent may hold.
+ *
+ * An agent that cannot see the project it is changing is the failure this addresses: a coder about to edit a
+ * function needs to know what calls it, and a reviewer needs to know how far a change reaches. Those lookups
+ * change nothing, so there is no reason to keep them from any agent, and every reason not to.
+ *
+ * Tools that can mutate stay out. They remain exec-level and reach only the agent explicitly given them.
+ */
+export function mcpReadTools(deps: { mcpTools?: () => import("../core/types.js").Tool[] }): import("../core/types.js").Tool[] {
+  return (deps.mcpTools?.() ?? []).filter((t) => t.permissionLevel === "safe");
 }

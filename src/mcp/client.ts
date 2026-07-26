@@ -9,6 +9,14 @@ export interface McpTool {
   name: string;
   description?: string;
   inputSchema: unknown; // JSON Schema (draft-7) as provided by the server
+  /**
+   * Whether calling this tool only reads.
+   *
+   * It decides who may hold the tool and whether using it interrupts the user for approval, so it is taken
+   * from the server's own `annotations.readOnlyHint` and never guessed from a name — a tool called
+   * `get_thing` is free to delete one. Absent hint means "assume it writes".
+   */
+  readOnly: boolean;
 }
 
 export interface McpConnection {
@@ -64,7 +72,16 @@ export async function connectMcpServer(name: string, spec: McpServerSpec): Promi
     : await connectRemote(spec.url, spec.headers);
 
   const listed = await client.listTools();
-  const tools: McpTool[] = listed.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
+  // A server-wide `readOnly` in the config is an explicit statement by the user that this server cannot
+  // mutate anything. It exists because most servers ship no annotations at all, and without some way to say
+  // so, every one of their tools would stay locked to the one agent allowed to run exec-level tools.
+  const declaredReadOnly = spec.readOnly === true;
+  const tools: McpTool[] = listed.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    inputSchema: t.inputSchema,
+    readOnly: declaredReadOnly || (t.annotations as { readOnlyHint?: boolean } | undefined)?.readOnlyHint === true,
+  }));
   return {
     name,
     tools,

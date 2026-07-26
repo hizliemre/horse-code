@@ -22,7 +22,7 @@ describe("mcpToolName", () => {
 describe("mcpToolAdapter", () => {
   it("wraps an MCP tool: exec-level, rawSchema = the server's inputSchema, run → callTool", async () => {
     const schema = { type: "object", properties: { path: { type: "string" } } };
-    const tool = mcpToolAdapter(fakeConn(), { name: "read_file", description: "reads a file", inputSchema: schema });
+    const tool = mcpToolAdapter(fakeConn(), { name: "read_file", description: "reads a file", inputSchema: schema, readOnly: false });
     expect(tool.name).toBe("mcp__fs__read_file");
     expect(tool.permissionLevel).toBe("exec");
     expect(tool.rawSchema).toBe(schema);
@@ -36,7 +36,7 @@ describe("mcpToolAdapter", () => {
 
   it("surfaces a call error as an error result (never throws)", async () => {
     const conn = fakeConn({ callTool: async () => { throw new Error("server crashed"); } });
-    const tool = mcpToolAdapter(conn, { name: "boom", inputSchema: {} });
+    const tool = mcpToolAdapter(conn, { name: "boom", inputSchema: {}, readOnly: false });
     const res = await tool.run({}, ctx());
     expect(res.isError).toBe(true);
     expect(res.content).toContain("server crashed");

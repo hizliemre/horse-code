@@ -18,9 +18,14 @@ export interface ReviewerConfig {
 export type CouncilorConfig = ReviewerConfig;
 
 /** An MCP server to connect at startup: local (stdio subprocess) or remote (http/sse URL). */
+/**
+ * `readOnly` marks a server whose tools only read. Such tools are handed to EVERY agent and skip the approval
+ * gate; without it a server's tools reach only the one agent allowed to run exec-level tools. Say it only for
+ * a server you know cannot mutate anything.
+ */
 export type McpServerSpec =
-  | { command: string[]; env?: Record<string, string> } // stdio: spawn a local server
-  | { url: string; headers?: Record<string, string> }; // remote: streamable-http / SSE
+  | { command: string[]; env?: Record<string, string>; readOnly?: boolean } // stdio: spawn a local server
+  | { url: string; headers?: Record<string, string>; readOnly?: boolean }; // remote: streamable-http / SSE
 
 export interface ResolvedConfig {
   apiKey?: string;
@@ -101,8 +106,8 @@ const fileSchema = z
       .record(
         z.string(),
         z.union([
-          z.object({ command: z.array(z.string()).min(1), env: z.record(z.string(), z.string()).optional() }),
-          z.object({ url: z.string(), headers: z.record(z.string(), z.string()).optional() }),
+          z.object({ command: z.array(z.string()).min(1), env: z.record(z.string(), z.string()).optional(), readOnly: z.boolean().optional() }),
+          z.object({ url: z.string(), headers: z.record(z.string(), z.string()).optional(), readOnly: z.boolean().optional() }),
         ]),
       )
       .optional(),
