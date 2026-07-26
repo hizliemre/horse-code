@@ -179,6 +179,40 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       memStore: opts.memStore,
       ask: (q, o) => controller.ask(q, o),
       note: (t) => controller.note(t),
+      existingSkills: () => (opts.listSkills?.() ?? []).map((s) => s.name),
+      /**
+       * Newly migrated skills go to the roles that should carry them, using the same tuner `/roles adjust`
+       * uses — including its project preconditions, so a design skill is not attached in a project with no
+       * interface. Restricted to the new names: a migration must not silently re-decide assignments the
+       * user already made.
+       */
+      assignSkills: async (names) => {
+        const all = opts.listSkills?.() ?? [];
+        const fresh = all.filter((s) => names.includes(s.name));
+        if (!fresh.length) return "";
+        const project = await scanRepo(process.cwd());
+        const tuner = deps0.roleRegistry.peekModel("architect") || opts.model || "";
+        const { assignments, withheld } = await tuneRoleSkills({
+          provider: deps.provider, tuner, project, roles: tunableRoles(), roleProfiles: ROLE_PROFILES,
+          skills: fresh.map((s) => ({ name: s.name, description: s.description })),
+        });
+        // Merge, never replace: the tuner is asked only about the new skills, so a role's existing list has
+        // to be carried through or migrating one skill would unassign everything else.
+        const merged: Record<string, string[]> = {};
+        for (const [role, list] of Object.entries(assignments)) {
+          if (!list.length) continue;
+          const current = deps0.roleRegistry.skillsFor(role);
+          merged[role] = [...new Set([...current, ...list])];
+        }
+        if (Object.keys(merged).length) await saveRoleSkills(homedir(), merged);
+        const rows = Object.entries(merged).map(([r, l]) => `- \`${r}\` → ${l.map((x) => `**${x}**`).join(", ")}`);
+        const held = withheld.length
+          ? `\n\nWithheld: ${withheld.map((w) => `${w.skill} (${w.because})`).join("; ")}`
+          : "";
+        return rows.length
+          ? `**Skills assigned:**\n${rows.join("\n")}${held}\n\n_Restart to pick them up in already-built prompts._`
+          : `No role needs one permanently${held}`;
+      },
     });
     return describeResult(r);
   };

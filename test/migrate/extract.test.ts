@@ -233,7 +233,7 @@ describe("consolidateRules", () => {
     } as unknown as Provider;
     await consolidateRules({ provider: spy, model: "m", candidates: cands(40) });
     expect(seen).toMatch(/MERGE candidates that say the same thing/);
-    expect(seen).toMatch(/Demoting is not discarding/);
+    expect(seen).toMatch(/kept as facts rather than discarded/);
     expect(seen).toMatch(/Do NOT invent a rule/);
   });
 });
@@ -255,5 +255,67 @@ describe("the rule bar", () => {
     expect(seen).toMatch(/would this still need saying on a task that has nothing to do with/);
     expect(seen).toMatch(/Process detail does NOT/);
     expect(seen).toMatch(/a long list of them is itself a defect/);
+  });
+});
+
+/**
+ * Orchestration is not neutral knowledge — it competes with the pipeline the work now runs in.
+ *
+ * These were originally demoted to facts, on the reasoning that process detail is still knowledge. That was
+ * wrong for THIS kind of process: an agent recalling "phase 3 is implementation, phase 4 is review" while
+ * running inside a different sequence has been handed two answers to the same question.
+ */
+describe("orchestration is eliminated, not remembered", () => {
+  it("tells the classifier that workflow is superseded rather than irrelevant", async () => {
+    let seen = "";
+    const spy = {
+      chat: async function* (req: { messages: { content: string }[] }) {
+        seen = req.messages.map((m) => m.content).join("\n");
+        yield { type: "text-delta" as const, text: '```json\n{"items":[]}\n```' };
+      },
+    } as unknown as Provider;
+    await classify({ provider: spy, model: "m", body: "b", source: "s" });
+    expect(seen).toMatch(/ORCHESTRATION/);
+    expect(seen).toMatch(/Phase 0 … Phase 7/);
+    expect(seen).toMatch(/SUPERSEDED — not merely irrelevant/);
+    expect(seen).toMatch(/a remembered description of a competing workflow is still a competing workflow/);
+    // What a phase produces can still stand alone; the phase itself cannot.
+    expect(seen).toMatch(/every requirement must be testable.*survives without the phase/);
+  });
+
+  it("consolidation drops workflow items instead of keeping them as facts", async () => {
+    const cands = Array.from({ length: 40 }, (_, i) => ({
+      text: `item ${i}`, disposition: "rule" as const, reason: "r", source: "CLAUDE.md",
+    }));
+    const provider = canned('```json\n{"rules":["kept"],"demoted":["item 1"],"dropped":["item 2","item 3"]}\n```');
+    const got = await consolidateRules({ provider, model: "m", candidates: cands, max: 25 });
+    expect(got.demoted.map((d) => d.text)).toEqual(["item 1"]);
+    expect(got.dropped.map((d) => d.text)).toEqual(["item 2", "item 3"]);
+    expect(got.dropped.every((d) => d.disposition === "skip")).toBe(true);
+  });
+
+  /** If the model lists an item as both, dropping wins — keeping a rival workflow is the worse error. */
+  it("drops an item that was named as both demoted and dropped", async () => {
+    const cands = Array.from({ length: 40 }, (_, i) => ({
+      text: `item ${i}`, disposition: "rule" as const, reason: "r", source: "s",
+    }));
+    const provider = canned('```json\n{"rules":["kept"],"demoted":["item 5"],"dropped":["item 5"]}\n```');
+    const got = await consolidateRules({ provider, model: "m", candidates: cands, max: 25 });
+    expect(got.demoted).toEqual([]);
+    expect(got.dropped.map((d) => d.text)).toEqual(["item 5"]);
+  });
+
+  it("tells the consolidator to drop sequencing rather than demote it", async () => {
+    let seen = "";
+    const spy = {
+      chat: async function* (req: { messages: { content: string }[] }) {
+        seen = req.messages.map((m) => m.content).join("\n");
+        yield { type: "text-delta" as const, text: '```json\n{"rules":["a"],"demoted":[],"dropped":[]}\n```' };
+      },
+    } as unknown as Provider;
+    await consolidateRules({ provider: spy, model: "m", candidates: Array.from({ length: 40 }, (_, i) => ({
+      text: `i${i}`, disposition: "rule" as const, reason: "r", source: "s" })) });
+    expect(seen).toMatch(/DROP anything describing HOW WORK IS SEQUENCED/);
+    expect(seen).toMatch(/leaves agents holding two workflows/);
   });
 });

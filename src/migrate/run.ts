@@ -29,6 +29,10 @@ export interface MigrateDeps {
   memStore: MemoryStore;
   ask: Ask;
   note: Note;
+  /** Skill names horse-code already has, so a migration never shadows one of ours with a stale copy. */
+  existingSkills?: () => string[];
+  /** Assigns newly installed skills to the roles that should carry them; returns what it did. */
+  assignSkills?: (names: string[]) => Promise<string>;
   signal?: AbortSignal;
 }
 
@@ -107,9 +111,11 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
       });
       if (c.rules.length < rules.length) {
         deps.note(`Consolidated **${rules.length} → ${c.rules.length}** rules` +
-          `${c.demoted.length ? `, and moved ${c.demoted.length} piece(s) of process detail to facts` : ""}.`);
+          `${c.demoted.length ? `, kept ${c.demoted.length} as fact(s)` : ""}` +
+          `${c.dropped.length ? `, dropped ${c.dropped.length} describing a workflow horse-code replaces` : ""}.`);
         rules = c.rules;
         facts.push(...c.demoted);
+        result.skipped += c.dropped.length;
       } else {
         deps.note(`⚠️ Consolidation did not run — you are being asked about all ${rules.length} candidates.`);
       }
@@ -162,7 +168,17 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
   }
 
   // --- skills -----------------------------------------------------------------------------------------
-  const skills = findings.filter((f) => f.kind === "skill");
+  /**
+   * Skills we do not already have.
+   *
+   * A project's own skill for its stack is worth taking; a second copy of one we ship would shadow ours by
+   * name and quietly replace a maintained document with a stale one.
+   */
+  const existing = new Set(deps.existingSkills?.() ?? []);
+  const allSkills = findings.filter((f) => f.kind === "skill");
+  const skills = allSkills.filter((f) => !existing.has(f.label.split("/").pop()!));
+  const alreadyHave = allSkills.length - skills.length;
+  if (alreadyHave) deps.note(`${alreadyHave} skill(s) are ones horse-code already ships — left alone.`);
   if (skills.length) {
     const answer = await deps.ask(
       `**${skills.length} skill(s)** were found. The format is the same as ours, so they transfer as they are:\n` +
@@ -174,14 +190,33 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
       ] },
     );
     if (YES.test(answer.trim())) {
+      const copied: string[] = [];
       for (const s of skills) {
         const name = s.label.split("/").pop()!;
         const dest = join(deps.cwd, ".horsecode", "skills", name, "SKILL.md");
         try {
           await mkdir(dirname(dest), { recursive: true });
           await copyFile(s.path, dest);
+          copied.push(name);
           result.skills++;
         } catch { /* one unreadable skill must not stop the rest */ }
+      }
+      /**
+       * Copying is not enough.
+       *
+       * A skill sitting on disk is only DISCOVERABLE — an agent has to notice it and fetch it, which is a
+       * coin toss. The point of migrating a project's own skills is that the agents doing that project's
+       * work carry them, so the assignment runs here rather than being left as homework.
+       */
+      if (copied.length && deps.assignSkills) {
+        deps.note(`Working out which roles should carry ${copied.length} newly installed skill(s)…`);
+        try {
+          const assigned = await deps.assignSkills(copied);
+          deps.note(assigned || "No role needed one of them permanently — every agent can still fetch them on demand.");
+        } catch (e) {
+          deps.note(`Skill assignment did not run (${e instanceof Error ? e.message : String(e)}) — ` +
+            `run \`/roles adjust\` to do it.`);
+        }
       }
     } else result.declined.push("skills");
   }

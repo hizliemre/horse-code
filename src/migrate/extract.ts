@@ -60,9 +60,20 @@ const CLASSIFY = (body: string): string =>
   `**fact** — durable knowledge about this project or user, INCLUDING its processes and conventions: stack, ` +
   `architecture decisions, workflow phases, service names, preferences. Recalled when relevant. This is the ` +
   `right home for most of what looks instructional.\n` +
-  `**skip** — anything that only means something in the original tool: named tools, slash commands, ` +
-  `subagent types, file paths of that tool's own config, its plugin or hook system. Also skip anything ` +
-  `stale, empty, or purely descriptive of the document itself.\n\n` +
+  `**skip** — two kinds of thing.\n` +
+  `  (a) Anything that only means something in the original tool: named tools, slash commands, subagent ` +
+  `types, file paths of that tool's own config, its plugin or hook system. Also anything stale, empty, or ` +
+  `purely descriptive of the document itself.\n` +
+  `  (b) ORCHESTRATION — how work is sequenced and gated. The receiving assistant runs its own fixed ` +
+  `pipeline (brainstorm → specification → clarification → plan → task breakdown → parallel implementation ` +
+  `waves → multi-lens review → council → judge → acceptance gate), and it cannot be reconfigured by an ` +
+  `imported instruction. So numbered phases ("Phase 0 … Phase 7"), what happens in which phase, phase ` +
+  `entry/exit gates, when to branch or open a worktree, when review runs, who approves what, and the order ` +
+  `of any of it are SUPERSEDED — not merely irrelevant. Importing them would leave agents following two ` +
+  `different workflows at once. Skip them even when they are stated as mandatory, and even as a fact: a ` +
+  `remembered description of a competing workflow is still a competing workflow.\n` +
+  `  What a phase PRODUCES can still be a rule if it stands alone: "every requirement must be testable" ` +
+  `survives without the phase it was written in; "in Phase 1 the analyst writes the spec" does not.\n\n` +
   `Rules for your output:\n` +
   `- REWRITE each kept item so it stands alone, in English, without referring to the original tool. If it ` +
   `cannot survive that rewrite, it is a skip.\n` +
@@ -241,8 +252,17 @@ export const MAX_RULES = 25;
 /** Consolidated output: the rules that survived, and what was demoted rather than dropped. */
 export interface Consolidation {
   rules: Candidate[];
-  /** Candidates that were process detail after all — kept, as facts. */
+  /** Candidates that were project detail after all — kept, as facts. */
   demoted: Candidate[];
+  /**
+   * Candidates describing a competing WORKFLOW — discarded outright.
+   *
+   * Not demoted to facts, which is where they went before this was noticed: the receiving pipeline is fixed
+   * and cannot adopt another one, so a remembered description of a rival workflow is still a rival workflow.
+   * An agent recalling "phase 3 is implementation, phase 4 is review" while running inside a different
+   * sequence has been given two answers to the same question.
+   */
+  dropped: Candidate[];
 }
 
 const CONSOLIDATE = (items: string[], max: number): string =>
@@ -255,12 +275,16 @@ const CONSOLIDATE = (items: string[], max: number): string =>
   `distinction that matters is worse than a slightly longer rule.\n` +
   `- KEEP what would still need saying on a task unrelated to where it came from: language requirements, ` +
   `commit and branch conventions, security mandates, review standards, things never to do.\n` +
-  `- DEMOTE the rest. Procedure ("in phase 3…", "the document contains these sections", step ordering) is ` +
-  `real knowledge but belongs where it is recalled when relevant, not in every prompt. Demoting is not ` +
-  `discarding — say which ones, and they are kept as facts.\n` +
+  `- DEMOTE domain and project detail that is real knowledge but does not belong in every prompt — say ` +
+  `which ones, and they are kept as facts rather than discarded.\n` +
+  `- DROP anything describing HOW WORK IS SEQUENCED: numbered phases, phase gates, what runs before what, ` +
+  `when review or branching happens. The receiving assistant has its own fixed pipeline and cannot adopt ` +
+  `another one, so keeping such an item — even as a fact — leaves agents holding two workflows. List these ` +
+  `under "dropped".\n` +
   `- Do NOT invent a rule that is not in the list, and do not weaken one into a vague slogan.\n\n` +
   `Answer with a fenced json block:\n` +
-  `{"rules":["<the consolidated rule>", …],"demoted":["<the exact original text>", …]}\n\n` +
+  `{"rules":["<the consolidated rule>", …],"demoted":["<the exact original text>", …],` +
+  `"dropped":["<the exact original text>", …]}\n\n` +
   `Candidates:\n${items.map((t, i) => `${i + 1}. ${t}`).join("\n")}`;
 
 /**
@@ -281,17 +305,22 @@ export async function consolidateRules(opts: {
   signal?: AbortSignal;
 }): Promise<Consolidation> {
   const max = opts.max ?? MAX_RULES;
-  if (opts.candidates.length <= max) return { rules: opts.candidates, demoted: [] };
+  if (opts.candidates.length <= max) return { rules: opts.candidates, demoted: [], dropped: [] };
 
   const texts = opts.candidates.map((c) => c.text);
   try {
     const out = await ask(opts.provider, opts.model, CONSOLIDATE(texts, max), opts.signal);
     const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(out);
-    const parsed = JSON.parse(fence ? fence[1] : out.slice(out.indexOf("{"))) as { rules?: unknown; demoted?: unknown };
+    const parsed = JSON.parse(fence ? fence[1] : out.slice(out.indexOf("{"))) as
+      { rules?: unknown; demoted?: unknown; dropped?: unknown };
     const rules = Array.isArray(parsed.rules) ? parsed.rules.filter((r): r is string => typeof r === "string") : [];
     if (!rules.length) throw new Error("no rules came back");
-    const demotedText = new Set(Array.isArray(parsed.demoted)
-      ? parsed.demoted.filter((d): d is string => typeof d === "string") : []);
+    const named = (key: "demoted" | "dropped"): Set<string> => new Set(
+      Array.isArray((parsed as Record<string, unknown>)[key])
+        ? ((parsed as Record<string, unknown>)[key] as unknown[]).filter((d): d is string => typeof d === "string")
+        : []);
+    const demotedText = named("demoted");
+    const droppedText = named("dropped");
     return {
       // The consolidated text is new, so the source is the whole set rather than any one file.
       rules: rules.slice(0, max).map((text) => ({
@@ -299,10 +328,12 @@ export async function consolidateRules(opts: {
       })),
       // Anything the model named as demoted is kept as a fact; anything it simply did not mention was
       // merged into a surviving rule and is already represented.
-      demoted: opts.candidates.filter((c) => demotedText.has(c.text))
-        .map((c) => ({ ...c, disposition: "fact" as const, reason: "process detail, kept as knowledge" })),
+      demoted: opts.candidates.filter((c) => demotedText.has(c.text) && !droppedText.has(c.text))
+        .map((c) => ({ ...c, disposition: "fact" as const, reason: "project detail, kept as knowledge" })),
+      dropped: opts.candidates.filter((c) => droppedText.has(c.text))
+        .map((c) => ({ ...c, disposition: "skip" as const, reason: "describes a workflow this pipeline replaces" })),
     };
   } catch {
-    return { rules: opts.candidates, demoted: [] };
+    return { rules: opts.candidates, demoted: [], dropped: [] };
   }
 }
