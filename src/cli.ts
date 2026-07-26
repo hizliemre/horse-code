@@ -10,6 +10,7 @@ import { registerBuiltinSkills } from "./skills/builtin.js";
 import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl } from "./skills/external.js";
 import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
+import { planFor, runTraces, describePlan } from "./engine/trace-run.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
@@ -237,6 +238,36 @@ export async function main(argv: string[]): Promise<void> {
         return `**Project graph** — ${st.nodes} symbols, ${st.edges} relationships, built ${age}.${fresh}\n\n_Every agent can query it: \`graph_impact\` (blast radius), \`graph_find\`, \`graph_context\`, \`graph_overview\`._`;
       };
       const buildGraphText = async (): Promise<string> => (await buildProjectGraph(cwd)).message;
+      // Which files are worth a trace: tracked or newly added source, never generated or vendored output.
+      const traceableFiles = async (): Promise<string[]> => {
+        const r = await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd);
+        return r.stdout.split("\n").filter(Boolean)
+          .filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala)$/.test(f))
+          .filter((f) => !/(^|\/)(dist|build|node_modules|vendor|\.horsecode|graphify-out)\//.test(f));
+      };
+      // The tracer is a high-volume role — one short note per file. It takes the model assigned to `refiner`,
+      // which the tuner keeps on a cheap tier for exactly this kind of work, rather than the session default
+      // which may well be a flagship.
+      const tracerModel = (): string => config.roles.refiner?.models[0] ?? config.model;
+      const planTracesFn = async (): Promise<{ summary: string; jobs: number }> => {
+        const plan = await planFor(cwd, await traceableFiles());
+        return { summary: describePlan(plan, tracerModel()), jobs: plan.jobs.length };
+      };
+      const runTracesFn = async (): Promise<string> => {
+        const files = await traceableFiles();
+        const plan = await planFor(cwd, files);
+        const res = await runTraces({
+          cwd, provider, model: tracerModel(), plan, liveFiles: new Set(files),
+        });
+        const bits = [`**Traces written: ${res.written}**`];
+        if (res.upToDate) bits.push(`${res.upToDate} already current`);
+        if (res.pruned.length) bits.push(`${res.pruned.length} removed for deleted files`);
+        if (res.wroteGitignore) bits.push("\n\n_Added .gitignore rules: traces are committed, the AST cache is not._");
+        if (res.failed.length) {
+          bits.push(`\n\n⚠️ ${res.failed.length} failed:\n${res.failed.slice(0, 5).map((f) => `- \`${f.file}\` — ${f.error}`).join("\n")}`);
+        }
+        return `${bits.join(" · ")}\n\n_Committed with the repo, so every clone starts with them. Agents read one with \`graph_trace\`._`;
+      };
       await runTuiRepl({
         buildDeps,
         memStore,
@@ -245,6 +276,8 @@ export async function main(argv: string[]): Promise<void> {
         addSkill,
         graphStatus: graphStatusText,
         buildGraph: buildGraphText,
+        planTraces: planTracesFn,
+        runTraces: runTracesFn,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
         formatResult: renderResult,
         model: config.model,

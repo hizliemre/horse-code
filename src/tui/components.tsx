@@ -687,7 +687,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -714,6 +714,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
+  planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
+  runTraces?: () => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -976,6 +978,29 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (arg.trim().toLowerCase() === "build") {
       controller.note("Building the project code graph (AST parsing — no tokens spent)…");
       buildGraph().then((r) => controller.note(r), (e) => controller.note(`Graph build failed: ${e instanceof Error ? e.message : String(e)}`));
+      return;
+    }
+    // Tracing is the one part of project understanding that spends tokens, so it is never started without
+    // showing what it will cost and getting an answer. The estimate is computed first — planning is free.
+    if (arg.trim().toLowerCase() === "trace") {
+      if (!planTraces || !runTraces) { controller.note("Tracing is not available."); return; }
+      void (async () => {
+        try {
+          const { summary, jobs } = await planTraces();
+          if (!jobs) { controller.note(summary); return; }
+          const answer = await controller.ask(`${summary}\n\nWrite the traces?`, {
+            options: [
+              { label: "Yes — write the traces", description: "Spends the tokens estimated above" },
+              { label: "No", description: "Nothing is sent; the graph is unaffected" },
+            ],
+          });
+          if (!/^yes/i.test(answer.trim())) { controller.note("Tracing cancelled — nothing was sent."); return; }
+          controller.note(`Tracing ${jobs} file(s)…`);
+          controller.note(await runTraces());
+        } catch (e) {
+          controller.note(`Tracing failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      })();
       return;
     }
     graphStatus().then((r) => controller.note(r), (e) => controller.note(`Graph status failed: ${e instanceof Error ? e.message : String(e)}`));

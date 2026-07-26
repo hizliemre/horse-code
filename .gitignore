@@ -1,6 +1,18 @@
 .DS_Store
-.horsecode/
+.horsecode/*
 *.log
 dist/
-graphify-out
 node_modules/
+
+# Project knowledge is SHARED — it describes the code, so it belongs to the repo and every clone starts
+# understanding the project instead of paying to rebuild it. Only machine-local or derived output is ignored.
+# (gitignore has no trailing comments — every pattern gets its own line.)
+
+# Per-file intent written by `/graph trace`. Costs tokens to produce, so it is shared, not re-bought per clone.
+!.horsecode/traces/
+
+# AST cache, keyed by local mtime — meaningless on another machine and a guaranteed merge conflict.
+graphify-out/manifest.json
+# ~850 KB viewer, regenerated from graph.json on every build.
+graphify-out/graph.html
+graphify-out/.graphify_root

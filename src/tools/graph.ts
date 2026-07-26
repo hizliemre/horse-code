@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import { loadGraphSync } from "../engine/project-graph.js";
+import { readTraceSync } from "../engine/trace.js";
 import type { ProjectGraph, GraphNode, GraphEdge } from "../engine/project-graph.js";
 
 /**
@@ -212,5 +213,31 @@ export const graphOverviewTool = graphTool(
   },
 );
 
+/**
+ * What a file is FOR, in the product's terms — written by the trace stage, which the graph cannot produce.
+ *
+ * Separate from `read_file` on purpose: this is ~150 words of intent, where reading the file is thousands of
+ * tokens of implementation. An agent orienting itself should reach for this first.
+ */
+export const graphTraceTool: Tool = {
+  name: "graph_trace",
+  description:
+    "What a source file is responsible for and what to be careful of when changing it, in the product's " +
+    "terms. Far cheaper than reading the file. Use it to orient before opening unfamiliar code.",
+  permissionLevel: "safe",
+  parameters: z.object({ file: z.string().describe("Repo-relative path, e.g. \"src/config/config.ts\"") }),
+  describe: (args) => ({ allowKey: "graph:trace", preview: `graph_trace ${JSON.stringify(args)}`.slice(0, 120) }),
+  async run(args, ctx) {
+    const file = String((args as { file?: unknown }).file ?? "");
+    const body = readTraceSync(ctx.cwd, file);
+    if (body) return { content: body, isError: false };
+    return {
+      content: `No trace for "${file}". Either it has none yet (traces are written by \`/graph trace\`, a user ` +
+        `action) or the path differs — check it with graph_find. Read the file directly instead.`,
+      isError: true,
+    };
+  },
+};
+
 /** Every graph tool, in the order an agent would naturally reach for them. */
-export const GRAPH_TOOLS: Tool[] = [graphOverviewTool, graphFindTool, graphContextTool, graphImpactTool];
+export const GRAPH_TOOLS: Tool[] = [graphOverviewTool, graphTraceTool, graphFindTool, graphContextTool, graphImpactTool];
