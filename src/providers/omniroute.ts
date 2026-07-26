@@ -145,7 +145,10 @@ export class OmniRouteProvider implements Provider {
 
     if (!res.ok) {
       const message = await readErrorMessage(res);
-      yield { type: "error", message, retryable: isRetryableStatus(res.status) || isCapabilityError(message) };
+      const capability = isCapabilityError(message);
+      // Only present when it IS one: the flag means something in the affirmative, and emitting it on every
+      // error would put a field in the shape that says nothing.
+      yield { type: "error", message, retryable: isRetryableStatus(res.status) || capability, ...(capability && { capability: true }) };
       return;
     }
     const stream = res.body;

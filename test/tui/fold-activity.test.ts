@@ -7,7 +7,7 @@ const act = (tool: string, target: string, ok = true): ToolActivity =>
   ({ tool, target, lines: 0, summary: ok ? "done" : "no such file", ok });
 
 const rows = (c: TuiController): ToolActivity[] =>
-  c.state.transcript.filter((x): x is { kind: "tool"; activity: ToolActivity } => "kind" in x)
+  c.getState().transcript.filter((x): x is { kind: "tool"; activity: ToolActivity } => "kind" in x)
     .map((x) => x.activity);
 
 const render = (a: ToolActivity): string =>

@@ -105,7 +105,13 @@ export type ChatEvent =
   | { type: "tool-progress"; name: string; chars: number; path?: string }
   | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens?: number }
   | { type: "done"; finishReason: "stop" | "tool_calls" | "length" }
-  | { type: "error"; message: string; retryable?: boolean }; // retryable = transient (429/5xx/network) → a fallback model may succeed
+  /**
+   * `retryable` = a fallback model may succeed with the same request.
+   * `capability` = the model REFUSED THIS REQUEST for what it is (too much context, an unsupported feature),
+   *   not because it is unwell. Both fall back, but only the first means the model is spent: benching a model
+   *   over a request that was merely too large makes it unavailable for every smaller request afterwards.
+   */
+  | { type: "error"; message: string; retryable?: boolean; capability?: boolean };
 
 export interface Provider {
   chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent>;
