@@ -12,7 +12,10 @@ export function applySkills(basePrompt: string, mandatory: string[], registry: S
     const sections = mandatory.map((name) => {
       const skill = registry.get(name);
       if (!skill) throw new Error(`applySkills: undefined skill: ${name}`);
-      return `## ${skill.name}\n${skill.content}`;
+      // A script-driven skill needs its own path to be usable at all: its instructions say things like
+      // "run node <skill-base-dir>/scripts/context.mjs", which is meaningless unless we say where it is.
+      const where = skill.dir ? `\n_Skill base directory: ${skill.dir}_\n` : "";
+      return `## ${skill.name}${where}\n${skill.content}`;
     });
     parts.push(`# Mandatory Skills\n${sections.join("\n\n")}`);
   }
@@ -61,7 +64,10 @@ export function buildSkillTool(registry: SkillRegistry): Tool {
       const { name, file } = parsed.data;
       const skill = registry.get(name);
       if (!skill) return { content: `skill not found: ${name}`, isError: true };
-      if (file === undefined) return { content: skill.content, isError: false };
+      if (file === undefined) {
+        const where = skill.dir ? `_Skill base directory: ${skill.dir}_\n\n` : "";
+        return { content: `${where}${skill.content}`, isError: false };
+      }
       if (!skill.dir) return { content: `skill ${name}: has no supporting documents`, isError: true };
 
       // Containment: a supporting document must live INSIDE the skill's directory. Without this check the

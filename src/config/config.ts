@@ -36,6 +36,11 @@ export interface ResolvedConfig {
   council?: { members: ReviewerConfig[] };
   specKit: { version: string };
   mcp: Record<string, McpServerSpec>;
+  /**
+   * Skills installed from a git repository instead of shipped here. Kept as a reference, not a copy: upstream
+   * stays the single source of truth and `/skills update` is a real operation.
+   */
+  skillSources: { name: string; repo: string; path?: string; ref?: string }[];
   /** Allowlist of model sources (omniroute `owned_by`) to show; empty = all (non-free). Only your connected
    *  subscriptions, e.g. ["antigravity","claude","codex","opencode-go"] — excludes combos + unofficial sources. */
   modelSources: string[];
@@ -52,6 +57,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   specKit: { version: "v0.13.2" },
   mcp: {},
   modelSources: [],
+  skillSources: [],
 };
 
 const reviewerSchema = z.object({ name: z.string(), perspective: z.string(), models: z.array(z.string()) });
@@ -85,6 +91,12 @@ const fileSchema = z
     council: z.object({ members: z.array(reviewerSchema) }).optional(),
     specKit: z.object({ version: z.string() }).optional(),
     modelSources: z.array(z.string()).optional(),
+    skillSources: z.array(z.object({
+      name: z.string(),
+      repo: z.string(),
+      path: z.string().optional(),
+      ref: z.string().optional(),
+    })).optional(),
     mcp: z
       .record(
         z.string(),
@@ -140,6 +152,12 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // modelSources: "most specific wins" (project's if present).
   merged.modelSources = projectSafe.modelSources ?? global.modelSources ?? [];
+
+  // skillSources MERGE by name: a machine-wide skill set stays available in every project, and a project may
+  // add its own or pin a different ref for one of them.
+  const byName = new Map((global.skillSources ?? []).map((s) => [s.name, s]));
+  for (const s of projectSafe.skillSources ?? []) byName.set(s.name, s);
+  merged.skillSources = [...byName.values()];
 
   // specKit: "most specific wins" instead of merging (use project's if present).
   merged.specKit = projectSafe.specKit ?? global.specKit ?? DEFAULT_CONFIG.specKit;

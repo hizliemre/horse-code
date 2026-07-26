@@ -687,7 +687,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -709,6 +709,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   listMcp?: () => { name: string; ok: boolean; toolCount: number; error?: string }[]; // /mcp
   sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // /sources
   refreshSources?: () => Promise<string[]>; // /sources refresh → re-probe connected sources
+  listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
+  updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -965,6 +967,22 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const list = info.sources.length ? info.sources.map((s) => `- ${s}`).join("\n") : "- (all)";
     controller.note(`**Model sources** (${how}):\n${list}\n\n_\`/sources refresh\` to re-probe your connected subscriptions._`);
   };
+  // /skills [update] → list what is loaded; update re-installs the externally-sourced ones from upstream.
+  const doSkills = (arg: string): void => {
+    if (arg.trim().toLowerCase() === "update") {
+      if (!updateSkills) { controller.note("Skill installation is not available."); return; }
+      controller.note("Updating externally-sourced skills from upstream…");
+      updateSkills().then(
+        (r) => controller.note(r),
+        (e) => controller.note(`Skill update failed: ${e instanceof Error ? e.message : String(e)}`),
+      );
+      return;
+    }
+    const all = listSkills?.() ?? [];
+    if (!all.length) { controller.note("No skills loaded."); return; }
+    const rows = all.map((s) => `- **${s.name}**${s.roles.length ? ` → \`${s.roles.join("`, `")}\`` : " _(discoverable)_"}\n  ${s.description}`);
+    controller.note(`**Skills** (${all.length}):\n${rows.join("\n")}\n\n_\`/skills update\` re-installs the ones sourced from a repo._`);
+  };
   // /mode [ask|acceptEdits|auto] → show or set the permission mode.
   const MODE_DESC: Record<string, string> = {
     ask: "prompt for every file write and command",
@@ -999,6 +1017,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/forget") doForget("");
     else if (c.name === "/mcp") doMcp();
     else if (c.name === "/sources") doSources("");
+    else if (c.name === "/skills") doSkills("");
     else if (c.name === "/mode") doMode("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
@@ -1304,6 +1323,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); doForget(trimmed.slice("/forget".length).trim()); return; }
               // /sources refresh (argument form).
               if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
+              if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSkills(trimmed.slice("/skills".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
               if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.

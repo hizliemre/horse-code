@@ -29,6 +29,7 @@ function baseConfig(over: Partial<ResolvedConfig> = {}): ResolvedConfig {
     specKit: DEFAULT_CONFIG.specKit,
     mcp: {},
     modelSources: [],
+    skillSources: [],
     ...over,
   };
 }

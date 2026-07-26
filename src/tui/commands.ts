@@ -20,6 +20,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/forget", desc: "Forget a remembered fact (/forget N)" },
   { name: "/mcp", desc: "Show connected MCP servers and their tools" },
   { name: "/sources", desc: "Show your connected model sources (/sources refresh re-detects)" },
+  { name: "/skills", desc: "Show loaded skills (/skills update re-installs the ones sourced from a repo)" },
   { name: "/mode", desc: "Permission mode (/mode ask|acceptEdits|auto)" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },

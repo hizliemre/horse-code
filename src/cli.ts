@@ -7,6 +7,7 @@ import { OmniRouteProvider } from "./providers/omniroute.js";
 import { listOmniRouteModels } from "./providers/models.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { registerBuiltinSkills } from "./skills/builtin.js";
+import { externalSkillsDir, syncSkillSources } from "./skills/external.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
@@ -20,6 +21,7 @@ import { memoryNote } from "./engine/memory-inject.js";
 import { runJob } from "./engine/job.js";
 import type { JobResult, JobDeps } from "./engine/job.js";
 import { runInit } from "./init.js";
+import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 
 export interface CliArgs {
   prompt: string;
@@ -110,17 +112,20 @@ export async function main(argv: string[]): Promise<void> {
     readFile: (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } },
   });
   const provider = new OmniRouteProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey });
+  const home = process.env.HOME ?? "";
   const skillRegistry = new SkillRegistry();
   // Built-ins FIRST, the project's own second: the registry is keyed by name, so a project skill with the
   // same name deliberately replaces the shipped one.
   await registerBuiltinSkills(skillRegistry);
+  // Externally-installed skills (config.skillSources) live under the user's home, already on disk. Loading is
+  // OFFLINE: startup never waits on the network — installing and updating are explicit acts (`/skills update`).
+  await skillRegistry.loadFromDir(externalSkillsDir(home));
   const skillsDir = join(cwd, ".horsecode", "skills");
   if (existsSync(skillsDir)) await skillRegistry.loadFromDir(skillsDir);
   const manager = new WorktreeManager({ repoRoot: cwd });
   const remoteUrl = (await defaultGitRunner(["remote", "get-url", "origin"], cwd)).stdout.trim();
   const prAdapter = makePRAdapter({ platform: detectPlatform(remoteUrl), run: defaultCmdRunner, cwd, log: (s) => console.log(s) });
   const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
-  const home = process.env.HOME ?? "";
   // ONE memory store for every entry point (REPL, one-shot TUI, headless). Rules live in memory, and rules must
   // reach every agent — so the store is created here, at the composition root, and handed to buildJobDeps.
   const memStore = new MemoryStore({ home, cwd });
@@ -174,9 +179,31 @@ export async function main(argv: string[]): Promise<void> {
           return false;
         }
       };
+      // /skills — what is loaded and which roles it reaches; update re-installs the repo-sourced ones.
+      const listSkills = () => skillRegistry.list().map((s) => ({
+        ...s,
+        roles: Object.entries(DEFAULT_ROLE_SKILLS).filter(([, sk]) => sk.includes(s.name)).map(([r]) => r),
+      }));
+      const updateSkills = async (): Promise<string> => {
+        if (!config.skillSources.length) {
+          return "No external skill sources configured. Add them under `skillSources` in your config.";
+        }
+        const { ok, failed } = await syncSkillSources(home, config.skillSources);
+        await skillRegistry.loadFromDir(externalSkillsDir(home)); // pick up whatever changed, in place
+        const changed = ok.filter((r) => r.changed);
+        const lines = [
+          ...changed.map((r) => `- ⬆️ **${r.name}** → \`${r.sha.slice(0, 8)}\``),
+          ...ok.filter((r) => !r.changed).map((r) => `- ✓ ${r.name} already up to date`),
+          ...failed.map((f) => `- ❌ **${f.name}** — ${f.error}`),
+        ];
+        const tail = changed.length ? "\n\n_Restart to pick up a changed skill in already-built prompts._" : "";
+        return `**Skill sources:**\n${lines.join("\n")}${tail}`;
+      };
       await runTuiRepl({
         buildDeps,
         memStore,
+        listSkills,
+        updateSkills,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },
         formatResult: renderResult,
         model: config.model,

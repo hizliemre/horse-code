@@ -57,11 +57,35 @@ On demand is the point. A dispatcher's entry point is small enough to sit in a p
 tree can run to megabytes; loading the tree up front would cost far more on every call than the guidance is
 worth on the rare call that needs it. Paths are contained to the skill's own directory and capped in size.
 
+## Installed from upstream, not copied
+
+A skill can also be **referenced** instead of vendored. Declare it in `config.skillSources`:
+
+```json
+"skillSources": [
+  { "name": "impeccable", "repo": "pbakaus/impeccable", "path": ".agents/skills/impeccable" }
+]
+```
+
+`/skills update` installs or refreshes them into `~/.horsecode/skills/<name>/` — outside this repo, because
+they are not ours. The commit is recorded beside each one, so an update knows whether anything actually
+changed and a re-run costs nothing when it has not.
+
+This is the right shape for a skill that is large, maintained upstream, or carries its own scripts. Copying
+one here would freeze it at the moment it was taken and make every upstream fix a manual merge. The whole
+subtree is installed, not just SKILL.md — a dispatcher's reference documents and any scripts it drives are
+part of the skill, and having them at a real path is what lets a script-driven skill run at all. Each skill's
+base directory is stated to the agent for exactly that reason.
+
+Startup never waits on the network: loading is offline, installing is an explicit act.
+
+**`impeccable`** is installed this way. It is not a prose skill — its SKILL.md dispatches to ~40 reference
+documents and drives its own `scripts/*.mjs`. It is discoverable rather than attached to a role: its own
+description says when it applies ("Not for backend-only or non-UI tasks"), and a 10 KB script-driven entry
+point does not belong in every designer prompt.
+
 ## Still not adopted, and why
 
-- [`pbakaus/impeccable`](https://github.com/pbakaus/impeccable) (Apache-2.0) — its SKILL.md points at
-  `reference/` **29 times** across ~40 documents. Shipping the entry point alone would leave dangling
-  pointers.
 - [`nextlevelbuilder/ui-ux-pro-max-skill`](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (MIT) —
   not one skill but seven, and two of them (`ui-styling` at 5.7 MB, `ui-ux-pro-max` at 1.7 MB) are libraries.
   Cherry-picking a single self-contained one (e.g. `design-system`) is the only sane path.

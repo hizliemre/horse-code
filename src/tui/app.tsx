@@ -58,6 +58,8 @@ export interface RunTuiReplOpts {
   mcp?: Record<string, McpServerSpec>; // MCP servers to connect at startup (tools → coach)
   refreshSources?: () => Promise<string[]>; // probe omniroute → your connected model sources (cached)
   sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // current source allowlist
+  listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
+  updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
   memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }
@@ -335,7 +337,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
