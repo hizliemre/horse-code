@@ -59,6 +59,8 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       };
       if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"Do X","intent":"${opts.intent ?? "feature"}","title":"add-thing"}`); return; }
       if (sys.includes("P-coach")) { yield* stop("coach response"); return; }
+      // The brainstormer is driven by its role prompt, not a spec-kit command.
+      if (sys.includes("brainstormer")) { yield* writeOnce("# decided approach"); return; }
       if (sys.includes("COMMAND:constitution")) { yield* writeOnce("# constitution"); return; }
       if (sys.includes("COMMAND:specify")) {
         if (opts.skipWrite) { yield* stop("I didn't write it"); return; } // specify that doesn't produce a file (guard test)
@@ -89,6 +91,7 @@ export function udeps(provider: Provider, signal?: AbortSignal): ReviewDeps {
   const roles: Record<string, RoleConfig> = {
     refiner: { models: ["m"], systemPrompt: "P-refiner" },
     coach: { models: ["m"], systemPrompt: "P-coach" },
+    brainstormer: { models: ["m"], systemPrompt: "P-brainstormer" },
     analyst: { models: ["m"], systemPrompt: "P-analyst" },
     planner: { models: ["m"], systemPrompt: "P-planner" },
     "project-manager": { models: ["m"], systemPrompt: "P-pm" },
@@ -282,7 +285,9 @@ describe("runUpstream", () => {
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}', '{"decision":"pass","feedback":[],"question":""}'] });
     const phases: string[] = [];
     await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); });
-    expect(phases).toEqual(["constitution", "specify", "clarify", "plan", "tasks"]);
+    // brainstorm sits between the constitution and the spec: the approach is decided WITH the user before
+    // anything is specified, and everything after that point runs autonomously.
+    expect(phases).toEqual(["constitution", "brainstorm", "specify", "clarify", "plan", "tasks"]);
   });
 
   it("throws if cancelled", async () => {
@@ -382,5 +387,73 @@ describe("interrupted during a review", () => {
     expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:plan"))).toBe(false);
     expect(await readFile(join(dir, "specs", slug, "plan.md"), "utf8")).toBe("# existing plan — hours of work");
     expect(notes.join("\n")).toMatch(/already written — resuming at its review/i);
+  });
+});
+
+// The approach used to be decided implicitly, by whoever wrote the spec, and only surfaced in review — where
+// changing it is expensive. Brainstorm makes that decision explicit, the user's, and recorded, ONCE, up front.
+describe("brainstorm — the approach is decided before anything is specified", () => {
+  it("writes the brief and runs BEFORE the spec", async () => {
+    const p = upstreamProvider({ intent: "feature" });
+    const order: string[] = [];
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") order.push(ev.phase); });
+    expect(res.kind).toBe("approved");
+    expect(existsSync(join(dir, "specs", "001-add-thing", "brainstorm.md"))).toBe(true);
+    expect(order.indexOf("brainstorm")).toBeLessThan(order.indexOf("specify"));
+  });
+
+  // The whole point of recording the decision is that the spec honours it instead of re-opening it.
+  it("points the spec at the brief and tells it not to re-litigate the choice", async () => {
+    const p = upstreamProvider({ intent: "feature" });
+    await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3);
+    const specPrompt = p.requests
+      .flatMap((r) => r.messages.filter((m) => m.role === "user").map((m) => (typeof m.content === "string" ? m.content : "")))
+      .find((c) => c.includes("spec.md") && c.includes("Feature request"));
+    expect(specPrompt).toBeDefined();
+    expect(specPrompt).toContain("brainstorm.md");
+    expect(specPrompt).toMatch(/do not re-litigate/i);
+  });
+
+  it("is skipped on resume once it is marked done", async () => {
+    const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
+    const { writeFile } = await import("node:fs/promises");
+    const slug = "001-add-thing";
+    await mkdir(join(dir, "specs", slug), { recursive: true });
+    await mkdir(join(dir, ".specify", "memory"), { recursive: true });
+    await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
+    await writeFile(join(dir, "specs", slug, "brainstorm.md"), "# decided", "utf8");
+    await writeFile(join(dir, "specs", slug, "spec.md"), "# spec", "utf8");
+    await writeFile(join(dir, "specs", slug, "plan.md"), "# plan", "utf8");
+    writeCheckpoint(root, { rawPrompt: "Add X", refinedPrompt: "Do X", title: "add thing", language: "English", featureSlug: slug, done: ["constitution", "brainstorm", "spec", "clarify", "plan"] });
+    const p = upstreamProvider({ intent: "feature" });
+    const phases: string[] = [];
+    await runUpstream(udeps(p), () => Promise.resolve(dir), "devam et", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); }, undefined, readCheckpoint(root)!);
+    expect(phases).not.toContain("brainstorm");
+  });
+
+  // A checkpoint written before this phase existed has no "brainstorm" in `done`; a spec on disk proves the
+  // approach was already settled, so asking the user to decide it now would be asking about finished work.
+  it("does NOT run for an older checkpoint whose spec already exists", async () => {
+    const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
+    const { writeFile } = await import("node:fs/promises");
+    const slug = "001-add-thing";
+    await mkdir(join(dir, "specs", slug), { recursive: true });
+    await mkdir(join(dir, ".specify", "memory"), { recursive: true });
+    await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
+    await writeFile(join(dir, "specs", slug, "spec.md"), "# spec", "utf8");
+    await writeFile(join(dir, "specs", slug, "plan.md"), "# plan", "utf8");
+    writeCheckpoint(root, { rawPrompt: "Add X", refinedPrompt: "Do X", title: "add thing", language: "English", featureSlug: slug, done: ["constitution", "spec", "clarify", "plan"] });
+    const p = upstreamProvider({ intent: "feature" });
+    const phases: string[] = [];
+    await runUpstream(udeps(p), () => Promise.resolve(dir), "devam et", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); }, undefined, readCheckpoint(root)!);
+    expect(phases).not.toContain("brainstorm");
+    expect(existsSync(join(dir, "specs", slug, "brainstorm.md"))).toBe(false);
+  });
+
+  it("a missing brief does not kill the run — it is advisory, not a gate", async () => {
+    const p = upstreamProvider({ intent: "feature", skipWrite: true });
+    // skipWrite makes every authoring phase produce nothing; the spec is REQUIRED so the run fails on that,
+    // never on the brainstorm.
+    await expect(runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3)).rejects.toThrow(/specify/);
   });
 });

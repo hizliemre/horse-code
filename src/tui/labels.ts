@@ -3,6 +3,7 @@ export const PHASE_LABELS: Record<string, string> = {
   upstream: "refining…",
   chat: "zottiring…",
   constitution: "Setting principles…",
+  brainstorm: "Brainstorming the approach…",
   specify: "Writing spec…",
   clarify: "Clarifying…",
   plan: "Planning…",
@@ -28,6 +29,7 @@ export function phaseLabel(phase: string): string {
 // the user unsure what's happening — especially the interactive constitution/specify steps that ask questions).
 export const PHASE_NARRATION: Record<string, string> = {
   constitution: "**Establishing the project constitution** — I may ask you a few questions about core principles.",
+  brainstorm: "**Brainstorming the approach** — I'll look at the repo, weigh a few options, and ask you to pick one. This is the decision point; everything after it runs on its own.",
   specify: "**Writing the feature spec** — I may ask a clarifying question or two.",
   clarify: "**Clarifying the spec** with you.",
   plan: "**Planning the implementation.**",

@@ -15,7 +15,14 @@ const askUserParams = z.object({
   question: z.string(),
   // For a multiple-choice question, list the choices here → the UI shows a selectable checkbox/radio list
   // (arrow keys + Enter) instead of a free-text box. Omit for an open-ended question.
-  options: z.array(z.string()).optional(),
+  //
+  // A choice may be a plain string, or an object carrying what the label alone cannot say: a one-line
+  // `description`, and a `preview` rendered in a panel beside the list while that option is focused. Use the
+  // rich form when the decision turns on the trade-offs rather than the name (e.g. "which approach?").
+  options: z.array(z.union([
+    z.string(),
+    z.object({ label: z.string(), description: z.string().optional(), preview: z.string().optional() }),
+  ])).optional(),
   // Set true when the user may pick more than one option (checkboxes); false/omitted = pick one (radio).
   multiSelect: z.boolean().optional(),
 });
@@ -34,7 +41,10 @@ export function buildAskUserTool(
     description:
       "Ask the user a question and get their answer. For a multiple-choice question, pass `options` (the " +
       "choices) — the UI shows a selectable list the user checks off; set `multiSelect: true` when they may " +
-      "pick several. Omit `options` for an open-ended (free-text) question.",
+      "pick several. Omit `options` for an open-ended (free-text) question. An option may be a plain string, " +
+      "or {label, description, preview} when the decision turns on trade-offs the label cannot carry — the " +
+      "preview is shown beside the list as the user moves the cursor. The user may attach a free-text note to " +
+      "their choice, which arrives appended to the answer.",
     permissionLevel: "safe",
     parameters: askUserParams,
     run: async (rawArgs) => {

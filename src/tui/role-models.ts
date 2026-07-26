@@ -22,7 +22,7 @@ const SPEC_LENS_ROLES = SPEC_TEAM.map((c) => c.name);
 const PLAN_LENS_ROLES = PLAN_TEAM.map((c) => c.name);
 const CODE_LENS_ROLES = CODE_TEAM.map((c) => c.name);
 const STRONG_ROLES = [
-  "analyst", "planner", "architect", "senior-coder", "senior-designer",
+  "brainstormer", "analyst", "planner", "architect", "senior-coder", "senior-designer",
   ...COUNCIL_ROLES, ...PLAN_LENS_ROLES, ...CODE_LENS_ROLES,
 ];
 const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational", "memory-keeper", ...SPEC_LENS_ROLES];
@@ -36,6 +36,7 @@ export const ROLE_PROFILES: Record<string, string> = {
   "project-manager": "Turns a task list into board items — light and structured → fast, cheap.",
   "team-lead": "Coordinates implementation waves — light orchestration → fast, cheap.",
   coach: "Your main interactive assistant, used constantly all session (highest interaction volume) → a capable but EFFICIENT model, never the costly flagship.",
+  brainstormer: "Turns a raw request into a decided design before the spec: explores the repo, weighs 2-3 approaches, gets the user to choose. Low volume, sets the direction for everything downstream → a strong reasoning model.",
   analyst: "Authors the spec and constitution → a strong reasoning model (Opus-tier).",
   planner: "Designs the implementation plan → a strong reasoning model (Opus-tier).",
   architect: "Diagnoses stuck tasks and produces recovery plans — serious design work → a strong model.",

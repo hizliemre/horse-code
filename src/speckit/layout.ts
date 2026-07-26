@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { toSlug } from "../worktree/slug.js";
 
-export interface FeaturePaths { dir: string; spec: string; plan: string; tasks: string }
+export interface FeaturePaths { dir: string; brainstorm: string; spec: string; plan: string; tasks: string }
 
 export function specsDir(workdir: string): string {
   return join(workdir, "specs");
@@ -14,7 +14,7 @@ export function constitutionPath(workdir: string): string {
 
 export function featurePaths(workdir: string, slug: string): FeaturePaths {
   const dir = join(specsDir(workdir), slug);
-  return { dir, spec: join(dir, "spec.md"), plan: join(dir, "plan.md"), tasks: join(dir, "tasks.md") };
+  return { dir, brainstorm: join(dir, "brainstorm.md"), spec: join(dir, "spec.md"), plan: join(dir, "plan.md"), tasks: join(dir, "tasks.md") };
 }
 
 /** Next feature slug "NNN-title": zero-padded, one past the highest existing specs/NNN- dir. */

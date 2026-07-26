@@ -12,7 +12,7 @@ import { appendReviewNotes } from "./review-notes.js";
 import type { ProgressEvent } from "./progress.js";
 import { constitutionPath, nextFeatureSlug, scaffoldFeature } from "../speckit/layout.js";
 import type { PhaseDeps } from "../speckit/phases.js";
-import { runConstitution, runSpecify, runPlan, runTasks } from "../speckit/phases.js";
+import { runBrainstorm, runConstitution, runSpecify, runPlan, runTasks } from "../speckit/phases.js";
 import { runClarify } from "../speckit/clarify.js";
 
 export { buildAskUserTool } from "./writer-registry.js";
@@ -24,7 +24,8 @@ export type UpstreamResult =
 
 /**
  * Upstream pipeline: refiner → route; chat→coach response; feature/bugfix→spec-kit phases
- * (constitution → specify → clarify → plan → tasks) with the council/judge review loop after spec AND plan.
+ * (constitution → brainstorm → specify → clarify → plan → tasks) with the council/judge review loop after
+ * spec AND plan. The brainstorm decides the APPROACH with the user; everything after it runs autonomously.
  * On approval returns {specPath, planPath, tasksPath}; if rejected, {rejected, stage}.
  */
 export async function runUpstream(
@@ -40,7 +41,7 @@ export async function runUpstream(
 ): Promise<UpstreamResult> {
   // Each spec-kit phase is driven by a specific role — surface it (+ its model) in the status detail so the
   // user sees WHO is working (e.g. "Writing spec… — analyst · cc/opus-4-8"), not just the persistent coach badge.
-  const PHASE_ROLE: Record<string, string> = { constitution: "analyst", specify: "analyst", clarify: "analyst", plan: "planner", tasks: "project-manager" };
+  const PHASE_ROLE: Record<string, string> = { constitution: "analyst", brainstorm: "brainstormer", specify: "analyst", clarify: "analyst", plan: "planner", tasks: "project-manager" };
   const emitPhase = (phase: string): void => {
     const role = PHASE_ROLE[phase];
     const model = role ? deps.roleRegistry.peekModel(role) : "";
@@ -126,6 +127,21 @@ export async function runUpstream(
     mark("constitution");
   }
 
+  // Brainstorm: decide the APPROACH with the user before anything is specified. Without it the first real
+  // design decision was made implicitly by whoever wrote the spec, and only surfaced in review — where
+  // changing it is expensive. This is the one phase where talking to the user is the point; everything
+  // downstream is autonomous precisely BECAUSE the decision was made here.
+  // A checkpoint written before this phase existed has no "brainstorm" in `done`, and a spec on disk proves
+  // the approach was already settled — brainstorming it now would ask the user to decide work that is done.
+  if (!done.has("brainstorm") && !existsSync(paths.spec)) {
+    emitPhase("brainstorm");
+    // Skip authoring if a brief is already there (a resumed run), exactly like spec/plan. Optional: a brief
+    // the model failed to write must not kill the run — the spec prompt simply finds no file to read.
+    await ensureWritten(paths.brainstorm, relative(workdir, paths.brainstorm), "brainstorm",
+      () => runBrainstorm(p, paths, r.refinedPrompt), true);
+    await commitStep(deps, workdir, "record the design decision");
+  }
+  mark("brainstorm"); // marked either way: a skipped brainstorm must not be retried on the next resume
 
   // Specify → council/judge review loop (revise = re-run specify with feedback).
   if (!done.has("spec")) {

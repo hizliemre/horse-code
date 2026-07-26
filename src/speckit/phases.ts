@@ -23,6 +23,15 @@ const SKIP = "The workspace is already scaffolded — do NOT run any shell scrip
 // isn't cut off mid-write (which would crash the whole upstream); a genuinely stuck phase still stops here.
 const PHASE_MAX_TURNS = 200;
 
+/**
+ * The brainstormer drives itself from its role prompt rather than a spec-kit command — spec-kit has no
+ * brainstorm step, and inventing one in template form would just restate the role prompt.
+ */
+const BRAINSTORM_COMMAND =
+  "You are the brainstormer. Produce a decided design brief for the request below, then write it to the file " +
+  "named in the message. Explore the repo before proposing anything, ask only questions that change the " +
+  "design, and have the user choose between real alternatives.";
+
 async function runRole(p: PhaseDeps, role: string, command: string, message: string, extraTools = false): Promise<void> {
   // fallbackOpts (not resolve): spec-kit phases drive the role with the spec-kit command prompt, so they
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
@@ -59,11 +68,32 @@ export async function runConstitution(p: PhaseDeps): Promise<void> {
   await runRole(p, "analyst", p.templates.command("constitution"), msg, true);
 }
 
+/**
+ * Brainstorm: turn the raw request into a DECIDED design before any spec exists.
+ *
+ * The spec used to be written straight from the request, so the first real design decision was made
+ * implicitly, by whoever authored the spec, and only surfaced in review — where it is expensive to revisit.
+ * This makes the decision explicit and the user's, once, up front. Interaction is deliberate here: the
+ * autonomy the pipeline needs starts AFTER the work is decided.
+ */
+export async function runBrainstorm(p: PhaseDeps, paths: FeaturePaths, prompt: string): Promise<void> {
+  const rel = relative(p.workdir, paths.brainstorm);
+  const msg =
+    `Request: "${prompt}".\n\n` +
+    `Explore this repository first, then decide the approach WITH the user, then write the decision to "${rel}".`;
+  await runRole(p, "brainstormer", BRAINSTORM_COMMAND, msg, true);
+}
+
 export async function runSpecify(p: PhaseDeps, paths: FeaturePaths, prompt: string, feedback?: string[]): Promise<void> {
   const rel = relative(p.workdir, paths.spec);
+  const brief = relative(p.workdir, paths.brainstorm);
   const msg = feedback?.length
     ? `Revise the spec at "${rel}" with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\nOriginal request: ${prompt}`
-    : `Feature request: "${prompt}". Ask clarifying questions with ask_user only if strictly necessary.\n` +
+    // The design was already decided WITH the user in the brainstorm; the spec states what that design must
+    // deliver, it does not re-open the choice.
+    : `Feature request: "${prompt}". Read "${brief}" FIRST — the approach was already decided with the user ` +
+      `there, and the spec must honor it (do not re-litigate the choice or reintroduce a rejected alternative).\n` +
+      `Ask clarifying questions with ask_user only if strictly necessary.\n` +
       `Follow this template:\n\n${p.templates.template("spec")}\n\nWrite the spec to "${rel}".`;
   await runRole(p, "analyst", p.templates.command("specify"), msg, true);
 }

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync, rmSync, statSync } from "node:
 import { join } from "node:path";
 
 /** The spec-kit upstream phases a run may have completed, in order. */
-export type UpstreamPhase = "constitution" | "spec" | "clarify" | "plan" | "tasks";
+export type UpstreamPhase = "constitution" | "brainstorm" | "spec" | "clarify" | "plan" | "tasks";
 
 /**
  * A resume checkpoint written at a worktree's root (`<slug>/checkpoint.json`, OUTSIDE the git `base/` tree

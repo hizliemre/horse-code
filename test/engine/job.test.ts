@@ -231,7 +231,7 @@ describe("runJob", () => {
       const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
       expect(res.kind).toBe("done");
       const phases = events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase);
-      expect(phases).toEqual(["upstream", "constitution", "specify", "clarify", "plan", "tasks", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
+      expect(phases).toEqual(["upstream", "constitution", "brainstorm", "specify", "clarify", "plan", "tasks", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
       expect(events.some((e) => e.kind === "board")).toBe(true);
     } finally {
       await rm(repo, { recursive: true, force: true });
