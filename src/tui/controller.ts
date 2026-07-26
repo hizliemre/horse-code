@@ -53,6 +53,17 @@ export interface TuiState {
   nextSteps: string[]; // coach-suggested follow-ups (run with /next N); cleared when a new turn starts
 }
 
+/**
+ * How many transcript items the live view keeps.
+ *
+ * The renderer flattens the WHOLE transcript into styled lines on every frame and then slices a viewport out
+ * of it, so the per-frame cost grows without bound. A 7.5-hour run reached a 4 GB heap and died with
+ * "JavaScript heap out of memory" — the transcript itself plus a fresh full-length line array on every render.
+ * The window is far larger than any scrollback anyone reads, and the full conversation is persisted separately
+ * by the session store, so nothing durable is lost by dropping the oldest items from the live view.
+ */
+export const MAX_TRANSCRIPT_ITEMS = 1_500;
+
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
   private state: TuiState = { phase: "", cards: [], transcript: [], queued: 0, currentModel: "", runningAgents: [], attachments: 0, nextSteps: [] };
@@ -69,6 +80,23 @@ export class TuiController {
   private agentTokens = new Map<string, { promptTokens: number; completionTokens: number }>();
   private agentModels = new Map<string, string>();
   private lastNarrated?: string; // last spec-kit phase narrated into the flow (dedup)
+  // The VIEW's transcript is windowed (see MAX_TRANSCRIPT_ITEMS), but the saved session must not be: capping
+  // what is persisted would silently drop the earliest turns of a long run. Chat text is small — it was the
+  // tool activity and the per-frame re-flatten that blew up memory, not the messages.
+  private archived: { role: "user" | "assistant"; text: string }[] = [];
+
+  /**
+   * Windows the on-screen transcript, ARCHIVING any chat message it drops.
+   *
+   * Done in one place rather than at each append site so no path can silently lose a turn — including
+   * `streamNote`, which mutates an item in place as deltas arrive and has no completion event to hook.
+   */
+  private cap(t: TranscriptItem[]): TranscriptItem[] {
+    if (t.length <= MAX_TRANSCRIPT_ITEMS) return t;
+    const cut = t.length - MAX_TRANSCRIPT_ITEMS;
+    for (const m of t.slice(0, cut)) if (!("kind" in m)) this.archived.push(m);
+    return t.slice(cut);
+  }
   private now: () => number;
 
   constructor(now: () => number = () => Date.now()) {
@@ -97,7 +125,7 @@ export class TuiController {
       const narration = phaseNarration(ev.phase);
       if (narration && this.lastNarrated !== ev.phase) {
         this.lastNarrated = ev.phase;
-        transcript = [...transcript, { role: "assistant", text: narration }];
+        transcript = this.cap([...transcript, { role: "assistant", text: narration }]);
       }
       this.state = { ...this.state, phase: ev.phase, detail: ev.detail, transcript, liveActivity: undefined };
     }
@@ -112,7 +140,7 @@ export class TuiController {
     else if (ev.kind === "agent-usage") { this.agentTokens.set(ev.id, { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens }); this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) }; }
     else if (ev.kind === "agent-result") this.state = { ...this.state, runningAgents: this.state.runningAgents.map((a) => a.id === ev.id ? { ...a, status: ev.status, doneAt: this.now(), promptTokens: ev.promptTokens, completionTokens: ev.completionTokens } : a) };
     // note: a live transcript line from deep in the pipeline (council findings, judge decision).
-    else if (ev.kind === "note") this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: ev.text }] };
+    else if (ev.kind === "note") this.state = { ...this.state, transcript: this.cap([...this.state.transcript, { role: "assistant", text: ev.text }]) };
     // refined: swap the raw prompt for the refined one live (the coach/pipeline only ever sees the refine),
     // so the transcript shows what was actually handed downstream. endRun does the same as a fallback.
     else this.state = { ...this.state, transcript: replaceLastUser(this.state.transcript, ev.refinedPrompt) };
@@ -167,7 +195,7 @@ export class TuiController {
   // arrow-bound: wired to deps.onActivity → write/edit tools push here → inline in the chat flow.
   pushActivity = (a: ToolActivity): void => {
     // The tool actually ran → its inline block replaces the transient "writing…" progress line.
-    this.state = { ...this.state, liveActivity: undefined, transcript: [...this.state.transcript, { kind: "tool", activity: a }] };
+    this.state = { ...this.state, liveActivity: undefined, transcript: this.cap([...this.state.transcript, { kind: "tool", activity: a }]) };
     this.notify();
   };
 
@@ -208,7 +236,7 @@ export class TuiController {
     return new Promise<string>((resolve) => {
       const next = this.queue.shift();
       if (next !== undefined) {
-        this.state = { ...this.state, mode: "input", transcript: [...this.state.transcript, { role: "user", text: next }], queued: this.queue.length };
+        this.state = { ...this.state, mode: "input", transcript: this.cap([...this.state.transcript, { role: "user", text: next }]), queued: this.queue.length };
         this.notify();
         resolve(next);
         return;
@@ -226,7 +254,7 @@ export class TuiController {
       // Hand the staged images to this turn; clear the staging area.
       this.turnAttachments = this.pendingAttachments;
       this.pendingAttachments = [];
-      this.state = { ...this.state, transcript: [...this.state.transcript, { role: "user", text: task }], attachments: 0 };
+      this.state = { ...this.state, transcript: this.cap([...this.state.transcript, { role: "user", text: task }]), attachments: 0 };
       this.notify();
       resolve(task);
       return;
@@ -368,7 +396,7 @@ export class TuiController {
     this.state = {
       ...this.state,
       mode: this.modeAfterPicker(), picker: undefined,
-      transcript: [...this.state.transcript, { role: "assistant", text: `Permission mode → **${mode}** — ${desc}.` }],
+      transcript: this.cap([...this.state.transcript, { role: "assistant", text: `Permission mode → **${mode}** — ${desc}.` }]),
     };
     this.notify();
   }
@@ -419,7 +447,7 @@ export class TuiController {
     this.state = {
       ...this.state,
       mode: this.modeAfterPicker(), picker: undefined,
-      transcript: [...this.state.transcript, { role: "assistant", text: `\`${role}\` → ${body}` }],
+      transcript: this.cap([...this.state.transcript, { role: "assistant", text: `\`${role}\` → ${body}` }]),
     };
     this.notify();
   }
@@ -439,7 +467,7 @@ export class TuiController {
     let acc = initial;
     return (delta: string): void => {
       acc += delta;
-      if (idx < 0) { idx = this.state.transcript.length; this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text: acc }] }; } // create on first delta
+      if (idx < 0) { idx = this.state.transcript.length; this.state = { ...this.state, transcript: this.cap([...this.state.transcript, { role: "assistant", text: acc }]) }; } // create on first delta
       else { const t = [...this.state.transcript]; if (t[idx] && "role" in t[idx]) t[idx] = { role: "assistant", text: acc }; this.state = { ...this.state, transcript: t }; }
       this.notify();
     };
@@ -447,7 +475,7 @@ export class TuiController {
 
   /** Append an assistant-style note to the transcript (used by /help). */
   note(text: string): void {
-    this.state = { ...this.state, transcript: [...this.state.transcript, { role: "assistant", text }] };
+    this.state = { ...this.state, transcript: this.cap([...this.state.transcript, { role: "assistant", text }]) };
     this.notify();
   }
 
@@ -464,10 +492,12 @@ export class TuiController {
   }
 
   /** The conversation messages only (tool-activity items excluded) — persisted for resume. */
+  /** The full conversation for persistence — never windowed, unlike the on-screen transcript. */
   messages(): { role: "user" | "assistant"; text: string }[] {
-    return this.state.transcript.filter(
-      (m): m is { role: "user" | "assistant"; text: string } => !("kind" in m),
-    );
+    return [
+      ...this.archived,
+      ...this.state.transcript.filter((m): m is { role: "user" | "assistant"; text: string } => !("kind" in m)),
+    ];
   }
 }
 

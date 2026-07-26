@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, memo } from "react";
+import React, { useEffect, useState, useRef, useMemo, memo } from "react";
 import { Box, Text, useStdout, useStdin, Static } from "ink";
 import type { BoardCardView } from "../engine/progress.js";
 import type { Column } from "../board/board.js";
@@ -1047,15 +1047,23 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   // Fullscreen (Claude Code model): flatten content into plain styled lines → manually render the
   // exactly-fitting window (no Ink overflow bug). The input is ALWAYS visible at the bottom; while a job
   // runs, a cyan status box sits above it and a metrics line below it. ↑/↓/PgUp/PgDn scrolls history.
+  // Flattening the whole transcript on EVERY frame was half of the out-of-memory failure: the running-agent
+  // panel ticks four times a second, and each tick rebuilt a full-length styled-line array for a transcript
+  // that only changes when something is appended. Keyed on the transcript reference (the controller replaces
+  // it on every append), so a tick now costs nothing. Hoisted out of the `fullscreen` branch — a hook inside a
+  // conditional breaks React's hook order the moment that condition differs between renders.
+  const fullscreenChatW = size.cols - 2;
+  const fullscreenLines = useMemo<StyledLine[]>(() => [
+    ...flattenSplash(fullscreenChatW, size.rows),
+    ...state.transcript.flatMap((m) => ("kind" in m ? flattenTool(m.activity, fullscreenChatW) : flattenMessage(m.role, m.text, fullscreenChatW))),
+  ], [state.transcript, fullscreenChatW, size.rows]);
+
   if (fullscreen) {
     // Chat content sits one unit off the left edge (paddingLeft below); flatten to the narrowed width so lines
     // still fit within the indented column and don't wrap early.
     const CHAT_INDENT = 2;
     const chatW = size.cols - CHAT_INDENT;
-    const allLines: StyledLine[] = [
-      ...flattenSplash(chatW, size.rows),
-      ...state.transcript.flatMap((m) => ("kind" in m ? flattenTool(m.activity, chatW) : flattenMessage(m.role, m.text, chatW))),
-    ];
+    const allLines = fullscreenLines;
     if (state.mode === "picker") {
       const PICKER_H = PICKER_HEIGHT + 1; // the ModelPicker box + its marginTop (deterministic)
       const viewportH = Math.max(3, size.rows - PICKER_H - 1);
