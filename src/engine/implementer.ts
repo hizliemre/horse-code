@@ -5,6 +5,8 @@ import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
 import { memoryHints } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
+import { adjudicateSkills } from "../skills/adjudicate.js";
+import { placedSkills } from "../prompts.js";
 import { loadGraphSync } from "./project-graph.js";
 import { applySkills } from "../skills/apply.js";
 import { contextTools } from "./task-types.js";
@@ -67,12 +69,25 @@ export async function runImplementer(
   const attached = deps.roleRegistry.skillsFor(role);
   const subject = `${task.title} ${task.acceptance.join(" ")} ${task.reviewNotes.join(" ")}`;
   const routed = routeSkills(subject, deps.skillRegistry, attached, {
-    role, implementing: true, files: filesForTask(subject, loadGraphSync(cwd)),
+    role, implementing: true, files: filesForTask(subject, loadGraphSync(cwd)), placed: placedSkills(),
   });
-  const systemPrompt = routed.length
-    ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
+  // Only the borderline matches are adjudicated; the confident ones are already right and paying for a
+  // verdict on them would be paying for an answer we have.
+  const verdict = routed.length
+    ? await adjudicateSkills({
+        provider: deps.provider, model: chain[0] ?? "", task: subject,
+        matches: routed, registry: deps.skillRegistry, signal: deps.signal,
+      })
+    : { keep: routed, asked: false, reasoning: undefined as string | undefined };
+  const kept = verdict.keep;
+  if (kept.length) {
+    deps.note?.(`📎 \`${role}\` · ${kept.map((m) => `**${m.name}**`).join(", ")}${verdict.asked ? " _(adjudicated)_" : ""}`);
+  } else if (routed.length && verdict.asked) {
+    deps.note?.(`📎 \`${role}\` · ${routed.map((m) => m.name).join(", ")} — rejected: ${verdict.reasoning ?? "does not apply"}`);
+  }
+  const systemPrompt = kept.length
+    ? applySkills(resolved.systemPrompt, kept.map((m) => m.name), deps.skillRegistry)
     : resolved.systemPrompt;
-  if (routed.length) deps.note?.(`📎 \`${role}\` · ${routed.map((m) => `**${m.name}**`).join(", ")} — matched: ${routed[0].hits.slice(0, 6).join(", ")}`);
 
   // A timeout here is NOT a cancellation: the job is fine, this one attempt ran too long. The two are
   // distinguished below so a genuine Ctrl-C still propagates as a cancellation.

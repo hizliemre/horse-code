@@ -186,3 +186,14 @@ export const DEFAULT_COUNCIL: ReviewerConfig[] = [
   { name: "user-value-judge", perspective: "Does this deliver the user's actual intent well? Weigh usability, accessibility, and whether the scope serves the request without gold-plating.", models: [] },
   { name: "feasibility-judge", perspective: "Can this be built and maintained as described? Weigh architecture, simplicity, dependencies, and maintainability findings against effort.", models: [] },
 ];
+
+/**
+ * Every skill the product places on a role deliberately.
+ *
+ * Task-level routing must not propose any of these: placement already decided where they belong, and a skill
+ * bound to a pipeline phase has no business being inlined into an implementer because its "use when" text
+ * happens to overlap the task.
+ */
+export function placedSkills(): string[] {
+  return [...new Set(Object.values(DEFAULT_ROLE_SKILLS).flat())];
+}

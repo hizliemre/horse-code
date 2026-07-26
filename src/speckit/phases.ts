@@ -2,6 +2,10 @@ import { relative } from "node:path";
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { contextTools } from "../engine/task-types.js";
+import { routeSkills, filesForTask } from "../skills/route.js";
+import { applySkills } from "../skills/apply.js";
+import { placedSkills } from "../prompts.js";
+import { loadGraphSync } from "../engine/project-graph.js";
 import { writerRegistry, buildAskUserTool } from "../engine/writer-registry.js";
 import { commitFile } from "../engine/operational.js";
 import { normalizeQuestion } from "../engine/normalize-question.js";
@@ -42,13 +46,26 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     ...contextTools(p.deps), // the spec and the plan are written about a codebase — let them see it
   ]);
   const hints = memoryHints(p.deps, message, { role });
+  /**
+   * Skills this stage's subject needs.
+   *
+   * Wired here as well as at implementation because this is the stage that can ASK. A design skill whose
+   * flow begins by interviewing the user for a product brief can only run that interview where `ask_user`
+   * exists — which is here, not in a wave of parallel implementers that must not block on a human.
+   */
+  const routed = routeSkills(message, p.deps.skillRegistry, [], {
+    role, files: filesForTask(message, loadGraphSync(p.workdir)), placed: placedSkills(),
+  });
+  if (routed.length) p.deps.note?.(`📎 \`${role}\` · ${routed.map((m) => `**${m.name}**`).join(", ")}`);
   const opts: RoleAgentOptions = {
     provider: p.deps.provider,
     model,
     fallbacks,
     onExhausted,
     onFallback,
-    systemPrompt: `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`,
+    systemPrompt: routed.length
+      ? applySkills(`${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`, routed.map((m) => m.name), p.deps.skillRegistry)
+      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`,
     tools,
     maxTurns: PHASE_MAX_TURNS,
     // Project memory (conventions/decisions/lessons) reaches the authoring roles too, not just the coach.

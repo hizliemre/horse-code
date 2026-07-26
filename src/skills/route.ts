@@ -178,10 +178,15 @@ export function routeSkills(
   task: string,
   registry: SkillRegistry,
   already: string[] = [],
-  opts: { bar?: number; max?: number; role?: string; implementing?: boolean; files?: string[] } = {},
+  opts: {
+    bar?: number; max?: number; role?: string; implementing?: boolean; files?: string[];
+    /** Skills the product places deliberately — see `placed` below. */
+    placed?: string[];
+  } = {},
 ): SkillMatch[] {
   const bar = opts.bar ?? MATCH_BAR;
   const have = new Set(already);
+  const placed = new Set(opts.placed ?? []);
   // The ROLE is part of what is being asked. "Add a dark theme toggle" is ambiguous on its own; the same
   // sentence handed to `designer` is unambiguously interface work, and the skill's own exclusion clause is
   // what stops the role from dragging it onto work it does not cover.
@@ -191,6 +196,12 @@ export function routeSkills(
   const subject = [opts.role ?? "", task, paths, expandExtensions(opts.files ?? [])].filter(Boolean).join(" ");
   return registry.list()
     .filter((s) => !have.has(s.name))
+    // Never propose a skill the product PLACES deliberately. Placement (`DEFAULT_ROLE_SKILLS`, and whatever
+    // `/roles adjust` decided) and routing are two mechanisms for two different things: placement says "this
+    // role always needs this", routing says "this task happens to need that". A skill managed by the first
+    // being second-guessed by the second is how a brainstorming skill — whose description opens with "use
+    // this before any creative work" — ended up inlined into an implementer building a component test.
+    .filter((s) => !placed.has(s.name))
     // Both vetoes come from the skill's own description. Matching a skill on its words while ignoring the
     // words that say when NOT to use it would be reading half the metadata.
     .filter((s) => !isExplicitOnly(s.description))
@@ -301,4 +312,31 @@ export function filesForTask(
   // noise on as evidence is the failure this replaced.
   const cut = scored[0].score * FILE_SCORE_RATIO;
   return scored.filter((s) => s.score >= cut && s.score >= MIN_FILE_SCORE).slice(0, max).map((s) => s.file);
+}
+
+/**
+ * How far above the bar a match must be to be trusted without a second opinion.
+ *
+ * Measured on a real project: every false positive sat exactly AT the bar. "implement store crud methods"
+ * and "configure ngrx signal store" each scored 3 against a design skill, on architecture words rather than
+ * interface intent — a judgement word-overlap cannot make. Matches well clear of the bar were right; matches
+ * at it were a coin toss. So this is where a model is worth asking, and only here.
+ */
+export const CONFIDENT_MARGIN = 2;
+
+export interface Adjudication {
+  keep: string[];
+  reasoning?: string;
+}
+
+/** Splits matches into those that need no second opinion and those that do. */
+export function partitionByConfidence(
+  matches: SkillMatch[],
+  bar = MATCH_BAR,
+  margin = CONFIDENT_MARGIN,
+): { confident: SkillMatch[]; borderline: SkillMatch[] } {
+  const confident: SkillMatch[] = [];
+  const borderline: SkillMatch[] = [];
+  for (const m of matches) (m.score >= bar + margin ? confident : borderline).push(m);
+  return { confident, borderline };
 }
