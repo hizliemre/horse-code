@@ -27,8 +27,18 @@ const STOP = new Set([
   "where", "which", "while", "what", "who", "how", "why", "does", "did", "done", "get", "got", "let", "lets",
 ]);
 
-/** A term long enough to mean something. Two-letter tokens match everything and nothing. */
+/** A term long enough to mean something. Two-letter tokens usually match everything and nothing. */
 const MIN_TERM = 3;
+
+/**
+ * Short terms that carry real meaning, exempt from the length floor.
+ *
+ * The floor exists because two-letter tokens are usually noise — but it was silently deleting the most
+ * central word in this entire domain. A task saying "redesign the UI" scored ZERO against a description
+ * saying "improve the UI of a page", and an Angular project's `ui/` directories contributed nothing.
+ * Everything downstream then blamed the description or the bar.
+ */
+const SHORT_TERMS = new Set(["ui", "ux", "db", "js", "ts", "qa"]);
 
 /**
  * Splits identifiers into words.
@@ -45,8 +55,8 @@ function splitIdentifiers(text: string): string {
 }
 
 function terms(text: string): string[] {
-  return (splitIdentifiers(text).toLowerCase().match(/[a-z][a-z0-9]{2,}/g) ?? [])
-    .filter((t) => t.length >= MIN_TERM && !STOP.has(t));
+  return (splitIdentifiers(text).toLowerCase().match(/[a-z][a-z0-9]+/g) ?? [])
+    .filter((t) => (t.length >= MIN_TERM || SHORT_TERMS.has(t)) && !STOP.has(t));
 }
 
 /**
@@ -193,7 +203,8 @@ export function routeSkills(
   // Directory names are evidence in their own right: a path through `components/` says what kind of work
   // this is even when the title does not.
   const paths = (opts.files ?? []).join(" ");
-  const subject = [opts.role ?? "", task, paths, expandExtensions(opts.files ?? [])].filter(Boolean).join(" ");
+  const base = [opts.role ?? "", task, paths].filter(Boolean).join(" ");
+  const subject = [base, expandExtensions(opts.files ?? []), expandAbbreviations(base)].filter(Boolean).join(" ");
   return registry.list()
     .filter((s) => !have.has(s.name))
     // Never propose a skill the product PLACES deliberately. Placement (`DEFAULT_ROLE_SKILLS`, and whatever
@@ -237,6 +248,31 @@ const EXT_WORDS: Record<string, string> = {
   sql: "database migration",
   proto: "protocol schema",
 };
+
+/**
+ * Abbreviations that appear in paths but never in prose.
+ *
+ * Code writes `a11y/`, `i18n/`, `auth/`; a skill description writes "accessibility", "internationalization",
+ * "authentication". Neither prefix matching nor a stemmer can bridge those — they are different words. This
+ * cost a real match: an accessibility service resolved correctly to `core/a11y/live-announcer.service.ts`
+ * and still failed to reach a skill that lists accessibility among its concerns.
+ *
+ * Facts about abbreviations, like the extension table — not judgements about skills.
+ */
+const ABBREVIATIONS: Record<string, string> = {
+  a11y: "accessibility",
+  i18n: "internationalization localization",
+  l10n: "localization",
+  auth: "authentication",
+  ui: "interface",
+  ux: "interface experience",
+};
+
+function expandAbbreviations(text: string): string {
+  const out: string[] = [];
+  for (const t of terms(text)) if (ABBREVIATIONS[t]) out.push(ABBREVIATIONS[t]);
+  return out.join(" ");
+}
 
 export function expandExtensions(files: string[]): string {
   const words = new Set<string>();

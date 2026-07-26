@@ -301,3 +301,40 @@ describe("file paths as routing signal", () => {
     expect(routeSkills(task, r, [], { role: "coder", files: filesForTask(task, graph) })).toEqual([]);
   });
 });
+
+describe("short and abbreviated terms", () => {
+  /**
+   * The length floor was silently deleting the most central word in this domain: a task saying "redesign the
+   * UI" scored zero against a description saying "improve the UI of a page", and everything downstream then
+   * blamed the description or the bar.
+   */
+  it.each(["ui", "ux"])("counts %o despite the length floor", (t) => {
+    expect(scoreSkill(`redesign the ${t}`, `Use when you improve the ${t} of a page`).score).toBe(1);
+  });
+
+  it("still drops genuine two-letter noise", () => {
+    expect(scoreSkill("go to it or so", "an of by to it so").score).toBe(0);
+  });
+
+  /**
+   * Code writes `a11y/`; a description writes "accessibility". Neither prefix matching nor a stemmer can
+   * bridge those — they are different words. It cost a real match on a real project: an accessibility
+   * service resolved correctly to `core/a11y/live-announcer.service.ts` and still reached nothing.
+   */
+  it("bridges a path abbreviation to the word a description uses", () => {
+    const r = new SkillRegistry();
+    r.register({ name: "design", description: "Covers layout, colour and accessibility of an interface", content: "b" });
+    const task = "implement polite live announcement service";
+    // The task text says nothing a design skill recognises; only the PATH reveals it is accessibility work.
+    expect(routeSkills(task, r, [], { role: "designer", bar: 1 })).toEqual([]);
+    expect(routeSkills(task, r, [], {
+      role: "designer", bar: 1, files: ["src/app/core/a11y/live-announcer.service.ts"],
+    }).map((m) => m.name)).toEqual(["design"]);
+  });
+
+  it("leaves a task with no abbreviations unchanged", () => {
+    const r = new SkillRegistry();
+    r.register({ name: "design", description: "Covers layout and colour", content: "b" });
+    expect(routeSkills("migrate the queue runner", r, [], { role: "coder" })).toEqual([]);
+  });
+});
