@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import { runRoleAgent, runToCompletion, type RoleAgentOptions } from "../../src/agent/loop.js";
 import { MockProvider } from "../../src/providers/mock.js";
@@ -206,5 +209,53 @@ describe("runRoleAgent fallback chain", () => {
     expect(p.requests.map((r) => r.model)).toEqual(["m"]); // no retry — output was already emitted
     expect(events).toContainEqual({ type: "message.delta", text: "partial" });
     expect(events.at(-1)).toEqual({ type: "error", message: "stream stalled", retryable: true });
+  });
+});
+
+// A RETURNING task must rewrite files it wrote in an EARLIER attempt, and a fresh run has no record of
+// reading them. Guarding those writes refused every one of them, so the attempt produced nothing at all —
+// which the pipeline reported as "the implementer wrote nothing" and escalated to a stronger model.
+//
+// The guard's premise is that an overwrite is irrecoverable. For an agent whose every write is committed as
+// it happens (`onWrite`), it is not: git holds every version.
+describe("the blind-overwrite guard is scoped to agents that do NOT commit every write", () => {
+  const writeTurn = (path: string): ChatEvent[] => [
+    { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: JSON.stringify({ path, content: "v2" }) } },
+    { type: "done", finishReason: "tool_calls" },
+  ];
+  const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "ok" }, { type: "done", finishReason: "stop" }];
+
+  const run = async (dir: string, onWrite?: (p: string) => Promise<void>) => {
+    const { writeFileTool } = await import("../../src/tools/write.js");
+    const { readFileTool } = await import("../../src/tools/read.js");
+    const p = new MockProvider([writeTurn("a.ts"), doneTurn]);
+    const results: string[] = [];
+    for await (const ev of runRoleAgent(opts(p, {
+      tools: registry(writeFileTool, readFileTool), cwd: dir,
+      ...(onWrite ? { onWrite } : {}),
+    }))) {
+      if (ev.type === "tool.result") results.push(ev.result.content);
+    }
+    return results.join("\n");
+  };
+
+  it("an agent that commits every write may overwrite without re-reading", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-gw-"));
+    try {
+      await writeFile(join(dir, "a.ts"), "v1", "utf8");
+      const out = await run(dir, async () => {});
+      expect(out).toContain("Written: a.ts");
+      expect(await readFile(join(dir, "a.ts"), "utf8")).toBe("v2");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("an agent whose writes are NOT committed is still guarded", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-gw-"));
+    try {
+      await writeFile(join(dir, "a.ts"), "v1", "utf8");
+      const out = await run(dir); // no onWrite → the conflict-resolver shape
+      expect(out).toMatch(/read_file it first/);
+      expect(await readFile(join(dir, "a.ts"), "utf8")).toBe("v1"); // untouched
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

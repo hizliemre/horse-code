@@ -39,8 +39,15 @@ function fmtChars(n: number): string {
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
   const working: Message[] = [{ role: "system", content: opts.systemPrompt }, ...opts.messages];
   const schemas = opts.tools.schemas();
-  // One log per agent run: reading a file in an EARLIER run says nothing about what it holds now.
-  const readFiles = new Set<string>();
+  // The blind-overwrite guard is only wired for agents whose writes are NOT individually committed.
+  //
+  // Its premise is that an overwrite destroys content irrecoverably. That is true for the merge-conflict
+  // resolver, which edits a shared worktree mid-merge. It is NOT true for the implementer or the spec-kit
+  // phases: every write of theirs is committed as it happens (`onWrite`), so git holds every version and a
+  // bad overwrite is recoverable. Guarding them anyway had a real cost — a RETURNING task must rewrite files
+  // it wrote in an earlier attempt, and a fresh run has no record of reading them, so every write was refused
+  // and the attempt produced nothing at all.
+  const readFiles = opts.onWrite ? undefined : new Set<string>();
   const maxTurns = opts.maxTurns ?? 50;
   let turn = 0;
 

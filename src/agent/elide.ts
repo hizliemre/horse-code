@@ -13,12 +13,16 @@ import type { Message } from "../core/types.js";
 // rejects the request outright. Eliding only the BODY keeps every id, role and ordering intact.
 
 /**
- * Tool results this recent are kept verbatim — the agent is usually still working with them.
+ * How much recent tool output is kept verbatim, in characters.
  *
- * Two, not four: the working set of an agent mid-edit is the file it just read and the command it just ran.
- * Anything older it has already acted on, and each retained result is re-billed on every remaining turn.
+ * A BUDGET, not a count. A fixed count is the wrong shape: a coding agent holds several files open while it
+ * edits, and "keep the last 2 results" threw a file's contents away after two unrelated greps — leaving it to
+ * edit from memory. A budget keeps many small results and only trims once the total genuinely weighs
+ * something, which is the thing being paid for on every turn.
  */
-export const KEEP_RECENT_RESULTS = 2;
+export const RECENT_RESULT_BUDGET = 40_000;
+/** The newest result is always kept, however large — it is what the agent is acting on right now. */
+export const ALWAYS_KEEP_NEWEST = 1;
 /** Below this size a tool result is not worth eliding; the stub would barely be smaller. */
 export const ELIDE_MIN_CHARS = 1_500;
 
@@ -39,14 +43,22 @@ function stub(chars: number): string {
  */
 export function elideOldToolResults(
   messages: Message[],
-  opts: { keepRecent?: number; minChars?: number } = {},
+  opts: { budget?: number; minChars?: number } = {},
 ): Message[] {
-  const keep = opts.keepRecent ?? KEEP_RECENT_RESULTS;
+  const budget = opts.budget ?? RECENT_RESULT_BUDGET;
   const min = opts.minChars ?? ELIDE_MIN_CHARS;
   const toolIdx: number[] = [];
   for (let i = 0; i < messages.length; i++) if (messages[i].role === "tool") toolIdx.push(i);
-  if (toolIdx.length <= keep) return messages;
-  const elidable = new Set(toolIdx.slice(0, toolIdx.length - keep));
+  if (toolIdx.length <= ALWAYS_KEEP_NEWEST) return messages;
+  // Walk newest → oldest, keeping results until the budget is spent; everything older is elidable.
+  const elidable = new Set<number>();
+  let used = 0;
+  for (let k = toolIdx.length - 1; k >= 0; k--) {
+    const i = toolIdx[k];
+    const size = messages[i].content.length;
+    if (k >= toolIdx.length - ALWAYS_KEEP_NEWEST || used + size <= budget) { used += size; continue; }
+    elidable.add(i);
+  }
   let changed = false;
   const out = messages.map((m, i) => {
     if (!elidable.has(i) || m.content.length < min) return m;
