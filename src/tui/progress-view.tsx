@@ -83,8 +83,11 @@ export function ProgressView(
   const suffix = phase === "upstream" && refinerModel ? ` (${refinerModel})` : detail ? ` — ${detail}` : "";
   // Broken out (not one lump): re-sent context bills per call, so ↑ grows with each round — showing the
   // split + call count makes it clear the total is cumulative across the turn's LLM calls, not one request.
+  // How much of ↑ the backend served from its prefix cache. Without it a re-sent 40k conversation looked
+  // exactly as expensive as a fresh one, so the headline overstated the real bill by an unknown amount.
+  const cached = meta && meta.cachedTokens > 0 ? ` (${fmtTokens(meta.cachedTokens)} cached)` : "";
   const metrics = meta?.running && meta.startedAt !== undefined
-    ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ↑${fmtTokens(meta.promptTokens)} ↓${fmtTokens(meta.completionTokens)} · ${meta.calls} call${meta.calls === 1 ? "" : "s"})`
+    ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ↑${fmtTokens(meta.promptTokens)}${cached} ↓${fmtTokens(meta.completionTokens)} · ${meta.calls} call${meta.calls === 1 ? "" : "s"})`
     : "";
   return (
     <Box>

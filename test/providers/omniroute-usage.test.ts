@@ -48,7 +48,7 @@ describe("OmniRouteProvider — usage", () => {
     const events = await drain(provider.chat(req, new AbortController().signal));
     expect(events).toEqual([
       { type: "text-delta", text: "hi" },
-      { type: "usage", promptTokens: 123, completionTokens: 45 },
+      { type: "usage", promptTokens: 123, completionTokens: 45, cachedTokens: 0 },
       { type: "done", finishReason: "stop" },
     ]);
   });
@@ -81,6 +81,6 @@ describe("OmniRouteProvider — usage", () => {
       );
     const provider = new OmniRouteProvider({ baseUrl: "http://localhost:20128", fetch });
     const events = await drain(provider.chat(req, new AbortController().signal));
-    expect(events).toContainEqual({ type: "usage", promptTokens: 100, completionTokens: 10 });
+    expect(events).toContainEqual({ type: "usage", promptTokens: 100, completionTokens: 10, cachedTokens: 0 });
   });
 });

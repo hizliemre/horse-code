@@ -39,7 +39,7 @@ describe("phase labels + running horse", () => {
   });
 
   it("while running, shows live elapsed + a broken-out token count (↑prompt ↓completion · N calls)", () => {
-    const meta = { model: "", promptTokens: 1234, completionTokens: 456, calls: 3, startedAt: Date.now() - 12_000, running: true };
+    const meta = { model: "", promptTokens: 1234, completionTokens: 456, cachedTokens: 0, calls: 3, startedAt: Date.now() - 12_000, running: true };
     const r = render(<ProgressView phase="chat" meta={meta} />);
     const f = clean(r.lastFrame());
     expect(f).toMatch(/\(\d+s · ↑1\.2k ↓456 · 3 calls\)/);

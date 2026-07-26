@@ -4,6 +4,8 @@ export interface UsageSample {
   model: string;
   promptTokens: number;
   completionTokens: number;
+  /** Share of `promptTokens` the backend served from its prefix cache — billed at a fraction of the rate. */
+  cachedTokens?: number;
 }
 
 /**
@@ -15,7 +17,7 @@ export function meterProvider(inner: Provider, onUsage: (s: UsageSample) => void
     async *chat(req, signal) {
       for await (const ev of inner.chat(req, signal)) {
         if (ev.type === "usage") {
-          onUsage({ model: req.model, promptTokens: ev.promptTokens, completionTokens: ev.completionTokens });
+          onUsage({ model: req.model, promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, cachedTokens: ev.cachedTokens ?? 0 });
         }
         yield ev;
       }

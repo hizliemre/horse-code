@@ -140,7 +140,7 @@ export class OmniRouteProvider implements Provider {
     const toolCalls = new Map<number, ToolCallAccumulator>();
     const lastProgress = new Map<number, number>(); // per tool-call: last arg length we emitted progress for
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
-    let usage: { promptTokens: number; completionTokens: number } | undefined;
+    let usage: { promptTokens: number; completionTokens: number; cachedTokens: number } | undefined;
     // omniroute appends the REAL billed token counts as trailing SSE comments (":
     // x-omniroute-tokens-in=48"). The stream's own usage chunk counts the full prompt the model saw —
     // including the large Claude Code system prompt omniroute injects for cc/claude providers, most of
@@ -163,8 +163,15 @@ export class OmniRouteProvider implements Provider {
         }
         // Usage arrives (with include_usage) in a final chunk whose `choices` is empty → read it before
         // the no-choice skip below.
-        const u = (chunk as { usage?: { prompt_tokens?: number; completion_tokens?: number } }).usage;
-        if (u) usage = { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0 };
+        const u = (chunk as { usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } }).usage;
+        // cached_tokens is the share of the prompt the backend served from its prefix cache. Without reading
+        // it, a re-sent 40k-token conversation looks identical in cost to a fresh one — so the headline number
+        // overstated what was actually billed, and there was no way to tell by how much.
+        if (u) usage = {
+          promptTokens: u.prompt_tokens ?? 0,
+          completionTokens: u.completion_tokens ?? 0,
+          cachedTokens: u.prompt_tokens_details?.cached_tokens ?? 0,
+        };
         const choice = (chunk as { choices?: unknown[] })?.choices?.[0] as
           | { delta?: Record<string, unknown>; finish_reason?: string | null }
           | undefined;
@@ -212,7 +219,7 @@ export class OmniRouteProvider implements Provider {
     if (billed.in !== undefined || billed.out !== undefined) {
       yield { type: "usage", promptTokens: billed.in ?? 0, completionTokens: billed.out ?? 0 };
     } else if (usage) {
-      yield { type: "usage", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens };
+      yield { type: "usage", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, cachedTokens: usage.cachedTokens };
     } else {
       const inHeader = res.headers.get("X-OmniRoute-Tokens-In");
       const outHeader = res.headers.get("X-OmniRoute-Tokens-Out");

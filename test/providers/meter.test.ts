@@ -12,7 +12,7 @@ function fakeProvider(events: ChatEvent[]): Provider {
 
 describe("meterProvider", () => {
   it("reports the request model + token usage for each usage event, and passes events through", async () => {
-    const samples: { model: string; promptTokens: number; completionTokens: number }[] = [];
+    const samples: { model: string; promptTokens: number; completionTokens: number; cachedTokens?: number }[] = [];
     const inner = fakeProvider([
       { type: "text-delta", text: "hi" },
       { type: "usage", promptTokens: 100, completionTokens: 40 },
@@ -23,7 +23,8 @@ describe("meterProvider", () => {
     for await (const ev of p.chat({ model: "m-x", messages: [], tools: [] }, new AbortController().signal)) {
       out.push(ev);
     }
-    expect(samples).toEqual([{ model: "m-x", promptTokens: 100, completionTokens: 40 }]);
+    // cachedTokens rides along so the UI can say how much of ↑ was actually re-billed.
+    expect(samples).toEqual([{ model: "m-x", promptTokens: 100, completionTokens: 40, cachedTokens: 0 }]);
     expect(out).toHaveLength(3); // all events forwarded untouched
     expect(out[0]).toEqual({ type: "text-delta", text: "hi" });
   });

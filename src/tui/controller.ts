@@ -9,6 +9,7 @@ export interface TurnMeta {
   model: string;
   promptTokens: number; // Σ billed input over every LLM call in the turn (re-sent context bills per call — no caching)
   completionTokens: number; // Σ generated tokens
+  cachedTokens: number; // Σ of promptTokens the backend served from its prefix cache (billed at a fraction)
   calls: number; // number of LLM calls the turn made (refiner + each coach tool-round + summarizer + subagents)
   startedAt?: number;
   durationMs?: number;
@@ -154,6 +155,7 @@ export class TuiController {
       meta: {
         ...m,
         model: s.model || m.model,
+        cachedTokens: m.cachedTokens + (s.cachedTokens ?? 0),
         promptTokens: m.promptTokens + s.promptTokens,
         completionTokens: m.completionTokens + s.completionTokens,
         calls: (m.calls ?? 0) + 1, // one usage event = one LLM call
@@ -283,7 +285,7 @@ export class TuiController {
     this.state = {
       ...this.state,
       mode: "running", cards: [], phase: "", detail: undefined, pending: undefined, runningAgents: [], nextSteps: [],
-      meta: { model: "", promptTokens: 0, completionTokens: 0, calls: 0, startedAt: this.now(), running: true },
+      meta: { model: "", promptTokens: 0, completionTokens: 0, cachedTokens: 0, calls: 0, startedAt: this.now(), running: true },
     };
     this.notify();
   }
@@ -296,7 +298,7 @@ export class TuiController {
     this.state = {
       ...this.state,
       mode: "running", phase, detail: undefined,
-      meta: { model, promptTokens: 0, completionTokens: 0, calls: 0, startedAt: this.now(), running: true },
+      meta: { model, promptTokens: 0, completionTokens: 0, cachedTokens: 0, calls: 0, startedAt: this.now(), running: true },
     };
     this.notify();
   }
