@@ -1,5 +1,5 @@
 import type { ChatRequest, Provider } from "../core/types.js";
-import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable } from "../tui/role-models.js";
+import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable, isKnownModel } from "../tui/role-models.js";
 
 export interface TunedRoles {
   reasoning: string;
@@ -43,6 +43,70 @@ function parseAssignments(text: string): { role: string; models: string[] }[] {
   return [];
 }
 
+/**
+ * Share of roles one model may appear in, across ALL chain positions.
+ *
+ * The tuner satisfies "fallbacks on a different source" per chain and still converges on the SAME model as the
+ * last link of nearly every chain — observed: one model was the final fallback of ~40 of 60 roles. Each chain
+ * looked diverse; the fleet was not. The moment the other sources rate-limit, every one of those roles lands on
+ * a single subscription at once, which is precisely the failure the fallback exists to survive.
+ */
+export const MAX_MODEL_SHARE = 0.25;
+
+/**
+ * Below this many roles the cap is meaningless and actively harmful: with a handful of roles a repeated
+ * fallback is normal, and a 25% share would forbid a model from appearing even twice. The problem this solves
+ * is a FLEET-scale one ("one model was the last link of 40 of 60 chains").
+ */
+export const MIN_FLEET_FOR_SPREAD = 8;
+
+/** How often each model appears across every chain. */
+function modelUse(chains: { role: string; models: string[] }[]): Map<string, number> {
+  const n = new Map<string, number>();
+  for (const c of chains) for (const m of c.models) n.set(m, (n.get(m) ?? 0) + 1);
+  return n;
+}
+
+/**
+ * Replaces over-represented models with the least-used alternative that still fits the chain: a different
+ * source from the rest of the chain where possible, closest heft second. Only FALLBACK slots are rewritten —
+ * a primary is the tuner's actual reasoning about the role and is left alone.
+ *
+ * Degrades gracefully: with too few models to satisfy the cap, a role keeps what it had rather than being
+ * stranded with a short chain.
+ */
+export function spreadLoad(chains: { role: string; models: string[] }[], models: string[]): { role: string; models: string[] }[] {
+  // Replacements come from real, assignable models only — the raw catalog also carries image/video endpoints.
+  if (chains.length < MIN_FLEET_FOR_SPREAD) return chains;
+  const pool = models.filter(isKnownModel);
+  if (!pool.length) return chains;
+  const slots = chains.reduce((n, c) => n + c.models.length, 0);
+  // A cap below the pigeonhole minimum is unsatisfiable: with few models, SOME model must repeat. Never ask
+  // for less than the unavoidable average, or a small fleet would churn without ever reaching the target.
+  const cap = Math.max(Math.ceil(chains.length * MAX_MODEL_SHARE), Math.ceil(slots / pool.length));
+  const use = modelUse(chains);
+  const out = chains.map((c) => ({ role: c.role, models: [...c.models] }));
+  for (const chain of out) {
+    for (let i = 1; i < chain.models.length; i++) { // i=1: never touch the primary
+      const m = chain.models[i];
+      if ((use.get(m) ?? 0) <= cap) continue;
+      const sources = new Set(chain.models.filter((_, j) => j !== i).map(sourceOf));
+      const inChain = new Set(chain.models);
+      const candidates = pool
+        .filter((x) => !inChain.has(x) && (use.get(x) ?? 0) < cap)
+        .sort((a, b) => (use.get(a) ?? 0) - (use.get(b) ?? 0)
+          || (sources.has(sourceOf(a)) ? 1 : 0) - (sources.has(sourceOf(b)) ? 1 : 0)
+          || Math.abs(capabilityScore(a) - capabilityScore(m)) - Math.abs(capabilityScore(b) - capabilityScore(m)));
+      const pick = candidates[0];
+      if (!pick) continue; // nothing left that is under the cap → keep what we have rather than strand the role
+      use.set(m, (use.get(m) ?? 1) - 1);
+      use.set(pick, (use.get(pick) ?? 0) + 1);
+      chain.models[i] = pick;
+    }
+  }
+  return out;
+}
+
 /** Keeps only real model ids, dedupes, pads each role's chain to 3 from the heuristic (never invents). */
 function validateChains(
   assignments: { role: string; models: string[] }[],
@@ -53,7 +117,7 @@ function validateChains(
   const valid = new Set(models);
   const byRole = new Map(assignments.map((a) => [a.role, a.models]));
   const heuMap = new Map(heuristic.map((h) => [h.role, h.models]));
-  return roles.map((role) => {
+  const built = roles.map((role) => {
     const chain: string[] = [];
     const seen = new Set<string>();
     const add = (m: string) => { if (m && valid.has(m) && !seen.has(m)) { seen.add(m); chain.push(m); } };
@@ -62,6 +126,8 @@ function validateChains(
     for (const m of models) { if (chain.length >= 3) break; add(m); } // last resort: any model
     return { role, models: chain };
   });
+  // Per-chain diversity is not fleet diversity: rebalance whatever one model ended up carrying for everyone.
+  return spreadLoad(built, models);
 }
 
 /**
@@ -90,6 +156,9 @@ export async function tuneRoleModels(opts: {
     `1. Use ONLY exact model ids from the catalog below — never invent one.\n` +
     `2. Every role gets EXACTLY 3 DISTINCT models: primary, fallback 1, fallback 2.\n` +
     `3. Prefer fallbacks on a DIFFERENT source than the primary, so one source's exhaustion drops cleanly.\n` +
+    `3a. Do NOT give the same model to everyone as a fallback. No single model should appear in more than a \n` +
+    `QUARTER of all chains — per-chain source diversity is worthless if every chain ends on the same model, \n` +
+    `because they all land on one subscription the moment the others rate-limit.\n` +
     `3b. A fallback is a SUBSTITUTE, not an upgrade: give it the SAME heft band as the primary whenever a \n` +
     `same-band model exists on another source. Standing in for a [mid] model with a [strong] or [flagship] \n` +
     `one silently multiplies cost and latency and defeats the tiering. Only leave the band when no peer exists.\n` +
