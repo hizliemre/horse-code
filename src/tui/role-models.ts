@@ -31,6 +31,9 @@ const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]
 
 // Human-readable role profiles — the picker advice AND the brief the LLM tuner reasons over.
 export const ROLE_PROFILES: Record<string, string> = {
+  tracer: "Writes the per-file reference note every other agent reads before changing unfamiliar code — " +
+    "moderate volume, but a wrong note misleads every agent that reads it afterwards, so it needs a STRONG " +
+    "model. Never a [fast] one: a shallow or invented note is worse than no note at all.",
   refiner: "Classifies intent and rewrites the prompt every turn — highest call volume, trivial task → a fast, cheap model.",
   router: "Picks coder-vs-designer for a task — tiny and frequent → fast, cheap.",
   "project-manager": "Turns a task list into board items — light and structured → fast, cheap.",

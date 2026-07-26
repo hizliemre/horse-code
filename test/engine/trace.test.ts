@@ -265,3 +265,26 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
     expect(existsSync(join(cwd, ".gitignore"))).toBe(false);
   });
 });
+
+describe("the tracer is a real role, and a strong one", () => {
+  it("is in the roles the tuner must assign", async () => {
+    const { REQUIRED_ROLES } = await import("../../src/prompts.js");
+    expect(REQUIRED_ROLES).toContain("tracer");
+  });
+
+  it("has a prompt, so resolving the role cannot fail", async () => {
+    const { DEFAULT_PROMPTS } = await import("../../src/prompts.js");
+    expect(DEFAULT_PROMPTS.tracer).toMatch(/never speculate/i);
+  });
+
+  /**
+   * The tuner reads these profiles to choose a model. A trace is read by every agent that later touches the
+   * file and is committed to the repo, so a cheap model here is a false economy — the profile has to say so
+   * or the tuner will put a [fast] model on it for looking like high-volume work.
+   */
+  it("tells the tuner it needs a strong model, never a fast one", async () => {
+    const { ROLE_PROFILES } = await import("../../src/tui/role-models.js");
+    expect(ROLE_PROFILES.tracer).toMatch(/STRONG/);
+    expect(ROLE_PROFILES.tracer).toMatch(/Never a \[fast\]/);
+  });
+});

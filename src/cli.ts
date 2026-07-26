@@ -245,10 +245,24 @@ export async function main(argv: string[]): Promise<void> {
           .filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala)$/.test(f))
           .filter((f) => !/(^|\/)(dist|build|node_modules|vendor|\.horsecode|graphify-out)\//.test(f));
       };
-      // The tracer is a high-volume role — one short note per file. It takes the model assigned to `refiner`,
-      // which the tuner keeps on a cheap tier for exactly this kind of work, rather than the session default
-      // which may well be a flagship.
-      const tracerModel = (): string => config.roles.refiner?.models[0] ?? config.model;
+      /**
+       * The model that writes the traces.
+       *
+       * `tracer` is a role of its own so `/roles adjust` assigns it deliberately and `/roles setmodel tracer`
+       * can override it. It needs a STRONG model: a trace is read by every agent that later touches the file,
+       * so a shallow or invented note misleads all of them — and unlike a bad answer in a conversation, it is
+       * written to disk and committed. Cheapness is the wrong axis here.
+       *
+       * Until the role has been assigned, it borrows from the strongest roles already configured rather than
+       * falling back to the session default, which may be anything.
+       */
+      const tracerModel = (): string => {
+        for (const role of ["tracer", "architect", "senior-coder", "judge"]) {
+          const m = config.roles[role]?.models[0];
+          if (m && m !== "default") return m;
+        }
+        return config.model;
+      };
       const planTracesFn = async (): Promise<{ summary: string; jobs: number }> => {
         const plan = await planFor(cwd, await traceableFiles());
         return { summary: describePlan(plan, tracerModel()), jobs: plan.jobs.length };

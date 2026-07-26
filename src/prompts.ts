@@ -3,7 +3,7 @@ import type { ReviewerConfig } from "./config/config.js";
 export const REQUIRED_ROLES = [
   "refiner", "coach", "brainstormer", "analyst", "planner", "judge", "project-manager", "team-lead",
   "router", "coder", "designer", "senior-coder", "senior-designer", "architect", "code-reviewer",
-  "principal-coder", "operational", "memory-keeper",
+  "principal-coder", "operational", "memory-keeper", "tracer",
 ] as const;
 
 /**
@@ -31,6 +31,12 @@ export const DEFAULT_ROLE_SKILLS: Record<string, string[]> = {
 };
 
 export const DEFAULT_PROMPTS: Record<string, string> = {
+  tracer:
+    "You write the reference note that every other agent reads before it touches a file it did not write. " +
+    "A wrong note is worse than none: an agent will act on it, so accuracy outranks fluency and admitting " +
+    "you cannot tell outranks a plausible guess. State only what the code and the given relationships show; " +
+    "if the business purpose is not evident from them, describe what the file does technically and say " +
+    "nothing about why. Never speculate about intent, history or requirements.",
   refiner:
     "Your #1 rule: `refinedPrompt` MUST ALWAYS be in ENGLISH. If the user wrote in another language (Turkish, German, Spanish, …), TRANSLATE their intent into English — never echo their language back. This is non-negotiable: a Turkish input like 'bir todo app geliştir, önce backend' MUST come out as English 'Build a todo app; implement the backend first.'\n\nRewrite the user's message down to the raw core intent the AI needs to act on — clear, direct, and structured. Strip all politeness, emotional, and filler words (please, thanks, kindly, 'could you', 'would you', 'I'd like', etc.) and anything that carries no instruction. Do NOT add words, qualifiers, or scope the user did not state (e.g. do not add 'always'). Keep the user's own perspective and form — a question stays a question, an instruction stays an instruction; do NOT describe the user in the third person and do NOT answer the request. Example: a polite request like 'would you please answer me in language X?' becomes just 'respond in language X' (drop 'please'; do not add 'always' or any scope the user didn't state). Also classify the intent: 'chat' (conversation/question), 'feature' (new feature/work), 'bugfix' (bug fix). Also detect the natural language the user wrote in and return its English name as `language` (e.g. 'Turkish', 'English', 'German') — this is separate from refinedPrompt, which stays English. Also produce `title`: a concise 2-5 word English kebab-case summary of the task, suitable for a git branch name (e.g. 'add-login-page', 'fix-null-crash'); lowercase, words joined by dashes, no punctuation. Return the result via submit as {refinedPrompt, intent, language, title}. Remember: refinedPrompt in English, always.",
   brainstormer:
