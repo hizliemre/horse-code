@@ -241,3 +241,61 @@ describe("prefers the newest release of a family", () => {
     expect(modelFamily("cc/claude-opus-4-8")).not.toBe(modelFamily("cc/claude-sonnet-5"));
   });
 });
+
+// Gemini never showed up in role assignments. Not a hard exclusion — the heuristic did pick some — but its
+// score was PINNED at a flat 65: every generation scored identically and the -high/-low effort suffix was
+// ignored, so a current Gemini Pro was ranked as if it were the first one, and the LLM tuner reading that
+// catalog had no reason to ever choose it.
+describe("Gemini is ranked like every other family we recognise", () => {
+  it("a newer generation outranks an older one", () => {
+    expect(capabilityScore("antigravity/gemini-3.1-pro-high")).toBeGreaterThan(capabilityScore("antigravity/gemini-2.5-pro"));
+    expect(capabilityScore("antigravity/gemini-2.5-pro")).toBeGreaterThan(capabilityScore("antigravity/gemini-1.5-pro"));
+  });
+
+  it("reasoning effort counts, as it does for the codex/gpt family", () => {
+    expect(capabilityScore("antigravity/gemini-3.1-pro-high")).toBeGreaterThan(capabilityScore("antigravity/gemini-3.1-pro-low"));
+  });
+
+  // ids separate with underscores as well as dashes; \bpro\b never matches after "_" (a word character).
+  it("recognises underscore-separated ids", () => {
+    expect(capabilityScore("tllm/gemini_3_pro")).toBeGreaterThan(capabilityScore("tllm/gemini_2_5_pro"));
+    expect(modelBand("tllm/gemini_3_pro")).toBe("mid");
+  });
+
+  it("a current Gemini Pro lands in the same band as a Sonnet, not below everything", () => {
+    expect(modelBand("antigravity/gemini-3.1-pro-high")).toBe("mid");
+  });
+
+  it("flash variants stay in the fast band (that part was always right)", () => {
+    expect(modelBand("antigravity/gemini-3.5-flash-high")).toBe("fast");
+  });
+
+  it("plain gpt-4 keeps its old score — only the Gemini branch changed", () => {
+    expect(capabilityScore("openai/gpt-4")).toBe(65);
+  });
+});
+
+// isKnownModel exists precisely so image/video endpoints never win a reasoning slot, but the family regex
+// waved them through whenever they carried a known family name.
+describe("non-text endpoints are not assignable models", () => {
+  it.each([
+    "antigravity/gemini-3-pro-image-preview",
+    "antigravity/gemini-3.1-flash-image",
+    "antigravity/gemini-2.5-computer-use-preview-10-2025",
+    "x/veo-3-video",
+    "x/whisper-audio",
+    "x/text-embedding-3-large",
+  ])("rejects %s", (m) => expect(isKnownModel(m)).toBe(false));
+
+  it.each([
+    "antigravity/gemini-3.1-pro-high",
+    "cc/claude-opus-4-8",
+    "cx/gpt-5.6-sol-ultra",
+  ])("still accepts %s", (m) => expect(isKnownModel(m)).toBe(true));
+
+  it("keeps image endpoints out of assignments entirely", () => {
+    const catalog = ["antigravity/gemini-3-pro-image-preview", "antigravity/gemini-3.1-pro-high", "cc/claude-opus-4-8"];
+    const used = new Set(adjustRoleModels(["coach", "judge"], catalog).flatMap((r) => r.models));
+    expect([...used].some((m) => /image/.test(m))).toBe(false);
+  });
+});

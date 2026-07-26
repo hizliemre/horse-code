@@ -125,8 +125,15 @@ const versionBump = (s: string, family?: string): number => {
  * reasoning role just because they happen to sit in a source the round-robin reached.
  */
 const KNOWN_FAMILY_RE = /(fable|mythos|opus|sonnet|haiku|claude|codex|gpt-|\bo\d\b|gemini|deepseek|llama|qwen|kimi|glm|mistral|grok|nova|command-r|phi-\d)/i;
+/**
+ * Endpoints that are not general-purpose TEXT models. They often carry a known family name (…/gemini-3-pro-
+ * image-preview, …/gemini-2.5-computer-use-…), so the family regex alone waved them through and they were
+ * handed real reasoning roles.
+ */
+const NON_TEXT_RE = /\b(image|imagen|vision|video|veo|tts|audio|speech|voice|embed|embedding|rerank|ocr|computer-use|realtime|moderation)\b/i;
+
 export function isKnownModel(model: string): boolean {
-  return KNOWN_FAMILY_RE.test(model);
+  return KNOWN_FAMILY_RE.test(model) && !NON_TEXT_RE.test(model);
 }
 
 /** Score given to a model we can't rank — used as the floor that keeps it out of the reasoning tiers. */
@@ -142,7 +149,13 @@ export function capabilityScore(model: string): number {
   // without disturbing how this family calibrates against opus/sonnet.
   if (/codex|gpt-5|\bo3\b/.test(s)) return 82 + effortBump(s) + versionBump(s, "gpt") / 100; // effort- AND version-aware
   if (/sonnet/.test(s)) return 78 + versionBump(s, "sonnet");
-  if (/gpt-4|gemini.*pro/.test(s)) return 65;
+  // Gemini Pro was pinned at a flat 65: every generation scored the same and the -high/-low effort
+  // suffix was ignored, so a current Gemini Pro was ranked as if it were the first one. Version- and
+  // effort-aware now, like every other family we actually rank.
+  // NB: plain /pro/ — ids separate with underscores as well as dashes (tllm/gemini_3_pro), and \bpro\b
+  // never matches after an underscore because "_" is a word character.
+  if (/gemini/.test(s) && /pro/.test(s)) return 76 + versionBump(s, "gemini") + effortBump(s);
+  if (/gpt-4/.test(s)) return 65;
   if (/deepseek/.test(s)) return 55;
   return UNRANKED_SCORE; // recognised family but no ranking signal (llama/qwen/kimi/…) or plain unknown
 }
