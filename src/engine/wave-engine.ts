@@ -97,7 +97,7 @@ export interface Delivery {
 
 export type WaveEngineResult =
   | { status: "completed"; session: WorktreeSession; pr?: { url: string }; delivery: Delivery; waves: string[][] }
-  | { status: "partial"; session: WorktreeSession; failed: string[]; skipped: string[]; delivery: Delivery; waves: string[][] };
+  | { status: "partial"; session: WorktreeSession; pr?: undefined; failed: string[]; skipped: string[]; delivery: Delivery; waves: string[][] };
 
 function teamLeadOpts(deps: WaveEngineDeps, session: WorktreeSession): RoleAgentOptions {
   const tl = deps.roleRegistry.resolve("team-lead");
@@ -130,13 +130,18 @@ export async function runWaves(
   }
 
   const delivery: Delivery = { branch: session.baseBranch, worktree: session.baseWorktree };
-  const clean = failed.length === 0 && skipped.length === 0;
 
-  if (clean) {
+  /**
+   * Only the PULL REQUEST is opened here. The merge is not.
+   *
+   * The review that runs after this stage commits to the same base branch, so merging now would deliver a
+   * snapshot taken before the review's own fixes — the user's branch would be missing exactly the commits
+   * the review was run to produce. Delivery therefore happens at the end of the job, after the review.
+   */
+  if (failed.length === 0 && skipped.length === 0) {
     await deps.manager.push(session);
-    // A pull request is delivery when there is a remote to open it against.
-    const remote = await deps.manager.hasRemote(session);
-    if (remote) {
+    // A pull request is delivery when there is a remote to open it against; when there is not, the merge is.
+    if (await deps.manager.hasRemote(session)) {
       const body = "Completed tasks:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
       const pr = await deps.manager.openPR(session, deps.prAdapter, {
         base: opts.base,
@@ -145,22 +150,8 @@ export async function runWaves(
       });
       return { status: "completed", session, pr, delivery, waves };
     }
-    // No remote: merging into the branch the job started from IS the delivery. Doing nothing here is what
-    // left a finished project invisible at the repository root.
-    const landed = await deps.manager.deliverLocally(session, opts.base);
-    if (landed.ok) delivery.mergedInto = opts.base;
-    else delivery.notMerged = landed.why;
     return { status: "completed", session, delivery, waves };
   }
-
-  /**
-   * A partial run is NOT merged automatically.
-   *
-   * Some tasks failed, and folding failed work into the user's branch without asking would be a worse
-   * error than leaving it on its own. But it is reported with the branch and the command, because the
-   * successful tasks are real work the user paid for and must be able to reach.
-   */
-  delivery.notMerged = "the run was partial — merge it yourself once you have looked at what failed";
   return { status: "partial", session, failed, skipped, delivery, waves };
 }
 

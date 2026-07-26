@@ -254,3 +254,54 @@ describe("resuming a partially finished board", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * The wave engine no longer merges.
+ *
+ * The review that runs after it commits to the same base branch, so merging here would deliver a snapshot
+ * taken before the review's own fixes — the user's branch would be missing exactly the commits the review
+ * was run to produce. Delivery moved to the end of the job, after the review.
+ */
+describe("delivery information", () => {
+  it("always reports the branch the work is on, on a clean run", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      const res = await runWaveEngine(edeps(mgr, fakeAdapter()), board, { fromBranch: "main", jobName: "job" });
+      expect(res.delivery.branch).toBe(res.session.baseBranch);
+      expect(res.delivery.worktree).toBe(res.session.baseWorktree);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("reports it on a partial run too — the completed tasks are still real work", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
+      const res = await runWaveEngine(
+        edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), board, { fromBranch: "main", jobName: "job" });
+      expect(res.status).toBe("partial");
+      expect(res.delivery.branch).toBe(res.session.baseBranch);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** Without a remote there is nowhere to open a pull request; the merge that replaces it happens later. */
+  it("opens no pull request and merges nothing when there is no remote", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      const adapter = fakeAdapter();
+      const res = await runWaveEngine(edeps(mgr, adapter), board, { fromBranch: "main", jobName: "job" });
+      expect(res.status).toBe("completed");
+      expect(res.pr).toBeUndefined();
+      expect(adapter.calls).toBe(0);
+      expect(res.delivery.mergedInto).toBeUndefined();
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});

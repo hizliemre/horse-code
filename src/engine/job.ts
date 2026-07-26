@@ -193,8 +193,19 @@ export async function runJob(
 
     let revision: RevisionResult | undefined;
     let deferredAll: string[] = [];
-    if (wave.status === "completed") {
-      emit({ kind: "phase", phase: "pr", detail: wave.pr?.url ?? wave.delivery.mergedInto ?? wave.delivery.branch });
+    /**
+     * The merged result is reviewed whether or not every task landed.
+     *
+     * This used to run only on a fully clean run, which meant a job that finished twenty-one of thirty tasks
+     * — a real, working, sizeable diff — got no review of the merged result at all, and its deferred
+     * findings were never adjudicated. A partial run is not a failed run: what it did produce deserves the
+     * same scrutiny as what a clean one produces, and it is what the user will actually be given.
+     *
+     * Nothing to review is the one case that skips it: a run where every task failed has no diff.
+     */
+    const reviewable = board.list().some((c) => c.column === "DONE");
+    if (reviewable) {
+      emit({ kind: "phase", phase: "pr", detail: wave.pr?.url ?? wave.delivery.branch });
       const prDiff = await deps.manager.diff(session, opts.fromBranch);
       // Non-blocking code findings the per-task reviews deferred: a passed task has no further attempt, so the
       // PR revision pass is where they are adjudicated — once, on the merged result.
@@ -213,12 +224,49 @@ export async function runJob(
       emit({ kind: "phase", phase: "revision-done", detail: revision.status });
     }
 
+    /**
+     * Delivery — after the review, so the user's branch contains the review's own fixes.
+     *
+     * Runs for a partial job too. A run that produced twenty-one working tasks and delivered nothing is
+     * indistinguishable, from the outside, from one that built nothing; the user paid for that work and has
+     * to be able to run it. What did not get done is reported alongside, so "delivered" is never mistaken
+     * for "finished".
+     *
+     * A pull request, when there is a remote, is already the delivery — the user reviews and merges it
+     * themselves, and merging here as well would take that decision away from them.
+     */
+    if (!wave.pr && reviewable) {
+      const landed = await deps.manager.deliverLocally(session, opts.fromBranch);
+      if (landed.ok) {
+        wave.delivery.mergedInto = opts.fromBranch;
+        emit({ kind: "note", text: `📦 Merged into \`${opts.fromBranch}\` — the files are in your working copy.` });
+      } else {
+        wave.delivery.notMerged = landed.why;
+        emit({ kind: "note", text: `📦 Not merged (${landed.why}) — the work is on \`${wave.delivery.branch}\`.` });
+      }
+    }
+
     await curate(deps, up.refinedPrompt ?? opts.prompt, board.list(), deferredAll, session.baseWorktree);
 
     emit({ kind: "phase", phase: "report" });
     const report = await runCoachReport(deps, session, board);
-    clearCheckpoint(session.root); // whole job succeeded → nothing left to resume
-    await rm(join(session.root, "board.json"), { force: true }).catch(() => { /* best-effort */ });
+    /**
+     * Resume state is kept whenever anything is left undone.
+     *
+     * This deletion used to be unconditional, under a comment claiming the whole job had succeeded. It also
+     * ran on a partial one — so a run that finished twenty-one of thirty tasks deleted the only record of
+     * WHICH nine were left, and the remaining work became unreachable. "Resume" then had nothing to resume
+     * and would have started the whole job again from the beginning.
+     */
+    const unfinished = board.list().filter((c) => c.column !== "DONE");
+    if (!unfinished.length) {
+      clearCheckpoint(session.root); // nothing left — the state is what makes a resume possible, not clutter
+      await rm(join(session.root, "board.json"), { force: true }).catch(() => { /* best-effort */ });
+    } else {
+      emit({ kind: "note", text:
+        `⏸ ${unfinished.length} task(s) were not finished. The board is kept — say **continue** to pick them ` +
+        `up without redoing the ${board.list().length - unfinished.length} that are done.` });
+    }
     emit({ kind: "phase", phase: "done" });
     return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {
