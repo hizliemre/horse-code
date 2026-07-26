@@ -116,6 +116,14 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       }
 
       if (!errored) break; // turn produced a (possibly tool-calling) response → proceed
+      /**
+       * A cancelled run never benches a model.
+       *
+       * Checked here as well as in the provider because this is the layer that owns the signal: whatever a
+       * provider reports, a model cannot have failed during a turn the user stopped. Getting this wrong told
+       * the user their model had died and re-assigned every role that used it — for pressing Ctrl+C.
+       */
+      if (opts.signal.aborted) { fatal = { message: "cancelled", retryable: false }; break; }
       if (errored.retryable) opts.onExhausted?.(activeModel, errored.message); // spent either way, WITH why
       if (errored.retryable && !streamed && chainIdx < chain.length - 1) {
         const next = chain[chainIdx + 1];

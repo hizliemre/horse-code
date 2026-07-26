@@ -111,3 +111,34 @@ export function contextTools(deps: { mcpTools?: () => import("../core/types.js")
 export function mcpReadTools(deps: { mcpTools?: () => import("../core/types.js").Tool[] }): import("../core/types.js").Tool[] {
   return (deps.mcpTools?.() ?? []).filter((t) => t.permissionLevel === "safe");
 }
+
+/** Longest the pointer may get: it is in every prompt this agent makes, for every task. */
+export const MAX_TOOL_NOTE_CHARS = 900;
+
+/**
+ * A short pointer at the project-specific tools an agent has been given.
+ *
+ * Registering a tool puts it in the list; it does not make an agent reach for it. A coder with fifteen tools
+ * writing Angular will recall Angular from training — which for a fast-moving framework means recalling a
+ * version the project is not on — unless something says that an authoritative source is right there.
+ *
+ * Deliberately a POINTER and not instruction: the names, what each is for in one line, and the one principle
+ * that matters (prefer the tool to recollection). The tools' own descriptions carry the detail, and repeating
+ * them here would pay for the same text twice in the same prompt.
+ */
+export function projectToolsNote(tools: import("../core/types.js").Tool[]): string {
+  const mcp = tools.filter((t) => t.name.startsWith("mcp__"));
+  if (!mcp.length) return "";
+  const rows = mcp.map((t) => {
+    // Strip our prefix and the server's own bracket — the model already has the full description on the tool.
+    const short = t.name.replace(/^mcp__[^_]*(?:_[^_]+)*?__/, "").replace(/^mcp__/, "");
+    const desc = t.description.replace(/^\[MCP:[^\]]*\]\s*/, "").split(/[.\n]/)[0].trim();
+    return `- \`${t.name}\` — ${desc}`;
+  });
+  const body = rows.join("\n");
+  const clipped = body.length > MAX_TOOL_NOTE_CHARS ? `${body.slice(0, MAX_TOOL_NOTE_CHARS)}\n- …` : body;
+  return `\n\n# Project tools\n\nThis project connects tools that know its actual stack and version:\n${clipped}\n\n` +
+    `Use them instead of relying on what you remember. Your training is a snapshot; these answer for the ` +
+    `version this project is on, and a confidently-recalled API that was renamed two releases ago costs a ` +
+    `review cycle to find.`;
+}

@@ -13,7 +13,7 @@ import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { placedSkills } from "../prompts.js";
 import { loadGraphSync } from "./project-graph.js";
-import { contextTools } from './task-types.js';
+import { contextTools, projectToolsNote } from "./task-types.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 
 /**
@@ -56,6 +56,7 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
   const hints = memoryHints(deps, task.title, { role: "code-reviewer" });
   // A reviewer is exactly where a read-only auditing skill belongs — the skills an implementer must not be
   // handed, because they refuse to write code, are the ones that judge it best.
+  const reviewerTools = readOnlyRegistry(deps, { propose: true });
   const routed = routeSkills(task.title, deps.skillRegistry, deps.roleRegistry.skillsFor("code-reviewer"), {
     role: "code-reviewer", files: filesForTask(task.title, loadGraphSync(cwd)), placed: placedSkills(),
   });
@@ -69,8 +70,10 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
-    systemPrompt: routed.length ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry) : resolved.systemPrompt,
-    tools: readOnlyRegistry(deps, { propose: true }),
+    systemPrompt: (routed.length
+      ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
+      : resolved.systemPrompt) + projectToolsNote(reviewerTools.list()),
+    tools: reviewerTools,
     proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "code-reviewer") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission,

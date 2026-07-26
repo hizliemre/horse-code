@@ -88,6 +88,21 @@ function pathOf(args: string): string | undefined {
   return args.match(/"path"\s*:\s*"([^"\\]+)"/)?.[1];
 }
 
+
+/**
+ * Whether a thrown error is the CALLER's cancellation rather than a fault.
+ *
+ * Both are delivered as an aborted fetch, so without this a user pressing Ctrl+C looked exactly like a model
+ * that had died: the abort became a retryable error, the retryable error benched the model, and the roles
+ * using it were re-assigned. The user cancelled and was told their model had failed.
+ *
+ * The idle-timeout abort is deliberately NOT this: nothing arriving for two minutes is a real transport
+ * failure and a fallback may well complete the same request.
+ */
+function isCallerAbort(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
 export class OmniRouteProvider implements Provider {
   private readonly apiKey?: string;
   private readonly baseUrl: string;
@@ -121,6 +136,8 @@ export class OmniRouteProvider implements Provider {
         signal: combined,
       });
     } catch (e) {
+      // The caller cancelling is not a failure of anything: no fallback, no benching.
+      if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
       // Network/connection failure (DNS, refused, reset) — transient; a fallback may connect.
       yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
       return;
@@ -204,6 +221,7 @@ export class OmniRouteProvider implements Provider {
         if (choice.finish_reason) finishReason = mapFinishReason(choice.finish_reason);
       }
     } catch (e) {
+      if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
       // Mid-stream failure or idle-timeout stall — transient; a fallback may complete.
       yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
       return;
