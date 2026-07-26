@@ -1393,7 +1393,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
     const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
     const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH;
-    const viewportH = Math.max(3, size.rows - bottomH - 1); // -1: scroll hint line
+    /**
+     * While a question is pending, the transcript yields every row it can.
+     *
+     * The floor below is normally three rows of history, which is right when nothing is being asked. It is
+     * wrong when something is: the question and its options are drawn at the top of the bottom region, so on
+     * a terminal that cannot hold both, those three rows are taken from the QUESTION — which then scrolls off
+     * the top and leaves the user answering something they cannot read.
+     *
+     * A long question must render. The history behind it can wait.
+     */
+    const viewportFloor = state.pending ? 0 : 3;
+    const viewportH = Math.max(viewportFloor, size.rows - bottomH - 1); // -1: scroll hint line
     const maxScroll = Math.max(0, allLines.length - viewportH);
     maxScrollRef.current = maxScroll;
     const clamped = Math.min(scroll, maxScroll);

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { choiceHeight, wrapPlain } from "../../src/tui/components.js";
+import { choiceHeight, wrapPlain, pendingBodyWidth } from "../../src/tui/components.js";
+import { flattenMarkdown } from "../../src/tui/lines.js";
 
 /**
  * The layout reserved fewer rows than the component painted, so Ink drew over the region above it: the
@@ -124,5 +125,41 @@ describe("wrapPlain", () => {
 
   it("empty text is one empty line, not none", () => {
     expect(wrapPlain("", 40)).toEqual([""]);
+  });
+});
+
+/**
+ * A long question must render in full, whatever its length.
+ *
+ * The question is markdown-wrapped to the terminal width, so it never overflows sideways — what corrupted it
+ * on screen was the choice box under-reserving its own height and painting over the region above. These
+ * assert the wrapping side of that contract: no line ever exceeds the body width, at any width, however long
+ * the question.
+ */
+describe("a paragraph-long question wraps rather than overflowing", () => {
+  const PARAGRAPH =
+    "The constitution mandates httpResource, resource(), and websocket streaming — but also \"no backend, "
+    + "localStorage only.\" These directly conflict: those are network primitives with nothing to talk to. "
+    + "How do you want to resolve this for v1? (This is the single biggest architectural decision.)";
+
+  it.each([60, 80, 120, 200])("fits the body width at cols=%i", (cols) => {
+    const width = pendingBodyWidth(cols);
+    for (const line of flattenMarkdown(PARAGRAPH, width)) {
+      expect(line.map((s) => s.text).join("").length).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it("uses more lines on a narrower terminal rather than cutting text", () => {
+    const narrow = flattenMarkdown(PARAGRAPH, pendingBodyWidth(60)).length;
+    const wide = flattenMarkdown(PARAGRAPH, pendingBodyWidth(200)).length;
+    expect(narrow).toBeGreaterThan(wide);
+  });
+
+  /** Nothing is dropped: every word of the question survives the wrap. */
+  it("keeps the whole question", () => {
+    const joined = flattenMarkdown(PARAGRAPH, pendingBodyWidth(80))
+      .map((l) => l.map((s) => s.text).join("")).join(" ");
+    expect(joined).toContain("httpResource");
+    expect(joined).toContain("single biggest architectural decision");
   });
 });
