@@ -247,9 +247,32 @@ describe("file paths as routing signal", () => {
     expect(filesForTask("anything", undefined)).toEqual([]);
   });
 
-  it("caps how many files it reports", () => {
+  /**
+   * Measured against 400 real commits, taking whatever matched first scored 9% precision — worse than
+   * returning nothing, because a wrong path is passed onward as evidence. A term that appears everywhere
+   * says nothing about WHICH file a task is about, and now scores nothing.
+   */
+  it("returns nothing for a term that appears in every file", () => {
     const many = { nodes: Array.from({ length: 50 }, (_, i) => ({ label: "widget", source_file: `src/w${i}.tsx` })) };
-    expect(filesForTask("widget", many, 4)).toHaveLength(4);
+    expect(filesForTask("widget", many, 4)).toEqual([]);
+  });
+
+  it("prefers the file whose name is distinctive over one sharing a common word", () => {
+    const g = {
+      nodes: [
+        // "handler" is everywhere; "onboarding" is in one place.
+        ...Array.from({ length: 20 }, (_, i) => ({ label: "handler", source_file: `src/h${i}.ts` })),
+        { label: "OnboardingHandler", source_file: "src/onboarding/Onboarding.tsx" },
+      ],
+    };
+    expect(filesForTask("fix the onboarding handler", g, 3)).toEqual(["src/onboarding/Onboarding.tsx"]);
+  });
+
+  it("caps how many files it reports", () => {
+    const g = {
+      nodes: Array.from({ length: 20 }, (_, i) => ({ label: `Widget${i}`, source_file: `src/w${i}.tsx` })),
+    };
+    expect(filesForTask("widget0 widget1 widget2 widget3 widget4 widget5", g, 3).length).toBeLessThanOrEqual(3);
   });
 
   /**

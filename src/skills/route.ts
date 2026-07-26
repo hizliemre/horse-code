@@ -49,6 +49,18 @@ function terms(text: string): string[] {
     .filter((t) => t.length >= MIN_TERM && !STOP.has(t));
 }
 
+/**
+ * How close to the best match a file has to be to be reported at all.
+ *
+ * Resolution is evidence for routing, not a search result: a handful of confident files helps, and a long
+ * tail of files sharing one common word actively misleads.
+ */
+export const FILE_SCORE_RATIO = 0.5;
+/** What counts as source. Documentation is in the graph too, and it is not what a task's work lands in. */
+const SOURCE_FILE = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala|css|scss|vue|svelte|sql)$/;
+/** Below this a match is one common word and nothing more. */
+export const MIN_FILE_SCORE = 1.0;
+
 /** Shortest shared prefix that counts as the same word. Below this, unrelated words start colliding. */
 const MIN_SHARED = 4;
 
@@ -242,21 +254,51 @@ export function filesForTask(
   max = 8,
 ): string[] {
   if (!graph) return [];
-  const taskTerms = new Set(terms(task));
-  if (!taskTerms.size) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
+  const taskTerms = [...new Set(terms(task))];
+  if (!taskTerms.length) return [];
+
+  // How many distinct files each term appears in. A term used all over the codebase ("config", "skill",
+  // "role") says almost nothing about WHICH file a task is about; a term in two files says a great deal.
+  // Without this weighting the resolver returned whatever matched first, which measured at 9% precision
+  // against real commits — worse than returning nothing, since a wrong path is fed onward as evidence.
+  const df = new Map<string, Set<string>>();
+  const fileTerms = new Map<string, Set<string>>();
   for (const n of graph.nodes) {
-    if (!n.source_file || seen.has(n.source_file)) continue;
-    // A symbol counts as referenced only on a whole-word match. Substring matching over a thousand node
-    // labels would tie almost every task to almost every file.
-    // Matched with the same word-equality the rest of routing uses, so "onboarding" reaches an
-    // `OnboardingScreen` — exact set membership would not.
-    const label = terms(n.label);
-    if (!label.some((l) => [...taskTerms].some((t) => sameWord(t, l)))) continue;
-    seen.add(n.source_file);
-    out.push(n.source_file);
-    if (out.length >= max) break;
+    // SOURCE files only. The graph also carries documentation, and doc filenames are full of rare tokens
+    // (dates, slice names) which the weighting below rates as highly informative — so a design document
+    // outranked the code the task actually changes. Routing wants to know what kind of CODE work this is.
+    if (!n.source_file || !SOURCE_FILE.test(n.source_file)) continue;
+    let ft = fileTerms.get(n.source_file);
+    if (!ft) { ft = new Set(); fileTerms.set(n.source_file, ft); }
+    for (const t of terms(n.label)) {
+      ft.add(t);
+      let files = df.get(t);
+      if (!files) { files = new Set(); df.set(t, files); }
+      files.add(n.source_file);
+    }
   }
-  return out;
+  const total = fileTerms.size;
+  if (!total) return [];
+  const weight = (t: string): number => {
+    const n = df.get(t)?.size ?? 0;
+    return n ? Math.log(total / n) : 0;
+  };
+
+  const scored: { file: string; score: number }[] = [];
+  for (const [file, ft] of fileTerms) {
+    let score = 0;
+    for (const t of taskTerms) {
+      // Same word-equality the rest of routing uses, so "onboarding" reaches an `OnboardingScreen`.
+      const hit = [...ft].find((l) => sameWord(t, l));
+      if (hit) score += weight(hit);
+    }
+    if (score > 0) scored.push({ file, score });
+  }
+  if (!scored.length) return [];
+
+  scored.sort((a, b) => b.score - a.score || a.file.localeCompare(b.file));
+  // Only files close to the best match. A long tail of files sharing one common word is noise, and passing
+  // noise on as evidence is the failure this replaced.
+  const cut = scored[0].score * FILE_SCORE_RATIO;
+  return scored.filter((s) => s.score >= cut && s.score >= MIN_FILE_SCORE).slice(0, max).map((s) => s.file);
 }
