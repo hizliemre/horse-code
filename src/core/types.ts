@@ -44,6 +44,14 @@ export interface ToolActivity {
   summary?: string;
   /** False when the call failed — rendered so a failing tool is not mistaken for a successful one. */
   ok?: boolean;
+  /**
+   * How many consecutive calls this row stands for, and to what.
+   *
+   * A planning agent reads the same spec twenty times at different offsets. Twenty rows saying
+   * `read_file(spec.md) · ---` bury the two rows that matter — the failures, and the files it never found.
+   * A run of calls to the same tool becomes one row.
+   */
+  runs?: { target: string; count: number }[];
   preview?: string[]; // first lines of the written / changed content (shown under the header; for an edit, the ADDED lines)
   startLine?: number; // 1-based line number the preview begins at (write → 1; edit → where the change starts)
   removed?: string[]; // edit only: the REPLACED (old) lines → rendered as a - / + diff against `preview`

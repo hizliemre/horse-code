@@ -106,11 +106,38 @@ export function flattenMarkdown(text: string, width: number): StyledLine[] {
   return out;
 }
 
+/** Keeps the tail of a path: `…/todo-app/spec.md` says more than `specs/001-build-lux…`. */
+function short(target: string, max: number): string {
+  if (target.length <= max) return target;
+  const tail = target.slice(-(max - 1));
+  const cut = tail.indexOf("/");
+  return `…${cut > 0 ? tail.slice(cut) : tail}`;
+}
+
 /** A file write/edit rendered inline in the chat flow (Claude Code-style): header + a preview of the content. */
 export function flattenTool(a: import("../core/types.js").ToolActivity, cols: number): StyledLine[] {
   const width = Math.max(20, cols - 2);
   // A tool that changed no file gets one compact line: what it was asked, and what came back.
   if (a.summary !== undefined) {
+    const total = a.runs?.reduce((n, r) => n + r.count, 0) ?? 1;
+    if (a.runs && total > 1) {
+      /**
+       * A folded run: the tool, how many calls, and WHICH targets — with the busiest first.
+       *
+       * The per-call summary is dropped here on purpose. For a run of reads it was the first line of
+       * whatever happened to be at that offset ("---", "<!--"), which said nothing about the run and
+       * crowded out the one thing that does: what was being read, and how much.
+       */
+      const busiest = [...a.runs].sort((x, y) => y.count - x.count);
+      const shown = busiest.slice(0, 3)
+        .map((r) => (r.count > 1 ? `${short(r.target, 34)} ×${r.count}` : short(r.target, 34)));
+      const rest = busiest.length > 3 ? `, +${busiest.length - 3} more` : "";
+      return [[
+        { text: `${GLYPHS.msgBullet} `, color: "#1a9fd8" },
+        { text: `${a.tool} ×${total}`, bold: true },
+        { text: `  ${shown.join(", ")}${rest}`, dim: true },
+      ]];
+    }
     const head = `${a.tool}(${a.target})`;
     const avail = Math.max(10, width - head.length - 6);
     const tail = a.summary.length > avail ? `${a.summary.slice(0, avail - 1)}…` : a.summary;

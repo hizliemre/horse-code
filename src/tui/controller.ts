@@ -192,10 +192,35 @@ export class TuiController {
     this.notify();
   };
 
-  // arrow-bound: wired to deps.onActivity → write/edit tools push here → inline in the chat flow.
+  /**
+   * Records a tool call in the chat, folding a run of calls to the same tool into one row.
+   *
+   * Every executed tool reaching the chat was the right call — the record of what an agent did was being
+   * lost — but a planning agent reads the same two files sixty times, and sixty rows of
+   * `read_file(spec.md) · ---` bury the handful that carry information: the failures, and the searches that
+   * found nothing.
+   *
+   * Folded only while the run is UNBROKEN and successful. A failure ends the run and gets its own row: it is
+   * the thing worth seeing, and averaging it into a count is how it would stop being noticed. A row with a
+   * diff (a write or an edit) is never folded either — its content is the point.
+   */
   pushActivity = (a: ToolActivity): void => {
+    const t = [...this.state.transcript];
+    const last = t[t.length - 1];
+    const foldable = (x: ToolActivity): boolean => x.summary !== undefined && x.ok !== false;
+    if (last && "kind" in last && last.kind === "tool" && foldable(last.activity) && foldable(a)
+      && last.activity.tool === a.tool) {
+      const runs = last.activity.runs ?? [{ target: last.activity.target, count: 1 }];
+      const hit = runs.find((r) => r.target === a.target);
+      if (hit) hit.count++;
+      else runs.push({ target: a.target, count: 1 });
+      // The newest outcome replaces the old one: a summary of the run's last call beats a stale first one.
+      t[t.length - 1] = { kind: "tool", activity: { ...a, runs } };
+    } else {
+      t.push({ kind: "tool", activity: a });
+    }
     // The tool actually ran → its inline block replaces the transient "writing…" progress line.
-    this.state = { ...this.state, liveActivity: undefined, transcript: this.cap([...this.state.transcript, { kind: "tool", activity: a }]) };
+    this.state = { ...this.state, liveActivity: undefined, transcript: this.cap(t) };
     this.notify();
   };
 
