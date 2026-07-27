@@ -9,6 +9,7 @@ import type { AskHuman } from "./escalation.js";
 import { readOnlyRegistry } from "./reviewer.js";
 import { runUpstream } from "./upstream.js";
 import { runProjectManager } from "./project-manager.js";
+import { auditBreakdown, repairRequest } from "./task-audit.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
 import { runRevision, type RevisionResult } from "./revision.js";
@@ -19,7 +20,7 @@ import { memoryHints } from "./memory-inject.js";
 import { curateMemories } from "./memory-consolidate.js";
 import { saveBoard, loadBoard } from "../board/persist.js";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { rm, readFile } from "node:fs/promises";
 import type { Card, Column } from "../board/board.js";
 import { dirname, join } from "node:path";
 
@@ -33,6 +34,8 @@ export interface JobDeps extends ReviewDeps {
   prAdapter: RevisionPRAdapter;
   rounds: number;
   askHuman: AskHuman;
+  /** How many tasks of one wave may run at once (see MAX_PARALLEL_TASKS). */
+  maxParallel?: number;
 }
 
 export type JobResult =
@@ -59,6 +62,61 @@ function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOpt
       `that costs a merge conflict hours later rather than an error now. Do not list files a task only READS.` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
+}
+
+/** How much of the plan the auditor is given. Long enough for a real plan, short of paying for a whole book. */
+const MAX_PLAN_CHARS = 24_000;
+
+/** Undefined when the role is not configured — the structural pass runs regardless; see `auditBreakdown`. */
+function auditOpts(deps: JobDeps, workdir: string): RoleAgentOptions | undefined {
+  let resolved;
+  try { resolved = deps.roleRegistry.resolve("task-auditor"); } catch { return undefined; }
+  return {
+    provider: deps.provider, ...resolved,
+    tools: readOnlyRegistry(deps),
+    messages: [],
+    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+  };
+}
+
+/**
+ * The gate the task breakdown never had.
+ *
+ * A spec and a plan each pass fifteen lenses, a council and a judge; the breakdown that every later hour is
+ * spent executing went from the model straight to the board. One repair round, not a loop: the findings are
+ * concrete enough that a second pass fixes them or the model cannot, and a loop here would spend the run's
+ * budget before a line of code was written.
+ */
+async function gateBreakdown(
+  deps: JobDeps, workdir: string, tasksPath: string, planPath: string,
+  emit: (ev: ProgressEvent) => void,
+): Promise<Board> {
+  let board = await runProjectManager(pmOpts(deps, workdir, tasksPath));
+  let planText = "";
+  try { planText = (await readFile(join(workdir, planPath), "utf8")).slice(0, MAX_PLAN_CHARS); } catch { /* the audit still runs on structure alone */ }
+
+  const audit = await auditBreakdown(auditOpts(deps, workdir), board, planText);
+  if (audit.findings.length === 0) return board;
+
+  emit({ kind: "note", text:
+    `🧾 The task breakdown has ${audit.findings.length} problem(s) — sending it back before any of it is built:\n` +
+    audit.findings.map((f) => `  · ${f.task ? `${f.task}: ` : ""}${f.issue}`).join("\n") });
+
+  try {
+    const opts = pmOpts(deps, workdir, tasksPath);
+    board = await runProjectManager({ ...opts, messages: [...opts.messages, { role: "user", content: repairRequest(audit.findings) }] });
+  } catch (e) {
+    if (deps.signal.aborted) throw e;
+    emit({ kind: "note", text: `⚠️ The repaired breakdown did not come back — continuing with the original.` });
+    return board;
+  }
+  // Reported, not re-gated: what survives one targeted repair is not going to fall to a second round, and
+  // the run's budget belongs to the implementation.
+  const left = await auditBreakdown(auditOpts(deps, workdir), board, planText);
+  if (left.findings.length) {
+    emit({ kind: "note", text: `🧾 ${left.findings.length} of those are still open after the repair — continuing anyway.` });
+  }
+  return board;
 }
 
 /**
@@ -183,7 +241,7 @@ export async function runJob(
       const done = board.list().filter((c) => c.column === "DONE").length;
       emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` });
     } else {
-      board = await runProjectManager(pmOpts(deps, workdir, up.tasksPath));
+      board = await gateBreakdown(deps, workdir, up.tasksPath, up.planPath, emit);
       await saveBoard(board, boardPath);
     }
     emit({ kind: "board", cards: snapshotBoard(board) });

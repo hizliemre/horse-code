@@ -19,10 +19,11 @@ import type { ProgressEvent } from "../../src/engine/progress.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 // End-to-end provider that responds to all roles based on systemPrompt.
-function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[]; councilRec?: "approve" | "revise"; councilVote?: "pass" | "revise" } = {}): Provider & { requests: ChatRequest[] } {
+function jobProvider(opts: { intent?: string; judge?: string[]; principal?: string[]; councilRec?: "approve" | "revise"; councilVote?: "pass" | "revise"; badBreakdownFirst?: boolean } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
   let principalCall = 0;
+  let pmCall = 0;
   return {
     requests,
     async *chat(req) {
@@ -57,7 +58,20 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
       if (sys.includes("COMMAND:clarify")) { yield* submit('{"nextQuestion":null}'); return; }
       if (sys.includes("COMMAND:plan")) { yield* writeOnce("# plan"); return; }
       if (sys.includes("COMMAND:tasks")) { yield* writeOnce("# tasks"); return; }
-      if (sys.includes("P-pm")) { yield* submit('{"tasks":[{"id":"t1","title":"task-a","deps":[]}]}'); return; }
+      // A well-formed breakdown: the audit gate sends back one that has no acceptance criteria or file list.
+      if (sys.includes("P-pm")) {
+        const bad = opts.badBreakdownFirst && pmCall++ === 0;
+        yield* submit(bad
+          ? '{"tasks":[{"id":"t1","title":"task-a","deps":[]}]}'
+          : '{"tasks":[{"id":"t1","title":"task-a","deps":[],"acceptance":["src/a.ts exports runA"],"files":["src/a.ts"]}]}');
+        return;
+      }
+      if (sys.includes("P-auditor")) { yield* submit('{"missing":[],"weak":[]}'); return; }
+      // The acceptance gate runs on the code-reviewer's model with its OWN system prompt, so it needs its own branch.
+      if (sys.includes("acceptance gate")) {
+        yield* submit('{"checks":[{"criterion":"src/a.ts exports runA","met":true,"evidence":"src/a.ts"}]}');
+        return;
+      }
       if (sys.includes("P-router")) { yield* submit('{"role":"coder"}'); return; }
       if (sys.includes("P-reviewer")) { yield* submit('{"verdict":"pass","notes":[]}'); return; }
       if (sys.includes("Conventional Commits")) { yield* submit(`{"message":"chore: test step"}`); return; }
@@ -105,6 +119,7 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
     analyst: { models: ["m"], systemPrompt: "P-analyst" },
     planner: { models: ["m"], systemPrompt: "P-planner" },
     "project-manager": { models: ["m"], systemPrompt: "P-pm" },
+    "task-auditor": { models: ["m"], systemPrompt: "P-auditor" },
     judge: { models: ["m"], systemPrompt: "P-judge" },
     operational: { models: ["m"], systemPrompt: "Write Conventional Commits messages." },
     router: { models: ["m"], systemPrompt: "P-router" },
@@ -134,6 +149,30 @@ function jdeps(provider: Provider, manager: WorktreeManager, prAdapter: Revision
 }
 
 describe("runJob", () => {
+  /**
+   * A spec and a plan each pass fifteen lenses, a council and a judge. The breakdown every later hour is
+   * spent executing went from the model straight to the board — and a bad one does not fail: the tasks pass
+   * their reviews and the wrong work is delivered correctly.
+   */
+  it("sends a breakdown with no acceptance criteria back before any of it is built", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const p = jobProvider({ badBreakdownFirst: true });
+      const notes: string[] = [];
+      const res = await runJob(jdeps(p, mgr, fakeAdapter()), {
+        prompt: "build it", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2,
+        onEvent: (e) => { if (e.kind === "note") notes.push(e.text); },
+      });
+      expect(res.kind).toBe("done");
+      const said = notes.join("\n");
+      expect(said).toMatch(/task breakdown has \d+ problem/);
+      expect(said).toContain("no acceptance criteria");
+      // The repaired breakdown is the one that ran: the gate is not a warning printed beside the old board.
+      if (res.kind === "done") expect(res.wave.status).toBe("completed");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
   it("chat: intent chat → coach response", async () => {
     const repo = await initTmpRepo();
     try {

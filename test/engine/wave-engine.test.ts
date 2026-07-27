@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMutex, runWave, runWaveEngine, runWaves } from "../../src/engine/wave-engine.js";
+import { createMutex, mapWithLimit, runWave, runWaveEngine, runWaves } from "../../src/engine/wave-engine.js";
 import type { WaveEngineDeps } from "../../src/engine/wave-engine.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import type { AskHuman } from "../../src/engine/escalation.js";
@@ -89,6 +89,47 @@ describe("createMutex", () => {
   });
 });
 
+/**
+ * A wave used to start every runnable task at once, with no ceiling — a twenty-task wave meant twenty agents,
+ * each with its own worktree and history. Two heap exhaustions were reached that way.
+ */
+describe("mapWithLimit", () => {
+  it("never runs more than the limit at once", async () => {
+    let live = 0, peak = 0;
+    await mapWithLimit([1, 2, 3, 4, 5, 6, 7], 3, async () => {
+      peak = Math.max(peak, ++live);
+      await new Promise((r) => setTimeout(r, 5));
+      live--;
+    });
+    expect(peak).toBe(3);
+  });
+
+  it("returns results in the original order, not completion order", async () => {
+    const out = await mapWithLimit([30, 5, 20, 1], 2, async (ms, i) => {
+      await new Promise((r) => setTimeout(r, ms));
+      return i;
+    });
+    expect(out).toEqual([0, 1, 2, 3]);
+  });
+
+  it("passes each item its own index — the slot a task's model rotation is keyed to", async () => {
+    expect(await mapWithLimit(["a", "b", "c"], 2, async (x, i) => `${x}${i}`)).toEqual(["a0", "b1", "c2"]);
+  });
+
+  it("still runs when there are fewer items than the limit", async () => {
+    expect(await mapWithLimit([1], 8, async (x) => x * 2)).toEqual([2]);
+  });
+
+  it("an empty list is not an error", async () => {
+    expect(await mapWithLimit([], 4, async () => 1)).toEqual([]);
+  });
+
+  /** A limit of zero would spawn no workers at all and hang forever. */
+  it("treats a limit below one as one", async () => {
+    expect(await mapWithLimit([1, 2], 0, async (x) => x)).toEqual([1, 2]);
+  });
+});
+
 describe("runWave", () => {
   it("all-pass (parallel): both tasks merged", async () => {
     const repo = await initTmpRepo();
@@ -102,6 +143,22 @@ describe("runWave", () => {
       expect(o.merged.sort()).toEqual(["t1", "t2"]);
       expect(o.failed).toEqual([]);
       expect(o.skipped).toEqual([]);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("holds a wide wave to the parallelism cap and still merges everything", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      const ids = ["t1", "t2", "t3", "t4", "t5"];
+      for (const id of ids) board.addCard({ id, title: `task-${id}` });
+      const notes: string[] = [];
+      const deps = { ...edeps(mgr, fakeAdapter()), maxParallel: 2, note: (t: string) => notes.push(t) };
+      const o = await runWave(deps, session, board, ids, new Set());
+      expect(o.merged.sort()).toEqual(ids);
+      expect(notes.join("\n")).toContain("running 2 at a time");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 

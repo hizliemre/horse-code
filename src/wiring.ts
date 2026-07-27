@@ -3,6 +3,7 @@ import { PermissionEngine } from "./permission/engine.js";
 import type { PermissionRequest } from "./permission/engine.js";
 import { buildTeamRegistry, buildCouncilRegistry, type ReviewStage } from "./engine/review.js";
 import { InjectionLog } from "./engine/memory-retrieval.js";
+import { MAX_PARALLEL_TASKS } from "./engine/wave-engine.js";
 import { ProposalQueue } from "./engine/memory-proposals.js";
 import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_ROLE_SKILLS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
 import type { ResolvedConfig, RoleConfig, ReviewerConfig } from "./config/config.js";
@@ -111,6 +112,7 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     manager: opts.manager,
     prAdapter: opts.prAdapter,
     rounds: 3,
+    maxParallel: MAX_PARALLEL_TASKS,
     askHuman: opts.askHuman,
   };
 }

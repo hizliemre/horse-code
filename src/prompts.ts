@@ -3,6 +3,7 @@ import type { ReviewerConfig } from "./config/config.js";
 export const REQUIRED_ROLES = [
   "refiner", "coach", "brainstormer", "analyst", "planner", "judge", "project-manager", "team-lead",
   "router", "coder", "designer", "senior-coder", "senior-designer", "architect", "code-reviewer",
+  "task-auditor",
   "principal-coder", "operational", "memory-keeper", "tracer",
 ] as const;
 
@@ -75,6 +76,14 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "implementer never sees the others still knows the signatures it must produce and consume.\n" +
     "Right-size the same way the skill does: a task is the smallest unit worth its own test cycle and its own " +
     "review. Fold setup and scaffolding into the task whose deliverable needs them.",
+  "task-auditor":
+    "You are the last check on a task breakdown before any of it is built. Every hour of implementation after " +
+    "you is spent executing this list, and a bad list does not fail — the tasks pass their reviews and the " +
+    "wrong work is delivered correctly. Its structure has already been checked mechanically; you are here for " +
+    "the part only a reader can answer: does the breakdown deliver what the plan requires, and would a task's " +
+    "acceptance criteria still hold for an implementation that missed the point? Do not propose better work " +
+    "than the plan asked for — scope you invent here becomes hours someone spends. A clean breakdown is the " +
+    "normal case; say so. Return {missing, weak} via submit.",
   "team-lead":
     "You audit a task breakdown before any of it runs. The schedule itself is computed from the declared " +
     "dependencies and is not yours to write; what nothing has checked is whether those dependencies are " +

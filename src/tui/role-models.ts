@@ -25,7 +25,7 @@ const STRONG_ROLES = [
   "brainstormer", "analyst", "planner", "architect", "senior-coder", "senior-designer",
   ...COUNCIL_ROLES, ...PLAN_LENS_ROLES, ...CODE_LENS_ROLES,
 ];
-const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational", "memory-keeper", ...SPEC_LENS_ROLES];
+const MID_ROLES = ["coach", "coder", "designer", "code-reviewer", "operational", "memory-keeper", "task-auditor", ...SPEC_LENS_ROLES];
 const FAST_ROLES = ["refiner", "router", "project-manager", "team-lead"];
 const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]); // want a non-fast model
 
@@ -37,6 +37,9 @@ export const ROLE_PROFILES: Record<string, string> = {
   refiner: "Classifies intent and rewrites the prompt every turn — highest call volume, trivial task → a fast, cheap model.",
   router: "Picks coder-vs-designer for a task — tiny and frequent → fast, cheap.",
   "project-manager": "Turns a task list into board items — light and structured → fast, cheap.",
+  "task-auditor": "The only check on the task breakdown before hours of implementation are spent executing it — " +
+    "reads the plan against the task list and finds what was dropped. Low volume, and everything downstream " +
+    "depends on it → a capable model, never the cheapest.",
   "team-lead": "Coordinates implementation waves — light orchestration → fast, cheap.",
   coach: "Your main interactive assistant, used constantly all session (highest interaction volume) → a capable but EFFICIENT model, never the costly flagship.",
   brainstormer: "Turns a raw request into a decided design before the spec: explores the repo, weighs 2-3 approaches, gets the user to choose. Low volume, sets the direction for everything downstream → a strong reasoning model.",

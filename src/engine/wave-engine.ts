@@ -12,6 +12,30 @@ import { buildSkillTool } from "../skills/apply.js";
 export interface WaveEngineDeps extends EscalationDeps {
   manager: WorktreeManager;
   prAdapter: PRAdapter;
+  /** How many tasks of one wave may be in flight at once. Defaults to MAX_PARALLEL_TASKS. */
+  maxParallel?: number;
+}
+
+/**
+ * A wave used to start EVERY runnable task at once, with no ceiling — a twenty-task wave meant twenty agents,
+ * each with its own worktree, its own history and its own stream.
+ *
+ * Nothing about the board bounds that number; it is whatever the breakdown happened to produce. Two heap
+ * exhaustions and the provider's rate limits were both reached this way, and a wave that dies halfway leaves
+ * more skipped tasks than a narrower one that finishes. The cap costs wall-clock only when a wave is wider
+ * than it, and only for the tasks past the ceiling.
+ */
+export const MAX_PARALLEL_TASKS = 4;
+
+/** Runs `fn` over every item, at most `limit` at a time, and returns the results in the ORIGINAL order. */
+export async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i], i);
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
 }
 
 export interface WaveOutcome {
@@ -52,8 +76,13 @@ export async function runWave(
   }
 
   const ser = createMutex();
-  const results = await Promise.all(
-    runnable.map(async (t, slot) => {
+  const limit = deps.maxParallel ?? MAX_PARALLEL_TASKS;
+  if (runnable.length > limit) {
+    deps.note?.(`⏳ ${runnable.length} task(s) in this wave — running ${limit} at a time.`);
+  }
+  const results = await mapWithLimit(
+    runnable, limit,
+    async (t, slot) => {
       const resolveConflict = async (tw: TaskWorktree, files: string[]): Promise<MergeResult> => {
         try {
           const r = await resolveMergeConflict(deps, session, board, t, tw);
@@ -68,7 +97,7 @@ export async function runWave(
       };
       const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict }, session, board, t, slot);
       return { t, status: res.status };
-    }),
+    },
   );
 
   return {
