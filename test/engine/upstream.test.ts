@@ -57,7 +57,7 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
         if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content })); return; }
         yield* stop("done");
       };
-      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"Do X","intent":"${opts.intent ?? "feature"}","title":"add-thing"}`); return; }
+      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"Do X","intent":"${opts.intent ?? "feature"}","title":"login-page"}`); return; }
       if (sys.includes("P-coach")) { yield* stop("coach response"); return; }
       // The brainstormer is driven by its role prompt, not a spec-kit command.
       if (sys.includes("brainstormer")) { yield* writeOnce("# decided approach"); return; }
@@ -164,7 +164,7 @@ describe("runUpstream", () => {
     expect(res.kind).toBe("approved");
     expect(opened).toBe(1); // the feature pipeline opens the worktree exactly once
 
-    // The refiner title is "add-thing" → the feature slug is the first "001-*" directory under specs/.
+    // The refiner title is "login-page" → the feature slug is the first "001-*" directory under specs/.
     const featureDirs = await readdir(join(dir, "specs"));
     expect(featureDirs).toHaveLength(1);
     const slug = featureDirs[0];
@@ -224,7 +224,7 @@ describe("runUpstream", () => {
     const { writeFile } = await import("node:fs/promises");
     // Simulate an interrupted run: constitution + spec + clarify are done; plan/tasks remain. Pre-place the
     // artifacts the completed phases already produced so the reused paths line up.
-    const slug = "001-add-thing";
+    const slug = "001-login-page";
     await mkdir(join(dir, "specs", slug), { recursive: true });
     await mkdir(join(dir, ".specify", "memory"), { recursive: true });
     await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
@@ -245,7 +245,7 @@ describe("runUpstream", () => {
   it("resume hint (a 'continue' request) drives the pipeline WITHOUT running the refiner", async () => {
     const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
     const { writeFile } = await import("node:fs/promises");
-    const slug = "001-add-thing";
+    const slug = "001-login-page";
     await mkdir(join(dir, "specs", slug), { recursive: true });
     await mkdir(join(dir, ".specify", "memory"), { recursive: true });
     await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
@@ -268,7 +268,7 @@ describe("runUpstream", () => {
   it("a resume preserves the ORIGINAL rawPrompt instead of stamping the continue phrase over it", async () => {
     const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
     const { writeFile } = await import("node:fs/promises");
-    const slug = "001-add-thing";
+    const slug = "001-login-page";
     await mkdir(join(dir, "specs", slug), { recursive: true });
     await mkdir(join(dir, ".specify", "memory"), { recursive: true });
     await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
@@ -371,7 +371,7 @@ describe("interrupted during a review", () => {
     // stopped while the council was reviewing it), but the checkpoint never marked "plan" (review never passed).
     const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
     const { writeFile: wf } = await import("node:fs/promises");
-    const slug = "001-add-thing";
+    const slug = "001-login-page";
     await mkdir(join(dir, "specs", slug), { recursive: true });
     await mkdir(join(dir, ".specify", "memory"), { recursive: true });
     await wf(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
@@ -398,7 +398,7 @@ describe("brainstorm — the approach is decided before anything is specified", 
     const order: string[] = [];
     const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") order.push(ev.phase); });
     expect(res.kind).toBe("approved");
-    expect(existsSync(join(dir, "specs", "001-add-thing", "brainstorm.md"))).toBe(true);
+    expect(existsSync(join(dir, "specs", "001-login-page", "brainstorm.md"))).toBe(true);
     expect(order.indexOf("brainstorm")).toBeLessThan(order.indexOf("specify"));
   });
 
@@ -417,7 +417,7 @@ describe("brainstorm — the approach is decided before anything is specified", 
   it("is skipped on resume once it is marked done", async () => {
     const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
     const { writeFile } = await import("node:fs/promises");
-    const slug = "001-add-thing";
+    const slug = "001-login-page";
     await mkdir(join(dir, "specs", slug), { recursive: true });
     await mkdir(join(dir, ".specify", "memory"), { recursive: true });
     await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");
@@ -436,7 +436,7 @@ describe("brainstorm — the approach is decided before anything is specified", 
   it("does NOT run for an older checkpoint whose spec already exists", async () => {
     const { writeCheckpoint, readCheckpoint } = await import("../../src/engine/checkpoint.js");
     const { writeFile } = await import("node:fs/promises");
-    const slug = "001-add-thing";
+    const slug = "001-login-page";
     await mkdir(join(dir, "specs", slug), { recursive: true });
     await mkdir(join(dir, ".specify", "memory"), { recursive: true });
     await writeFile(join(dir, ".specify", "memory", "constitution.md"), "# c", "utf8");

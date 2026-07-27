@@ -50,7 +50,7 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
         if (!toolMsgs.some((m) => m.name === "write_file")) { yield* call("write_file", JSON.stringify({ path: writeTarget, content })); return; }
         yield* stop("done");
       };
-      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"do X","intent":"${opts.intent ?? "feature"}","title":"add-thing"}`); return; }
+      if (sys.includes("P-refiner")) { yield* submit(`{"refinedPrompt":"do X","intent":"${opts.intent ?? "feature"}","title":"login-page"}`); return; }
       if (sys.includes("P-coach")) { yield* stop("coach report"); return; }
       if (sys.includes("COMMAND:constitution")) { yield* writeOnce("# constitution"); return; }
       if (sys.includes("COMMAND:specify")) { yield* writeOnce("# spec"); return; }
@@ -174,9 +174,9 @@ describe("runJob", () => {
         expect(res.wave.status).toBe("completed");
         expect(res.report).toBe("coach report");
         expect(existsSync(join(res.session.baseWorktree, ".specify/memory/constitution.md"))).toBe(true);
-        expect(existsSync(join(res.session.baseWorktree, "specs/001-add-thing/spec.md"))).toBe(true);
-        expect(existsSync(join(res.session.baseWorktree, "specs/001-add-thing/plan.md"))).toBe(true);
-        expect(existsSync(join(res.session.baseWorktree, "specs/001-add-thing/tasks.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, "specs/001-login-page/spec.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, "specs/001-login-page/plan.md"))).toBe(true);
+        expect(existsSync(join(res.session.baseWorktree, "specs/001-login-page/tasks.md"))).toBe(true);
         expect(res.revision?.status).toBe("approved"); // principal approved on the first round
       }
       expect(adapter.calls).toBe(1);

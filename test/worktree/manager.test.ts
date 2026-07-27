@@ -21,11 +21,12 @@ describe("WorktreeManager.openSession", () => {
   it("creates the base worktree + hc/<slug>/base branch, writes .gitignore", async () => {
     repo = await initTmpRepo();
     const wm = new WorktreeManager({ repoRoot: repo });
+    // "Add Auth" → "auth": the name is the subject, and the verb is what the tool always does.
     const s = await wm.openSession("main", "Add Auth");
-    expect(s.jobSlug).toBe("add-auth");
-    expect(s.baseBranch).toBe("hc/add-auth/base");
+    expect(s.jobSlug).toBe("auth");
+    expect(s.baseBranch).toBe("hc/auth/base");
     expect(existsSync(s.baseWorktree)).toBe(true);
-    expect(await branchExists(repo, "hc/add-auth/base")).toBe(true);
+    expect(await branchExists(repo, "hc/auth/base")).toBe(true);
     expect(existsSync(join(repo, ".horsecode/worktrees/.gitignore"))).toBe(true);
   });
 
@@ -65,10 +66,10 @@ describe("WorktreeManager.openSession", () => {
     expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).not.toBe(0); // no commits yet
 
     const wm = new WorktreeManager({ repoRoot: repo });
-    const s = await wm.openSession("main", "add-login-page"); // asked for 'main' (doesn't exist)
-    expect(s.jobSlug).toBe("add-login-page");
+    const s = await wm.openSession("main", "login-page"); // asked for 'main' (doesn't exist)
+    expect(s.jobSlug).toBe("login-page");
     expect(existsSync(s.baseWorktree)).toBe(true);
-    expect(await branchExists(repo, "hc/add-login-page/base")).toBe(true);
+    expect(await branchExists(repo, "hc/login-page/base")).toBe(true);
     expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).toBe(0); // bootstrap commit landed
   });
 
@@ -130,10 +131,10 @@ describe("WorktreeManager.findResumable", () => {
     const older = await wm.openSession("main", "old-task");
     writeCheckpoint(older.root, { rawPrompt: "build the old thing", refinedPrompt: "x", title: "Old", language: "English", featureSlug: "001-old", done: ["spec"] });
     await new Promise((r) => setTimeout(r, 15)); // ensure a later mtime on the newer checkpoint
-    const newer = await wm.openSession("main", "new-task");
+    const newer = await wm.openSession("main", "recent-task");
     writeCheckpoint(newer.root, { rawPrompt: "build the new thing", refinedPrompt: "y", title: "New", language: "Turkish", featureSlug: "001-new", done: ["constitution"] });
     const found = await wm.findResumable("kaldığımız yerden devam edelim"); // matches neither prompt, but is a continue
-    expect(found?.jobSlug).toBe("new-task"); // most recent wins — both have progress
+    expect(found?.jobSlug).toBe("recent-task"); // most recent wins — both have progress
   });
 
   // Observed in the wild: a mis-resume scaffolded an empty worktree, which then outranked a spec'd, committed
@@ -193,9 +194,9 @@ describe("WorktreeManager.deriveTask", () => {
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("main", "job");
     const t = await wm.deriveTask(s, "Create Model");
-    expect(t.taskSlug).toBe("create-model");
-    expect(t.branch).toBe("hc/job/t/create-model");
+    expect(t.taskSlug).toBe("model");
+    expect(t.branch).toBe("hc/job/t/model");
     expect(existsSync(t.worktree)).toBe(true);
-    expect(await branchExists(repo, "hc/job/t/create-model")).toBe(true);
+    expect(await branchExists(repo, "hc/job/t/model")).toBe(true);
   });
 });

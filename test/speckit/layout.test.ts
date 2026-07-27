@@ -11,13 +11,13 @@ afterEach(async () => { await rm(wd, { recursive: true, force: true }); });
 
 describe("layout", () => {
   it("nextFeatureSlug starts at 001 in an empty workdir", () => {
-    expect(nextFeatureSlug(wd, "add login page")).toBe("001-add-login-page");
+    expect(nextFeatureSlug(wd, "add login page")).toBe("001-login-page");
   });
 
   it("nextFeatureSlug increments past existing NNN- dirs", async () => {
     await mkdir(join(wd, "specs", "001-foo"), { recursive: true });
     await mkdir(join(wd, "specs", "002-bar"), { recursive: true });
-    expect(nextFeatureSlug(wd, "fix null crash on submit here")).toBe("003-fix-null-crash-on-submit");
+    expect(nextFeatureSlug(wd, "fix null crash on submit here")).toBe("003-null-crash-on-submit-here");
   });
 
   it("featurePaths + constitutionPath produce the spec-kit layout", () => {
