@@ -333,7 +333,7 @@ export function FilePicker({ matches, selected, query, cols }: { matches: string
 export type SendMode = "queue" | "byTheWay" | "steer";
 const SEND_MODES: { mode: SendMode; key: string; label: string; desc: string }[] = [
   { mode: "queue", key: "q", label: "Queue", desc: "run after the current turn finishes" },
-  { mode: "byTheWay", key: "b", label: "By the way", desc: "fold into the running turn (no restart)" },
+  { mode: "byTheWay", key: "b", label: "By the way", desc: "answer it now — the running work is untouched" },
   { mode: "steer", key: "s", label: "Steer", desc: "stop the current turn and run this next" },
 ];
 
@@ -754,7 +754,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, answerByTheWay, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -783,6 +783,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   buildGraph?: () => Promise<string>; // /graph build
   migrate?: () => Promise<string>; // /migrate
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
+  answerByTheWay?: (question: string) => void; // a question asked while work is running
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
@@ -885,7 +886,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const t = sendModeText;
     setSendModeText(null);
     if (t === null) return;
-    if (mode === "byTheWay") { controller.addInboxNote(t); return; }
+    // While a job runs, nothing will read the inbox until it ends — so the question is answered now
+    // instead of being queued behind hours of work.
+    if (mode === "byTheWay") { controller.addInboxNote(t, state.mode === "running" ? answerByTheWay : undefined); return; }
     controller.submitTask(t); // Queue and Steer both enqueue…
     if (mode === "steer") cancelJob?.(); // …Steer also aborts the current turn so the queued prompt runs now
   };

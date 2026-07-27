@@ -329,10 +329,40 @@ export class TuiController {
     return a;
   }
 
-  /** "By-the-way": queue a note to fold into the running turn (with a transcript confirmation). */
-  addInboxNote(text: string): void {
+  /**
+   * "By-the-way": a question asked while work is running.
+   *
+   * It used to be queued unconditionally with a note claiming it had been "folded into the running turn".
+   * The inbox is only ever read by the COACH, which runs at the start and end of a job — so during a
+   * multi-hour coding phase there was no turn to fold into, and the message promised an answer that would
+   * not arrive until the whole job finished. The user watched two hours of output and never got a reply.
+   *
+   * `answerNow` is supplied when nothing is going to consume the note: the question is answered against the
+   * live state instead of waiting for a turn that is not coming.
+   */
+  addInboxNote(text: string, answerNow?: (q: string) => void): void {
+    if (answerNow) {
+      this.note(`↳ by-the-way: ${text}`);
+      answerNow(text);
+      return;
+    }
     this.inbox.push(text);
     this.note(`↳ by-the-way (folded into the running turn): ${text}`);
+  }
+
+  /** What the running job looks like right now — the context a mid-run question is asked about. */
+  liveSnapshot(): string {
+    const s = this.state;
+    const byColumn = new Map<string, number>();
+    for (const c of s.cards) byColumn.set(c.column, (byColumn.get(c.column) ?? 0) + 1);
+    const cols = [...byColumn.entries()].map(([k, n]) => `${k}: ${n}`).join(" · ") || "no board yet";
+    const agents = s.runningAgents.length
+      ? s.runningAgents.map((a) => `- ${a.title}${a.model ? ` (${a.model})` : ""}`).join("\n")
+      : "- none";
+    const recent = s.transcript.slice(-12)
+      .map((m) => ("kind" in m ? `[${m.activity.tool}] ${m.activity.target}` : `${m.role}: ${m.text.slice(0, 120)}`))
+      .join("\n");
+    return `Phase: ${s.phase || "idle"}\nTasks — ${cols}\n\nRunning now:\n${agents}\n\nRecent activity:\n${recent}`;
   }
 
   /** Loop poll: take the next queued by-the-way note, or undefined. */

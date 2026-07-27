@@ -475,6 +475,81 @@ describe("TuiController", () => {
     expect(c.takeInboxNote()).toBeUndefined();
   });
 
+  /**
+   * The note was queued unconditionally and announced as "folded into the running turn".
+   *
+   * Only the coach reads the inbox, and the coach is not running during a coding phase — so the question sat
+   * there for the rest of the job while the message promised otherwise. A real run: two hours of output, no
+   * answer.
+   */
+  describe("a by-the-way question asked mid-run", () => {
+    it("is answered on the spot when an answerer is supplied", () => {
+      const c = new TuiController();
+      const asked: string[] = [];
+      c.addInboxNote("how many tasks are left?", (q) => asked.push(q));
+      expect(asked).toEqual(["how many tasks are left?"]);
+      expect(c.takeInboxNote()).toBeUndefined(); // not also queued — it would be answered twice
+    });
+
+    // The old message was a promise nothing kept. Whichever path is taken, the wording has to match it.
+    it("does not claim it was folded into a turn that will answer it", () => {
+      const c = new TuiController();
+      c.addInboxNote("q", () => {});
+      const said = c.getState().transcript.filter((m) => "role" in m).map((m) => (m as { text: string }).text).join("\n");
+      expect(said).toContain("q");
+      expect(said).not.toContain("folded into the running turn");
+    });
+
+    it("still queues, and still says so, when there is no answerer", () => {
+      const c = new TuiController();
+      c.addInboxNote("q");
+      expect(c.takeInboxNote()).toBe("q");
+      const said = c.getState().transcript.filter((m) => "role" in m).map((m) => (m as { text: string }).text).join("\n");
+      expect(said).toContain("folded into the running turn");
+    });
+  });
+
+  /**
+   * The answer is only as good as what it is given, and a mid-run question is almost always about progress:
+   * how much of the board is done, what is running, what just happened.
+   */
+  describe("liveSnapshot", () => {
+    it("counts the board by column — the question is usually 'how many are left'", () => {
+      const c = new TuiController();
+      c.onEvent({ kind: "board", cards: [
+        { id: "a", title: "A", column: "DONE" },
+        { id: "b", title: "B", column: "DONE" },
+        { id: "c", title: "C", column: "TODO" },
+      ] });
+      const snap = c.liveSnapshot();
+      expect(snap).toContain("DONE: 2");
+      expect(snap).toContain("TODO: 1");
+    });
+
+    it("names the agents in flight and the phase", () => {
+      const c = new TuiController();
+      c.onEvent({ kind: "phase", phase: "waves" });
+      c.onEvent({ kind: "agents", agents: [{ id: "coder:1", title: "coder: store", model: "m1" }] });
+      const snap = c.liveSnapshot();
+      expect(snap).toContain("waves");
+      expect(snap).toContain("coder: store");
+      expect(snap).toContain("m1");
+    });
+
+    it("carries recent activity, so 'what is it doing' has an answer", () => {
+      const c = new TuiController();
+      c.pushActivity({ tool: "write_file", target: "src/todo.ts", lines: 40 });
+      expect(c.liveSnapshot()).toContain("src/todo.ts");
+    });
+
+    /** Asked before anything starts, it must still be a usable prompt rather than a wall of blanks. */
+    it("reads sensibly with nothing running yet", () => {
+      const snap = new TuiController().liveSnapshot();
+      expect(snap).toContain("no board yet");
+      expect(snap).toContain("- none");
+    });
+  });
+
   it("clearAttachments discards staged images", () => {
     const c = new TuiController();
     c.addAttachment("data:image/png;base64,AAA");

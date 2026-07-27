@@ -164,6 +164,43 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
   /**
+   * Answers a "by-the-way" question while work is still running.
+   *
+   * The inbox is read by the coach, which is not running during a coding phase — so a question asked then
+   * waited for the whole job to finish. This answers it against the live state instead: the board, the
+   * agents in flight, and the recent activity, which is what such a question is almost always about.
+   *
+   * Deliberately its own small call rather than an interruption: the running work is untouched, and a
+   * failure here costs the answer, not the job.
+   */
+  const answerByTheWay = (question: string): void => {
+    const model = deps0.roleRegistry.peekModel("coach") || opts.model || "";
+    const append = controller.streamNote("");
+    void (async () => {
+      try {
+        const req = {
+          model,
+          messages: [
+            { role: "system" as const, content:
+              "You answer a short question about a coding job that is running right now. Answer ONLY from " +
+              "the state given — it is all you can see. If the state does not contain the answer, say so " +
+              "plainly and say what would. Be brief: two or three sentences, no preamble." },
+            { role: "user" as const, content: `${controller.liveSnapshot()}\n\nQuestion: ${question}` },
+          ],
+          tools: [],
+        };
+        let any = false;
+        for await (const ev of deps.provider.chat(req, new AbortController().signal)) {
+          if (ev.type === "text-delta") { any = true; append(ev.text); }
+          else if (ev.type === "error") throw new Error(ev.message);
+        }
+        if (!any) append("(no answer came back)");
+      } catch (e) {
+        append(`could not answer that right now — ${e instanceof Error ? e.message : String(e)}`);
+      }
+    })();
+  };
+  /**
    * `/mcp add` — install a server from the page that documents it, or from the command that page tells you
    * to run.
    *
@@ -515,7 +552,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} addMcp={addMcp}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} addMcp={addMcp} answerByTheWay={answerByTheWay}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
