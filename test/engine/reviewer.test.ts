@@ -15,7 +15,7 @@ function submitTurn(argsJson: string): ChatEvent[] {
     { type: "done", finishReason: "tool_calls" },
   ];
 }
-const card = (): Card => ({ id: "t1", title: "X", column: "REVIEW", deps: [], acceptance: [], reviewNotes: [], attempts: 0, stageHistory: [] });
+const card = (): Card => ({ id: "t1", title: "X", column: "REVIEW", deps: [], acceptance: [], files: [], reviewNotes: [], attempts: 0, stageHistory: [] });
 function deps(provider: MockProvider): TaskCycleDeps {
   return {
     provider,

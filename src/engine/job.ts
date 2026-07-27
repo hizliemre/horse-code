@@ -47,12 +47,16 @@ function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOpt
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [...(hints.message ? [{ role: "user" as const, content: hints.message }] : []), { role: "user", content:
-      `Read the "${tasksPath}" task list and turn it into board tasks (id, title, deps, acceptance).\n\n` +
+      `Read the "${tasksPath}" task list and turn it into board tasks (id, title, deps, acceptance, files).\n\n` +
       `For EACH task also write its \`acceptance\` — 2-4 concrete statements that will be OBSERVABLY true when ` +
       `the task is done, each checkable by reading the worktree: a named file exists and exports/contains X, a ` +
       `specific behavior is covered by a test, a config key is set. They are the completion gate: a task is only ` +
       `marked done when these are verified. Write conditions, not restatements of the title — ` +
-      `"src/models/todo.ts defines a Todo type with id, title, done" is a criterion; "the model is implemented" is not.` }],
+      `"src/models/todo.ts defines a Todo type with id, title, done" is a criterion; "the model is implemented" is not.\n\n` +
+      `Also give each task its \`files\` — the repo-relative paths it will create or modify, taken from the task ` +
+      `list (which already names them). List every file the task writes, including its test file. This decides ` +
+      `what may run in parallel: two tasks that write the same file are not independent, and being wrong about ` +
+      `that costs a merge conflict hours later rather than an error now. Do not list files a task only READS.` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
 }

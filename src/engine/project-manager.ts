@@ -13,6 +13,15 @@ const taskSchema = z.object({
    * "done" is whatever the implementer says it is; with them, completion is verified rather than asserted.
    */
   acceptance: z.array(z.string()).default([]),
+  /**
+   * The files this task is expected to create or modify, repo-relative.
+   *
+   * The task list already names them, and until now they stopped there. Wave planning needs them: two tasks
+   * that write the same file are not independent whichever way their `deps` read, and that is not something
+   * `deps` alone can be trusted to say — a missed dependency does not fail loudly, it surfaces hours later
+   * as a merge conflict.
+   */
+  files: z.array(z.string()).default([]),
 });
 
 // Note: superRefine validates dep INTEGRITY (duplicate id, dangling dep); ACYCLICITY is not
@@ -38,6 +47,6 @@ export const TasksSchema = z
 export async function runProjectManager(opts: RoleAgentOptions): Promise<Board> {
   const { tasks } = await runStructuredRole(opts, TasksSchema);
   const board = new Board();
-  for (const t of tasks) board.addCard({ id: t.id, title: t.title, deps: t.deps, acceptance: t.acceptance });
+  for (const t of tasks) board.addCard({ id: t.id, title: t.title, deps: t.deps, acceptance: t.acceptance, files: t.files });
   return board;
 }

@@ -32,7 +32,7 @@ const ideps = (provider: Provider, onProgress?: (ev: ProgressEvent) => void): Ta
   ({ ...deps(provider as MockProvider), provider, ...(onProgress ? { onProgress } : {}) });
 
 const card = (over: Partial<Card> = {}): Card => ({
-  id: "t1", title: "write file", column: "IN-PROGRESS", deps: [], acceptance: [], reviewNotes: [], attempts: 0, stageHistory: [], ...over,
+  id: "t1", title: "write file", column: "IN-PROGRESS", deps: [], acceptance: [], files: [], reviewNotes: [], attempts: 0, stageHistory: [], ...over,
 });
 function writeThenDone(): ChatEvent[][] {
   return [

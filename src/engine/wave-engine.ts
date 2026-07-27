@@ -5,6 +5,7 @@ import { runWaveTask } from "./wave-task.js";
 import { resolveMergeConflict } from "./conflict.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runTeamLead } from "./team-lead.js";
+import { splitFileConflicts, waveStats, describeWaves, type FileClash } from "./waves.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 
@@ -117,7 +118,21 @@ export async function runWaves(
   board: Board,
   opts: { base: string; prTitle?: string },
 ): Promise<WaveEngineResult> {
-  const waves = await runTeamLead(teamLeadOpts(deps, session), board);
+  const proposed = await runTeamLead(teamLeadOpts(deps, session), board);
+  /**
+   * The last word on what may run together, and it is not the plan's.
+   *
+   * `deps` is an account nothing verifies; a dependency it omits shows up as two agents editing one file in
+   * separate worktrees and a merge conflict hours later. Applied AFTER the team-lead so it holds whichever
+   * waves were chosen — the file lists are evidence, and no confirmation step may override them.
+   */
+  const { waves, clashes } = splitFileConflicts(proposed, board);
+  if (clashes.length) {
+    deps.note?.(
+      `🔀 ${clashes.length} task pair(s) would have written the same file in one wave — separated so they run in ` +
+      `sequence: ${clashes.slice(0, 3).map((c: FileClash) => `${c.a}/${c.b} (${c.files[0]})`).join(", ")}` +
+      `${clashes.length > 3 ? ", …" : ""}`);
+  }
 
   const blocked = new Set<string>();
   const failed: string[] = [];
@@ -130,6 +145,9 @@ export async function runWaves(
   }
 
   const delivery: Delivery = { branch: session.baseBranch, worktree: session.baseWorktree };
+  // Whether the breakdown was any good is not visible from "completed": twenty tasks in twenty waves and
+  // twenty tasks in three cost the same on paper and wildly different in wall-clock. Report the numbers.
+  deps.note?.(`📊 ${describeWaves(waveStats(board, waves, clashes))}`);
 
   /**
    * Only the PULL REQUEST is opened here. The merge is not.

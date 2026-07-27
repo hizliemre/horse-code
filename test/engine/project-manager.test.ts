@@ -38,6 +38,24 @@ describe("runProjectManager", () => {
     ]);
   });
 
+  /**
+   * The task list already names each task's files; they used to stop there and never reach the board, so
+   * wave planning had nothing but `deps` — an unverified account — to decide what could run in parallel.
+   */
+  it("carries each task's file list onto the card", async () => {
+    const p = new MockProvider([
+      submitTurn('{"tasks":[{"id":"t1","title":"X","deps":[],"files":["src/store.ts","test/store.test.ts"]}]}'),
+    ]);
+    const board = await runProjectManager(opts(p));
+    expect(board.get("t1")!.files).toEqual(["src/store.ts", "test/store.test.ts"]);
+  });
+
+  /** A model that omits the field must not fail the breakdown — an empty list simply means "unknown". */
+  it("accepts a task that names no files", async () => {
+    const p = new MockProvider([submitTurn('{"tasks":[{"id":"t1","title":"X","deps":[]}]}')]);
+    expect((await runProjectManager(opts(p))).get("t1")!.files).toEqual([]);
+  });
+
   it("dangling dep → self-correct (superRefine isError → resubmit)", async () => {
     const p = new MockProvider([
       submitTurn('{"tasks":[{"id":"t1","title":"X","deps":["missing"]}]}'), // invalid

@@ -155,6 +155,41 @@ describe("runWaves", () => {
       await rm(bare, { recursive: true, force: true });
     }
   });
+
+  /**
+   * `deps` said these two tasks were independent. Their file lists say otherwise, and the file lists are
+   * evidence — a dependency the plan omits shows up as a merge conflict hours later, not as an error.
+   */
+  it("separates two tasks that would write the same file, and says why", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a", files: ["src/store.ts"] });
+      board.addCard({ id: "t2", title: "task-b", files: ["src/store.ts"] });
+      const notes: string[] = [];
+      const deps = { ...edeps(mgr, fakeAdapter()), note: (t: string) => notes.push(t) };
+      const res = await runWaves(deps, session, board, { base: "main" });
+      expect(res.waves).toEqual([["t1"], ["t2"]]); // one wave each, not one wave racing
+      expect(notes.join("\n")).toContain("same file");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** The shape of the run is reported whether it went well or not — that is the point of measuring it. */
+  it("reports the shape of the run", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b" });
+      const notes: string[] = [];
+      await runWaves({ ...edeps(mgr, fakeAdapter()), note: (t: string) => notes.push(t) }, session, board, { base: "main" });
+      expect(notes.join("\n")).toMatch(/2 task in 1 wave\(s\)/);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
 });
 
 describe("runWaveEngine", () => {

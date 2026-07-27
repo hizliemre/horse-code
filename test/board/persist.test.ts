@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +25,23 @@ describe("board persistence", () => {
     expect(existsSync(path)).toBe(true);
     const back = await loadBoard(path);
     expect(back.list()).toEqual(b.list());
+  });
+
+  it("round-trips the file list a card was created with", async () => {
+    const b = new Board();
+    b.addCard({ id: "t1", title: "a", files: ["src/a.ts"] });
+    const path = join(dir, "board.json");
+    await saveBoard(b, path);
+    expect((await loadBoard(path)).get("t1")!.files).toEqual(["src/a.ts"]);
+  });
+
+  /** A run interrupted before file lists existed must still resume — its board has no `files` key at all. */
+  it("loads a board written before cards had file lists", async () => {
+    const path = join(dir, "old.json");
+    await writeFile(path, JSON.stringify({ version: 1, cards: [
+      { id: "t1", title: "a", column: "TODO", deps: [], reviewNotes: [], attempts: 0, stageHistory: [] },
+    ] }));
+    expect((await loadBoard(path)).get("t1")!.files).toEqual([]);
   });
 
   it("loadBoard throws for a nonexistent file", async () => {
