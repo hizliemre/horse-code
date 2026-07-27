@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE";
 
+/** How much of a card's history is kept. Enough to see the pattern of a struggling task, not unbounded. */
+export const MAX_STAGE_EVENTS = 200;
+
 export interface StageEvent {
   role: string;
   action: string;
@@ -103,7 +106,14 @@ export class Board {
     const c = this.require(id);
     const from = c.column;
     c.column = column;
-    if (actor) c.stageHistory.push({ role: actor, action: `→${column}` });
+    if (actor) {
+      c.stageHistory.push({ role: actor, action: `→${column}` });
+      // Bounded: a card that cycles through review a dozen times accumulates events forever, and the board
+      // is held in memory AND re-serialised to disk on every mutation. The tail is what anyone reads.
+      if (c.stageHistory.length > MAX_STAGE_EVENTS) {
+        c.stageHistory.splice(0, c.stageHistory.length - MAX_STAGE_EVENTS);
+      }
+    }
     if (from !== column) this.onMove?.(c, from, column); // surface the transition as a chat action
     this.onChange?.();
   }

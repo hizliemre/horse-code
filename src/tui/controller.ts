@@ -63,6 +63,13 @@ export interface TuiState {
  * by the session store, so nothing durable is lost by dropping the oldest items from the live view.
  */
 export const MAX_TRANSCRIPT_ITEMS = 1_500;
+/**
+ * How many scrolled-off chat turns are kept for a resume.
+ *
+ * Generous — a resume wants context — but finite. Unbounded, it was one of the structures a five-hour run
+ * grew until the heap gave out.
+ */
+export const MAX_ARCHIVED = 4_000;
 
 /** Bridges runJob's async seams (onEvent + ask) to React state. Pure state machine. */
 export class TuiController {
@@ -83,6 +90,13 @@ export class TuiController {
   // The VIEW's transcript is windowed (see MAX_TRANSCRIPT_ITEMS), but the saved session must not be: capping
   // what is persisted would silently drop the earliest turns of a long run. Chat text is small — it was the
   // tool activity and the per-frame re-flatten that blew up memory, not the messages.
+  /**
+   * Chat turns scrolled off the visible transcript, kept so a resumed session has its history.
+   *
+   * Bounded, because it is not: a five-hour run archives every turn it drops and holds them all. The oldest
+   * turns are also the least useful to a resume — what matters is what was decided recently — so the window
+   * is the tail.
+   */
   private archived: { role: "user" | "assistant"; text: string }[] = [];
 
   /**
@@ -95,6 +109,7 @@ export class TuiController {
     if (t.length <= MAX_TRANSCRIPT_ITEMS) return t;
     const cut = t.length - MAX_TRANSCRIPT_ITEMS;
     for (const m of t.slice(0, cut)) if (!("kind" in m)) this.archived.push(m);
+    if (this.archived.length > MAX_ARCHIVED) this.archived.splice(0, this.archived.length - MAX_ARCHIVED);
     return t.slice(cut);
   }
   private now: () => number;

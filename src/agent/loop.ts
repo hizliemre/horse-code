@@ -5,7 +5,7 @@ import type { PermissionEngine, PermissionRequest } from "../permission/engine.j
 import type { ToolRegistry } from "../tools/registry.js";
 import { executeToolCalls } from "./tool-exec.js";
 import { shieldToolOutput } from "../core/prompt-guard.js";
-import { elideOldToolResults } from "./elide.js";
+import { elideInPlace } from "./elide.js";
 
 export interface RoleAgentOptions {
   provider: Provider;
@@ -89,7 +89,11 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       // Older large tool outputs are elided on the way out: with no prompt-cache control every turn re-bills
       // the whole conversation, and a file read from thirty turns ago is the single biggest thing being paid
       // for repeatedly. Our own `working` history stays complete.
-      const req: ChatRequest = { model: activeModel, messages: elideOldToolResults([...working]), tools: schemas };
+      // Elided IN PLACE: the history is never read at full size again, and keeping it was what put a
+      // long run into the heap ceiling. The provider still gets a COPY — it must never hold a reference to
+      // an array that is still growing.
+      elideInPlace(working);
+      const req: ChatRequest = { model: activeModel, messages: [...working], tools: schemas };
 
       for await (const ev of opts.provider.chat(req, opts.signal)) {
         if (ev.type === "text-delta") {

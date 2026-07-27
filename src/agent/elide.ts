@@ -67,3 +67,29 @@ export function elideOldToolResults(
   });
   return changed ? out : messages;
 }
+
+/**
+ * Elides old tool results IN the history, freeing what they held.
+ *
+ * The pure version above elides only the COPY handed to the provider; the agent's own history kept every
+ * result at full size for the life of the run. With a few hundred tool calls — a planner reached 820 — and
+ * results capped at 30 KB each, one agent retains hundreds of megabytes it will never read again. Nine
+ * agents at once is how a run reaches the heap ceiling after five hours.
+ *
+ * Safe because elision is one-way: the budget is spent walking newest to oldest, and messages are only ever
+ * appended, so a result outside the budget can only get older. Nothing that has been elided can come back
+ * into the window and be needed at full size again.
+ *
+ * Returns how many characters were released, so the saving is measurable rather than assumed.
+ */
+export function elideInPlace(messages: Message[], opts: { budget?: number; minChars?: number } = {}): number {
+  const elided = elideOldToolResults(messages, opts);
+  if (elided === messages) return 0;
+  let freed = 0;
+  for (let i = 0; i < messages.length; i++) {
+    if (elided[i] === messages[i]) continue;
+    freed += messages[i].content.length - elided[i].content.length;
+    messages[i] = elided[i];
+  }
+  return freed;
+}
