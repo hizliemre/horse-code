@@ -80,3 +80,56 @@ describe("elideOldToolResults", () => {
     expect(m.map((x) => x.content)).toEqual(snapshot);
   });
 });
+
+const readOf = (id: string, path: string): Message =>
+  ({ role: "assistant", content: "", toolCalls: [{ id, name: "read_file", arguments: JSON.stringify({ path }) }] });
+
+/**
+ * Recency alone built a treadmill.
+ *
+ * A coder holds several files open while it works. Once a couple of large reads pushed an earlier one out of
+ * the window, its stub told the agent to run the tool again — so it did, which pushed something else out,
+ * which it then re-read. Measured on a real run: 496 tool calls in two and a half minutes over the same few
+ * files, until the twenty-minute attempt budget killed it; 31 of one session's 243 attempts died that way.
+ *
+ * Keeping the newest copy of each distinct file removes the REASON to re-read, rather than arguing with it.
+ */
+describe("the newest look at each file survives the recency window", () => {
+  const readsOf = (paths: string[], size: number): Message[] => {
+    const out: Message[] = [{ role: "system", content: "sys" }];
+    paths.forEach((p, i) => out.push(readOf(`c${i}`, p), toolMsg(`c${i}`, `${p} `.repeat(size / 8))));
+    return out;
+  };
+
+  it("keeps a file the agent read, even when newer reads pushed it out of the budget", () => {
+    // Four distinct 20k reads: the recency budget (40k) holds two, the distinct budget holds the rest.
+    const out = elideOldToolResults(readsOf(["a.ts", "b.ts", "c.ts", "d.ts"], 20_000));
+    const bodies = out.filter((m) => m.role === "tool").map((m) => m.content);
+    expect(bodies.every((b) => !b.startsWith("["))).toBe(true);
+  });
+
+  it("elides the older copy when the SAME file is read again", () => {
+    const out = elideOldToolResults(readsOf(["a.ts", "b.ts", "c.ts", "a.ts"], 20_000));
+    const bodies = out.filter((m) => m.role === "tool").map((m) => m.content);
+    expect(bodies[0]).toMatch(/^\[/);          // the first read of a.ts is gone…
+    expect(bodies[3].startsWith("[")).toBe(false); // …because the latest one is right there
+  });
+
+  /** The stub that caused the loop must never appear where re-running is the wrong advice. */
+  it("tells the agent NOT to run it again when a later call covered the same file", () => {
+    const out = elideOldToolResults(readsOf(["a.ts", "b.ts", "c.ts", "a.ts"], 20_000));
+    const stub = out.filter((m) => m.role === "tool").map((m) => m.content).find((b) => b.startsWith("["))!;
+    expect(stub).toMatch(/Do not run it again/);
+    expect(stub).not.toMatch(/Re-run the tool/);
+  });
+
+  /** An agent that opens hundreds of files must still not retain all of them. */
+  it("still bounds what it keeps when the agent reads far too much", () => {
+    const paths = Array.from({ length: 60 }, (_, i) => `f${i}.ts`);
+    const out = elideOldToolResults(readsOf(paths, 20_000));
+    const kept = out.filter((m) => m.role === "tool" && !m.content.startsWith("["))
+      .reduce((n, m) => n + m.content.length, 0);
+    expect(kept).toBeLessThan(200_000); // 60 × 20k = 1.2 MB unbounded
+    expect(out.some((m) => m.role === "tool" && m.content.startsWith("["))).toBe(true);
+  });
+});
