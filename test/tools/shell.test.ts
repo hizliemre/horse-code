@@ -59,3 +59,47 @@ describe("clampOutput", () => {
     expect(out).toMatch(/trimmed from the middle/);
   });
 });
+
+/**
+ * With `shell: true` the child is `/bin/sh`, and `child.kill()` reaches the shell and nothing else.
+ *
+ * A command like `npm start` therefore survived its own timeout as an orphan — still running long after the
+ * agent had moved on, and still holding the terminal it shares with the TUI. Killing the whole group is what
+ * makes a timeout mean what it says.
+ */
+describe("a timed-out command takes everything it started with it", () => {
+  const alive = (pid: number): boolean => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  };
+
+  it("kills the grandchild, not just the shell", async () => {
+    // Backgrounded, so `sh` does NOT exec into it: a real grandchild, which is the case that used to leak.
+    const grandchild = `node -e "setInterval(()=>{},1000)" & echo $!; wait`;
+    const r = await shellTool.run(
+      { command: grandchild, timeout: 400 },
+      { cwd: process.cwd(), signal: new AbortController().signal },
+    );
+    const pid = Number(/(\d+)/.exec(r.content)?.[1]);
+    expect(pid).toBeGreaterThan(0);
+    expect(r.isError).toBe(true);           // it was killed, not finished
+    await new Promise((res) => setTimeout(res, 300)); // SIGTERM → SIGKILL grace
+    expect(alive(pid)).toBe(false);
+  }, 15_000);
+
+  it("kills the tree on abort too", async () => {
+    const ac = new AbortController();
+    const grandchild = `node -e "setInterval(()=>{},1000)" & echo $!; wait`;
+    const run = shellTool.run(
+      { command: grandchild, timeout: 10_000 },
+      { cwd: process.cwd(), signal: ac.signal },
+    );
+    await new Promise((res) => setTimeout(res, 400));
+    ac.abort();
+    const r = await run;
+    const pid = Number(/(\d+)/.exec(r.content)?.[1]);
+    if (pid > 0) {
+      await new Promise((res) => setTimeout(res, 300));
+      expect(alive(pid)).toBe(false);
+    }
+  }, 15_000);
+});

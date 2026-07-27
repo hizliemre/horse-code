@@ -69,7 +69,17 @@ export const shellTool: Tool = {
       try {
         // stdin is CLOSED, not piped: a command that asks a question (npm init, a package manager's y/n)
         // otherwise waits on input that will never come, and the whole agent stalls behind it.
-        child = spawn(a.command, { cwd: ctx.cwd, shell: true, signal: ctx.signal, stdio: ["ignore", "pipe", "pipe"] });
+        /**
+         * Its OWN process group, so that killing it kills everything it started.
+         *
+         * With `shell: true` the child is `/bin/sh`; `child.kill()` reaches the shell and nothing else. A
+         * command like `npm start` therefore survived its own timeout as an orphan — still holding the
+         * terminal it was sharing with us, still running long after the agent had moved on. Detached, the
+         * whole tree can be signalled at once with a negative pid.
+         */
+        child = spawn(a.command, {
+          cwd: ctx.cwd, shell: true, signal: ctx.signal, stdio: ["ignore", "pipe", "pipe"], detached: true,
+        });
       } catch (e) {
         resolvePromise({
           content: `shell error: ${e instanceof Error ? e.message : String(e)}`,
@@ -82,15 +92,31 @@ export const shellTool: Tool = {
       let err = "";
       let timedOut = false;
       let killer: NodeJS.Timeout | undefined;
+      /** Signals the whole group. Falls back to the child alone if the group is already gone. */
+      const killTree = (sig: NodeJS.Signals): void => {
+        try {
+          if (child.pid) process.kill(-child.pid, sig);
+          else child.kill(sig);
+        } catch {
+          try { child.kill(sig); } catch { /* already dead */ }
+        }
+      };
+      // An abort reaches `/bin/sh` through spawn's own signal handling; everything BELOW it is ours to end.
+      const onAbort = (): void => killTree("SIGKILL");
+      ctx.signal?.addEventListener("abort", onAbort, { once: true });
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill("SIGTERM");
+        killTree("SIGTERM");
         // Escalate if it ignores SIGTERM — otherwise "timed out" would still leave the process running.
-        killer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+        killer = setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS);
         killer.unref?.();
       }, budget);
       timer.unref?.(); // a pending timer must never keep the process alive on its own
-      const done = (): void => { clearTimeout(timer); if (killer) clearTimeout(killer); };
+      const done = (): void => {
+        clearTimeout(timer);
+        if (killer) clearTimeout(killer);
+        ctx.signal?.removeEventListener("abort", onAbort);
+      };
       child.stdout?.on("data", (d) => (out += d.toString()));
       child.stderr?.on("data", (d) => (err += d.toString()));
       child.on("error", (e) => {

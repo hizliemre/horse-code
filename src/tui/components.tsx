@@ -491,6 +491,14 @@ export function MetricsLine({ meta, model }: { meta: TurnMeta; model?: string })
  * Live panel of the sub-agents currently working tasks (the parallel wave), shown under the input:
  * a count header + one row each — "● <task> · <elapsed> · <model>". The elapsed time ticks locally.
  */
+/**
+ * How often the terminal is asked whether it is still in raw mode.
+ *
+ * Often enough that a stolen terminal is unusable for a moment rather than for the rest of the session;
+ * rare enough to be free — it is one property read.
+ */
+export const RAW_MODE_CHECK_MS = 250;
+
 /** When a running agent's clock stops being reassuring. Three quarters of the implementer's own budget. */
 export const LONG_RUNNING_MS = 15 * 60 * 1000;
 
@@ -1317,6 +1325,27 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   // `input.startsWith('')` throws and crashes the app. Parsing the few sequences we care about
   // ourselves and ignoring the rest sidesteps that entirely.
   const { stdin: rootStdin } = useStdin();
+  /**
+   * Re-asserts raw mode, because a child process can take the terminal away from us.
+   *
+   * The tty is SHARED with everything the agents spawn. A child that configures it for itself — a dev server,
+   * a watcher, anything that prompts — and is then killed rather than allowed to exit leaves the terminal in
+   * ITS settings, not ours. Echo comes back on: from that moment every keystroke is printed by the terminal
+   * below the last frame and wiped by the next repaint, which is exactly what a user reported after a task
+   * whose job was to run `npm start`.
+   *
+   * Nothing tells us when it happens, so this checks. `isRaw` is the terminal's own answer, not a belief of
+   * ours, and re-enabling when it is already on is a no-op.
+   */
+  useEffect(() => {
+    const tty = rootStdin as (NodeJS.ReadStream & { isRaw?: boolean }) | undefined;
+    if (!fullscreen || !tty?.isTTY || typeof tty.setRawMode !== "function") return undefined;
+    const timer = setInterval(() => {
+      if (tty.isRaw === false) tty.setRawMode(true);
+    }, RAW_MODE_CHECK_MS);
+    timer.unref?.(); // a repeating check must never be the reason the process stays alive
+    return () => clearInterval(timer);
+  }, [rootStdin, fullscreen]);
   const keyRef = useRef<(s: string) => void>(() => {});
   keyRef.current = (s: string): void => {
     // Help overlay owns stdin while open: Esc / q / ? closes it, everything else is swallowed.
