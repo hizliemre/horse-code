@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, ChoiceInput } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, LONG_RUNNING_MS, ChoiceInput } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
@@ -513,4 +513,29 @@ describe("Ink components", () => {
     unmount();
   });
 
+});
+
+/**
+ * A task was seen held at 26 minutes on a 20-minute budget. The budget now ends the attempt, but the row
+ * should say something is wrong before it does — the panel is what the user is watching.
+ */
+describe("a running agent that has been going too long", () => {
+  const agent = (ms: number, over: Record<string, unknown> = {}) =>
+    [{ id: "t1", title: "Validate npm start", role: "coder", model: "m", startedAt: Date.now() - ms, ...over }];
+
+  it("marks the clock of an agent past the long-running mark", () => {
+    const f = strip(render(<RunningAgents agents={agent(LONG_RUNNING_MS + 60_000)} cols={90} />).lastFrame());
+    expect(f).toContain("16m");
+  });
+
+  it("leaves a normal one alone", () => {
+    const f = strip(render(<RunningAgents agents={agent(60_000)} cols={90} />).lastFrame());
+    expect(f).toContain("1m 00s");
+  });
+
+  /** A finished agent's frozen clock is a record, not a warning — nothing is waiting on it. */
+  it("does not warn about an agent that has already reported", () => {
+    const rows = agent(LONG_RUNNING_MS + 60_000, { status: "pass", doneAt: Date.now() });
+    expect(() => render(<RunningAgents agents={rows} cols={90} />)).not.toThrow();
+  });
 });

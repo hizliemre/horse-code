@@ -1,5 +1,6 @@
 import type { Card } from "../board/board.js";
 import { runToCompletion, type RoleAgentOptions } from "../agent/loop.js";
+import { withDeadline } from "../agent/deadline.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
@@ -117,13 +118,23 @@ export async function runImplementer(
     onLiveActivity: deps.onLiveActivity,
     onWrite: (path) => commitFile(deps, cwd, path).then(() => {}), // per-write conventional commit in the task worktree
   };
+  const mins = Math.round((deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS) / 60_000);
+  // Surfaced as a failed ATTEMPT (the escalation ladder catches it and moves up a tier), with a note that
+  // says what happened so the next tier does not simply repeat it.
+  const overran = `the implementer ran past its ${mins}-minute budget for a single attempt and was stopped. ` +
+    `Whatever it wrote is committed and kept — continue from there rather than starting over.`;
   try {
-    await runToCompletion(opts);
+    /**
+     * The budget is enforced HERE, not only inside the loop.
+     *
+     * The loop tests its signal at the top of each turn, which bounds turns rather than time: one turn is a
+     * model response plus every tool call it asked for, and a shell command runs for minutes. A task was seen
+     * still held at 26 minutes on a 20-minute budget — the abort had fired, the loop had not come back round.
+     * The attempt now ends when the budget does; the loop unwinds behind it on the same signal.
+     */
+    await withDeadline(runToCompletion(opts), budget, overran);
   } catch (e) {
     if (deps.signal.aborted || !budget.aborted) throw e; // a real cancel, or a real error → unchanged
-    // Surfaced as a failed ATTEMPT (the escalation ladder catches it and moves up a tier), with a note that
-    // says what happened so the next tier does not simply repeat it.
-    const mins = Math.round((deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS) / 60_000);
-    throw new Error(`the implementer ran past its ${mins}-minute budget for a single attempt and was stopped. Whatever it wrote is committed and kept — continue from there rather than starting over.`);
+    throw new Error(overran);
   }
 }

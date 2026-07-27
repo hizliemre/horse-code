@@ -479,6 +479,9 @@ export function MetricsLine({ meta, model }: { meta: TurnMeta; model?: string })
  * Live panel of the sub-agents currently working tasks (the parallel wave), shown under the input:
  * a count header + one row each — "● <task> · <elapsed> · <model>". The elapsed time ticks locally.
  */
+/** When a running agent's clock stops being reassuring. Three quarters of the implementer's own budget. */
+export const LONG_RUNNING_MS = 15 * 60 * 1000;
+
 export function RunningAgents({ agents, cols, cursor }: { agents: RunningAgent[]; cols: number; cursor?: number }): React.ReactElement {
   const [, tick] = useState(0);
   useEffect(() => {
@@ -503,12 +506,15 @@ export function RunningAgents({ agents, cols, cursor }: { agents: RunningAgent[]
               : /APPROVE|pass/i.test(a.status) ? "green" : undefined)
             : undefined;
           const on = i === cursor;
+          // An implementer gets 20 minutes; past three quarters of that it is not working, it is stuck, and
+          // the row should say so before the budget quietly ends the attempt.
+          const slow = !a.status && (a.doneAt ?? Date.now()) - a.startedAt > LONG_RUNNING_MS;
           return (
             <Text key={a.id} wrap="truncate-end" inverse={on}>
               <Text color={a.status ? undefined : "cyan"}>{`${on ? "›" : " "}${a.status ? "✔" : ICONS.msgBullet} `}</Text>
               {a.role ? <Text color="#7dd3fc">{`${a.role} `}</Text> : null}
               {a.title}
-              <Text dimColor>{`  · ${a.model ? `${a.model} ` : ""}(${dur})`}</Text>
+              <Text dimColor={!slow} color={slow ? "#ffb454" : undefined}>{`  · ${a.model ? `${a.model} ` : ""}(${dur})`}</Text>
               {a.status ? <Text color={statusColor}>{`  · ${a.status}`}</Text> : null}
             </Text>
           );
