@@ -147,7 +147,17 @@ export async function runWaves(
   board: Board,
   opts: { base: string; prTitle?: string },
 ): Promise<WaveEngineResult> {
+  /**
+   * Said before it happens, not after.
+   *
+   * The first thing a wave run does is read the whole plan and ask whether the dependencies are right. That
+   * is one call over a hundred task cards, and while it runs there is no agent and no tool line — a resumed
+   * job sat at "Coding… 0 calls" for a minute with nothing on screen to say anything was happening.
+   */
+  const todo = board.list().filter((c) => c.column !== "DONE").length;
+  deps.note?.(`🧭 Planning the run — checking the dependencies of ${todo} remaining task(s) before scheduling.`);
   const plan = await runTeamLead(teamLeadOpts(deps, session), board);
+  if (plan.skipped) deps.note?.(`🧭 Dependency check skipped — ${plan.skipped}. Scheduling from the plan as written.`);
   if (plan.added.length) {
     deps.note?.(
       `🔗 ${plan.added.length} dependency the breakdown did not state — ${plan.added

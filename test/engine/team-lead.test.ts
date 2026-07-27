@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runTeamLead } from "../../src/engine/team-lead.js";
+import { runTeamLead, MAX_AUDIT_CARDS } from "../../src/engine/team-lead.js";
 import { Board } from "../../src/board/board.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
@@ -123,6 +123,32 @@ describe("runTeamLead", () => {
     const p = new MockProvider([[{ type: "text-delta", text: "hmm" }, { type: "done", finishReason: "stop" }]]);
     const plan = await runTeamLead(opts(p), parallelBoard());
     expect(plan.waves).toEqual([["t1", "t2"]]);
+  });
+
+  /**
+   * A ninety-card listing asked of one model in one call does not get a careful answer; it gets a plausible
+   * one. And the whole run waits on it: a resumed job sat at "0 calls, no agents" for a minute.
+   */
+  it("skips the audit — and says so — when more tasks would run together than one reading can judge", async () => {
+    const p = new MockProvider([submitTurn('{"missing":[]}')]);
+    const board = new Board();
+    for (let i = 0; i < MAX_AUDIT_CARDS + 1; i++) board.addCard({ id: `t${i}`, title: `task ${i}` });
+    const plan = await runTeamLead(opts(p), board);
+    expect(p.requests).toHaveLength(0);
+    expect(plan.skipped).toMatch(/parallel/);
+    expect(plan.waves).toHaveLength(1); // the deterministic schedule stands
+  });
+
+  it("asks only about the tasks that would run together, not the whole board", async () => {
+    const p = new MockProvider([submitTurn('{"missing":[]}')]);
+    const board = new Board();
+    board.addCard({ id: "a", title: "first thing" });
+    board.addCard({ id: "b", title: "second thing" });
+    board.addCard({ id: "late", title: "alone at the end", deps: ["a", "b"] });
+    await runTeamLead(opts(p), board);
+    const sent = p.requests[0].messages.map((m) => m.content).join("\n");
+    expect(sent).toContain("first thing");
+    expect(sent).not.toContain("alone at the end"); // nothing runs beside it → nothing to ask
   });
 
   it("does not fall back when aborted, rethrows the error", async () => {

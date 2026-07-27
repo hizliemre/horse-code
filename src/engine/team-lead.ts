@@ -23,11 +23,34 @@ export interface WavePlan {
   added: DepFix[];
   /** Dependencies the audit thinks are unnecessary. Reported only — see `runTeamLead`. */
   suspected: DepFix[];
+  /** Set when the audit did not happen, with the reason — silence would read as "nothing was wrong". */
+  skipped?: string;
 }
 
-/** Cards as the auditor sees them: everything that could reveal a dependency the breakdown did not state. */
-function describeCards(board: Board): string {
-  return board.list().map((c) => {
+/**
+ * How long the audit may hold up the run before it is abandoned.
+ *
+ * It is a pre-flight check on a plan, not part of the work — nothing it can find justifies a job sitting at
+ * "0 calls, no agents" while a model reads a hundred task cards. Past this the deterministic schedule stands.
+ */
+export const AUDIT_TIMEOUT_MS = 90_000;
+
+/**
+ * How many cards the question may be about.
+ *
+ * A ninety-card listing asked of one model in one call does not get a careful answer; it gets a plausible
+ * one. Past this the audit is skipped and said to be skipped, which is honest, rather than performed badly.
+ */
+export const MAX_AUDIT_CARDS = 40;
+
+/**
+ * Cards as the auditor sees them: everything that could reveal a dependency the breakdown did not state.
+ *
+ * Only the cards the question is ABOUT — those that would run beside something else — plus what they already
+ * declare they depend on. A task that is alone in its wave cannot collide with anything.
+ */
+function describeCards(board: Board, ids: Set<string>): string {
+  return board.list().filter((c) => ids.has(c.id)).map((c) => {
     const files = c.files.length ? `\n  writes: ${c.files.join(", ")}` : "";
     const acc = c.acceptance.length ? `\n  done when: ${c.acceptance.join("; ")}` : "";
     return `- ${c.id}: "${c.title}" deps=[${c.deps.join(", ")}]${files}${acc}`;
@@ -57,10 +80,17 @@ export async function runTeamLead(opts: RoleAgentOptions, board: Board): Promise
   // Nothing runs together → nothing can collide, and there is no question worth a call.
   if (parallel.length === 0) return { waves: suggested, added: [], suspected: [] };
 
+  // The cards the question is about, plus the ones they already declare they need (context for the answer).
+  const subject = new Set(parallel.flat());
+  for (const id of [...subject]) for (const d of board.get(id)?.deps ?? []) subject.add(d);
+  if (subject.size > MAX_AUDIT_CARDS) {
+    return { waves: suggested, added: [], suspected: [], skipped: `${subject.size} tasks would run in parallel — more than one reading can judge` };
+  }
+
   const msg = {
     role: "user" as const,
     content:
-      `Tasks:\n${describeCards(board)}\n\n` +
+      `Tasks:\n${describeCards(board, subject)}\n\n` +
       `Given those dependencies, these groups would run AT THE SAME TIME, in separate worktrees, each ` +
       `starting from the same base:\n${parallel.map((w) => `- ${w.join(", ")}`).join("\n")}\n\n` +
       `Audit the dependencies. Two questions:\n` +
@@ -74,10 +104,15 @@ export async function runTeamLead(opts: RoleAgentOptions, board: Board): Promise
 
   let audit: z.infer<typeof DepAuditSchema>;
   try {
-    audit = await runStructuredRole({ ...opts, messages: [...opts.messages, msg] }, DepAuditSchema);
+    audit = await runStructuredRole({
+      ...opts,
+      messages: [...opts.messages, msg],
+      // Bounded: an advisory check must never be the reason a run does nothing.
+      signal: AbortSignal.any([opts.signal, AbortSignal.timeout(AUDIT_TIMEOUT_MS)]),
+    }, DepAuditSchema);
   } catch (e) {
-    if (opts.signal.aborted) throw e; // abort → don't silently fall back, rethrow
-    return { waves: suggested, added: [], suspected: [] }; // no submit / other error → the plan as written
+    if (opts.signal.aborted) throw e; // a real cancel → rethrow
+    return { waves: suggested, added: [], suspected: [], skipped: "the check did not come back in time" };
   }
 
   const added: DepFix[] = [];

@@ -233,6 +233,24 @@ describe("runWaves", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
+  /**
+   * A resumed job sat at "Coding… 0 calls" with no agents for a minute: the first thing a wave run does is
+   * read the plan and audit its dependencies, and nothing on screen said so.
+   */
+  it("says it is planning before the run goes quiet", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      const notes: string[] = [];
+      await runWaves({ ...edeps(mgr, fakeAdapter()), note: (t: string) => notes.push(t) }, session, board, { base: "main" });
+      expect(notes[0]).toMatch(/Planning the run/);
+      expect(notes[0]).toContain("1 remaining task");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
   /** The shape of the run is reported whether it went well or not — that is the point of measuring it. */
   it("reports the shape of the run", async () => {
     const repo = await initTmpRepo();
