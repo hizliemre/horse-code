@@ -177,7 +177,7 @@ describe("waveStats", () => {
 describe("describeWaves", () => {
   it("always states the shape of the run", () => {
     const b = withFiles([{ id: "a" }, { id: "b" }]);
-    expect(describeWaves(waveStats(b, [["a", "b"]]))).toContain("2 task in 1 wave(s)");
+    expect(describeWaves(waveStats(b, [["a", "b"]]))).toContain("2 task, 1 dependency layer(s) deep");
   });
 
   // A clean run should read as one clean line, not a list of zeroes.

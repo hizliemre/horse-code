@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMutex, mapWithLimit, runWave, runWaveEngine, runWaves } from "../../src/engine/wave-engine.js";
+import { createMutex, mapWithLimit, runReady, runWaveEngine, runWaves } from "../../src/engine/wave-engine.js";
 import type { WaveEngineDeps } from "../../src/engine/wave-engine.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import type { AskHuman } from "../../src/engine/escalation.js";
@@ -130,8 +130,28 @@ describe("mapWithLimit", () => {
   });
 });
 
-describe("runWave", () => {
-  it("all-pass (parallel): both tasks merged", async () => {
+/**
+ * The engine used to run strict layers: every task of wave N had to finish before ANY task of wave N+1
+ * could start. On a real 94-task board that is 17 layers, and it sat with 63 tasks in TODO and ONE agent
+ * running — that agent was the last unfinished task of layer 5, and the seventeen tasks of layer 6 were not
+ * allowed to begin. A layer is an artefact of how the schedule was computed; what constrains a task is what
+ * it depends on.
+ */
+describe("runReady", () => {
+  /** Counts how many tasks are actually in flight: derive starts one, merge ends it. */
+  const watched = (mgr: WorktreeManager): { mgr: WorktreeManager; peak: () => number } => {
+    let live = 0, peak = 0;
+    const wrapped = Object.create(mgr) as WorktreeManager;
+    wrapped.deriveTask = async (...a: Parameters<WorktreeManager["deriveTask"]>) => {
+      const r = await mgr.deriveTask(...a); live++; peak = Math.max(peak, live); return r;
+    };
+    wrapped.mergeTask = async (...a: Parameters<WorktreeManager["mergeTask"]>) => {
+      const r = await mgr.mergeTask(...a); live--; return r;
+    };
+    return { mgr: wrapped, peak: () => peak };
+  };
+
+  it("merges two independent tasks", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
@@ -139,30 +159,63 @@ describe("runWave", () => {
       const board = new Board();
       board.addCard({ id: "t1", title: "task-a" });
       board.addCard({ id: "t2", title: "task-b" });
-      const o = await runWave(edeps(mgr, fakeAdapter()), session, board, ["t1", "t2"], new Set());
+      const o = await runReady(edeps(mgr, fakeAdapter()), session, board);
       expect(o.merged.sort()).toEqual(["t1", "t2"]);
       expect(o.failed).toEqual([]);
       expect(o.skipped).toEqual([]);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("holds a wide wave to the parallelism cap and still merges everything", async () => {
+  /**
+   * The heart of it. Layered, the order is forced to A, C, B — C shares A's layer and B waits for the layer
+   * to drain. Dependency-driven, B is runnable the moment A merges, so it goes before C.
+   */
+  it("starts a task as soon as its own dependency merges, not when its layer does", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const board = new Board();
-      const ids = ["t1", "t2", "t3", "t4", "t5"];
-      for (const id of ids) board.addCard({ id, title: `task-${id}` });
-      const notes: string[] = [];
-      const deps = { ...edeps(mgr, fakeAdapter()), maxParallel: 2, note: (t: string) => notes.push(t) };
-      const o = await runWave(deps, session, board, ids, new Set());
-      expect(o.merged.sort()).toEqual(ids);
-      expect(notes.join("\n")).toContain("running 2 at a time");
+      board.addCard({ id: "a", title: "task-a" });
+      board.addCard({ id: "b", title: "task-b", deps: ["a"] });
+      board.addCard({ id: "c", title: "task-c" }); // shares a's layer; nothing depends on it
+      const o = await runReady({ ...edeps(mgr, fakeAdapter()), maxParallel: 1 }, session, board);
+      expect(o.merged).toEqual(["a", "b", "c"]);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("one-fail: failing task is failed, the other is merged", async () => {
+  it("never runs more than the cap at once", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const base = new WorktreeManager({ repoRoot: repo });
+      const session = await base.openSession("main", "job");
+      const { mgr, peak } = watched(base);
+      const board = new Board();
+      const ids = ["t1", "t2", "t3", "t4", "t5"];
+      for (const id of ids) board.addCard({ id, title: `task-${id}` });
+      const o = await runReady({ ...edeps(base, fakeAdapter()), manager: mgr, maxParallel: 2 }, session, board);
+      expect(o.merged.sort()).toEqual(ids);
+      expect(peak()).toBeLessThanOrEqual(2);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** The protection the layer split used to give, now applied against what is genuinely in flight. */
+  it("does not run two tasks that write the same file at the same time", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const base = new WorktreeManager({ repoRoot: repo });
+      const session = await base.openSession("main", "job");
+      const { mgr, peak } = watched(base);
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a", files: ["src/store.ts"] });
+      board.addCard({ id: "t2", title: "task-b", files: ["src/store.ts"] });
+      const o = await runReady({ ...edeps(base, fakeAdapter()), manager: mgr, maxParallel: 4 }, session, board);
+      expect(o.merged.sort()).toEqual(["t1", "t2"]);
+      expect(peak()).toBe(1);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("fails one task without touching its independent sibling", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
@@ -170,23 +223,42 @@ describe("runWave", () => {
       const board = new Board();
       board.addCard({ id: "t1", title: "task-a" });
       board.addCard({ id: "t2", title: "task-b" });
-      const o = await runWave(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board, ["t1", "t2"], new Set());
+      const o = await runReady(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board);
       expect(o.failed).toEqual(["t1"]);
       expect(o.merged).toEqual(["t2"]);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("skip: blocked dependency → task is skipped (doesn't run)", async () => {
+  it("skips everything downstream of a failure, however deep", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const board = new Board();
-      board.addCard({ id: "t3", title: "task-c", deps: ["t1"] });
-      const o = await runWave(edeps(mgr, fakeAdapter()), session, board, ["t3"], new Set(["t1"]));
-      expect(o.skipped).toEqual(["t3"]);
-      expect(o.merged).toEqual([]);
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
+      board.addCard({ id: "t3", title: "task-c", deps: ["t2"] });
+      const o = await runReady(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board);
+      expect(o.failed).toEqual(["t1"]);
+      expect(o.skipped.sort()).toEqual(["t2", "t3"]);
       expect(board.get("t3")!.stageHistory.some((s) => s.action === "skipped")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** Re-running a merged task would redo the whole implementation. */
+  it("treats a task an earlier run finished as merged and does not run it again", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const base = new WorktreeManager({ repoRoot: repo });
+      const session = await base.openSession("main", "job");
+      const { mgr, peak } = watched(base);
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      board.move("t1", "DONE", "coder");
+      board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
+      const o = await runReady({ ...edeps(base, fakeAdapter()), manager: mgr }, session, board);
+      expect(o.merged.sort()).toEqual(["t1", "t2"]); // t1 counts as delivered…
+      expect(peak()).toBe(1);                        // …but only t2 was ever derived
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
@@ -247,7 +319,8 @@ describe("runWaves", () => {
       const notes: string[] = [];
       await runWaves({ ...edeps(mgr, fakeAdapter()), note: (t: string) => notes.push(t) }, session, board, { base: "main" });
       expect(notes[0]).toMatch(/Planning the run/);
-      expect(notes[0]).toContain("1 remaining task");
+      expect(notes[0]).toContain("1 task(s) left");
+      expect(notes[0]).toContain("at a time");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
@@ -262,7 +335,7 @@ describe("runWaves", () => {
       board.addCard({ id: "t2", title: "task-b" });
       const notes: string[] = [];
       await runWaves({ ...edeps(mgr, fakeAdapter()), note: (t: string) => notes.push(t) }, session, board, { base: "main" });
-      expect(notes.join("\n")).toMatch(/2 task in 1 wave\(s\)/);
+      expect(notes.join("\n")).toMatch(/2 task, 1 dependency layer/);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

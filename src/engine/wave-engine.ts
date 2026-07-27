@@ -5,7 +5,7 @@ import { runWaveTask } from "./wave-task.js";
 import { resolveMergeConflict } from "./conflict.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runTeamLead } from "./team-lead.js";
-import { splitFileConflicts, waveStats, describeWaves, type FileClash } from "./waves.js";
+import { splitFileConflicts, waveStats, describeWaves, normalizePath, type FileClash } from "./waves.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 
@@ -58,56 +58,112 @@ export function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {
 }
 
 /**
- * Single wave: skip tasks with a blocked dependency; run the rest in parallel with a shared mutex +
- * resolveConflict (resolveMergeConflict inside the merge lock); classify the results.
+ * Runs every task the moment its dependencies are merged — not when its "wave" comes round.
+ *
+ * The engine used to run strict layers: every task of wave N had to finish before ANY task of wave N+1
+ * could start. Measured on a real 94-task board that is 17 layers, and the board sat with 63 tasks in TODO
+ * and ONE agent running, because that agent was the last unfinished task of layer 5 and the seventeen tasks
+ * of layer 6 were not allowed to begin. A layer is an artefact of how the schedule was computed; the only
+ * thing that actually constrains a task is what it depends on.
+ *
+ * Three rules, all of them local:
+ * - a task starts when every dependency it declares has MERGED;
+ * - at most `maxParallel` run at once, each holding a slot so the model rotation still spreads;
+ * - a task does not start while a RUNNING task writes a file it writes — the same protection the layer
+ *   split gave, applied against what is genuinely in flight rather than against a layer.
+ *
+ * A failed task blocks everything downstream of it, transitively; those are reported as skipped, exactly as
+ * the layered engine did.
  */
-export async function runWave(
+export async function runReady(
   deps: WaveEngineDeps,
   session: WorktreeSession,
   board: Board,
-  taskIds: string[],
-  blocked: Set<string>,
 ): Promise<WaveOutcome> {
-  // A task already in DONE was implemented and merged by an earlier (interrupted) run — re-running it would
-  // redo the whole implementation. Treat it as merged and move on.
-  const alreadyDone = taskIds.filter((t) => board.get(t)!.column === "DONE");
-  const rest = taskIds.filter((t) => !alreadyDone.includes(t));
-  const skipped = rest.filter((t) => board.get(t)!.deps.some((d) => blocked.has(d)));
-  const runnable = rest.filter((t) => !skipped.includes(t));
-  for (const t of skipped) {
-    board.appendStage(t, { role: "team-lead", action: "skipped", note: "dependency failed" });
-  }
-
+  const limit = Math.max(1, deps.maxParallel ?? MAX_PARALLEL_TASKS);
   const ser = createMutex();
-  const limit = deps.maxParallel ?? MAX_PARALLEL_TASKS;
-  if (runnable.length > limit) {
-    deps.note?.(`⏳ ${runnable.length} task(s) in this wave — running ${limit} at a time.`);
-  }
-  const results = await mapWithLimit(
-    runnable, limit,
-    async (t, slot) => {
-      const resolveConflict = async (tw: TaskWorktree, files: string[]): Promise<MergeResult> => {
-        try {
-          const r = await resolveMergeConflict(deps, session, board, t, tw);
-          return r.status === "resolved" ? { status: "merged" } : { status: "conflict", files };
-        } catch (e) {
-          // abort → rethrow (base may be left mid-merge; cleanup is left to session teardown — G/H).
-          // If a queued sibling merge hits a dirty tree, git rejects it (won't return merged) → no false PR.
-          if (deps.signal.aborted) throw e;
-          try { await deps.manager.abortMerge(session); } catch { /* zaten temiz olabilir */ }
-          return { status: "conflict", files };
-        }
-      };
-      const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict }, session, board, t, slot);
-      return { t, status: res.status };
-    },
-  );
+  const cards = board.list();
+  // A task already in DONE was implemented and merged by an earlier (interrupted) run — re-running it would
+  // redo the whole implementation.
+  const done = new Set(cards.filter((c) => c.column === "DONE").map((c) => c.id));
+  const merged = [...done];
+  const failed: string[] = [];
+  const skipped: string[] = [];
+  const blocked = new Set<string>();
+  const pending = new Set(cards.filter((c) => !done.has(c.id)).map((c) => c.id));
+  const busy = new Set<string>();                     // files held by a task that is running right now
+  const slots = Array.from({ length: limit }, (_, i) => i);
+  const running = new Map<number, Promise<number>>(); // slot → its task, resolving to the slot it frees
+  const depsOf = (id: string): string[] => board.get(id)?.deps ?? [];
+  const filesOf = (id: string): string[] => (board.get(id)?.files ?? []).map(normalizePath).filter(Boolean);
 
-  return {
-    merged: [...alreadyDone, ...results.filter((r) => r.status === "merged").map((r) => r.t)],
-    failed: results.filter((r) => r.status !== "merged").map((r) => r.t),
-    skipped,
+  /** Nothing downstream of a failure can run. Iterated: a chain of dependents is dropped in one pass. */
+  const dropUnreachable = (): void => {
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const id of [...pending]) {
+        if (!depsOf(id).some((d) => blocked.has(d))) continue;
+        pending.delete(id);
+        skipped.push(id);
+        blocked.add(id);
+        board.appendStage(id, { role: "team-lead", action: "skipped", note: "dependency failed" });
+        changed = true;
+      }
+    }
   };
+
+  while (pending.size > 0 || running.size > 0) {
+    dropUnreachable();
+    for (const id of [...pending]) {
+      if (slots.length === 0) break;
+      if (!depsOf(id).every((d) => done.has(d))) continue;
+      const files = filesOf(id);
+      if (files.some((f) => busy.has(f))) continue; // a running task owns that file → take it on the next pass
+      pending.delete(id);
+      for (const f of files) busy.add(f);
+      const slot = slots.shift() as number;
+      running.set(slot, (async () => {
+        try {
+          const resolveConflict = async (tw: TaskWorktree, conflicted: string[]): Promise<MergeResult> => {
+            try {
+              const r = await resolveMergeConflict(deps, session, board, id, tw);
+              return r.status === "resolved" ? { status: "merged" } : { status: "conflict", files: conflicted };
+            } catch (e) {
+              // abort → rethrow (base may be left mid-merge; cleanup is left to session teardown).
+              // If a queued sibling merge hits a dirty tree, git rejects it (won't return merged) → no false PR.
+              if (deps.signal.aborted) throw e;
+              try { await deps.manager.abortMerge(session); } catch { /* zaten temiz olabilir */ }
+              return { status: "conflict", files: conflicted };
+            }
+          };
+          const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict }, session, board, id, slot);
+          if (res.status === "merged") { merged.push(id); done.add(id); }
+          else { failed.push(id); blocked.add(id); }
+        } finally {
+          for (const f of files) busy.delete(f);
+          slots.push(slot);
+        }
+        return slot;
+      })());
+    }
+    if (running.size === 0) {
+      /**
+       * Nothing is running and nothing could start: what is left depends on something that will never
+       * arrive. `computeWaves` rejects cycles before this point, so in practice this is a dependency on a
+       * task that failed — but it is reported rather than looped on, because a scheduler that cannot
+       * schedule must say so instead of spinning.
+       */
+      for (const id of pending) {
+        skipped.push(id);
+        board.appendStage(id, { role: "team-lead", action: "skipped", note: "its dependencies never completed" });
+      }
+      pending.clear();
+      break;
+    }
+    running.delete(await Promise.race(running.values()));
+  }
+
+  return { merged, failed, skipped };
 }
 
 /**
@@ -165,7 +221,8 @@ export async function runWaves(
    * job sat at "Coding… 0 calls" for a minute with nothing on screen to say anything was happening.
    */
   const todo = board.list().filter((c) => c.column !== "DONE").length;
-  deps.note?.(`🧭 Planning the run — checking the dependencies of ${todo} remaining task(s) before scheduling.`);
+  deps.note?.(`🧭 Planning the run — ${todo} task(s) left, up to ${deps.maxParallel ?? MAX_PARALLEL_TASKS} at a time. ` +
+    `Checking their dependencies before scheduling.`);
   const plan = await runTeamLead(teamLeadOpts(deps, session), board);
   if (plan.skipped) deps.note?.(`🧭 Dependency check skipped — ${plan.skipped}. Scheduling from the plan as written.`);
   if (plan.added.length) {
@@ -188,20 +245,14 @@ export async function runWaves(
   const { waves, clashes } = splitFileConflicts(plan.waves, board);
   if (clashes.length) {
     deps.note?.(
-      `🔀 ${clashes.length} task pair(s) would have written the same file in one wave — separated so they run in ` +
-      `sequence: ${clashes.slice(0, 3).map((c: FileClash) => `${c.a}/${c.b} (${c.files[0]})`).join(", ")}` +
+      `🔀 ${clashes.length} task pair(s) write the same file — they will not run at the same time: ` +
+      `${clashes.slice(0, 3).map((c: FileClash) => `${c.a}/${c.b} (${c.files[0]})`).join(", ")}` +
       `${clashes.length > 3 ? ", …" : ""}`);
   }
 
-  const blocked = new Set<string>();
-  const failed: string[] = [];
-  const skipped: string[] = [];
-  for (const wave of waves) {
-    const o = await runWave(deps, session, board, wave, blocked);
-    for (const t of o.failed) { blocked.add(t); failed.push(t); }
-    for (const t of o.skipped) { blocked.add(t); skipped.push(t); }
-    // successful merges were committed to base → the next wave derives from the updated base (D automatic)
-  }
+  const outcome = await runReady(deps, session, board);
+  const failed = outcome.failed;
+  const skipped = outcome.skipped;
 
   const delivery: Delivery = { branch: session.baseBranch, worktree: session.baseWorktree };
   // Whether the breakdown was any good is not visible from "completed": twenty tasks in twenty waves and

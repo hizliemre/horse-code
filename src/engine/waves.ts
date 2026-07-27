@@ -64,7 +64,7 @@ export interface FileClash {
  * Deliberately generous: over-reporting costs a little parallelism, under-reporting costs a merge conflict
  * and a council. Two spellings of the same path on a case-insensitive filesystem are the same file.
  */
-function normalizePath(p: string): string {
+export function normalizePath(p: string): string {
   return p.trim().replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
 }
 
@@ -163,7 +163,7 @@ export function waveStats(board: Board, waves: string[][], clashes: FileClash[] 
 /** One line for the run report — the numbers that say whether the plan was any good. */
 export function describeWaves(s: WaveStats): string {
   const parts = [
-    `${s.tasks} task in ${s.waves} wave(s) — ${s.width} per wave, widest ${s.widest}`,
+    `${s.tasks} task, ${s.waves} dependency layer(s) deep — ${s.width} per layer, widest ${s.widest}`,
     s.clashes ? `${s.clashes} file clash(es) split apart` : "",
     s.conflicts ? `${s.conflicts} merge conflict(s)` : "",
     s.escalated ? `${s.escalated} task(s) took more than one attempt (${s.attempts} total)` : "",
