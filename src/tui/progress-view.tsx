@@ -69,8 +69,21 @@ export function ShimmerText({ text, accent = BLUE, bold = true }: { text: string
  * Left-aligned: ping-pong ball + shimmering phase label + live "(elapsed · N tokens)". During refine the
  * label also shows the refiner model. The elapsed time ticks here; tokens come from `meta` (App re-renders).
  */
+/**
+ * Longest live label allowed on the progress row.
+ *
+ * `truncate-end` alone is not a guarantee: a Text with no width constraint simply grows and pushes the row
+ * onto a second line — which puts content back under the running indicator, the thing being prevented. The
+ * label is bounded at the source so no terminal width can produce a second row.
+ */
+export const MAX_LIVE_LABEL = 60;
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
 export function ProgressView(
-  { phase, detail, refinerModel, meta }: { phase: string; detail?: string; cols?: number; refinerModel?: string; meta?: TurnMeta },
+  { phase, detail, refinerModel, meta, live }: { phase: string; detail?: string; cols?: number; refinerModel?: string; meta?: TurnMeta; live?: string },
 ): React.ReactElement {
   const [, tick] = useState(0);
   useEffect(() => {
@@ -89,12 +102,22 @@ export function ProgressView(
   const metrics = meta?.running && meta.startedAt !== undefined
     ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ↑${fmtTokens(meta.promptTokens)}${cached} ↓${fmtTokens(meta.completionTokens)} · ${meta.calls} call${meta.calls === 1 ? "" : "s"})`
     : "";
+  /**
+   * The live write indicator sits ON this line, not under it.
+   *
+   * It had its own row below the shimmer, which meant the running indicator was never the last thing before
+   * the input — something kept appearing beneath it. Folding it in keeps the feedback (a slow write is
+   * otherwise indistinguishable from a hang) and costs no row at all.
+   */
   return (
-    <Box>
+    // Every trailing segment truncates: this row must be exactly one line. Wrapping would put the overflow
+    // BELOW the running indicator, which is the thing being fixed.
+    <Box flexWrap="nowrap" overflow="hidden">
       <RunningHorse accent={accent} />
       <Text> </Text>
       <ShimmerText text={`${phaseLabel(phase)}${suffix}`} accent={accent} />
-      {metrics ? <Text dimColor>{metrics}</Text> : null}
+      {metrics ? <Text dimColor wrap="truncate-end">{metrics}</Text> : null}
+      {live ? <Text color="#1a9fd8" wrap="truncate-end">{`  ✎ ${clip(live, MAX_LIVE_LABEL)}`}</Text> : null}
     </Box>
   );
 }

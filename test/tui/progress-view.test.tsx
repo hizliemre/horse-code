@@ -63,3 +63,40 @@ describe("phase labels + running horse", () => {
     chat.unmount();
   });
 });
+
+/**
+ * Nothing is ever drawn beneath the running indicator.
+ *
+ * The live write indicator had its own row below it, so the shimmer was never the last thing before the
+ * input — something kept appearing under it. It rides on the same line now, and that line truncates: if it
+ * wrapped, the overflow would land below the indicator again and reintroduce exactly what was removed.
+ */
+describe("the progress row is exactly one line", () => {
+  const meta = {
+    running: true, startedAt: Date.now() - 43 * 60_000,
+    promptTokens: 52e6, completionTokens: 525_300, cachedTokens: 0, calls: 2035,
+  };
+  const rows = (el: React.ReactElement): number =>
+    (render(el).lastFrame() ?? "").split("\n").filter((l) => l.trim()).length;
+
+  it("with nothing being written", () => {
+    expect(rows(<ProgressView phase="coding" meta={meta as never} />)).toBe(1);
+  });
+
+  it("while a file is being written", () => {
+    expect(rows(
+      <ProgressView phase="coding" meta={meta as never} live="writing error-notice.component.spec.ts · 200 chars" />,
+    )).toBe(1);
+  });
+
+  it("with a live label long enough to overflow any terminal", () => {
+    expect(rows(<ProgressView phase="coding" meta={meta as never} live={"writing ".concat("x".repeat(400))} />)).toBe(1);
+  });
+
+  it("still shows which file is being written", () => {
+    const frame = render(
+      <ProgressView phase="coding" meta={meta as never} live="writing error-notice.spec.ts" />,
+    ).lastFrame() ?? "";
+    expect(frame).toContain("error-notice");
+  });
+});

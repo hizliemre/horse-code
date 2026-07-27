@@ -1267,7 +1267,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       </Box>
     ) : (
       <Box flexDirection="column">
-        <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} />
+        <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} live={state.liveActivity} />
         {state.pending ? <Prompt question={state.pending.question} onSubmit={(s) => controller.answer(s)} /> : null}
       </Box>
     );
@@ -1365,16 +1365,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const pendingLines = state.pending
       ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingBodyWidth(size.cols)).length
       : 0;
-    /**
-     * Only present while something is actually being written.
-     *
-     * This was reserved unconditionally, to stop the row resizing the status box and making the progress
-     * indicator read as stuttering. That was one fix too many: the stutter came from the row FLASHING for
-     * every tool's argument generation, and restricting it to file writes already removed that. Keeping the
-     * reservation as well bought nothing and cost a permanent blank line between the indicator and the input.
-     */
-    const liveH = progressLine && state.liveActivity ? 1 : 0;
-    const statusH = (progressLine || doneLine ? 1 : 0) + liveH + pendingLines; // progress/done(1) + live + pending
+    // The write indicator rides ON the progress line, so it costs no row of its own — and nothing is ever
+    // drawn beneath the running indicator.
+    const statusH = (progressLine || doneLine ? 1 : 0) + pendingLines; // progress/done(1) + pending
     const inputMarginTop = showStatus ? 0 : 1; // no blank line between the status label and the input
     // A pending choice question replaces the free-text input with a ChoiceInput selector.
     const choiceOptions = state.pending?.options ?? [];
@@ -1420,8 +1413,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         <Text dimColor>{clamped > 0 ? `  ↓ ${clamped} more · ↓/PgDn to jump to bottom` : " "}</Text>
         {showStatus ? (
           <Box flexDirection="column">
-            {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} /></Box> : null}
-            {progressLine && state.liveActivity ? <Box paddingLeft={2}><Text color="#1a9fd8" wrap="truncate-end">{`  ✎ ${state.liveActivity}`}</Text></Box> : null}
+            {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} live={state.liveActivity} /></Box> : null}
             {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
           </Box>
