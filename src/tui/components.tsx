@@ -315,6 +315,18 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
 }
 
 /** Full-width help overlay (opened with "?" on an empty input): grouped keybindings + slash commands. */
+/**
+ * Whether a chunk of stdin should close the help overlay.
+ *
+ * Matched by CONTAINMENT, not equality. A chunk is not a keystroke: fast typing, a paste, and a terminal
+ * that batches its writes all deliver several bytes at once, and an equality test then recognises none of
+ * them — leaving the overlay open with nothing else able to close it, because it replaces the input line.
+ * Ctrl+C counts too: it is what anyone reaches for when a screen will not go away.
+ */
+export function closesHelp(s: string): boolean {
+  return /[q?]/i.test(s) || s.includes("\x1b") || s.includes("\x03");
+}
+
 export function HelpOverlay({ cols }: { cols: number }): React.ReactElement {
   const w = Math.max(30, cols - 2);
   const sections = helpSections();
@@ -1308,7 +1320,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const keyRef = useRef<(s: string) => void>(() => {});
   keyRef.current = (s: string): void => {
     // Help overlay owns stdin while open: Esc / q / ? closes it, everything else is swallowed.
-    if (helpOpen) { if (s === "\x1b" || s === "q" || s === "?") setHelpOpen(false); return; }
+    if (helpOpen) { if (closesHelp(s)) setHelpOpen(false); return; }
     if (sendModeText !== null) return; // the SendModePicker owns stdin while it's open
     if (!fullscreen || state.mode === "picker") return;
     if (state.pending?.options?.length) return; // ChoiceInput owns stdin while a choice is pending
