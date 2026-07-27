@@ -21,6 +21,8 @@ import { PinStore } from "../session/pins.js";
 import { MemoryStore } from "../session/memory.js";
 import { ModelHealth } from "../engine/model-health.js";
 import { saveRoleChains } from "../config/save-roles.js";
+import { saveMaxParallel } from "../config/save-parallel.js";
+import { MAX_PARALLEL_TASKS } from "../engine/wave-engine.js";
 import { saveRoleSkills } from "../config/save-skills.js";
 import { tuneRoleSkills } from "../engine/skill-tuner.js";
 import { scanRepo } from "../engine/scan-repo.js";
@@ -69,6 +71,7 @@ export interface RunTuiReplOpts {
   buildGraph?: () => Promise<string>; // /graph build
   migrate?: () => Promise<string>; // /migrate
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
+  maxParallel?: number; // configured task parallelism → /parallel shows and changes it
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
@@ -144,6 +147,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     onActivity: controller.pushActivity,
     onLiveActivity: controller.setLiveActivity, // live "writing <file> · N chars" during long tool generations
     note: (t) => controller.note(t), // persistent chat-flow notes from deep in the pipeline (auto-commits)
+    get maxParallel() { return parallelRef.current; }, // re-read per scheduling pass → /parallel is live
 
     inbox: () => controller.takeInboxNote(), // "by-the-way" notes → folded into the running coach turn
     pins: () => pinStore.list(), // context pins → coach system prompt
@@ -163,6 +167,17 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   };
   // /model picker → live-swap every role's model on the running session (no config write).
   const setModel = (m: string): void => deps0.roleRegistry.setModelOverride(m);
+  /**
+   * Task parallelism, held in a ref so a change reaches the RUNNING job.
+   *
+   * `deps.maxParallel` is a getter over this, and the scheduler re-reads its ceiling on every pass — so
+   * `/parallel 12` fills the extra slots as soon as tasks finish, instead of at the next job.
+   */
+  const parallelRef = { current: opts.maxParallel ?? MAX_PARALLEL_TASKS };
+  const setParallel = (n: number): void => {
+    parallelRef.current = n;
+    void saveMaxParallel(homedir(), n);
+  };
   /**
    * Answers a "by-the-way" question while work is still running.
    *
@@ -552,7 +567,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} addMcp={addMcp} answerByTheWay={answerByTheWay}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}

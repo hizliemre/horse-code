@@ -215,6 +215,30 @@ describe("runReady", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
+  /**
+   * The number that is safe is a property of the user's subscriptions, and it is usually learned by watching
+   * a job run — which is exactly when restarting to change it costs the most.
+   */
+  it("picks up a raised ceiling while the job is running", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const base = new WorktreeManager({ repoRoot: repo });
+      const session = await base.openSession("main", "job");
+      const { mgr, peak } = watched(base);
+      const board = new Board();
+      const ids = ["t1", "t2", "t3", "t4", "t5", "t6"];
+      for (const id of ids) board.addCard({ id, title: `task-${id}` });
+      let limit = 1;
+      const deps = { ...edeps(base, fakeAdapter()), manager: mgr, get maxParallel() { return limit; } };
+      const run = runReady(deps, session, board);
+      limit = 3; // raised mid-flight
+      const o = await run;
+      expect(o.merged.sort()).toEqual(ids);
+      expect(peak()).toBeGreaterThan(1); // the extra slots were actually used
+      expect(peak()).toBeLessThanOrEqual(3);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
   it("fails one task without touching its independent sibling", async () => {
     const repo = await initTmpRepo();
     try {

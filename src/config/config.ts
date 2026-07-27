@@ -49,6 +49,14 @@ export interface ResolvedConfig {
   /** Allowlist of model sources (omniroute `owned_by`) to show; empty = all (non-free). Only your connected
    *  subscriptions, e.g. ["antigravity","claude","codex","opencode-go"] — excludes combos + unofficial sources. */
   modelSources: string[];
+  /**
+   * How many implementation tasks may run at once.
+   *
+   * The right number is a property of YOUR subscriptions, not of the tool: it is bounded by how many parallel
+   * calls your model sources tolerate and by how much of the machine you want spent. It is a setting because
+   * no default can know that.
+   */
+  maxParallel: number;
 }
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
@@ -63,6 +71,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   mcp: {},
   modelSources: [],
   skillSources: [],
+  maxParallel: 8,
 };
 
 const reviewerSchema = z.object({ name: z.string(), perspective: z.string(), models: z.array(z.string()) });
@@ -96,6 +105,8 @@ const fileSchema = z
     council: z.object({ members: z.array(reviewerSchema) }).optional(),
     specKit: z.object({ version: z.string() }).optional(),
     modelSources: z.array(z.string()).optional(),
+    // Bounded: below 1 nothing runs; above 32 the git merge lock, not the models, becomes the limit.
+    maxParallel: z.number().int().min(1).max(32).optional(),
     skillSources: z.array(z.object({
       name: z.string(),
       repo: z.string(),
@@ -157,6 +168,9 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // modelSources: "most specific wins" (project's if present).
   merged.modelSources = projectSafe.modelSources ?? global.modelSources ?? [];
+
+  // maxParallel: most specific wins — a heavy project may want a different number from the machine default.
+  merged.maxParallel = projectSafe.maxParallel ?? global.maxParallel ?? DEFAULT_CONFIG.maxParallel;
 
   // skillSources MERGE by name: a machine-wide skill set stays available in every project, and a project may
   // add its own or pin a different ref for one of them.

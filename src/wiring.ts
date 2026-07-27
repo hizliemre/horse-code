@@ -112,7 +112,7 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     manager: opts.manager,
     prAdapter: opts.prAdapter,
     rounds: 3,
-    maxParallel: MAX_PARALLEL_TASKS,
+    maxParallel: opts.config.maxParallel ?? MAX_PARALLEL_TASKS,
     askHuman: opts.askHuman,
   };
 }

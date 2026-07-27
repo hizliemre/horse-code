@@ -336,6 +336,7 @@ export async function main(argv: string[]): Promise<void> {
         model: config.model,
         listModels,
         mcp: config.mcp,
+        maxParallel: config.maxParallel,
         refreshSources,
         sourcesInfo,
         probeModel,

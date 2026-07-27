@@ -30,6 +30,7 @@ function baseConfig(over: Partial<ResolvedConfig> = {}): ResolvedConfig {
     mcp: {},
     modelSources: [],
     skillSources: [],
+    maxParallel: DEFAULT_CONFIG.maxParallel,
     ...over,
   };
 }

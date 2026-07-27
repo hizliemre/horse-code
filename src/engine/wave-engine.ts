@@ -80,7 +80,6 @@ export async function runReady(
   session: WorktreeSession,
   board: Board,
 ): Promise<WaveOutcome> {
-  const limit = Math.max(1, deps.maxParallel ?? MAX_PARALLEL_TASKS);
   const ser = createMutex();
   const cards = board.list();
   // A task already in DONE was implemented and merged by an earlier (interrupted) run — re-running it would
@@ -92,8 +91,16 @@ export async function runReady(
   const blocked = new Set<string>();
   const pending = new Set(cards.filter((c) => !done.has(c.id)).map((c) => c.id));
   const busy = new Set<string>();                     // files held by a task that is running right now
-  const slots = Array.from({ length: limit }, (_, i) => i);
   const running = new Map<number, Promise<number>>(); // slot → its task, resolving to the slot it frees
+  /**
+   * Slot numbers spread each role's model chain across its parallel workers, so they are recycled rather
+   * than counted: a freed slot is handed to the next task, and a new one is minted only when the ceiling
+   * rises. Read on every pass, so raising the ceiling mid-run takes effect at the next completion instead
+   * of at the next job.
+   */
+  const free: number[] = [];
+  let minted = 0;
+  const ceiling = (): number => Math.max(1, deps.maxParallel ?? MAX_PARALLEL_TASKS);
   const depsOf = (id: string): string[] => board.get(id)?.deps ?? [];
   const filesOf = (id: string): string[] => (board.get(id)?.files ?? []).map(normalizePath).filter(Boolean);
 
@@ -114,14 +121,15 @@ export async function runReady(
 
   while (pending.size > 0 || running.size > 0) {
     dropUnreachable();
+    const limit = ceiling();
     for (const id of [...pending]) {
-      if (slots.length === 0) break;
+      if (running.size >= limit) break;
       if (!depsOf(id).every((d) => done.has(d))) continue;
       const files = filesOf(id);
       if (files.some((f) => busy.has(f))) continue; // a running task owns that file → take it on the next pass
       pending.delete(id);
       for (const f of files) busy.add(f);
-      const slot = slots.shift() as number;
+      const slot = free.pop() ?? minted++;
       running.set(slot, (async () => {
         try {
           const resolveConflict = async (tw: TaskWorktree, conflicted: string[]): Promise<MergeResult> => {
@@ -141,7 +149,7 @@ export async function runReady(
           else { failed.push(id); blocked.add(id); }
         } finally {
           for (const f of files) busy.delete(f);
-          slots.push(slot);
+          free.push(slot);
         }
         return slot;
       })());

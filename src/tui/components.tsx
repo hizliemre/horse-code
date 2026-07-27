@@ -823,7 +823,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, answerByTheWay, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, answerByTheWay, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -853,6 +853,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   migrate?: () => Promise<string>; // /migrate
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   answerByTheWay?: (question: string) => void; // a question asked while work is running
+  parallel?: () => number; // how many tasks may run at once
+  setParallel?: (n: number) => void; // /parallel N — live, and persisted
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
@@ -1090,6 +1092,28 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     removeMemory(n).then((r) => controller.note(r ? `Forgot: ${r}` : `No memory #${n}.`));
   };
   // /mcp → show connected MCP servers + tool counts.
+  /**
+   * `/parallel` — how many tasks run at once.
+   *
+   * The right number is a property of the user's subscriptions, not of this tool: it is how many parallel
+   * calls their model sources tolerate. It is live because the answer is usually learned from watching a
+   * running job, which is exactly when restarting to change it is most expensive.
+   */
+  const doParallel = (arg = ""): void => {
+    const n = Number(arg.trim());
+    if (!arg.trim()) {
+      controller.note(`Up to **${parallel?.() ?? "?"}** task(s) run at once. \`/parallel N\` changes it (1–32).`);
+      return;
+    }
+    if (!Number.isInteger(n) || n < 1 || n > 32) {
+      controller.note(`\`/parallel\` takes a whole number from 1 to 32 — "${arg.trim()}" is not one.`);
+      return;
+    }
+    if (!setParallel) { controller.note("This session cannot change the parallelism."); return; }
+    setParallel(n);
+    controller.note(`Up to **${n}** task(s) will now run at once — the running job picks it up as tasks finish.`);
+  };
+
   const doMcp = (arg = ""): void => {
     const add = /^add\s+(.+)$/is.exec(arg.trim());
     if (add) {
@@ -1230,6 +1254,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/graph") doGraph("");
     else if (c.name === "/migrate") doMigrate();
     else if (c.name === "/mode") doMode("");
+    else if (c.name === "/parallel") doParallel("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -1572,6 +1597,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /sources refresh (argument form).
               if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
               if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSkills(trimmed.slice("/skills".length).trim()); return; }
+              if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); doParallel(trimmed.slice("/parallel".length).trim()); return; }
               if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMcp(trimmed.slice("/mcp".length).trim()); return; }
               if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); doGraph(trimmed.slice("/graph".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
