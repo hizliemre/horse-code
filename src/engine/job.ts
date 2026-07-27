@@ -78,6 +78,8 @@ function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOpt
 
 /** How much of the plan the auditor is given. Long enough for a real plan, short of paying for a whole book. */
 const MAX_PLAN_CHARS = 24_000;
+/** Turns the breakdown audit may take. It reads a plan it was handed; it does not survey the repository. */
+const AUDIT_MAX_TURNS = 8;
 
 /** Undefined when the role is not configured — the structural pass runs regardless; see `auditBreakdown`. */
 function auditOpts(deps: JobDeps, workdir: string): RoleAgentOptions | undefined {
@@ -88,6 +90,9 @@ function auditOpts(deps: JobDeps, workdir: string): RoleAgentOptions | undefined
     tools: readOnlyRegistry(deps),
     messages: [],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+    // It may want to open a file the plan names; it has no business exploring for fifty turns. A gate that
+    // costs more than the work it guards is not a gate.
+    maxTurns: AUDIT_MAX_TURNS,
   };
 }
 

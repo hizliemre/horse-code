@@ -151,6 +151,19 @@ describe("runTeamLead", () => {
     expect(sent).not.toContain("alone at the end"); // nothing runs beside it → nothing to ask
   });
 
+  /**
+   * A model that would not call `submit` walked its whole fallback chain at fifty turns per attempt:
+   * seventy-three calls and 1.5M tokens re-sending the same task list, four and a half minutes before a
+   * single agent started. The budget is what has to be small — everything the question needs is in the prompt.
+   */
+  it("gives up quickly rather than re-reading the task list on every model", async () => {
+    const talk: ChatEvent[] = [{ type: "text-delta", text: "thinking about it" }, { type: "done", finishReason: "stop" }];
+    const p = new MockProvider([talk, talk, talk, talk, talk, talk]);
+    const plan = await runTeamLead(opts(p), parallelBoard());
+    expect(plan.waves).toEqual([["t1", "t2"]]); // the deterministic schedule stands
+    expect(p.requests.length).toBeLessThanOrEqual(4);
+  });
+
   it("does not fall back when aborted, rethrows the error", async () => {
     const ac = new AbortController();
     ac.abort();

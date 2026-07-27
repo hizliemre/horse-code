@@ -38,6 +38,9 @@ export async function routeTask(deps: TaskCycleDeps, task: Card): Promise<Implem
       approve: deps.approve,
       cwd: "/",
       signal: deps.signal,
+      // One question, one answer, from the text in front of it. Nothing here is worth a fifty-turn budget —
+      // and an unbounded structured role walks its entire fallback chain when a model will not submit.
+      maxTurns: 3,
     };
     const { role } = await runStructuredRole(opts, RouteSchema);
     return role;

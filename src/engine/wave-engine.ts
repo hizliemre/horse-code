@@ -27,6 +27,9 @@ export interface WaveEngineDeps extends EscalationDeps {
  */
 export const MAX_PARALLEL_TASKS = 4;
 
+/** Enough to fetch one skill and answer. The audit has nothing to explore — everything it needs is given. */
+export const TEAM_LEAD_MAX_TURNS = 3;
+
 /** Runs `fn` over every item, at most `limit` at a time, and returns the results in the ORIGINAL order. */
 export async function mapWithLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
@@ -137,6 +140,13 @@ function teamLeadOpts(deps: WaveEngineDeps, session: WorktreeSession): RoleAgent
     provider: deps.provider, ...tl,
     tools, messages: [], permission: deps.permission, approve: deps.approve,
     cwd: session.baseWorktree, signal: deps.signal,
+    /**
+     * The question is answerable from the prompt alone — the tasks, their files and their criteria are all
+     * in it. Left at the default fifty turns per attempt, a model that would not call `submit` walked its
+     * whole fallback chain instead: seventy-three calls and 1.5M tokens re-sending the same task list, four
+     * and a half minutes before a single agent started, and nothing on screen to say so.
+     */
+    maxTurns: TEAM_LEAD_MAX_TURNS,
   };
 }
 
