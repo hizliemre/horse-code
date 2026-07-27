@@ -190,7 +190,11 @@ export class RoleRegistry {
   resolve(roleName: string): ResolvedRole {
     const role = this.roles[roleName];
     if (!role) throw new Error(`undefined role: ${roleName}`);
-    if (!role.models.length) throw new Error(`role '${roleName}' has no model defined`);
+    if (!role.models.length) {
+      throw new Error(
+        `role '${roleName}' has no model defined — set one with \`/roles setmodel\`, run \`/roles adjust\`, ` +
+        `or choose a session model with \`/model\`.`);
+    }
 
     let systemPrompt = role.systemPrompt ?? this.defaultPrompts[roleName];
     if (systemPrompt === undefined) throw new Error(`role '${roleName}' has no systemPrompt`);

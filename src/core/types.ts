@@ -119,7 +119,12 @@ export type ChatEvent =
    *   not because it is unwell. Both fall back, but only the first means the model is spent: benching a model
    *   over a request that was merely too large makes it unavailable for every smaller request afterwards.
    */
-  | { type: "error"; message: string; retryable?: boolean; capability?: boolean };
+  /**
+   * `capability` — this model/subscription refused the request; another may accept it.
+   * `noBench` — the failure says nothing about the model's HEALTH (a bad model id, a configuration fault).
+   *   Falling to the next model is still right; taking this one out of service is not.
+   */
+  | { type: "error"; message: string; retryable?: boolean; capability?: boolean; noBench?: boolean };
 
 export interface Provider {
   chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent>;

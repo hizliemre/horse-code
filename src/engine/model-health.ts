@@ -10,6 +10,7 @@
 // back into the pool instead of being written off for the whole session.
 
 import type { RoleRegistry } from "../agent/roles.js";
+import { isUnknownModelError } from "../providers/omniroute.js";
 import { adjustRoleModels } from "../tui/role-models.js";
 
 /** The role↔registry map, supplied by the composition root (roles live in several separate registries). */
@@ -138,6 +139,23 @@ export class ModelHealth {
       const reg = this.port.registryFor(role);
       const spent = reg.rawChain(role);
       if (!spent.length) return undefined;
+      /**
+       * A model id the gateway cannot resolve says nothing about any model's HEALTH.
+       *
+       * Observed: one role holding the placeholder id failed with "Unable to determine provider for model
+       * 'default'", and that error quarantined the three WORKING models the role had been assigned, then
+       * re-chained fifty-eight other roles onto a pool that had just shrunk — which produced the next
+       * failure, and the next. Fifteen review lenses went down in a row over an id none of them was using.
+       *
+       * The role still needs a working chain, so it is re-assigned; nothing is taken out of service for it.
+       */
+      if (isUnknownModelError(reason)) {
+        const healthy = await this.healthyModels();
+        if (!healthy.length) return undefined;
+        this.note(`⚠️ \`${role}\` was pointed at a model the gateway does not know (${reason.slice(0, 80)}) — re-assigning it; no model was benched.`);
+        const mine = this.reassign([role], healthy)[0];
+        return mine?.chain.length ? mine.chain : undefined;
+      }
       const fresh = spent.filter((m) => !reg.isQuarantined(m));
       for (const m of spent) this.mark(m, reason);
       if (fresh.length) {

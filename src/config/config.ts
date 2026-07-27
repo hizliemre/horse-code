@@ -59,9 +59,18 @@ export interface ResolvedConfig {
   maxParallel: number;
 }
 
+/**
+ * The stand-in used when no session model has been chosen yet.
+ *
+ * It is NOT a model id — the gateway cannot resolve it, and a role that reaches a request holding it fails
+ * with "Unable to determine provider for model 'default'". Exported so the places that must never dispatch
+ * it can say so by name rather than by guessing at the string.
+ */
+export const UNSET_MODEL = "default";
+
 export const DEFAULT_CONFIG: ResolvedConfig = {
   baseUrl: "http://localhost:20128",
-  model: "default",
+  model: UNSET_MODEL,
   // acceptEdits: auto-approve file writes/edits (the pipeline builds in an isolated worktree → reviewed as a
   // PR), still prompt for shell/exec. Keeps the automated build flowing without an approval per file.
   mode: "acceptEdits",

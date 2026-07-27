@@ -83,6 +83,19 @@ export function isCapabilityError(message: string): boolean {
   return /long[- ]context|not (yet )?available for this subscription|context[- ](length|window)|too many tokens|maximum context|unsupported|not supported/i.test(message);
 }
 
+/**
+ * The gateway could not resolve the MODEL ID it was given.
+ *
+ * "Unable to determine provider for model 'default'" is a statement about the id, not about any model's
+ * health — and the id in it is usually not even one of the models the failing role was assigned. Benching on
+ * it is how one bad id took the whole pool down: each failure quarantined three working models and re-chained
+ * fifty-eight roles onto a shrinking pool, which produced the next failure. Falling to the next model is
+ * still right; writing this one off is not.
+ */
+export function isUnknownModelError(message: string): boolean {
+  return /unable to determine provider for model|unknown model|model not found|no such model|invalid model/i.test(message);
+}
+
 /** Best-effort extraction of a "path" field from partial tool-call JSON args (for live write progress). */
 function pathOf(args: string): string | undefined {
   return args.match(/"path"\s*:\s*"([^"\\]+)"/)?.[1];
@@ -146,9 +159,15 @@ export class OmniRouteProvider implements Provider {
     if (!res.ok) {
       const message = await readErrorMessage(res);
       const capability = isCapabilityError(message);
+      const unknownModel = isUnknownModelError(message);
       // Only present when it IS one: the flag means something in the affirmative, and emitting it on every
       // error would put a field in the shape that says nothing.
-      yield { type: "error", message, retryable: isRetryableStatus(res.status) || capability, ...(capability && { capability: true }) };
+      yield {
+        type: "error", message,
+        retryable: isRetryableStatus(res.status) || capability || unknownModel,
+        ...(capability && { capability: true }),
+        ...(unknownModel && { noBench: true }),
+      };
       return;
     }
     const stream = res.body;

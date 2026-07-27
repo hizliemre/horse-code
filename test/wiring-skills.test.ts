@@ -18,7 +18,9 @@ const registry = (): SkillRegistry => {
  */
 const opts = (roles: ResolvedConfig["roles"]): Parameters<typeof buildJobDeps>[0] =>
   ({
-    config: { ...DEFAULT_CONFIG, roles },
+    // A real session model: with the placeholder, a role with no configured chain is deliberately left
+    // EMPTY (it is not a model id, and dispatching it fails), which is a different test's subject.
+    config: { ...DEFAULT_CONFIG, model: "cc/claude-opus-4-8", roles },
     skillRegistry: registry(),
     home: "/tmp/hc-nowhere",
   }) as unknown as Parameters<typeof buildJobDeps>[0];

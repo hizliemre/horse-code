@@ -84,7 +84,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       assistantText = "";
       toolCalls = [];
       let streamed = false;
-      let errored: { message: string; retryable?: boolean; capability?: boolean } | undefined;
+      let errored: { message: string; retryable?: boolean; capability?: boolean; noBench?: boolean } | undefined;
       // messages: snapshot (copy) each turn — so the provider doesn't hold a reference to our internal array.
       // Older large tool outputs are elided on the way out: with no prompt-cache control every turn re-bills
       // the whole conversation, and a file read from thirty turns ago is the single biggest thing being paid
@@ -113,7 +113,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
           yield { type: "usage", promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
           opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, model: activeModel });
         } else if (ev.type === "error") {
-          errored = { message: ev.message, retryable: ev.retryable, capability: ev.capability };
+          errored = { message: ev.message, retryable: ev.retryable, capability: ev.capability, noBench: ev.noBench };
           break;
         }
         // "done" → ignore; the loop decides based on toolCalls
@@ -135,7 +135,8 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
        * this model, not that the model is unwell. Quarantining it took a perfectly usable model out of the
        * pool for every later request too — including all the ones small enough for it.
        */
-      if (errored.retryable && !errored.capability) opts.onExhausted?.(activeModel, errored.message);
+      // A refusal, or a fault that is not about this model at all, moves on WITHOUT taking it out of service.
+      if (errored.retryable && !errored.capability && !errored.noBench) opts.onExhausted?.(activeModel, errored.message);
       if (errored.retryable && !streamed && chainIdx < chain.length - 1) {
         const next = chain[chainIdx + 1];
         opts.onFallback?.(activeModel, next, errored.message);

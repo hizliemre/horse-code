@@ -6,6 +6,7 @@ import { InjectionLog } from "./engine/memory-retrieval.js";
 import { MAX_PARALLEL_TASKS } from "./engine/wave-engine.js";
 import { ProposalQueue } from "./engine/memory-proposals.js";
 import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_ROLE_SKILLS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
+import { UNSET_MODEL } from "./config/config.js";
 import type { ResolvedConfig, RoleConfig, ReviewerConfig } from "./config/config.js";
 import type { Provider } from "./core/types.js";
 import type { FetchLike } from "./providers/omniroute.js";
@@ -36,6 +37,16 @@ export interface BuildJobDepsOpts {
 export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   const { config } = opts;
   const roles: Record<string, RoleConfig> = {};
+  /**
+   * What a role with no configured models gets.
+   *
+   * `config.model` is the SESSION model, and until one is chosen it holds a placeholder that is not a model
+   * id at all. Handing that out produced a role that failed on every call with "Unable to determine provider
+   * for model 'default'" — and, before it was recognised for what it is, that error quarantined three working
+   * models and re-chained fifty-eight roles per occurrence. An empty chain is the honest answer: it fails
+   * once, loudly, at the role that is actually misconfigured.
+   */
+  const sessionChain = config.model === UNSET_MODEL ? [] : [config.model];
   for (const name of REQUIRED_ROLES) {
     // Skills and models are configured INDEPENDENTLY, so the two must merge rather than one replacing the
     // other. Taking a configured role as written looks reasonable until you notice that `/roles adjust`
@@ -51,11 +62,11 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     const cfg = config.roles[name];
     const declared = cfg?.skills;
     const skills = (declared ?? DEFAULT_ROLE_SKILLS[name] ?? []).filter((s) => opts.skillRegistry.get(s));
-    roles[name] = { ...(cfg ?? { models: [config.model] }), ...(skills.length ? { skills } : { skills: [] }) };
+    roles[name] = { ...(cfg ?? { models: sessionChain }), ...(skills.length ? { skills } : { skills: [] }) };
   }
   const roleRegistry = new RoleRegistry(roles, DEFAULT_PROMPTS, opts.skillRegistry);
 
-  const fillModels = (r: ReviewerConfig): ReviewerConfig => ({ ...r, models: r.models.length > 0 ? r.models : [config.model] });
+  const fillModels = (r: ReviewerConfig): ReviewerConfig => ({ ...r, models: r.models.length > 0 ? r.models : sessionChain });
   // One finder-lens set per review stage (a spec, a plan and code each need different questions asked).
   const teams: Record<ReviewStage, ReviewerConfig[]> = {
     spec: (config.team?.spec ?? SPEC_TEAM).map(fillModels),
