@@ -57,3 +57,43 @@ describe("projectToolsNote", () => {
     expect(projectToolsNote(many).length).toBeLessThan(MAX_TOOL_NOTE_CHARS + 400);
   });
 });
+
+/**
+ * The graph tools were registered on every agent and named nowhere.
+ *
+ * The same failure the MCP pointer exists to fix — the pointer just filtered on the `mcp__` prefix and left
+ * these out. A coder with fifteen tools does not go looking for one, so `graph_impact` sat unused while
+ * agents changed code without checking what depended on it.
+ */
+describe("the graph tools are pointed at too", () => {
+  const graph = [tool("graph_impact", "Blast radius"), tool("graph_find", "Locate a symbol")];
+
+  it("names graph_impact and states the rule that matters", () => {
+    const note = projectToolsNote(graph, true);
+    expect(note).toContain("graph_impact");
+    expect(note).toMatch(/Before you change code you did not write, check what depends on it/);
+  });
+
+  /** Grep is what the agent would otherwise reach for, so the note says what it cannot answer. */
+  it("says why grep is not the same thing", () => {
+    expect(projectToolsNote(graph, true)).toMatch(/does not answer "what breaks"/);
+  });
+
+  /**
+   * Suppressed without a graph: instructing an agent toward a tool that can only reply "there is no graph"
+   * spends its attention for nothing.
+   */
+  it("says nothing when no graph has been built", () => {
+    expect(projectToolsNote(graph, false)).toBe("");
+  });
+
+  it("carries both sections when a project has graph and MCP tools", () => {
+    const note = projectToolsNote([...graph, ...ANGULAR], true);
+    expect(note).toContain("# Project map");
+    expect(note).toContain("# Project tools");
+  });
+
+  it("still says nothing at all when an agent has neither", () => {
+    expect(projectToolsNote([tool("read_file", "Reads a file")], true)).toBe("");
+  });
+});

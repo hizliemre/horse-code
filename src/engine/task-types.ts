@@ -126,9 +126,42 @@ export const MAX_TOOL_NOTE_CHARS = 900;
  * that matters (prefer the tool to recollection). The tools' own descriptions carry the detail, and repeating
  * them here would pay for the same text twice in the same prompt.
  */
-export function projectToolsNote(tools: import("../core/types.js").Tool[]): string {
+export function projectToolsNote(tools: import("../core/types.js").Tool[], hasGraph = false): string {
+  const sections: string[] = [];
+
+  /**
+   * The graph tools, pointed at explicitly — and only when a graph exists.
+   *
+   * They were registered on every agent and named nowhere, which is the same failure the MCP pointer was
+   * written to fix; the pointer just filtered on the `mcp__` prefix and left these out. A coder with fifteen
+   * tools does not go looking for one, so the one rule that matters is stated rather than implied: find out
+   * what depends on a thing BEFORE changing it. Suppressed without a graph, because instructing an agent
+   * toward a tool that can only answer "there is no graph" spends its attention for nothing.
+   */
+  if (hasGraph && tools.some((t) => t.name === "graph_impact")) {
+    sections.push(
+      `# Project map
+
+This project has a code graph — what calls what, across every file.
+` +
+      `- \`graph_impact\` — what depends on a symbol and would break if you change it
+` +
+      `- \`graph_trace\` — what a file is for, in the product's terms (\`project\` for the whole project)
+` +
+      `- \`graph_find\` · \`graph_context\` · \`graph_overview\` — where something is, what it touches, the shape of it
+
+` +
+      `Before you change code you did not write, check what depends on it. Grep answers "where does this ` +
+      `name appear"; it does not answer "what breaks", and that is the question a change has to survive.`,
+    );
+  }
+
   const mcp = tools.filter((t) => t.name.startsWith("mcp__"));
-  if (!mcp.length) return "";
+  if (mcp.length) sections.push(mcpSection(mcp));
+  return sections.length ? "\n\n" + sections.join("\n\n") : "";
+}
+
+function mcpSection(mcp: import("../core/types.js").Tool[]): string {
   const rows = mcp.map((t) => {
     // Strip our prefix and the server's own bracket — the model already has the full description on the tool.
     const short = t.name.replace(/^mcp__[^_]*(?:_[^_]+)*?__/, "").replace(/^mcp__/, "");
@@ -137,7 +170,7 @@ export function projectToolsNote(tools: import("../core/types.js").Tool[]): stri
   });
   const body = rows.join("\n");
   const clipped = body.length > MAX_TOOL_NOTE_CHARS ? `${body.slice(0, MAX_TOOL_NOTE_CHARS)}\n- …` : body;
-  return `\n\n# Project tools\n\nThis project connects tools that know its actual stack and version:\n${clipped}\n\n` +
+  return `# Project tools\n\nThis project connects tools that know its actual stack and version:\n${clipped}\n\n` +
     `Use them instead of relying on what you remember. Your training is a snapshot; these answer for the ` +
     `version this project is on, and a confidently-recalled API that was renamed two releases ago costs a ` +
     `review cycle to find.`;

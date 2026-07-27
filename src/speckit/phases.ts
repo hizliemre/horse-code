@@ -65,7 +65,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     onFallback,
     systemPrompt: (routed.length
       ? applySkills(`${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`, routed.map((m) => m.name), p.deps.skillRegistry)
-      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + projectToolsNote(tools.list()),
+      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)),
     tools,
     maxTurns: PHASE_MAX_TURNS,
     // Project memory (conventions/decisions/lessons) reaches the authoring roles too, not just the coach.

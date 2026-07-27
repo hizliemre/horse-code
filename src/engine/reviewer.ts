@@ -72,7 +72,7 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
     ...resolved,
     systemPrompt: (routed.length
       ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
-      : resolved.systemPrompt) + projectToolsNote(reviewerTools.list()),
+      : resolved.systemPrompt) + projectToolsNote(reviewerTools.list(), !!loadGraphSync(cwd)),
     tools: reviewerTools,
     proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "code-reviewer") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
