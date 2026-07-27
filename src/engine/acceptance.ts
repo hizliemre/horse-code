@@ -6,6 +6,7 @@ import type { Card } from "../board/board.js";
 import type { ReviewDeps } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
 import { runProjectTests, describeTestRun } from "./test-runner.js";
+import { taskDiff, describeDiff } from "./task-diff.js";
 
 export interface CriterionCheck { criterion: string; met: boolean; evidence: string }
 export interface AcceptanceResult {
@@ -73,6 +74,8 @@ export async function verifyAcceptance(
   }
   const testEvidence = { ran: !tests.skipped, passed: tests.passed, ...(tests.command ? { command: tests.command } : {}) };
   if (!card.acceptance.length) return { passed: true, unmet: [], tests: testEvidence };
+  // The gate ran out of turns before it had opened anything, repeatedly. The change is what it is judging.
+  const diff = deps.baseRef ? await taskDiff(cwd, deps.baseRef) : "";
   const resolved = deps.roleRegistry.resolve("code-reviewer");
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
@@ -81,7 +84,7 @@ export async function verifyAcceptance(
     messages: [{ role: "user", content:
       `Task: "${card.title}".\n\nAcceptance criteria:\n${card.acceptance.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\n` +
       `Check each one against the worktree and report met/unmet with the evidence you saw.\n\n` +
-      `${describeTestRun(tests)}` }],
+      `${describeTestRun(tests)}\n\n${describeDiff(diff)}` }],
     permission: deps.permission, approve: deps.approve, cwd,
     signal: AbortSignal.any([deps.signal, AbortSignal.timeout(CODE_REVIEW_TIMEOUT_MS)]),
     maxTurns: CODE_REVIEW_MAX_TURNS,

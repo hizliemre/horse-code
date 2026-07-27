@@ -53,3 +53,26 @@ describe("runReviewer", () => {
     expect(toolNames).not.toContain("shell");
   });
 });
+
+/**
+ * A reviewer that spends its budget FINDING the change has none left to judge it — and its "I could not
+ * inspect anything" answer was recorded as a REJECTION, escalating the task a tier every time.
+ */
+describe("the reviewer is handed the diff", () => {
+  it("puts the task's diff in the request when the base branch is known", async () => {
+    const p = new MockProvider([submitTurn('{"verdict":"pass","notes":[]}')]);
+    // A real diff, from this repository's own last commit — the shape the reviewer actually receives.
+    await runReviewer({ ...deps(p), baseRef: "HEAD~1" }, card(), process.cwd());
+    const sent = p.requests[0].messages.map((m) => m.content).join("\n");
+    expect(sent).toMatch(/diff of this task's changes/);
+    expect(sent).toMatch(/read it first/);
+  });
+
+  /** Chat and the document phases have no task branch — the reviewer must still work from the worktree. */
+  it("tells it to inspect the worktree when there is no branch to diff against", async () => {
+    const p = new MockProvider([submitTurn('{"verdict":"pass","notes":[]}')]);
+    await runReviewer(deps(p), card(), "/tmp");
+    const sent = p.requests[0].messages.map((m) => m.content).join("\n");
+    expect(sent).toMatch(/could not be produced/);
+  });
+});

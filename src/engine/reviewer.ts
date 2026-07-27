@@ -15,6 +15,7 @@ import { placedSkills } from "../prompts.js";
 import { loadGraphSync } from "./project-graph.js";
 import { contextTools, projectToolsNote } from "./task-types.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
+import { taskDiff, describeDiff } from "./task-diff.js";
 
 /**
  * Budget for the agents that inspect real CODE (the per-task reviewer, the acceptance gate). Wider than a
@@ -61,12 +62,14 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
     role: "code-reviewer", files: filesForTask(task.title, loadGraphSync(cwd)), placed: placedSkills(),
   });
   if (routed.length) deps.note?.(`📎 \`code-reviewer\` · ${routed.map((m) => `**${m.name}**`).join(", ")}`);
+  // Handed, not hunted: a reviewer that spends its budget FINDING the change has none left to judge it.
+  const diff = deps.baseRef ? await taskDiff(cwd, deps.baseRef) : "";
   const ask = { role: "user" as const, content:
     `Review the CODE that implements task "${task.title}" — correctness, tests, and implementation quality.\n` +
     `The subject of this review is ALWAYS the code. Do NOT review, re-open, or comment on the upstream ` +
     `planning documents (specs/**, .specify/**, plan.md, tasks.md) — they were already reviewed and approved ` +
     `before coding began; treat them as fixed context, not as something to critique.\n` +
-    `Give a verdict (pass/fail + notes).` };
+    `Give a verdict (pass/fail + notes).\n\n${describeDiff(diff)}` };
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,

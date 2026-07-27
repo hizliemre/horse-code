@@ -1,0 +1,44 @@
+import type { GitRunner } from "../worktree/git.js";
+import { defaultGitRunner } from "../worktree/git.js";
+
+/**
+ * How much of a task's diff a reviewer is handed.
+ *
+ * Generous — the point is that the reviewer never has to go looking — but finite: the diff rides in the
+ * prompt of every review round, and an unbounded one would be re-sent on each of them.
+ */
+export const MAX_DIFF_CHARS = 60_000;
+
+/**
+ * What this task actually changed, as a diff against the branch it was derived from.
+ *
+ * Reviewers used to be told "review the code that implements X" and handed read/grep/glob to go and find it.
+ * Measured on a real board, that is where they died: `Tool-call budget was exhausted prior to inspecting code
+ * changes`, `No code inspection was performed`, `I cannot complete an evidence-based review` — over and over,
+ * each one recorded as a REJECTION, each rejection escalating the task a tier until it was abandoned. Four of
+ * the six schedulable tasks on that board were dead this way, and none of them for anything to do with the
+ * code.
+ *
+ * A reviewer's subject is the change. Handing it over costs one git call and removes the search entirely.
+ */
+export async function taskDiff(
+  cwd: string,
+  baseRef: string,
+  git: GitRunner = defaultGitRunner,
+): Promise<string> {
+  // Three dots: what THIS branch added since it forked, not everything that has landed on base meanwhile.
+  const out = await git(["diff", `${baseRef}...HEAD`], cwd);
+  if (out.code !== 0) return "";
+  const diff = out.stdout;
+  if (diff.length <= MAX_DIFF_CHARS) return diff;
+  return `${diff.slice(0, MAX_DIFF_CHARS)}\n…diff truncated at ${MAX_DIFF_CHARS} characters — read the remaining files directly.`;
+}
+
+/** The diff as a prompt section, or an explicit note that there wasn't one. */
+export function describeDiff(diff: string): string {
+  if (!diff.trim()) {
+    return "The diff for this task could not be produced. Inspect the worktree with read_file/grep instead.";
+  }
+  return `The complete diff of this task's changes follows. It is the subject of the review — read it first, ` +
+    `and open a file only when the diff alone cannot answer a question.\n\n\`\`\`diff\n${diff}\n\`\`\``;
+}

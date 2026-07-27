@@ -136,7 +136,7 @@ export async function runReady(
               return { status: "conflict", files: conflicted };
             }
           };
-          const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict }, session, board, id, slot);
+          const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict, baseRef: session.baseBranch }, session, board, id, slot);
           if (res.status === "merged") { merged.push(id); done.add(id); }
           else { failed.push(id); blocked.add(id); }
         } finally {
