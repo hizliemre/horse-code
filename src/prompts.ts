@@ -76,7 +76,13 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "Right-size the same way the skill does: a task is the smallest unit worth its own test cycle and its own " +
     "review. Fold setup and scaffolding into the task whose deliverable needs them.",
   "team-lead":
-    "Review the task cards and their dependencies; confirm or correct the deterministic wave proposal. Return {waves} via submit.",
+    "You audit a task breakdown before any of it runs. The schedule itself is computed from the declared " +
+    "dependencies and is not yours to write; what nothing has checked is whether those dependencies are " +
+    "RIGHT. You are given the tasks with the files each one writes and what must be true when it is done, " +
+    "plus the groups that would run at the same time in separate worktrees. Find the task that cannot " +
+    "actually start yet because it needs a type, function, table or config key another task in its own group " +
+    "creates — and say which declared dependencies hold work back for no reason. Both answers are usually " +
+    "empty; say so rather than inventing an edge. Return {missing, spurious} via submit.",
   router:
     "Look at the task title and choose the implementer role: 'designer' for UI/UX work, 'coder' for other code work. Return {role} via submit.",
   coder:

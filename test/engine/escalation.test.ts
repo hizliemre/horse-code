@@ -65,6 +65,12 @@ function boardWithTask(): Board {
   b.addCard({ id: "t1", title: "Do X" });
   return b;
 }
+/** Its files make it design work outright, so the router settles it without a call. */
+function boardWithDesignTask(): Board {
+  const b = new Board();
+  b.addCard({ id: "t1", title: "Restyle X", files: ["src/ui/x.scss"] });
+  return b;
+}
 const contents = (p: MockProvider): string[] =>
   p.requests.flatMap((r) => r.messages.map((m) => (typeof m.content === "string" ? m.content : "")));
 
@@ -105,11 +111,10 @@ describe("runTaskWithEscalation", () => {
 
   it("designer family (N=1): designer fail → senior-designer takes over", async () => {
     const p = new MockProvider([
-      submit('{"role":"designer"}'),
       noopImpl, ...codeReviewFail("a"),   // tier0 designer fail
       noopImpl, ...codeReviewPass(),      // tier1 senior-designer pass
     ]);
-    const board = boardWithTask();
+    const board = boardWithDesignTask();
     const v = await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.column).toBe("DONE");

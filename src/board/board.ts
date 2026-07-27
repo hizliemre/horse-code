@@ -133,6 +133,29 @@ export class Board {
     this.onChange?.();
   }
 
+  /**
+   * Records a dependency the breakdown missed.
+   *
+   * Returns false — rather than throwing — for anything that is not a real new edge (unknown id, self, or
+   * already present), because the caller is an audit whose input is a model's suggestion: a nonsense entry
+   * is an expected outcome there, not an exceptional one.
+   */
+  addDep(id: string, dependsOn: string): boolean {
+    const c = this.cards.get(id);
+    if (!c || id === dependsOn || !this.cards.has(dependsOn) || c.deps.includes(dependsOn)) return false;
+    c.deps.push(dependsOn);
+    this.onChange?.();
+    return true;
+  }
+
+  /** Undoes `addDep` — used when the added edge turns out to close a cycle. */
+  removeDep(id: string, dependsOn: string): void {
+    const c = this.cards.get(id);
+    if (!c) return;
+    c.deps = c.deps.filter((d) => d !== dependsOn);
+    this.onChange?.();
+  }
+
   appendStage(id: string, event: StageEvent): void {
     this.require(id).stageHistory.push({ ...event });
     this.onChange?.();

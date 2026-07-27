@@ -118,7 +118,17 @@ export async function runWaves(
   board: Board,
   opts: { base: string; prTitle?: string },
 ): Promise<WaveEngineResult> {
-  const proposed = await runTeamLead(teamLeadOpts(deps, session), board);
+  const plan = await runTeamLead(teamLeadOpts(deps, session), board);
+  if (plan.added.length) {
+    deps.note?.(
+      `🔗 ${plan.added.length} dependency the breakdown did not state — ${plan.added
+        .map((f) => `${f.task} needs ${f.needs}`).join(", ")}. Those tasks no longer run together.`);
+  }
+  if (plan.suspected.length) {
+    deps.note?.(
+      `💤 ${plan.suspected.length} dependency looks unnecessary and is holding work back: ${plan.suspected
+        .map((f) => `${f.task}→${f.needs}`).join(", ")}. Left in place.`);
+  }
   /**
    * The last word on what may run together, and it is not the plan's.
    *
@@ -126,7 +136,7 @@ export async function runWaves(
    * separate worktrees and a merge conflict hours later. Applied AFTER the team-lead so it holds whichever
    * waves were chosen — the file lists are evidence, and no confirmation step may override them.
    */
-  const { waves, clashes } = splitFileConflicts(proposed, board);
+  const { waves, clashes } = splitFileConflicts(plan.waves, board);
   if (clashes.length) {
     deps.note?.(
       `🔀 ${clashes.length} task pair(s) would have written the same file in one wave — separated so they run in ` +
