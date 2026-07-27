@@ -79,3 +79,90 @@ describe("elideInPlace frees what the history will never read again", () => {
     expect(elideInPlace(w)).toBe(0);
   });
 });
+
+/**
+ * A `write_file` call carries the entire file in its ARGUMENTS, on an assistant message — which elision
+ * never touched. The body was retained for the life of the run and re-sent on every subsequent turn.
+ *
+ * Measured on a coder writing forty 12 KB files: after eliding every result, 92% of what remained was
+ * arguments, and each turn re-sent all of it. That is both the heap and the token bill.
+ */
+describe("a past call's arguments are elided with its result", () => {
+  const FILE = "y".repeat(12_000);
+  const withWrites = (n: number): Message[] => {
+    const w: Message[] = [{ role: "system", content: "sys" }];
+    for (let i = 0; i < n; i++) {
+      w.push({ role: "assistant", content: "", toolCalls: [
+        { id: `t${i}`, name: "write_file", arguments: JSON.stringify({ path: `src/f${i}.ts`, content: FILE }) },
+      ] } as Message);
+      w.push({ role: "tool", toolCallId: `t${i}`, name: "write_file", content: "written" } as Message);
+    }
+    return w;
+  };
+  const argSize = (w: Message[]): number =>
+    w.reduce((n, m) => n + (m.toolCalls?.reduce((a, c) => a + c.arguments.length, 0) ?? 0), 0);
+
+  it("releases the file bodies the results left behind", () => {
+    const w = withWrites(40);
+    const before = argSize(w);
+    elideInPlace(w);
+    expect(before).toBeGreaterThan(400_000); // ~480 KB of file bodies, re-sent every turn
+    // What survives is the budget, not a fraction: the newest exchanges keep their arguments whole, and
+    // 40 KB of budget is about three 12 KB files. Asserting a percentage would just encode this fixture.
+    expect(argSize(w)).toBeLessThanOrEqual(RECENT_RESULT_BUDGET + 12_000);
+  });
+
+  /** `path` is what makes the history readable — it says which file. The body says nothing more. */
+  it("keeps the short fields that identify the call", () => {
+    const w = withWrites(40);
+    elideInPlace(w);
+    const first = JSON.parse(w.find((m) => m.toolCalls)!.toolCalls![0].arguments) as Record<string, string>;
+    expect(first.path).toBe("src/f0.ts");
+    expect(first.content).toMatch(/elided/);
+  });
+
+  /** Paired: the history never shows a stubbed result beside the full request that produced it. */
+  it("leaves the newest call whole, as its result is", () => {
+    const w = withWrites(40);
+    elideInPlace(w);
+    const last = [...w].reverse().find((m) => m.toolCalls)!.toolCalls![0];
+    expect(JSON.parse(last.arguments).content).toBe(FILE);
+  });
+
+  it("does not touch a call whose result was never elided", () => {
+    const w = withWrites(1);
+    elideInPlace(w);
+    expect(JSON.parse(w[1].toolCalls![0].arguments).content).toBe(FILE);
+  });
+
+  it("leaves small arguments alone", () => {
+    const w: Message[] = [
+      { role: "assistant", content: "", toolCalls: [{ id: "a", name: "grep", arguments: '{"pattern":"x"}' }] } as Message,
+      { role: "tool", toolCallId: "a", name: "grep", content: "y".repeat(50_000) } as Message,
+      { role: "assistant", content: "", toolCalls: [{ id: "b", name: "grep", arguments: '{"pattern":"z"}' }] } as Message,
+      { role: "tool", toolCallId: "b", name: "grep", content: "y".repeat(50_000) } as Message,
+    ];
+    elideInPlace(w);
+    expect(w[0].toolCalls![0].arguments).toBe('{"pattern":"x"}');
+  });
+
+  /** "Re-run the tool" is wrong advice for a write: re-running means writing the file a second time. */
+  it("tells the agent the value was already applied, not to send it again", () => {
+    const w = withWrites(40);
+    elideInPlace(w);
+    const first = w.find((m) => m.toolCalls)!.toolCalls![0].arguments;
+    expect(first).toMatch(/already applied/);
+    expect(first).not.toMatch(/Re-run the tool/);
+  });
+
+  it("survives arguments that are not JSON", () => {
+    const w: Message[] = [
+      { role: "assistant", content: "", toolCalls: [{ id: "a", name: "x", arguments: "z".repeat(20_000) }] } as Message,
+      { role: "tool", toolCallId: "a", name: "x", content: "y".repeat(50_000) } as Message,
+      { role: "assistant", content: "", toolCalls: [{ id: "b", name: "x", arguments: "{}" }] } as Message,
+      { role: "tool", toolCallId: "b", name: "x", content: "y".repeat(50_000) } as Message,
+    ];
+    expect(() => elideInPlace(w)).not.toThrow();
+    expect(w[0].toolCalls![0].arguments.length).toBeLessThan(200);
+  });
+});

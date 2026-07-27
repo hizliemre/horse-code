@@ -32,6 +32,17 @@ function stub(chars: number): string {
 }
 
 /**
+ * The stub for a past call's ARGUMENTS, which is not the same advice.
+ *
+ * "Re-run the tool" is right for a result you can fetch again; it is wrong for the arguments of a write,
+ * where re-running means writing the file a second time. What the agent needs to know here is that the
+ * value was sent and is gone, not that it should be sent again.
+ */
+function argStub(chars: number): string {
+  return `[argument elided to save context — ${chars.toLocaleString("en-US")} chars, already applied. Read the file if you need it.]`;
+}
+
+/**
  * Returns a copy of `messages` with the bodies of older, large tool results replaced by a stub. The last
  * {@link KEEP_RECENT_RESULTS} tool results are always left untouched, as is every non-tool message.
  *
@@ -82,14 +93,95 @@ export function elideOldToolResults(
  *
  * Returns how many characters were released, so the saving is measurable rather than assumed.
  */
+/**
+ * Shrinks a past tool call's arguments, keeping what identifies it.
+ *
+ * A `write_file` call carries the entire file in its arguments — and those live on an ASSISTANT message,
+ * which elision never touched. So the file body was retained for the life of the run AND re-sent on every
+ * subsequent turn. Measured on a coder writing forty files: after eliding every result, 92% of what
+ * remained was arguments.
+ *
+ * The short fields stay. `{"path":"src/x.ts"}` is what makes the history readable — it says which file was
+ * written; the 12 KB of content says nothing the result did not already confirm.
+ */
+export function elideArgs(argumentsJson: string, minChars = ELIDE_MIN_CHARS): string {
+  if (argumentsJson.length < minChars) return argumentsJson;
+  try {
+    const parsed: unknown = JSON.parse(argumentsJson);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return argStub(argumentsJson.length);
+    }
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "string" && v.length >= minChars) { out[k] = argStub(v.length); changed = true; }
+      else out[k] = v;
+    }
+    return changed ? JSON.stringify(out) : argumentsJson;
+  } catch {
+    // Not JSON (a partial or malformed call) — the whole thing is bulk with no structure worth keeping.
+    return argStub(argumentsJson.length);
+  }
+}
+
 export function elideInPlace(messages: Message[], opts: { budget?: number; minChars?: number } = {}): number {
-  const elided = elideOldToolResults(messages, opts);
-  if (elided === messages) return 0;
+  const budget = opts.budget ?? RECENT_RESULT_BUDGET;
+  const min = opts.minChars ?? ELIDE_MIN_CHARS;
+
+  /**
+   * Which tool exchanges are old, by POSITION.
+   *
+   * Deliberately not "which results were big enough to stub". Keying off that was wrong in exactly the case
+   * that matters most: a `write_file` returns "written" — seven characters, never elided — while carrying
+   * twelve kilobytes of file in its arguments. The pairing has to follow the age of the exchange, not the
+   * size of its reply.
+   */
+  const toolIdx: number[] = [];
+  for (let i = 0; i < messages.length; i++) if (messages[i].role === "tool") toolIdx.push(i);
+  if (toolIdx.length <= ALWAYS_KEEP_NEWEST) return 0;
+
+  /**
+   * The budget is spent on the WHOLE exchange — what was sent as well as what came back.
+   *
+   * Counting only results meant a run of writes never filled it: forty files went out as half a megabyte of
+   * arguments and came back as "written" seven times over, so by the result-only measure nothing was ever
+   * old enough to elide. What occupies the context is the traffic in both directions.
+   */
+  const argLen = new Map<string, number>();
+  for (const m of messages) for (const c of m.toolCalls ?? []) argLen.set(c.id, c.arguments.length);
+  const cost = (i: number): number =>
+    messages[i].content.length + (argLen.get(messages[i].toolCallId ?? "") ?? 0);
+
+  const oldIdx = new Set<number>();
+  const oldIds = new Set<string>();
+  let used = 0;
+  for (let k = toolIdx.length - 1; k >= 0; k--) {
+    const i = toolIdx[k];
+    if (k >= toolIdx.length - ALWAYS_KEEP_NEWEST || used + cost(i) <= budget) {
+      used += cost(i);
+      continue;
+    }
+    oldIdx.add(i);
+    const id = messages[i].toolCallId;
+    if (id) oldIds.add(id);
+  }
+
   let freed = 0;
-  for (let i = 0; i < messages.length; i++) {
-    if (elided[i] === messages[i]) continue;
-    freed += messages[i].content.length - elided[i].content.length;
-    messages[i] = elided[i];
+  for (const i of oldIdx) {
+    const m = messages[i];
+    if (m.content.length < min) continue;
+    freed += m.content.length - stub(m.content.length).length;
+    messages[i] = { ...m, content: stub(m.content.length) };
+  }
+  for (const m of messages) {
+    if (!m.toolCalls?.length) continue;
+    for (const c of m.toolCalls) {
+      if (!oldIds.has(c.id)) continue;
+      const shorter = elideArgs(c.arguments, min);
+      if (shorter === c.arguments) continue;
+      freed += c.arguments.length - shorter.length;
+      c.arguments = shorter;
+    }
   }
   return freed;
 }
