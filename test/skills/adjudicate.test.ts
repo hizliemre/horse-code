@@ -119,3 +119,31 @@ describe("adjudicateSkills", () => {
     expect(seen).toMatch(/not by whether they share words/);
   });
 });
+
+/**
+ * A real run assigned `apple-design` to "Update Material M3 theme to luxury colors".
+ *
+ * It scored 5 — exactly the old confidence threshold — so it counted as settled and was never checked. Its
+ * hits were `interface web materials style interfaces`: four generic words and one FALSE FRIEND, since the
+ * "Material" of Material Design and the translucent "materials" of Apple's interface language are opposing
+ * systems that share a word. Asked about it, the adjudicator rejected it at once.
+ */
+describe("a score can be inflated by generic vocabulary", () => {
+  it("no longer certifies a match on the strength of five loose words", () => {
+    const { confident, borderline } = partitionByConfidence([m("impeccable", 9), m("apple-design", 5)]);
+    expect(confident.map((x) => x.name)).toEqual(["impeccable"]);
+    expect(borderline.map((x) => x.name)).toEqual(["apple-design"]);
+  });
+
+  /** The earlier calibration must not regress: those false positives all sat at 3 and 4. */
+  it("still sends the low scores that were wrong before", () => {
+    const { confident } = partitionByConfidence([m("impeccable", 3), m("apple-design", 4)]);
+    expect(confident).toEqual([]);
+  });
+
+  it("a strongly-matched skill is still not paid for", () => {
+    const { confident, borderline } = partitionByConfidence([m("impeccable", 9)]);
+    expect(confident).toHaveLength(1);
+    expect(borderline).toEqual([]);
+  });
+});

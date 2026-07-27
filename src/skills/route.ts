@@ -353,12 +353,19 @@ export function filesForTask(
 /**
  * How far above the bar a match must be to be trusted without a second opinion.
  *
- * Measured on a real project: every false positive sat exactly AT the bar. "implement store crud methods"
- * and "configure ngrx signal store" each scored 3 against a design skill, on architecture words rather than
- * interface intent — a judgement word-overlap cannot make. Matches well clear of the bar were right; matches
- * at it were a coin toss. So this is where a model is worth asking, and only here.
+ * Raised from 2 after a real run got it wrong. "Update Material M3 theme to luxury colors" matched
+ * `apple-design` at 5 — exactly the old threshold, so it counted as confident and was never checked. Its
+ * hits were `interface web materials style interfaces`: four generic words and one FALSE FRIEND, since the
+ * "Material" of Material Design and the translucent "materials" of Apple's interface language are opposing
+ * systems that happen to share a word. Apple guidance on a Material theming task is not merely useless, it
+ * argues the other way.
+ *
+ * A score can be inflated by generic vocabulary, so score alone cannot certify a match. Asked about it, the
+ * adjudicator rejected it immediately and kept the right skill — so the lever is to ask more often, not to
+ * judge better here. `impeccable` scored 9 on that task and stays confident; the doubtful middle now goes
+ * where doubt is resolved.
  */
-export const CONFIDENT_MARGIN = 2;
+export const CONFIDENT_MARGIN = 4;
 
 export interface Adjudication {
   keep: string[];
