@@ -214,17 +214,40 @@ describe("runTaskWithEscalation", () => {
   });
 });
 
-// A no-op attempt is not a near miss to iterate on: nothing was written, so the SAME role given the SAME
-// instruction produces the same nothing. `tierOf` would otherwise spend every remaining same-tier retry
-// proving it — which is the "→ rework / wrote nothing / → In progress" churn seen in the wild.
-describe("a no-op attempt escalates immediately instead of burning same-tier retries", () => {
-  it("jumps to the next tier rather than repeating the same role `rounds` times", async () => {
+/**
+ * A no-op attempt used to jump a whole tier at once, on the reasoning that the same role given the same
+ * instruction produces the same nothing. It does not: `runCycleWithRole` leads with `slot + attempts` of the
+ * chain, so the next attempt is a DIFFERENT model — and answering in prose instead of calling write_file is a
+ * property of the model, not the role.
+ *
+ * Measured on a real 94-task board: 41 no-op attempts pushed tasks to attempt counts of 6, 8 and 12, so
+ * everything ran at council tier and the plain coder finished only 4 of the 28 completed tasks.
+ */
+describe("a no-op attempt tries the role's next model before spending a stronger role", () => {
+  it("advances one attempt — a different model, same tier — on the first no-op", async () => {
+    const p = new MockProvider([submit('{"role":"coder"}'), noopImpl, ...codeReviewPass()]);
+    const board = boardWithTask();
+    board.incrementAttempts("t1"); // mid-tier already (rounds=3 → tier 0 spans 0..2)
+    await runTaskWithEscalation(edeps(p, { rounds: 3 }), board, "t1", dir);
+    const roles = p.requests.map((r) => r.messages[0].content);
+    expect(roles).toContain("P-coder");
+    expect(roles).not.toContain("P-senior-coder"); // the tier was not spent
+  });
+
+  it("escalates once the tier's second model has also written nothing", async () => {
     const p = new MockProvider([submit('{"role":"coder"}'), ...Array.from({ length: 12 }, () => noopImpl)]);
     const board = boardWithTask();
     await runTaskWithEscalation(edeps(p, { rounds: 3 }), board, "t1", dir);
-    // Each tier gets exactly ONE no-op attempt, not `rounds` of them…
-    expect(board.get("t1")!.stageHistory.filter((s) => s.action === "no-changes").length).toBeLessThanOrEqual(2);
-    // …so the attempt counter lands on tier boundaries and never grinds in between.
-    expect(board.get("t1")!.attempts % 3).toBe(0);
+    // Two tries per tier, not `rounds` of them, and never a third.
+    const perTier = board.get("t1")!.stageHistory.filter((s) => s.action === "no-changes").length;
+    expect(perTier).toBeLessThanOrEqual(4); // ≤2 tiers × 2 attempts
+    expect(board.get("t1")!.attempts % 3).toBe(0); // still lands on a tier boundary
+  });
+
+  it("never grinds through a whole tier of no-ops", async () => {
+    const p = new MockProvider([submit('{"role":"coder"}'), ...Array.from({ length: 20 }, () => noopImpl)]);
+    const board = boardWithTask();
+    await runTaskWithEscalation(edeps(p, { rounds: 6 }), board, "t1", dir);
+    expect(board.get("t1")!.stageHistory.filter((s) => s.action === "no-changes").length).toBeLessThanOrEqual(4);
   });
 });

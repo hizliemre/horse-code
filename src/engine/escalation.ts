@@ -88,10 +88,21 @@ export async function runTaskWithEscalation(
       }
       if (v.verdict === "pass") return v; // runCycleWithRole moved it to DONE
       if (v.noProgress) {
-        // Nothing was written at all. That is not a near miss to iterate on: the same role, given the same
-        // instruction, produces the same nothing — and `tierOf` would otherwise spend every remaining
-        // same-tier retry proving it. Jump straight to the next tier (a stronger role).
-        const target = (Math.floor(attempts / deps.rounds) + 1) * deps.rounds;
+        /**
+         * Nothing was written at all — but a same-tier retry is NOT a repeat.
+         *
+         * `runCycleWithRole` leads with `slot + attempts` of the role's chain, so the next attempt is a
+         * DIFFERENT model given the same instruction, and the commonest reason an attempt writes nothing is
+         * that its model answered in prose. Jumping the whole tier on the first one spent a stronger role on
+         * something the role's own second model would have done: measured on a real 94-task board, 41 no-op
+         * attempts pushed tasks to attempt counts of 6, 8 and 12 — every one of them running at council tier,
+         * with the plain coder completing only 4 of the 28 finished tasks.
+         *
+         * So: one more model at this tier, then escalate. Two models producing nothing is the role, not the
+         * model, and `tierOf` must not be allowed to grind through the rest of the tier proving it.
+         */
+        const tierStart = Math.floor(attempts / deps.rounds) * deps.rounds;
+        const target = attempts === tierStart ? attempts + 1 : tierStart + deps.rounds;
         while (board.get(taskId)!.attempts < target) board.incrementAttempts(taskId);
       } else {
         board.incrementAttempts(taskId); // fail → tier advances
