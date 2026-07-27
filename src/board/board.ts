@@ -169,6 +169,20 @@ export class Board {
     this.onChange?.();
   }
 
+  /**
+   * Returns an interrupted card to TODO and forgets who was working it.
+   *
+   * Deliberately silent — no stage event, no move note: nothing HAPPENED to this task, a process died. The
+   * chat should not report a transition the user did not cause and no agent performed.
+   */
+  reopen(id: string): void {
+    const c = this.require(id);
+    c.column = "TODO";
+    c.role = undefined;
+    c.model = undefined;
+    this.onChange?.();
+  }
+
   /** Records WHO is working this card: the role and the model it will actually use. */
   setWorker(id: string, role: string, model: string): void {
     const c = this.require(id);

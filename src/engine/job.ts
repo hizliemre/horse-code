@@ -250,8 +250,19 @@ export async function runJob(
     let board: Board;
     if (existsSync(boardPath)) {
       board = await loadBoard(boardPath);
+      /**
+       * A card left mid-flight by the run that died is NOT in progress — nothing is working it.
+       *
+       * The columns are a record of where each task got to, and the previous process took its workers with
+       * it. Left as they were, the agent panel listed four implementers that did not exist, with no role and
+       * no model, their clocks counting up from the moment the panel first saw them. Returned to TODO they
+       * are simply work still to do, which is what they are; the wave loop re-runs them either way.
+       */
+      const interrupted = board.list().filter((c) => c.column === "IN-PROGRESS" || c.column === "REVIEW");
+      for (const c of interrupted) board.reopen(c.id);
       const done = board.list().filter((c) => c.column === "DONE").length;
-      emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` });
+      emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` +
+        (interrupted.length ? ` ${interrupted.length} was interrupted mid-flight and goes back in the queue.` : "") });
     } else {
       board = await gateBreakdown(deps, workdir, up.tasksPath, up.planPath, emit);
       await saveBoard(board, boardPath);

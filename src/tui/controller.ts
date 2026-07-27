@@ -372,6 +372,14 @@ export class TuiController {
   }
 
   submitTask(task: string): void {
+    /**
+     * A blank line is not a task.
+     *
+     * Enter with an empty input queued an empty prompt — and while a job runs there is no consumer, so it
+     * just incremented the counter, without limit. Pressing Enter while reading the agent panel ran the
+     * count to seventeen; every one of them would have started a turn on "" once the job ended.
+     */
+    if (!task.trim()) return;
     // Typing again is the signal that the pinned answer has been read.
     if (this.state.aside) this.state = { ...this.state, aside: undefined };
     if (this.taskResolve) {

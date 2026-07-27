@@ -740,6 +740,37 @@ describe("an agent's tool calls stay on its own row", () => {
   });
 });
 
+/**
+ * Enter on an empty input queued an empty prompt, and while a job runs nothing consumes the queue — so the
+ * counter just climbed. Pressing Enter while reading the agent panel ran it to seventeen, every one of which
+ * would have started a turn on "" once the job ended.
+ */
+describe("a blank line is not a task", () => {
+  it("does not queue an empty submit while a job is running", () => {
+    const c = new TuiController();
+    c.submitTask("");
+    c.submitTask("   ");
+    c.submitTask("\n");
+    expect(c.getState().queued).toBe(0);
+  });
+
+  it("does not resolve a waiting turn with an empty prompt", async () => {
+    const c = new TuiController();
+    let resolved: string | undefined;
+    void c.awaitTask().then((t) => { resolved = t; });
+    c.submitTask("");
+    await Promise.resolve();
+    expect(resolved).toBeUndefined();
+    expect(c.getState().transcript).toEqual([]);
+  });
+
+  it("still takes a real one", () => {
+    const c = new TuiController();
+    c.submitTask("do the thing");
+    expect(c.getState().queued).toBe(1);
+  });
+});
+
 describe("selecting an agent to inspect", () => {
   const three = (): TuiController => {
     const c = new TuiController();
