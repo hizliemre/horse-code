@@ -175,7 +175,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    */
   const answerByTheWay = (question: string): void => {
     const model = deps0.roleRegistry.peekModel("coach") || opts.model || "";
-    const append = controller.streamNote("");
+    const append = controller.streamAside();
     void (async () => {
       try {
         const req = {
@@ -339,7 +339,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     if (!skills.length) return;
     const project = await scanRepo(process.cwd());
     controller.note(`🔎 **Project scan** — skills are assigned from this, not from a guess:\n${project.summary.split("\n").map((l) => `- ${l}`).join("\n")}`);
-    const append = controller.streamNote("");
+    const append = controller.streamAside();
     controller.startBusy("assigning skills", tuner);
     try {
       const { assignments, withheld, reasoning } = await tuneRoleSkills({
@@ -382,7 +382,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     const roleNames = tunableRoles(); // main roles + review councilors (both must be covered)
     const tuner = mostCapable(models);
     controller.note(`🤖 \`${tuner}\` is assigning models to all ${roleNames.length} roles — reasoning over cost, capability & source diversity:`);
-    const append = controller.streamNote(""); // reasoning streams here live
+    const append = controller.streamAside(); // reasoning streams here live
     controller.startBusy("tuning", tuner); // status line: shimmer + live timer + token spend
     try {
       const { chains } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames, onReason: append });

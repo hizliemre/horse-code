@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { choiceHeight, wrapPlain, pendingBodyWidth } from "../../src/tui/components.js";
+import { choiceHeight, wrapPlain, pendingBodyWidth, asideLines } from "../../src/tui/components.js";
 import { flattenMarkdown } from "../../src/tui/lines.js";
 
 /**
@@ -167,5 +167,32 @@ describe("a paragraph-long question wraps rather than overflowing", () => {
     const rendered = flattenMarkdown(PARAGRAPH, pendingBodyWidth(80))
       .map((l) => l.map((s) => s.text).join(" ")).join(" ");
     expect(words(rendered)).toEqual(words(PARAGRAPH));
+  });
+});
+
+/**
+ * The panel's rows are counted by the same function that draws them.
+ *
+ * They disagreed once already on the pending question, and Ink painted the bottom region straight over the
+ * transcript — the user answered a question they could no longer read.
+ */
+describe("asideLines", () => {
+  it("is one row for the question plus the wrapped answer", () => {
+    const lines = asideLines("kaç task kaldı", "59 in TODO, 5 in progress", 100);
+    expect(lines[0]).toContain("kaç task kaldı");
+    expect(lines).toHaveLength(2);
+  });
+
+  it("wraps a long answer to the available width", () => {
+    const answer = "word ".repeat(60).trim();
+    expect(asideLines("q", answer, 60).length).toBeGreaterThan(4);
+  });
+
+  it("holds a row for the answer that has not arrived yet, so the panel does not jump", () => {
+    expect(asideLines("q", "", 100)).toHaveLength(2);
+  });
+
+  it("never lets the question itself wrap — it is one truncated row", () => {
+    expect(asideLines("x".repeat(400), "short", 80)).toHaveLength(2);
   });
 });

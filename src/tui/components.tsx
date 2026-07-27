@@ -50,6 +50,36 @@ export function pendingBodyWidth(cols: number): number {
 }
 
 /**
+ * The pinned "by-the-way" exchange: the question, and the answer as it streams in.
+ *
+ * Answering into the transcript was not enough. A coding run writes hundreds of tool lines a minute, and one
+ * paragraph of answer in the same style as everything around it went past unread — which is exactly what the
+ * user reported. Held above the input, in its own colour, it cannot scroll away; typing again dismisses it.
+ */
+export function AsidePanel({ question, answer, cols }: { question: string; answer: string; cols: number }): React.ReactElement {
+  const lines = asideLines(question, answer, cols);
+  return (
+    <Box flexDirection="column" width={pendingWidth(cols)} paddingLeft={2}>
+      <Text color="#7dd3fc" bold wrap="truncate-end">{`↳ ${question}`}</Text>
+      <Box flexDirection="column" paddingLeft={2}>
+        {lines.slice(1).map((l, i) => <Text key={i} color="#7dd3fc">{l.length ? l : " "}</Text>)}
+      </Box>
+    </Box>
+  );
+}
+
+/**
+ * The panel's rows, shared by the renderer and the height math so the two can never disagree.
+ *
+ * They disagreed once already, on the pending question, and Ink painted the bottom region straight over the
+ * transcript. The first row is the question (one line, truncated); the rest is the wrapped answer.
+ */
+export function asideLines(question: string, answer: string, cols: number): string[] {
+  const body = answer.trim();
+  return [`↳ ${question}`, ...(body ? wrapPlain(body, Math.max(16, pendingBodyWidth(cols) - 2)) : ["…"])];
+}
+
+/**
  * Renders a pending question/permission/review prompt: a colored icon + label header, then the body
  * rendered as markdown (bold/lists/code) — the body often contains a markdown-formatted numbered list.
  */
@@ -1270,6 +1300,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       </Box>
     ) : (
       <Box flexDirection="column">
+        {state.aside ? <AsidePanel question={state.aside.question} answer={state.aside.answer} cols={size.cols} /> : null}
         <ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} live={state.liveActivity} />
         {state.pending ? <Prompt question={state.pending.question} onSubmit={(s) => controller.answer(s)} /> : null}
       </Box>
@@ -1392,7 +1423,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
     const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
-    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH;
+    // Counted from the SAME function that renders it — a bottom region that under-reports its height gets
+    // painted straight over the transcript.
+    const asideH = state.aside ? asideLines(state.aside.question, state.aside.answer, size.cols).length : 0;
+    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH + asideH;
     /**
      * While a question is pending, the transcript yields every row it can.
      *
@@ -1421,6 +1455,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
           </Box>
         ) : null}
+        {state.aside ? <AsidePanel question={state.aside.question} answer={state.aside.answer} cols={size.cols} /> : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
         {atOpen ? <FilePicker matches={atMatches} selected={atIdx} query={at?.query ?? ""} cols={size.cols} /> : null}
         {sendModeText !== null ? (

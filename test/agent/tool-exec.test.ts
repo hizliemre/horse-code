@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { executeToolCalls, type ToolExecResult } from "../../src/agent/tool-exec.js";
+import { executeToolCalls, outcome, type ToolExecResult } from "../../src/agent/tool-exec.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { AgentEvent, Tool, ToolCall } from "../../src/core/types.js";
@@ -171,5 +171,42 @@ describe("executeToolCalls", () => {
     const { result } = await drainGen(executeToolCalls([badCall], deps({})));
     expect(result[0].result.isError).toBe(true);
     expect(result[0].result.content).toContain("invalid JSON");
+  });
+});
+
+/**
+ * A shell result opens with `$ <command>` so the model's transcript records what ran.
+ *
+ * The chat line already names the command — it IS the bold part — so taking that first line as the summary
+ * printed the same command twice on one line and pushed out the only new thing there was. On a run making
+ * six hundred calls, that doubling is most of what makes the flow tiring to read.
+ */
+describe("outcome", () => {
+  const res = (content: string) => ({ content, isError: false });
+
+  it("skips the shell echo and reports what the command said", () => {
+    expect(outcome(res("$ wc -l styles.css\n     412 styles.css"), "wc -l styles.css")).toBe("412 styles.css");
+  });
+
+  it("keeps a line that merely starts with $ but is not the echo", () => {
+    expect(outcome(res("$ echo hi\n$ PATH is unset"), "echo hi")).toBe("$ PATH is unset");
+  });
+
+  it("says nothing when the command produced nothing but its own echo", () => {
+    expect(outcome(res("$ touch a.txt\n"), "touch a.txt")).toBe("");
+  });
+
+  it("is unchanged for a tool that does not echo", () => {
+    expect(outcome(res("140 lines"), "src/a.ts")).toBe("140 lines");
+  });
+
+  /** The subject is truncated at 60 chars with an ellipsis; the echo it came from is not. */
+  it("still matches when the shown command was truncated", () => {
+    const cmd = "cd /private/tmp/wsrepo && grep -n \"^:root\\\\[data-theme\" packages/simpleui/src/styles.css";
+    expect(outcome(res(`$ ${cmd}\n12: :root[data-theme]`), `${cmd.slice(0, 59)}…`)).toBe("12: :root[data-theme]");
+  });
+
+  it("does not strip anything when there is no subject to match", () => {
+    expect(outcome(res("$ something\nrest"))).toBe("$ something");
   });
 });

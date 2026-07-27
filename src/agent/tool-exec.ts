@@ -53,9 +53,18 @@ function callSubject(args: Record<string, unknown> | undefined): string {
   return typeof first === "string" ? (first.length > 60 ? `${first.slice(0, 59)}…` : first) : "";
 }
 
-/** A one-line account of what came back, for a tool that produced no file diff. */
-function outcome(result: import("../core/types.js").ToolResult): string {
-  const line = (result.content ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+/**
+ * A one-line account of what came back, for a tool that produced no file diff.
+ *
+ * A shell result opens with `$ <command>` so the MODEL's transcript records what ran. The chat line already
+ * names the command — it is the `target` — so taking that first line put the same command on the line twice,
+ * once bold and once dim, and pushed out the only new thing there was: what the command actually said. On a
+ * run making hundreds of calls that doubling is most of the noise.
+ */
+export function outcome(result: import("../core/types.js").ToolResult, subject = ""): string {
+  const lines = (result.content ?? "").split("\n").map((l) => l.trim());
+  const head = subject.replace(/…$/, "").slice(0, 24);
+  const line = lines.find((l) => l && !(l.startsWith("$ ") && head.length > 0 && l.slice(2).startsWith(head))) ?? "";
   return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }
 
@@ -81,9 +90,10 @@ async function runTool(
     proposeMemory: deps.proposeMemory, readFiles: deps.readFiles,
   });
   if (!reported) {
+    const target = callSubject(args);
     deps.onActivity?.({
-      tool: tool.name, target: callSubject(args), lines: 0,
-      summary: outcome(result), ok: !result.isError,
+      tool: tool.name, target, lines: 0,
+      summary: outcome(result, target), ok: !result.isError,
     });
   }
   return result;

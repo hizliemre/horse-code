@@ -510,6 +510,68 @@ describe("TuiController", () => {
   });
 
   /**
+   * Answering into the transcript was not enough.
+   *
+   * A coding run writes hundreds of tool lines a minute. The answer — one paragraph, in the same style as
+   * everything around it — went past unread; the user reported missing it while watching the screen. It is
+   * held above the input instead, until they type again.
+   */
+  describe("the answer is pinned where it cannot scroll away", () => {
+    it("pins the question the moment it is asked, before any answer exists", () => {
+      const c = new TuiController();
+      c.addInboxNote("how many tasks are left?", () => {});
+      expect(c.getState().aside).toEqual({ question: "how many tasks are left?", answer: "" });
+    });
+
+    it("streams the answer into the pin", () => {
+      const c = new TuiController();
+      c.addInboxNote("q", () => {});
+      const append = c.streamAside();
+      append("59 in TODO"); append(", 5 running");
+      expect(c.getState().aside?.answer).toBe("59 in TODO, 5 running");
+    });
+
+    /** The pin is read; the transcript copy is the record — it scrolls back and it is what a resume keeps. */
+    it("also writes the answer to the transcript", () => {
+      const c = new TuiController();
+      c.addInboxNote("q", () => {});
+      c.streamAside()("59 in TODO");
+      const said = c.getState().transcript.filter((m) => "role" in m).map((m) => (m as { text: string }).text);
+      expect(said).toContain("59 in TODO");
+    });
+
+    it("clears when the user types again — that is the signal it was read", () => {
+      const c = new TuiController();
+      c.awaitTask();
+      c.addInboxNote("q", () => {});
+      c.submitTask("carry on");
+      expect(c.getState().aside).toBeUndefined();
+    });
+
+    it("is replaced, not stacked, by a second question", () => {
+      const c = new TuiController();
+      c.addInboxNote("first", () => {});
+      c.streamAside()("a");
+      c.addInboxNote("second", () => {});
+      expect(c.getState().aside).toEqual({ question: "second", answer: "" });
+    });
+
+    it("clearAside drops it", () => {
+      const c = new TuiController();
+      c.addInboxNote("q", () => {});
+      c.clearAside();
+      expect(c.getState().aside).toBeUndefined();
+    });
+
+    // A queued note is answered by a later turn, in the transcript — there is nothing to pin.
+    it("pins nothing when the question is only queued", () => {
+      const c = new TuiController();
+      c.addInboxNote("q");
+      expect(c.getState().aside).toBeUndefined();
+    });
+  });
+
+  /**
    * The answer is only as good as what it is given, and a mid-run question is almost always about progress:
    * how much of the board is done, what is running, what just happened.
    */
