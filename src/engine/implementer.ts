@@ -112,7 +112,8 @@ export async function runImplementer(
     approve: deps.approve,
     cwd,
     signal: AbortSignal.any([deps.signal, budget]),
-    onActivity: deps.onActivity,
+    // Stamped with the card id: the agent panel is keyed by it, and unattributed activity goes to the chat.
+    onActivity: deps.onActivity ? (a) => deps.onActivity?.({ ...a, agent: task.id }) : undefined,
     onLiveActivity: deps.onLiveActivity,
     onWrite: (path) => commitFile(deps, cwd, path).then(() => {}), // per-write conventional commit in the task worktree
   };

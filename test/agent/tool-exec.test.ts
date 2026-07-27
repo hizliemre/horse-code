@@ -210,3 +210,36 @@ describe("outcome", () => {
     expect(outcome(res("$ something\nrest"))).toBe("$ something");
   });
 });
+
+/**
+ * A successful read's summary was the first line of whatever sat at that offset — `import { defineConfig }`,
+ * `<!--`, a stray brace. It said nothing about the read and crowded out the file's own name.
+ */
+describe("a successful read leaves no second column", () => {
+  const activityFor = async (name: string, content: string, isError = false) => {
+    const seen: { summary?: string; ok?: boolean }[] = [];
+    const reg = registry({
+      name, description: "d", permissionLevel: "safe", parameters: z.object({ path: z.string() }),
+      run: async () => ({ content, isError }),
+    } as unknown as Tool);
+    await drainGen(executeToolCalls(
+      [call("c1", name, { path: "src/a.ts" })],
+      deps({ tools: reg, onActivity: (a) => seen.push({ summary: a.summary, ok: a.ok }) }),
+    ));
+    return seen[0];
+  };
+
+  it("says nothing extra about a read that worked", async () => {
+    expect((await activityFor("read_file", "   1  import { defineConfig } from 'vitest/config';"))?.summary).toBe("");
+  });
+
+  it("still reports a read that did not", async () => {
+    const a = await activityFor("read_file", "offset 560 is past the end of the file (473 lines).", true);
+    expect(a?.summary).toContain("past the end");
+    expect(a?.ok).toBe(false);
+  });
+
+  it("leaves every other tool's outcome alone — a grep's match is the point", async () => {
+    expect((await activityFor("grep", "src/a.ts:12: const x = 1;"))?.summary).toBe("src/a.ts:12: const x = 1;");
+  });
+});

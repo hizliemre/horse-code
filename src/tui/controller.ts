@@ -22,10 +22,26 @@ export type TranscriptItem =
   | { kind: "tool"; activity: ToolActivity };
 
 /** A sub-agent currently working a task (IN-PROGRESS card) — shown live under the input. */
+/** The last few calls an agent made, kept on its own row instead of in the conversation. */
+export interface AgentCall {
+  tool: string;
+  target: string;
+  ok?: boolean;
+}
+
+/** How much of an agent's tool history its row keeps. The panel shows the tail; the rest is not read. */
+export const MAX_AGENT_CALLS = 8;
+
 export interface RunningAgent {
   id: string;
   title: string;
   model?: string;
+  /** The role doing the work — "coder", "senior-designer", a review lens. */
+  role?: string;
+  /** This agent's most recent tool calls, newest last. */
+  calls?: AgentCall[];
+  /** How many calls it has made in total; the kept list is only the tail. */
+  callCount?: number;
   startedAt: number;
   status?: string; // set when the agent finishes → its result (e.g. "REJECT · C:2 M:1 L:0"), shown inline
   doneAt?: number; // freeze the row's timer once the agent has reported its result
@@ -48,6 +64,8 @@ export interface TuiState {
   picker?: { models: string[]; loading: boolean; error?: string; stage: "role" | "model" | "mode"; role?: string; note?: string; picked?: string[]; slots?: number };
   currentModel: string;
   runningAgents: RunningAgent[]; // IN-PROGRESS cards → live agent panel under the input
+  /** Which agent row is highlighted (↑/↓ while a job runs); undefined = none, and no detail panel. */
+  agentCursor?: number;
   liveActivity?: string; // transient "writing <file> · N chars" while a tool call is being generated
   attachments: number; // count of pasted images staged for the next prompt (shown under the input)
   nextSteps: string[]; // coach-suggested follow-ups (run with /next N); cleared when a new turn starts
@@ -177,7 +195,7 @@ export class TuiController {
     return agents.map((a) => {
       let startedAt = this.agentStarts.get(a.id);
       if (startedAt === undefined) { startedAt = this.now(); this.agentStarts.set(a.id, startedAt); }
-      return { id: a.id, title: a.title, model: a.model, startedAt, ...this.agentTokens.get(a.id) };
+      return { id: a.id, title: a.title, model: a.model, startedAt, ...this.agentTokens.get(a.id), ...this.workOf(a.id) };
     });
   }
 
@@ -191,7 +209,7 @@ export class TuiController {
       if (startedAt === undefined) { startedAt = this.now(); this.agentStarts.set(c.id, startedAt); } // newly started
       if (c.model) this.agentModels.set(c.id, c.model);
       const model = c.model || this.agentModels.get(c.id);
-      return { id: c.id, title: c.title, ...(model ? { model } : {}), startedAt, ...this.agentTokens.get(c.id) };
+      return { id: c.id, title: c.title, ...(model ? { model } : {}), ...(c.role ? { role: c.role } : {}), startedAt, ...this.agentTokens.get(c.id), ...this.workOf(c.id) };
     });
   }
 
@@ -215,6 +233,60 @@ export class TuiController {
     this.notify();
   };
 
+  /** Per-agent tool history, kept outside the state so a row rebuild (board event) does not lose it. */
+  private agentCalls = new Map<string, { calls: AgentCall[]; count: number }>();
+
+  private workOf(id: string): { calls?: AgentCall[]; callCount?: number } {
+    const w = this.agentCalls.get(id);
+    return w ? { calls: w.calls, callCount: w.count } : {};
+  }
+
+  /**
+   * Files a tool call under its agent. Returns false when no live row owns it — then it is the coach's own
+   * call and belongs in the conversation, where a direct question's work should be visible.
+   */
+  private recordAgentCall(a: ToolActivity): boolean {
+    const id = a.agent as string;
+    if (!this.state.runningAgents.some((x) => x.id === id)) return false;
+    const w = this.agentCalls.get(id) ?? { calls: [], count: 0 };
+    const call: AgentCall = { tool: a.tool, target: a.target, ...(a.ok === false ? { ok: false } : {}) };
+    const last = w.calls[w.calls.length - 1];
+    // A row of identical repeats says nothing new; only the count moves.
+    const calls = last && last.tool === call.tool && last.target === call.target
+      ? w.calls
+      : [...w.calls, call].slice(-MAX_AGENT_CALLS);
+    this.agentCalls.set(id, { calls, count: w.count + 1 });
+    this.state = {
+      ...this.state,
+      liveActivity: undefined,
+      runningAgents: this.state.runningAgents.map((x) => x.id === id ? { ...x, ...this.workOf(id) } : x),
+    };
+    this.notify();
+    return true;
+  }
+
+  /**
+   * Moves the highlight in the running-agents panel; undefined selects nothing.
+   *
+   * Clamped rather than wrapped: the list changes under the cursor as agents start and finish, and a cursor
+   * that wraps would jump to the far end of a list the user is not looking at.
+   */
+  selectAgent(delta: number): void {
+    const n = this.state.runningAgents.length;
+    if (n === 0) { if (this.state.agentCursor !== undefined) { this.state = { ...this.state, agentCursor: undefined }; this.notify(); } return; }
+    const cur = this.state.agentCursor;
+    const next = cur === undefined ? (delta > 0 ? 0 : n - 1) : Math.min(n - 1, Math.max(0, cur + delta));
+    this.state = { ...this.state, agentCursor: next };
+    this.notify();
+  }
+
+  /** Drops the highlight (Esc, or the panel emptying). */
+  clearAgentSelection(): void {
+    if (this.state.agentCursor === undefined) return;
+    this.state = { ...this.state, agentCursor: undefined };
+    this.notify();
+  }
+
   /**
    * Records a tool call in the chat, folding a run of calls to the same tool into one row.
    *
@@ -228,6 +300,10 @@ export class TuiController {
    * diff (a write or an edit) is never folded either — its content is the point.
    */
   pushActivity = (a: ToolActivity): void => {
+    // Attributed to an agent → it belongs to that agent's row, not to the conversation. Five implementers
+    // running at once produced one interleaved flood in which nothing could be traced to anyone; the panel
+    // below the input is where "who did what" is answerable.
+    if (a.agent !== undefined && this.recordAgentCall(a)) return;
     const t = [...this.state.transcript];
     const last = t[t.length - 1];
     const foldable = (x: ToolActivity): boolean => x.summary !== undefined && x.ok !== false;

@@ -672,3 +672,115 @@ describe("TuiController", () => {
     expect(c.getState().meta).toBeUndefined();
   });
 });
+
+/**
+ * Five implementers ran at once and wrote their tool calls into ONE chat flow.
+ *
+ * Nothing in it said whose call was whose, and a single wave produced over a thousand of them — the
+ * conversation became a log nobody could read, and the feedback that mattered (who picked up what, who
+ * finished) was buried in it. Attributed calls belong to the agent's row.
+ */
+describe("an agent's tool calls stay on its own row", () => {
+  const withAgent = (): TuiController => {
+    const c = new TuiController();
+    c.onEvent({ kind: "agents", agents: [{ id: "t1", title: "task one", model: "m" }] });
+    return c;
+  };
+
+  it("keeps an attributed call out of the conversation", () => {
+    const c = withAgent();
+    c.pushActivity({ agent: "t1", tool: "read_file", target: "src/a.ts", lines: 0, summary: "x" });
+    expect(c.getState().transcript.filter((m) => "kind" in m)).toEqual([]);
+    expect(c.getState().runningAgents[0].calls).toEqual([{ tool: "read_file", target: "src/a.ts" }]);
+  });
+
+  it("counts every call even though it keeps only the last few", () => {
+    const c = withAgent();
+    for (let i = 0; i < 20; i++) c.pushActivity({ agent: "t1", tool: "read_file", target: `f${i}.ts`, lines: 0, summary: "" });
+    const a = c.getState().runningAgents[0];
+    expect(a.callCount).toBe(20);
+    expect(a.calls!.length).toBeLessThanOrEqual(8);
+    expect(a.calls![a.calls!.length - 1].target).toBe("f19.ts"); // newest last
+  });
+
+  it("does not repeat an identical call as a second row", () => {
+    const c = withAgent();
+    c.pushActivity({ agent: "t1", tool: "grep", target: "x", lines: 0, summary: "" });
+    c.pushActivity({ agent: "t1", tool: "grep", target: "x", lines: 0, summary: "" });
+    expect(c.getState().runningAgents[0].calls).toHaveLength(1);
+    expect(c.getState().runningAgents[0].callCount).toBe(2);
+  });
+
+  it("marks a call that failed", () => {
+    const c = withAgent();
+    c.pushActivity({ agent: "t1", tool: "shell", target: "npm test", lines: 0, summary: "", ok: false });
+    expect(c.getState().runningAgents[0].calls![0].ok).toBe(false);
+  });
+
+  /** A direct question's work SHOULD be visible: there is no agent row to file it under, and no flood. */
+  it("still shows the coach's own calls in the conversation", () => {
+    const c = withAgent();
+    c.pushActivity({ tool: "read_file", target: "README.md", lines: 0, summary: "x" });
+    expect(c.getState().transcript.filter((m) => "kind" in m)).toHaveLength(1);
+  });
+
+  it("shows a call attributed to an agent that is no longer running, rather than losing it", () => {
+    const c = new TuiController();
+    c.pushActivity({ agent: "gone", tool: "grep", target: "x", lines: 0, summary: "" });
+    expect(c.getState().transcript.filter((m) => "kind" in m)).toHaveLength(1);
+  });
+
+  it("survives the row being rebuilt from a board event", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "board", cards: [{ id: "t1", title: "task one", column: "IN-PROGRESS", role: "coder" }] });
+    c.pushActivity({ agent: "t1", tool: "grep", target: "x", lines: 0, summary: "" });
+    c.onEvent({ kind: "board", cards: [{ id: "t1", title: "task one", column: "IN-PROGRESS", role: "coder", model: "m" }] });
+    expect(c.getState().runningAgents[0].calls).toHaveLength(1);
+    expect(c.getState().runningAgents[0].role).toBe("coder");
+  });
+});
+
+describe("selecting an agent to inspect", () => {
+  const three = (): TuiController => {
+    const c = new TuiController();
+    c.onEvent({ kind: "agents", agents: [
+      { id: "a", title: "A", model: "m" }, { id: "b", title: "B", model: "m" }, { id: "c", title: "C", model: "m" },
+    ] });
+    return c;
+  };
+
+  it("starts with nothing selected — the panel is a list until asked", () => {
+    expect(three().getState().agentCursor).toBeUndefined();
+  });
+
+  it("↓ from nothing lands on the first, ↑ from nothing on the last", () => {
+    const a = three(); a.selectAgent(1);
+    expect(a.getState().agentCursor).toBe(0);
+    const b = three(); b.selectAgent(-1);
+    expect(b.getState().agentCursor).toBe(2);
+  });
+
+  /** The list changes under the cursor as agents start and finish; wrapping would jump somewhere unlooked-at. */
+  it("clamps at both ends instead of wrapping", () => {
+    const c = three();
+    c.selectAgent(1); c.selectAgent(-1); c.selectAgent(-1);
+    expect(c.getState().agentCursor).toBe(0);
+    c.selectAgent(1); c.selectAgent(1); c.selectAgent(1); c.selectAgent(1);
+    expect(c.getState().agentCursor).toBe(2);
+  });
+
+  it("clears the selection when the panel empties", () => {
+    const c = three();
+    c.selectAgent(1);
+    c.onEvent({ kind: "agents", agents: [] });
+    c.selectAgent(1);
+    expect(c.getState().agentCursor).toBeUndefined();
+  });
+
+  it("clearAgentSelection drops it", () => {
+    const c = three();
+    c.selectAgent(1);
+    c.clearAgentSelection();
+    expect(c.getState().agentCursor).toBeUndefined();
+  });
+});

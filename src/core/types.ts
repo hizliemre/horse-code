@@ -29,6 +29,14 @@ export interface ToolResult {
 
 /** A file-touching tool's activity, surfaced in the chat flow (Claude Code-style: name + target + preview). */
 export interface ToolActivity {
+  /**
+   * Which agent made the call, when one did.
+   *
+   * Without it every tool line from every parallel implementer landed in one undifferentiated chat flow —
+   * five agents interleaved, and no way to tell whose call was whose. Attributed activity belongs to that
+   * agent's row instead of to the conversation.
+   */
+  agent?: string;
   tool: string;      // "write" | "edit" | any tool name
   target: string;    // the file path (relative to cwd), or a short description of what the call asked for
   lines: number;     // lines written / changed; 0 for a tool that does not touch a file

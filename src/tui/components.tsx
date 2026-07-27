@@ -479,36 +479,75 @@ export function MetricsLine({ meta, model }: { meta: TurnMeta; model?: string })
  * Live panel of the sub-agents currently working tasks (the parallel wave), shown under the input:
  * a count header + one row each — "● <task> · <elapsed> · <model>". The elapsed time ticks locally.
  */
-export function RunningAgents({ agents, cols }: { agents: RunningAgent[]; cols: number }): React.ReactElement {
+export function RunningAgents({ agents, cols, cursor }: { agents: RunningAgent[]; cols: number; cursor?: number }): React.ReactElement {
   const [, tick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => tick((n) => n + 1), 250);
     return () => clearInterval(id);
   }, []);
+  const selected = cursor !== undefined ? agents[cursor] : undefined;
   const width = Math.max(20, cols - 2);
+  // The detail panel sits BESIDE the list when the terminal is wide enough for both to say anything, and
+  // under it when it is not — a 30-column column of wrapped fragments helps nobody.
+  const side = width >= 100;
+  const listW = selected ? (side ? Math.floor(width * 0.55) : width) : width;
   return (
-    <Box flexDirection="column" width={width}>
-      <Text dimColor>{`  ${agents.length} ${agents.length === 1 ? "agent" : "agents"} running`}</Text>
-      {agents.map((a) => {
-        const dur = fmtDuration((a.doneAt ?? Date.now()) - a.startedAt); // freeze once the agent has reported
-        const statusColor = a.status
-          ? (/UNVERIFIED|no response/i.test(a.status) ? "#ffb454" // amber — a lens that couldn't review (blocking)
-            : /REJECT|revise/i.test(a.status) ? "#ff6b6b"
-            : /APPROVE|pass/i.test(a.status) ? "green" : undefined)
-          : undefined;
-        // Per-agent metering, formatted like the main shimmer: model (duration · ↑prompt ↓completion).
-        const tokens = a.promptTokens !== undefined ? ` · ↑${fmtTokens(a.promptTokens)} ↓${fmtTokens(a.completionTokens ?? 0)}` : "";
-        return (
-          <Text key={a.id} wrap="truncate-end">
-            <Text color={a.status ? undefined : "cyan"}>{`  ${a.status ? "✔" : ICONS.msgBullet} `}</Text>
-            {a.title}
-            <Text dimColor>{`  · ${a.model ? `${a.model} ` : ""}(${dur}${tokens})`}</Text>
-            {a.status ? <Text color={statusColor}>{`  · ${a.status}`}</Text> : null}
-          </Text>
-        );
-      })}
+    <Box flexDirection={side ? "row" : "column"} width={width}>
+      <Box flexDirection="column" width={listW} borderStyle="round" borderColor="gray" paddingX={1}>
+        <Text dimColor>{`Running agents (${agents.length})${cursor === undefined ? " · ↑/↓ to inspect" : ""}`}</Text>
+        {agents.map((a, i) => {
+          const dur = fmtDuration((a.doneAt ?? Date.now()) - a.startedAt); // freeze once the agent has reported
+          const statusColor = a.status
+            ? (/UNVERIFIED|no response/i.test(a.status) ? "#ffb454" // amber — a lens that couldn't review (blocking)
+              : /REJECT|revise/i.test(a.status) ? "#ff6b6b"
+              : /APPROVE|pass/i.test(a.status) ? "green" : undefined)
+            : undefined;
+          const on = i === cursor;
+          return (
+            <Text key={a.id} wrap="truncate-end" inverse={on}>
+              <Text color={a.status ? undefined : "cyan"}>{`${on ? "›" : " "}${a.status ? "✔" : ICONS.msgBullet} `}</Text>
+              {a.role ? <Text color="#7dd3fc">{`${a.role} `}</Text> : null}
+              {a.title}
+              <Text dimColor>{`  · ${a.model ? `${a.model} ` : ""}(${dur})`}</Text>
+              {a.status ? <Text color={statusColor}>{`  · ${a.status}`}</Text> : null}
+            </Text>
+          );
+        })}
+      </Box>
+      {selected ? (
+        <Box flexDirection="column" width={side ? width - listW : width} borderStyle="round" borderColor="#7dd3fc" paddingX={1}>
+          {agentDetail(selected).map((l, i) => (
+            <Text key={i} wrap="truncate-end" dimColor={i > 0 && l.startsWith("  ")}>{l.length ? l : " "}</Text>
+          ))}
+        </Box>
+      ) : null}
     </Box>
   );
+}
+
+/**
+ * What an agent is: its role, its model, the task, what it has spent, and the calls it has just made.
+ *
+ * Shared with the height math, which is why it returns lines rather than rendering them — the two disagreeing
+ * is how Ink ends up painting the bottom region over the transcript.
+ */
+export function agentDetail(a: RunningAgent): string[] {
+  const dur = fmtDuration((a.doneAt ?? Date.now()) - a.startedAt);
+  const spend = a.promptTokens !== undefined ? ` · ↑${fmtTokens(a.promptTokens)} ↓${fmtTokens(a.completionTokens ?? 0)}` : "";
+  const out = [
+    a.title,
+    `  role   ${a.role ?? "—"}`,
+    `  model  ${a.model ?? "—"}`,
+    `  time   ${dur}${spend}${a.callCount ? ` · ${a.callCount} call${a.callCount === 1 ? "" : "s"}` : ""}`,
+  ];
+  if (a.status) out.push(`  result ${a.status}`);
+  if (a.calls?.length) {
+    out.push("");
+    // Newest last, the way it happened. The tool's own output is deliberately absent: it is what made the
+    // chat unreadable, and what it was ASKED is the part that says what the agent is doing.
+    for (const c of a.calls) out.push(`  ${c.ok === false ? "✗" : "·"} ${c.tool}(${c.target})`);
+  }
+  return out;
 }
 
 /**
@@ -1266,6 +1305,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     // In input mode ↑/↓ is command history; transcript scrolls via PgUp/PgDn. In job mode ↑/↓ scrolls.
     if (isInput && up) { historyPrev(); return; }
     if (isInput && down) { historyNext(); return; }
+    /**
+     * While agents are running, ↑/↓ walks THEM rather than the transcript.
+     *
+     * The transcript no longer carries their tool calls, so there is far less of it to scroll through and
+     * far more to ask about the agents; PgUp/PgDn still scrolls, and Esc drops the highlight.
+     */
+    if (state.runningAgents.length > 0) {
+      const kk = parseKittyKey(s);
+      if (s === "\x1b" || kk?.type === "escape") { controller.clearAgentSelection(); return; }
+      if (up) { controller.selectAgent(-1); return; }
+      if (down) { controller.selectAgent(1); return; }
+    }
     const page = Math.max(1, size.rows - 8);
     const m = maxScrollRef.current;
     if (up) setScroll((v) => Math.min(m, v + 1));
@@ -1418,8 +1469,17 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const metricsH = state.meta ? 1 : 0;
     const metricsGapH = state.meta ? 1 : 0; // small blank line below the info line
     const queuedH = state.queued > 0 ? 1 : 0;
-    // Live-agents panel under the input: 1 header line + one row per running sub-agent.
-    const agentsH = state.runningAgents.length > 0 ? 1 + state.runningAgents.length : 0;
+    /**
+     * Live-agents panel under the input: a bordered box with a header and one row per agent, plus the detail
+     * box for the highlighted one. Counted from the same shape the renderer draws — when the detail sits
+     * BESIDE the list it costs no extra rows, and when it sits under it, it costs its own.
+     */
+    const selectedAgent = state.agentCursor !== undefined ? state.runningAgents[state.agentCursor] : undefined;
+    const agentListH = state.runningAgents.length > 0 ? 3 + state.runningAgents.length : 0; // border(2) + header(1) + rows
+    const detailLines = selectedAgent ? agentDetail(selectedAgent).length + 2 : 0; // + border(2)
+    const agentsH = agentListH === 0 ? 0
+      : size.cols - 2 >= 100 ? Math.max(agentListH, detailLines) // side by side → the taller of the two
+        : agentListH + detailLines;
     const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
     const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
@@ -1543,7 +1603,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           </Box>
         ) : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel?.() || model} /> : null}
-        {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} /> : null}
+        {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}
       </Box>

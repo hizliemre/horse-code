@@ -35,7 +35,7 @@ export async function runCycleWithRole(
   // exactly that. Each retry therefore leads with the next link of the role's chain.
   const rotation = slot + board.get(taskId)!.attempts;
   // The UI must name the model this worker will ACTUALLY use, which is its rotated head, not the chain's.
-  board.setModel(taskId, deps.roleRegistry.chainFor(role, rotation)[0] ?? "");
+  board.setWorker(taskId, role, deps.roleRegistry.chainFor(role, rotation)[0] ?? "");
   const before = await worktreeState(git, cwd);
   await runImplementer(deps, role, board.get(taskId)!, cwd, rotation);
   const after = await worktreeState(git, cwd);

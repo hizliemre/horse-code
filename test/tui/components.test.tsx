@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, ChoiceInput } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, ChoiceInput } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
@@ -235,35 +235,69 @@ describe("Ink components", () => {
     unmount();
   });
 
-  it("RunningAgents shows the count header + each agent's task, live duration, and model", () => {
+  /**
+   * Five implementers running at once wrote their tool calls into one interleaved chat flow, and nothing in
+   * it said whose call was whose. The calls belong to the agent; the panel is where that question is answered.
+   */
+  it("RunningAgents is a titled box naming each agent's role, task and model", () => {
     const agents = [
-      { id: "t1", title: "add-login-endpoint", model: "cc/claude-opus-4-8", startedAt: Date.now() - 72_000 },
-      { id: "t2", title: "wire-session-store", model: "opencode-go/deepseek-v4-flash", startedAt: Date.now() - 44_000 },
+      { id: "t1", title: "add-login-endpoint", role: "coder", model: "cc/claude-opus-4-8", startedAt: Date.now() - 72_000 },
+      { id: "t2", title: "wire-session-store", role: "designer", model: "opencode-go/deepseek-v4-flash", startedAt: Date.now() - 44_000 },
     ];
     const f = strip(render(<RunningAgents agents={agents} cols={90} />).lastFrame());
-    expect(f).toContain("2 agents running");
+    expect(f).toContain("Running agents (2)");
+    expect(f).toContain("coder");
     expect(f).toContain("add-login-endpoint");
     expect(f).toContain("cc/claude-opus-4-8");
     expect(f).toMatch(/1m 12s/); // live elapsed from startedAt
-    expect(f).toContain("●");
   });
 
-  it("RunningAgents uses singular 'agent' for one", () => {
-    const f = strip(render(<RunningAgents agents={[{ id: "t1", title: "x", model: "m", startedAt: Date.now() }]} cols={80} />).lastFrame());
-    expect(f).toContain("1 agent running");
+  it("RunningAgents says how to inspect an agent until one is selected", () => {
+    const a = [{ id: "t1", title: "x", model: "m", startedAt: Date.now() }];
+    expect(strip(render(<RunningAgents agents={a} cols={80} />).lastFrame())).toContain("↑/↓ to inspect");
+    expect(strip(render(<RunningAgents agents={a} cols={80} cursor={0} />).lastFrame())).not.toContain("↑/↓ to inspect");
   });
 
-  it("RunningAgents shows a finished agent's result (verdict + counts) with a frozen duration", () => {
+  it("RunningAgents shows a finished agent's result with a frozen duration", () => {
     const now = Date.now();
     const agents = [
-      { id: "t1", title: "team: security", model: "cx/gpt-5.6", startedAt: now - 30_000, status: "REJECT · C:2 M:1 L:0", doneAt: now - 5_000, promptTokens: 12_300, completionTokens: 4_500 },
+      { id: "t1", title: "team: security", model: "cx/gpt-5.6", startedAt: now - 30_000, status: "REJECT · C:2 M:1 L:0", doneAt: now - 5_000 },
       { id: "t2", title: "team: arch", model: "cc/opus", startedAt: now - 30_000 }, // still running
     ];
     const f = strip(render(<RunningAgents agents={agents} cols={120} />).lastFrame());
     expect(f).toContain("REJECT · C:2 M:1 L:0"); // result stamped on the finished row
     expect(f).toMatch(/25s/); // frozen at doneAt-startedAt (25s), not the full 30s
-    expect(f).toContain("↑12.3k ↓4.5k"); // this agent's own token spend, in the parens
     expect(f).toContain("✔"); // finished marker (running rows keep the ● bullet)
+  });
+
+  it("RunningAgents opens a detail box for the highlighted agent", () => {
+    const agents = [
+      { id: "t1", title: "add-login-endpoint", role: "coder", model: "cc/opus", startedAt: Date.now() - 5_000,
+        promptTokens: 12_300, completionTokens: 4_500, callCount: 41,
+        calls: [{ tool: "read_file", target: "src/auth.ts" }, { tool: "shell", target: "npm test", ok: false }] },
+      { id: "t2", title: "other", model: "m", startedAt: Date.now() },
+    ];
+    const f = strip(render(<RunningAgents agents={agents} cols={140} cursor={0} />).lastFrame());
+    expect(f).toContain("role");
+    expect(f).toContain("coder");
+    expect(f).toContain("41 calls");
+    expect(f).toContain("read_file(src/auth.ts)");
+    expect(f).toContain("shell(npm test)");
+    expect(f).toContain("↑12.3k ↓4.5k");
+  });
+
+  /** The panel's rows are counted from this, so it must describe exactly what is drawn. */
+  it("agentDetail names role, model and the recent calls", () => {
+    const lines = agentDetail({ id: "t1", title: "task", role: "coder", model: "m", startedAt: Date.now(),
+      calls: [{ tool: "grep", target: "x" }] });
+    expect(lines[0]).toBe("task");
+    expect(lines.some((l) => l.includes("role") && l.includes("coder"))).toBe(true);
+    expect(lines.some((l) => l.includes("grep(x)"))).toBe(true);
+  });
+
+  it("agentDetail says so when there is nothing yet rather than leaving a blank", () => {
+    const lines = agentDetail({ id: "t1", title: "task", startedAt: Date.now() });
+    expect(lines.some((l) => l.includes("—"))).toBe(true);
   });
 
   it("parsePending strips the [question]/[permission]/[human] tag + leading newline", () => {

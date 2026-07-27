@@ -25,8 +25,20 @@ import type { Card, Column } from "../board/board.js";
 import { dirname, join } from "node:path";
 
 /** Human-readable action for a board column transition (chat notes). */
-function columnAction(to: Column): string {
-  return to === "IN-PROGRESS" ? "In progress" : to === "REVIEW" ? "In review" : to === "DONE" ? "Done ✓" : "Sent back for rework";
+/**
+ * A board transition, said as what happened to WHOM.
+ *
+ * The chat used to read "📋 **task** → In progress" — true, and silent about the five agents running at
+ * once. With the tool flood moved onto the agent rows, this is what the conversation is FOR: who picked up
+ * what, and who finished it.
+ */
+function moveNote(card: Card, to: Column, actor?: string): string {
+  const who = actor ?? card.role;
+  const title = `**${card.title}**`;
+  if (to === "IN-PROGRESS") return `🤖 ${who ? `\`${who}\` picked up ${title}` : `${title} → in progress`}`;
+  if (to === "REVIEW") return `🔍 ${title} — ${who ? `\`${who}\` handed it to review` : "in review"}`;
+  if (to === "DONE") return `✅ ${who ? `\`${who}\` finished ${title}` : `${title} — done`}`;
+  return `↩︎ ${title} — sent back for rework`;
 }
 
 export interface JobDeps extends ReviewDeps {
@@ -247,7 +259,7 @@ export async function runJob(
     emit({ kind: "board", cards: snapshotBoard(board) });
     board.onChange = () => { emit({ kind: "board", cards: snapshotBoard(board) }); void saveBoard(board, boardPath).catch(() => { /* persistence is best-effort */ }); };
     // The chat shows task progress as ACTIONS (transitions), not a kanban board. One note per real column move.
-    board.onMove = (card, _from, to) => emit({ kind: "note", text: `📋 **${card.title}** → ${columnAction(to)}` });
+    board.onMove = (card, _from, to, actor) => emit({ kind: "note", text: moveNote(card, to, actor) });
 
     emit({ kind: "phase", phase: "waves" });
     const wave = await runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle });

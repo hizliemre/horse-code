@@ -93,7 +93,16 @@ async function runTool(
     const target = callSubject(args);
     deps.onActivity?.({
       tool: tool.name, target, lines: 0,
-      summary: outcome(result, target), ok: !result.isError,
+      /**
+       * A successful read says nothing worth a second column.
+       *
+       * Its summary was the first line of whatever happened to be at that offset — `import { defineConfig }`,
+       * `<!--`, a stray brace — which tells you nothing about the read and pushes the file's own name toward
+       * the edge. A FAILED read is the opposite ("offset 560 is past the end of a 473-line file"): that is
+       * the whole reason the line is there.
+       */
+      summary: tool.name === "read_file" && !result.isError ? "" : outcome(result, target),
+      ok: !result.isError,
     });
   }
   return result;

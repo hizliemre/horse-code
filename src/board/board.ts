@@ -34,6 +34,8 @@ export interface Card {
   attempts: number;
   stageHistory: StageEvent[];
   model?: string; // the model of the implementer currently working this card (for the live-agents UI)
+  /** The role of the implementer currently working this card — the agent panel names WHO, not just what. */
+  role?: string;
 }
 
 export interface BoardData {
@@ -73,7 +75,7 @@ function cloneCard(c: Card): Card {
 
 export class Board {
   onChange?: () => void; // called after every mutation (if set; H3a progress events)
-  onMove?: (card: Card, from: Column, to: Column) => void; // called on a real column transition → action notes
+  onMove?: (card: Card, from: Column, to: Column, actor?: string) => void; // called on a real column transition → action notes
   private cards = new Map<string, Card>();
 
   constructor(cards: Card[] = []) {
@@ -129,7 +131,7 @@ export class Board {
         c.stageHistory.splice(0, c.stageHistory.length - MAX_STAGE_EVENTS);
       }
     }
-    if (from !== column) this.onMove?.(c, from, column); // surface the transition as a chat action
+    if (from !== column) this.onMove?.(c, from, column, actor); // surface the transition as a chat action
     this.onChange?.();
   }
 
@@ -164,6 +166,14 @@ export class Board {
   /** Records the model of the implementer now working this card (surfaced in the live-agents UI). */
   setModel(id: string, model: string): void {
     this.require(id).model = model;
+    this.onChange?.();
+  }
+
+  /** Records WHO is working this card: the role and the model it will actually use. */
+  setWorker(id: string, role: string, model: string): void {
+    const c = this.require(id);
+    c.role = role;
+    c.model = model;
     this.onChange?.();
   }
 
