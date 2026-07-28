@@ -1,6 +1,7 @@
 import type { Board } from "../board/board.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult } from "../worktree/manager.js";
 import { runTaskWithEscalation, type EscalationDeps } from "./escalation.js";
+import { squashTask } from "./operational.js";
 
 /** E4a only uses these three methods (a narrow interface for stub/mock injection). */
 export type WaveTaskManager = Pick<WorktreeManager, "deriveTask" | "commitTask" | "mergeTask">;
@@ -67,6 +68,9 @@ export async function runWaveTask(
   // pass → commit the worktree changes to the task branch, then merge into base
   const land = async (): Promise<MergeResult> => {
     await deps.manager.commitTask(tw, `hc: ${card.title}`);
+    // The per-file checkpoints did their job (a killed attempt kept its work); as history they say nothing.
+    // One message, written from the whole diff, is what the base branch should carry.
+    if (deps.baseRef) await squashTask(deps, tw.worktree, deps.baseRef, card.title);
     return ser(async () => {
       const r = await deps.manager.mergeTask(session, tw);
       if (r.status === "conflict" && deps.resolveConflict) return deps.resolveConflict(tw, r.files);

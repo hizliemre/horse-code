@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { rm, writeFile } from "node:fs/promises";
+import { rm, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { commitStep, commitFile, fileCommitMessage, runOperational } from "../../src/engine/operational.js";
+import { commitStep, commitFile, fileCommitMessage, squashTask, runOperational } from "../../src/engine/operational.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -71,37 +71,39 @@ describe("commitStep", () => {
     const notes: string[] = [];
     const msg = await commitFile({ ...deps(p), note: (t) => notes.push(t) }, repo, "a.md");
     expect(p.requests).toHaveLength(0); // no model call to write a commit message
-    expect(msg).toBe("docs: update a.md");
-    expect(notes).toContain("🔖 docs: update a.md"); // still surfaced in the chat flow
+    expect(msg).toBe("wip(docs): a.md");
+    expect(notes).toContain("🔖 wip(docs): a.md"); // still surfaced in the chat flow
     // only a.md was committed; b.md is still uncommitted
-    expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("docs: update a.md");
+    expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("wip(docs): a.md");
     expect((await g(["status", "--porcelain"])).stdout).toContain("b.md");
     expect((await g(["status", "--porcelain"])).stdout).not.toContain("a.md");
   });
 
+  /**
+   * These are CHECKPOINTS, not history: `squashTask` replaces the lot with one real message when the task
+   * lands. They say `wip` so that nothing reads them as a conventional-commit claim about the change.
+   */
   describe("fileCommitMessage", () => {
-    it("labels a test file as a test change", () => {
-      expect(fileCommitMessage("tests/store.spec.ts")).toMatch(/^test/);
-      expect(fileCommitMessage("src/app/store.spec.ts")).toMatch(/^test/);
+    it("marks every checkpoint as work in progress", () => {
+      expect(fileCommitMessage("src/store/todo.ts")).toMatch(/^wip\(/);
+      expect(fileCommitMessage("README.md")).toMatch(/^wip\(/);
     });
 
-    it("labels build configuration as build", () => {
-      expect(fileCommitMessage("package.json")).toMatch(/^build/);
-      expect(fileCommitMessage("angular.json")).toMatch(/^build/);
-      expect(fileCommitMessage("vite.config.ts")).toMatch(/^build/);
-    });
-
-    it("labels prose as docs", () => {
-      expect(fileCommitMessage("README.md")).toMatch(/^docs/);
+    it("says what kind of file it was, so the checkpoint list is still scannable", () => {
+      expect(fileCommitMessage("tests/store.spec.ts")).toContain("test");
+      expect(fileCommitMessage("src/app/store.spec.ts")).toContain("test");
+      expect(fileCommitMessage("package.json")).toContain("build");
+      expect(fileCommitMessage("angular.json")).toContain("build");
+      expect(fileCommitMessage("README.md")).toContain("docs");
     });
 
     it("scopes by the containing folder, and never by a bare src", () => {
-      expect(fileCommitMessage("src/store/todo.ts")).toBe("chore(store): update todo.ts");
-      expect(fileCommitMessage("src/todo.ts")).toBe("chore: update todo.ts");
+      expect(fileCommitMessage("src/store/todo.ts")).toBe("wip(chore/store): todo.ts");
+      expect(fileCommitMessage("src/todo.ts")).toBe("wip(chore): todo.ts");
     });
 
     it("survives a bare filename and a windows path", () => {
-      expect(fileCommitMessage("Makefile")).toBe("chore: update Makefile");
+      expect(fileCommitMessage("Makefile")).toBe("wip(chore): Makefile");
       expect(fileCommitMessage("src\\app\\x.ts")).toContain("x.ts");
     });
   });
@@ -114,5 +116,67 @@ describe("commitStep", () => {
     expect(committed).toBe("chore: add x"); // fallback, but the work is still committed
     const log = await defaultGitRunner(["log", "-1", "--format=%s"], repo);
     expect(log.stdout.trim()).toBe("chore: add x");
+  });
+});
+
+/**
+ * The base branch was carrying thirty lines of `update local-change-transport.ts` per task — true, and
+ * silent about what the task did or why. Writing a real message for each of them was worse: a blocking model
+ * call after every single write, inside the attempt's budget.
+ *
+ * A task is the unit a commit message describes, so the checkpoints are squashed and one message is written
+ * from the whole diff.
+ */
+describe("squashTask", () => {
+  const commitFiles = async (repo: string, files: [string, string][]): Promise<void> => {
+    for (const [name, body] of files) {
+      await writeFile(join(repo, name), body, "utf8");
+      await defaultGitRunner(["add", "--", name], repo);
+      await defaultGitRunner(["commit", "-m", `wip(chore): ${name}`], repo);
+    }
+  };
+
+  it("replaces the checkpoints with one message written from the whole diff", async () => {
+    repo = await initTmpRepo();
+    const g = (args: string[]) => defaultGitRunner(args, repo!);
+    const before = (await g(["rev-parse", "HEAD"])).stdout.trim();
+    await commitFiles(repo, [["a.ts", "export const a = 1;\n"], ["b.ts", "export const b = 2;\n"]]);
+    const p = new MockProvider([submit("feat(core): add the a and b constants")]);
+    const msg = await squashTask(deps(p), repo, before, "Add a and b");
+    expect(msg).toBe("feat(core): add the a and b constants");
+    expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("feat(core): add the a and b constants");
+    // one commit on top of the fork point, not three
+    expect((await g(["rev-list", "--count", `${before}..HEAD`])).stdout.trim()).toBe("1");
+  });
+
+  /** --soft moves the branch pointer only: every byte the task wrote is still in the tree. */
+  it("keeps every file the task wrote", async () => {
+    repo = await initTmpRepo();
+    const before = (await defaultGitRunner(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await commitFiles(repo, [["a.ts", "export const a = 1;\n"]]);
+    await squashTask(deps(new MockProvider([submit("feat: add a")])), repo, before, "Add a");
+    expect(await readFile(join(repo, "a.ts"), "utf8")).toBe("export const a = 1;\n");
+  });
+
+  /** The task's own title still says what it was — far better than losing the commit entirely. */
+  it("falls back to the task title when the operational agent fails", async () => {
+    repo = await initTmpRepo();
+    const before = (await defaultGitRunner(["rev-parse", "HEAD"], repo)).stdout.trim();
+    await commitFiles(repo, [["a.ts", "x\n"]]);
+    const p = new MockProvider([[{ type: "error", message: "boom" }]]);
+    expect(await squashTask(deps(p), repo, before, "Add the a module")).toBe("chore: Add the a module");
+  });
+
+  it("does nothing when the task committed nothing", async () => {
+    repo = await initTmpRepo();
+    const head = (await defaultGitRunner(["rev-parse", "HEAD"], repo)).stdout.trim();
+    const p = new MockProvider([submit("feat: nothing")]);
+    expect(await squashTask(deps(p), repo, head, "Nothing")).toBeUndefined();
+    expect(p.requests).toHaveLength(0); // and asks nobody to phrase it
+  });
+
+  it("does not raise when the base ref is unknown", async () => {
+    repo = await initTmpRepo();
+    await expect(squashTask(deps(new MockProvider([])), repo, "no-such-ref", "X")).resolves.toBeUndefined();
   });
 });

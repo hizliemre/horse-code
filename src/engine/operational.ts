@@ -55,7 +55,9 @@ export function fileCommitMessage(path: string): string {
         : /(^|\/)(package\.json|tsconfig[^/]*\.json|angular\.json|vite\.config|.*\.config\.[a-z]+)$/i.test(p) ? "build"
           : "chore";
   const dir = p.includes("/") ? p.slice(0, p.lastIndexOf("/")).split("/").filter((x) => x !== "src").pop() : "";
-  return `${type}${dir ? `(${dir})` : ""}: update ${p.slice(p.lastIndexOf("/") + 1)}`;
+  // Marked as a checkpoint, because that is what it is: `squashTask` replaces the lot with one real message
+  // when the task lands. Labelling it `feat(x): …` would be a conventional-commit claim nothing checked.
+  return `wip(${type}${dir ? `/${dir}` : ""}): ${p.slice(p.lastIndexOf("/") + 1)}`;
 }
 
 export async function commitFile(
@@ -92,5 +94,45 @@ export async function commitStep(
   const res = await git(["commit", "-m", message], workdir);
   if (res.code !== 0) return undefined; // commit failed (e.g. hooks) → don't claim success
   deps.note?.(`🔖 ${message}`); // persistent chat-flow note so the user sees each auto-commit
+  return message;
+}
+
+/**
+ * Collapses a task's per-file checkpoints into ONE commit that says what the task did.
+ *
+ * The per-file commits exist so a killed attempt keeps its work — they are scaffolding, not history, and as
+ * history they are actively bad: thirty lines of `chore(transport): update local-change-transport.ts` say
+ * nothing about what changed or why. Writing a real message for each of them was worse still, because it put
+ * a blocking model call after every single write.
+ *
+ * A task is the unit a commit message describes. So the checkpoints are squashed at the end and one message
+ * is written from the WHOLE diff — one model call per task instead of one per file, and a history a person
+ * can read.
+ */
+export async function squashTask(
+  deps: TaskCycleDeps, worktree: string, baseRef: string, title: string, git: GitRunner = defaultGitRunner,
+): Promise<string | undefined> {
+  const fork = await git(["merge-base", "HEAD", baseRef], worktree);
+  if (fork.code !== 0) return undefined;
+  const at = fork.stdout.trim();
+  if (!at) return undefined;
+  const ahead = await git(["rev-list", "--count", `${at}..HEAD`], worktree);
+  if (Number(ahead.stdout.trim() || "0") < 1) return undefined; // nothing of ours to squash
+  const diff = await git(["diff", `${at}..HEAD`], worktree);
+  if (!diff.stdout.trim()) return undefined;
+
+  let message: string;
+  try {
+    message = await runOperational(deps, diff.stdout, `completed the task: ${title}`);
+  } catch {
+    message = `chore: ${title}`; // the operational agent failed → the task's own title, which still says what it was
+  }
+  // --soft: the working tree and index are untouched, only the branch pointer moves. Nothing can be lost here
+  // that `git reflog` would not still hold.
+  const reset = await git(["reset", "--soft", at], worktree);
+  if (reset.code !== 0) return undefined;
+  const res = await git(["commit", "-m", message], worktree);
+  if (res.code !== 0) return undefined;
+  deps.note?.(`🔖 ${message}`);
   return message;
 }
