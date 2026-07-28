@@ -6,6 +6,7 @@ import { resolveMergeConflict } from "./conflict.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runTeamLead } from "./team-lead.js";
 import { splitFileConflicts, waveStats, describeWaves, normalizePath, type FileClash } from "./waves.js";
+import { describeTimings } from "./timings.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 
@@ -266,6 +267,9 @@ export async function runWaves(
   // Whether the breakdown was any good is not visible from "completed": twenty tasks in twenty waves and
   // twenty tasks in three cost the same on paper and wildly different in wall-clock. Report the numbers.
   deps.note?.(`📊 ${describeWaves(waveStats(board, waves, clashes))}`);
+  // Where the time went, not just what happened: the two answer different questions and only one of them
+  // says what to fix.
+  if (deps.timings && !deps.timings.empty) deps.note?.(describeTimings(deps.timings));
 
   /**
    * Only the PULL REQUEST is opened here. The merge is not.

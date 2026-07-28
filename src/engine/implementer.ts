@@ -132,7 +132,9 @@ export async function runImplementer(
      * still held at 26 minutes on a 20-minute budget — the abort had fired, the loop had not come back round.
      * The attempt now ends when the budget does; the loop unwinds behind it on the same signal.
      */
-    await withDeadline(runToCompletion(opts), budget, overran);
+    await (deps.timings
+      ? deps.timings.time("implementation", () => withDeadline(runToCompletion(opts), budget, overran))
+      : withDeadline(runToCompletion(opts), budget, overran));
   } catch (e) {
     if (deps.signal.aborted || !budget.aborted) throw e; // a real cancel, or a real error → unchanged
     throw new Error(overran);

@@ -11,6 +11,7 @@ import type { WorktreeSession, PRAdapter } from "../../src/worktree/manager.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 import type { RoleConfig } from "../../src/config/config.js";
 import { Board } from "../../src/board/board.js";
+import { Timings } from "../../src/engine/timings.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
@@ -345,6 +346,26 @@ describe("runWaves", () => {
       expect(notes[0]).toMatch(/Planning the run/);
       expect(notes[0]).toContain("1 task(s) left");
       expect(notes[0]).toContain("at a time");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /**
+   * A count says WHAT happened; a duration says what to fix. Without this the two candidates for "why is it
+   * slow" — a stage that fails often and a stage that is simply slow — look identical on the board.
+   */
+  it("reports where the run's time went", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      const notes: string[] = [];
+      const deps = { ...edeps(mgr, fakeAdapter()), timings: new Timings(), note: (t: string) => notes.push(t) };
+      await runWaves(deps, session, board, { base: "main" });
+      const said = notes.join("\n");
+      expect(said).toMatch(/Slot time/);
+      expect(said).toMatch(/implementation|code review|git/);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 

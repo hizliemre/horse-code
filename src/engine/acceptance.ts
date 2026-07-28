@@ -53,7 +53,8 @@ export async function verifyAcceptance(
    * reasoning holds for criteria and not for the suite: a task can break something it never mentioned, and
    * "it promised nothing" is no reason to let a red suite through.
    */
-  const tests = await runProjectTests(cwd);
+  // Split out of the gate: a suite that takes minutes and a verifier that takes minutes are different problems.
+  const tests = await (deps.timings ? deps.timings.time("test suite", () => runProjectTests(cwd)) : runProjectTests(cwd));
   if (!tests.skipped) {
     emit({ kind: "note", text: tests.passed
       ? `✅ **Tests passed** for "${card.title}" — \`${tests.command}\``

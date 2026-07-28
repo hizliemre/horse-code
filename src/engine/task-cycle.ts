@@ -60,11 +60,13 @@ export async function runCycleWithRole(
   const card = board.get(taskId)!;
   // `attempts` drives the tiered bar: the first review of a task is the thorough pass, later attempts (the code
   // has already been revised for reviewer notes) are blocked only by CRITICAL findings.
-  const v = await runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
+  const review = () => runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
+  const v = await (deps.timings ? deps.timings.time("code review", review) : review());
   // The review says the code is GOOD; the gate says the code does WHAT WAS ASKED. A task that quietly
   // implemented half the requirement passes review — only the criteria catch that.
   if (v.verdict === "pass") {
-    const gate = await verifyAcceptance(deps, board.get(taskId)!, cwd, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); });
+    const check = () => verifyAcceptance(deps, board.get(taskId)!, cwd, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); });
+    const gate = await (deps.timings ? deps.timings.time("acceptance gate", check) : check());
     if (!gate.passed) {
       board.appendStage(taskId, { role: "code-reviewer", action: "acceptance:failed", note: gate.unmet.join("; ") });
       board.clearReviewNotes(taskId);

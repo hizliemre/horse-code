@@ -28,6 +28,8 @@ export interface TaskCycleDeps {
   onProgress?: (ev: import("./progress.js").ProgressEvent) => void;
   /** Persistent chat-flow note sink (wired to the TUI) — e.g. each auto-commit surfaces here. */
   note?: (text: string) => void;
+  /** Where the run's time went, accumulated across every stage. Absent in chat and in one-shot runs. */
+  timings?: import("./timings.js").Timings;
   /**
    * The branch a task worktree was derived from → lets a reviewer be HANDED the diff instead of hunting for it.
    *

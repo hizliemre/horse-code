@@ -41,7 +41,8 @@ export async function runWaveTask(
   if (!card) throw new Error(`runWaveTask: unknown task: ${taskId}`);
 
   const ser = deps.serialize ?? (<T>(f: () => Promise<T>) => f());
-  const tw = await ser(() => deps.manager.deriveTask(session, card.title));
+  const derive = () => ser(() => deps.manager.deriveTask(session, card.title));
+  const tw = await (deps.timings ? deps.timings.time("git", derive) : derive());
 
   const rounds = Math.max(1, deps.rounds);
   // Isolate this task's failures: an implementer/reviewer that throws (e.g. hits its turn-count ceiling, or a
@@ -64,12 +65,15 @@ export async function runWaveTask(
   }
 
   // pass → commit the worktree changes to the task branch, then merge into base
-  await deps.manager.commitTask(tw, `hc: ${card.title}`);
-  const mr = await ser(async () => {
-    const r = await deps.manager.mergeTask(session, tw);
-    if (r.status === "conflict" && deps.resolveConflict) return deps.resolveConflict(tw, r.files);
-    return r;
-  });
+  const land = async (): Promise<MergeResult> => {
+    await deps.manager.commitTask(tw, `hc: ${card.title}`);
+    return ser(async () => {
+      const r = await deps.manager.mergeTask(session, tw);
+      if (r.status === "conflict" && deps.resolveConflict) return deps.resolveConflict(tw, r.files);
+      return r;
+    });
+  };
+  const mr = await (deps.timings ? deps.timings.time("git", land) : land());
   if (mr.status === "merged") {
     board.appendStage(taskId, { role: "team-lead", action: "merged" });
     return { status: "merged", task: tw };
