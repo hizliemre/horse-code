@@ -24,6 +24,8 @@ export interface RunReport {
   reReads: ReReadTotal[];
   /** Model calls that came back as an error, by model. */
   errors: { model: string; count: number }[];
+  /** Models whose implementer attempt wrote no file at all, by model — a whole attempt for nothing. */
+  wroteNothing: { model: string; count: number }[];
   records: number;
 }
 
@@ -60,6 +62,7 @@ export class ReportAccumulator {
   private stages = new Map<string, StageTotal>();
   private reads = new Map<string, ReReadTotal>();
   private errors = new Map<string, number>();
+  private nothing = new Map<string, number>();
   private turns = 0;
   private toolCalls = 0;
   private singleToolTurns = 0;
@@ -80,6 +83,11 @@ export class ReportAccumulator {
     }
     if (!isEvent(r)) return;
     const a = r.attributes;
+    if (r.name === "implementer.no_changes") {
+      const m = String(a["hc.model"] ?? "?");
+      this.nothing.set(m, (this.nothing.get(m) ?? 0) + 1);
+      return;
+    }
     if (r.name === "gen_ai.chat") {
       this.turns += 1;
       const asked = Number(a["hc.tools_requested"] ?? 0);
@@ -117,6 +125,7 @@ export class ReportAccumulator {
       modelSeconds: this.modelSeconds,
       reReads: [...this.reads.values()].filter((r) => r.count > 1).sort((a, b) => b.count - a.count).slice(0, 5),
       errors: [...this.errors.entries()].map(([model, count]) => ({ model, count })).sort((a, b) => b.count - a.count),
+      wroteNothing: [...this.nothing.entries()].map(([model, count]) => ({ model, count })).sort((a, b) => b.count - a.count),
       records: this.records,
     };
   }
@@ -155,6 +164,11 @@ export function describeReport(r: RunReport): string {
 
   if (r.errors.length) {
     lines.push(`**Failed calls** — ${r.errors.map((e) => `${e.model} x${e.count}`).join(" · ")}`);
+  }
+
+  // A whole attempt spent on a model that answered in prose and called no tool at all.
+  if (r.wroteNothing.length) {
+    lines.push(`**Wrote nothing** — ${r.wroteNothing.map((e) => `${e.model} x${e.count}`).join(" · ")}`);
   }
 
   // The signature of an elision loop: one agent, one file, over and over.

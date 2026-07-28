@@ -47,11 +47,24 @@ export async function runCycleWithRole(
   // sends it up the escalation ladder (senior-coder next) with an explicit instruction.
   if (before !== undefined && after !== undefined && before === after) {
     const note = "The previous attempt produced NO file changes. You must actually write the code with write_file/edit_file — describing it is not enough.";
-    board.appendStage(taskId, { role, action: "no-changes" });
+    /**
+     * WHICH model wrote nothing, not just that something did.
+     *
+     * Caught live: two attempts ended in three seconds each — one model call, `finish_reason: stop`, no tool
+     * calls at all. The model answered the implementer in prose and stopped. The ladder already rotates to
+     * the role's next model, so the waste is bounded; what was missing was any way to see that one model
+     * accounts for it. Named in the note and recorded as an event, so a pattern is visible rather than
+     * inferred.
+     */
+    const servedBy = deps.roleRegistry.chainFor(role, rotation)[0] ?? "";
+    telemetry().event("implementer.no_changes", {
+      "hc.task.id": taskId, "hc.role": role, "hc.model": servedBy, "hc.attempt": board.get(taskId)!.attempts,
+    });
+    board.appendStage(taskId, { role, action: "no-changes", note: servedBy ? `model: ${servedBy}` : undefined });
     board.clearReviewNotes(taskId);
     board.addReviewNote(taskId, note);
     board.move(taskId, "TODO", role);
-    deps.note?.(`⚠️ **${board.get(taskId)!.title}** — the implementer wrote nothing; escalating to a stronger role.`);
+    deps.note?.(`⚠️ **${board.get(taskId)!.title}** — \`${role}\`${servedBy ? ` on \`${servedBy}\`` : ""} wrote nothing; trying the next model.`);
     return { verdict: "fail", notes: [note], noProgress: true };
   }
 

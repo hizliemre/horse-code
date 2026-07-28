@@ -102,6 +102,10 @@ export function monitorLines(r: MonitorReport, watches: WatchStatus[] = []): str
   if (r.errors.length) {
     out.push(`  ${"failed calls".padEnd(16)} ${r.errors.map((e) => `${e.model} x${e.count}`).join(", ")}`);
   }
+  // A whole attempt spent on a model that answered in prose and called no tool at all.
+  if (r.wroteNothing.length) {
+    out.push(`  ${"wrote nothing".padEnd(16)} ${r.wroteNothing.map((e) => `${e.model} x${e.count}`).join(", ")}`);
+  }
   }
   // The signature of a context-elision loop: one agent, one file, over and over.
   const worst = r.reReads[0];
@@ -1721,7 +1725,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const showMonitor = monitorOn && (monitorReport !== undefined || watches.length > 0) && running;
     const monitorH = showMonitor
       ? monitorLines((monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
-        promptTokens: 0, modelSeconds: 0, reReads: [], errors: [] }) as MonitorReport, watches).length + 3
+        promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [] }) as MonitorReport, watches).length + 3
       : 0; // border(2) + title(1)
     const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
@@ -1852,7 +1856,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
         {showMonitor ? <RunMonitor
           report={(monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
-            promptTokens: 0, modelSeconds: 0, reReads: [], errors: [] }) as MonitorReport}
+            promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [] }) as MonitorReport}
           watches={watches} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}

@@ -156,3 +156,30 @@ describe("readTelemetry", () => {
     expect(readTelemetry(join(dir, "nope.jsonl"))).toEqual([]);
   });
 });
+
+/**
+ * Caught live: two implementer attempts ended in three seconds each — one model call, `finish_reason: stop`,
+ * no tool calls at all. The model answered in prose and stopped, so the attempt wrote nothing and the ladder
+ * rotated to the next model. The waste is bounded; what was missing was any way to see that ONE model
+ * accounts for it.
+ */
+describe("models that write nothing", () => {
+  const nothing = (model: string): Record_ => ({
+    ts: "2026-07-28T00:00:00.000Z", name: "implementer.no_changes", kind: "event",
+    attributes: { "hc.model": model, "hc.task.id": "T1", "hc.role": "coder" },
+  });
+
+  it("counts them by model, heaviest first", () => {
+    const r = summarize([nothing("a/one"), nothing("b/two"), nothing("a/one")]);
+    expect(r.wroteNothing).toEqual([{ model: "a/one", count: 2 }, { model: "b/two", count: 1 }]);
+  });
+
+  it("names them in the report", () => {
+    expect(describeReport(summarize([nothing("antigravity/claude-sonnet-4-6")])))
+      .toMatch(/Wrote nothing.*antigravity\/claude-sonnet-4-6 x1/);
+  });
+
+  it("says nothing about it when every attempt wrote something", () => {
+    expect(describeReport(summarize([chat()]))).not.toContain("Wrote nothing");
+  });
+});
