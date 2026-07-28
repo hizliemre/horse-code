@@ -72,7 +72,9 @@ describe("commitStep", () => {
     const msg = await commitFile({ ...deps(p), note: (t) => notes.push(t) }, repo, "a.md");
     expect(p.requests).toHaveLength(0); // no model call to write a commit message
     expect(msg).toBe("wip(docs): a.md");
-    expect(notes).toContain("🔖 wip(docs): a.md"); // still surfaced in the chat flow
+    // Deliberately silent: `squashTask` replaces the checkpoints with one real message, and narrating each
+    // of them buried the thing people were actually looking for.
+    expect(notes).toEqual([]);
     // only a.md was committed; b.md is still uncommitted
     expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("wip(docs): a.md");
     expect((await g(["status", "--porcelain"])).stdout).toContain("b.md");
@@ -142,7 +144,11 @@ describe("squashTask", () => {
     const before = (await g(["rev-parse", "HEAD"])).stdout.trim();
     await commitFiles(repo, [["a.ts", "export const a = 1;\n"], ["b.ts", "export const b = 2;\n"]]);
     const p = new MockProvider([submit("feat(core): add the a and b constants")]);
-    const msg = await squashTask(deps(p), repo, before, "Add a and b");
+    const notes: string[] = [];
+    const msg = await squashTask({ ...deps(p), note: (t) => notes.push(t) }, repo, before, "Add a and b");
+    // The one commit a person wants to see, said so it cannot be mistaken for a checkpoint.
+    expect(notes.join("\n")).toContain("📦");
+    expect(notes.join("\n")).toContain("2 checkpoint(s) squashed");
     expect(msg).toBe("feat(core): add the a and b constants");
     expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("feat(core): add the a and b constants");
     // one commit on top of the fork point, not three

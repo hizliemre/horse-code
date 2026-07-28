@@ -69,7 +69,14 @@ export async function commitFile(
   const message = fileCommitMessage(path);
   const res = await git(["commit", "-m", message, "--", path], workdir);
   if (res.code !== 0) return undefined;
-  deps.note?.(`🔖 ${message}`); // persistent chat-flow note so the user sees each auto-commit
+  /**
+   * Deliberately silent.
+   *
+   * These are checkpoints, and `squashTask` replaces the lot with one real message when the task lands.
+   * Narrating each of them buried the thing people were actually looking for: a user watching this asked
+   * three separate times where the real commits were, while thirty `wip(chore/data): …` lines scrolled past.
+   * What is being written live is already on the agent's row ("writing taskflow.store.ts").
+   */
   return message;
 }
 
@@ -116,8 +123,9 @@ export async function squashTask(
   if (fork.code !== 0) return undefined;
   const at = fork.stdout.trim();
   if (!at) return undefined;
-  const ahead = await git(["rev-list", "--count", `${at}..HEAD`], worktree);
-  if (Number(ahead.stdout.trim() || "0") < 1) return undefined; // nothing of ours to squash
+  const aheadOut = await git(["rev-list", "--count", `${at}..HEAD`], worktree);
+  const ahead = Number(aheadOut.stdout.trim() || "0");
+  if (ahead < 1) return undefined; // nothing of ours to squash
   const diff = await git(["diff", `${at}..HEAD`], worktree);
   if (!diff.stdout.trim()) return undefined;
 
@@ -133,6 +141,7 @@ export async function squashTask(
   if (reset.code !== 0) return undefined;
   const res = await git(["commit", "-m", message], worktree);
   if (res.code !== 0) return undefined;
-  deps.note?.(`🔖 ${message}`);
+  // The one commit a person wants to see, said so it cannot be mistaken for a checkpoint.
+  deps.note?.(`📦 **${message}**${ahead ? ` — ${ahead} checkpoint(s) squashed` : ""}`);
   return message;
 }
