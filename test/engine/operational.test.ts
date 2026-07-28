@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { commitStep, commitFile, runOperational } from "../../src/engine/operational.js";
+import { commitStep, commitFile, fileCommitMessage, runOperational } from "../../src/engine/operational.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -57,7 +57,12 @@ describe("commitStep", () => {
     expect((await g(["status", "--porcelain"])).stdout.trim()).toBe("");
   });
 
-  it("commitFile commits only the given file (per-write), leaving other changes untouched", async () => {
+  /**
+   * Every file an implementer wrote used to cost a BLOCKING call to phrase its commit, in series, inside the
+   * attempt's twenty-minute budget — fifteen files, fifteen inline round-trips. And it describes the wrong
+   * unit: "persist the sort preference" is what the TASK did, not what one of its five files did.
+   */
+  it("commitFile commits only the given file, and spends nothing on phrasing it", async () => {
     repo = await initTmpRepo();
     const g = (args: string[]) => defaultGitRunner(args, repo!);
     await writeFile(join(repo, "a.md"), "# A", "utf8");
@@ -65,12 +70,40 @@ describe("commitStep", () => {
     const p = new MockProvider([submit("docs: add a.md")]);
     const notes: string[] = [];
     const msg = await commitFile({ ...deps(p), note: (t) => notes.push(t) }, repo, "a.md");
-    expect(msg).toBe("docs: add a.md");
-    expect(notes).toContain("🔖 docs: add a.md"); // surfaced in the chat flow
+    expect(p.requests).toHaveLength(0); // no model call to write a commit message
+    expect(msg).toBe("docs: update a.md");
+    expect(notes).toContain("🔖 docs: update a.md"); // still surfaced in the chat flow
     // only a.md was committed; b.md is still uncommitted
-    expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("docs: add a.md");
+    expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("docs: update a.md");
     expect((await g(["status", "--porcelain"])).stdout).toContain("b.md");
     expect((await g(["status", "--porcelain"])).stdout).not.toContain("a.md");
+  });
+
+  describe("fileCommitMessage", () => {
+    it("labels a test file as a test change", () => {
+      expect(fileCommitMessage("tests/store.spec.ts")).toMatch(/^test/);
+      expect(fileCommitMessage("src/app/store.spec.ts")).toMatch(/^test/);
+    });
+
+    it("labels build configuration as build", () => {
+      expect(fileCommitMessage("package.json")).toMatch(/^build/);
+      expect(fileCommitMessage("angular.json")).toMatch(/^build/);
+      expect(fileCommitMessage("vite.config.ts")).toMatch(/^build/);
+    });
+
+    it("labels prose as docs", () => {
+      expect(fileCommitMessage("README.md")).toMatch(/^docs/);
+    });
+
+    it("scopes by the containing folder, and never by a bare src", () => {
+      expect(fileCommitMessage("src/store/todo.ts")).toBe("chore(store): update todo.ts");
+      expect(fileCommitMessage("src/todo.ts")).toBe("chore: update todo.ts");
+    });
+
+    it("survives a bare filename and a windows path", () => {
+      expect(fileCommitMessage("Makefile")).toBe("chore: update Makefile");
+      expect(fileCommitMessage("src\\app\\x.ts")).toContain("x.ts");
+    });
   });
 
   it("falls back to a deterministic message when the operational agent errors (still commits)", async () => {
