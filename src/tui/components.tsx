@@ -24,6 +24,7 @@ import type { AskChoice } from "../engine/review.js";
 import { asChoice } from "../engine/review.js";
 import { readTelemetry, summarize, describeReport, type RunReport as MonitorReport } from "../obs/report.js";
 import { TelemetryTail } from "../obs/tail.js";
+import { WatchManager, type WatchStatus } from "../obs/watch.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -59,12 +60,14 @@ export function pendingBodyWidth(cols: number): number {
  * from watching real runs from the outside with a script; a tool that cannot answer them about itself makes
  * everyone rediscover them by hand.
  */
-export function RunMonitor({ report, cols }: { report: MonitorReport; cols: number }): React.ReactElement {
+export function RunMonitor({ report, watches = [], cols }: {
+  report: MonitorReport; watches?: WatchStatus[]; cols: number;
+}): React.ReactElement {
   const width = Math.max(20, cols - 2);
   return (
     <Box flexDirection="column" width={width} borderStyle="round" borderColor="gray" paddingX={1}>
-      <Text dimColor>Running monitors</Text>
-      {monitorLines(report).map((l, i) => (
+      <Text dimColor>{`Running monitors${watches.length ? ` · ${watches.filter((w) => w.alive).length} watch(es)` : ""}`}</Text>
+      {monitorLines(report, watches).map((l, i) => (
         <Text key={i} wrap="truncate-end" dimColor={i > 0}>{l.length ? l : " "}</Text>
       ))}
     </Box>
@@ -75,10 +78,13 @@ export function RunMonitor({ report, cols }: { report: MonitorReport; cols: numb
  * The panel's rows, shared with the height math — the two disagreeing is how Ink ends up painting the
  * bottom region over the transcript, which has happened twice.
  */
-export function monitorLines(r: MonitorReport): string[] {
-  if (!r.records) return ["waiting for the first records…"];
+export function monitorLines(r: MonitorReport, watches: WatchStatus[] = []): string[] {
   const out: string[] = [];
+  if (!r.records && !watches.length) return ["waiting for the first records…"];
   const secs = (n: number): string => (n < 90 ? `${Math.round(n)}s` : `${Math.round(n / 60)}m`);
+  // Nothing recorded at all is not the same as "no stage has finished": with only watches running, the run's
+  // own numbers have not started yet and saying anything about them would be an invention.
+  if (r.records) {
   if (r.stages.length) {
     const total = r.stages.reduce((n, s) => n + s.seconds, 0) || 1;
     for (const s of r.stages.slice(0, 5)) {
@@ -96,11 +102,19 @@ export function monitorLines(r: MonitorReport): string[] {
   if (r.errors.length) {
     out.push(`  ${"failed calls".padEnd(16)} ${r.errors.map((e) => `${e.model} x${e.count}`).join(", ")}`);
   }
+  }
   // The signature of a context-elision loop: one agent, one file, over and over.
   const worst = r.reReads[0];
   if (worst) {
     const name = worst.subject.slice(worst.subject.lastIndexOf("/") + 1);
     out.push(`  ${"re-read most".padEnd(16)} ${worst.task} ${name} x${worst.count}`);
+  }
+  // The user's own watches, under the run's own numbers: both are monitors, and the last line each one
+  // printed is the whole reason it was started.
+  for (const w of watches.slice(-4)) {
+    const state = w.alive ? `${w.events} event(s)` : (w.exit ?? "ended");
+    out.push(`  ${(w.alive ? "● " : "○ ") + w.name}`.padEnd(18) + ` ${state}` +
+      (w.last ? `  ${w.last.slice(0, 60)}` : ""));
   }
   return out;
 }
@@ -1206,6 +1220,56 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     return () => clearInterval(timer);
   }, [monitorOn]);
 
+  /**
+   * `/watch` — any command, its output lines as events.
+   *
+   * The run monitor answers fixed questions about horse-code; this answers whatever the user is actually
+   * waiting on. The command is one THEY typed, so it runs without an approval prompt — the same as typing it
+   * in a terminal — but it is killed as a process group when they stop it or the session ends, because a
+   * watcher that outlives its stop is how this project ended up with a day-old orphan holding a terminal.
+   */
+  const watchesRef = useRef<WatchManager | undefined>(undefined);
+  const [watches, setWatches] = useState<WatchStatus[]>([]);
+  if (!watchesRef.current) {
+    watchesRef.current = new WatchManager(
+      (w, line) => {
+        controller.note(`👁️ \`${w.name}\` ${line}`);
+        setWatches(watchesRef.current?.list() ?? []);
+      },
+      (w) => {
+        controller.note(`👁️ \`${w.name}\` ${w.exit ?? "ended"}` +
+          (w.suppressed ? ` · ${w.suppressed} line(s) suppressed` : ""));
+        setWatches(watchesRef.current?.list() ?? []);
+      },
+    );
+  }
+  useEffect(() => () => watchesRef.current?.stopAll(), []);
+
+  const doWatch = (arg = ""): void => {
+    const mgr = watchesRef.current;
+    if (!mgr) return;
+    const text = arg.trim();
+    const stop = /^stop\s+(\d+)$/i.exec(text);
+    if (stop) {
+      const id = Number(stop[1]);
+      controller.note(mgr.stop(id) ? `Watch ${id} stopped.` : `Watch ${id} is not running.`);
+      setWatches(mgr.list());
+      return;
+    }
+    if (text.toLowerCase() === "stop") { mgr.stopAll(); controller.note("All watches stopped."); setWatches(mgr.list()); return; }
+    if (!text) {
+      const live = mgr.list();
+      controller.note(live.length
+        ? live.map((w) => `${w.alive ? "●" : "○"} ${w.id}. \`${w.name}\` — ${w.command} · ${w.events} event(s)` +
+            `${w.suppressed ? `, ${w.suppressed} suppressed` : ""}${w.exit ? ` · ${w.exit}` : ""}`).join("\n")
+        : "No watches. `/watch <command>` starts one — every line it prints becomes an event.");
+      return;
+    }
+    const w = mgr.start(text);
+    controller.note(`👁️ Watching \`${w.name}\` — \`${text}\`. Each line it prints lands here; \`/watch stop ${w.id}\` ends it.`);
+    setWatches(mgr.list());
+  };
+
   const doMonitor = (arg = ""): void => {
     if (!telemetryPath) { controller.note("Telemetry is off for this session — nothing to monitor."); return; }
     const a = arg.trim().toLowerCase();
@@ -1381,6 +1445,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/mode") doMode("");
     else if (c.name === "/parallel") doParallel("");
     else if (c.name === "/monitor") doMonitor("");
+    else if (c.name === "/watch") doWatch("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -1653,8 +1718,11 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       : size.cols - 2 >= 100 ? Math.max(agentListH, detailLines) // side by side → the taller of the two
         : agentListH + detailLines;
     // Counted from the same function that draws it — see agentDetail for what happens when those disagree.
-    const showMonitor = monitorOn && monitorReport !== undefined && running;
-    const monitorH = showMonitor ? monitorLines(monitorReport as MonitorReport).length + 3 : 0; // border(2) + title(1)
+    const showMonitor = monitorOn && (monitorReport !== undefined || watches.length > 0) && running;
+    const monitorH = showMonitor
+      ? monitorLines((monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
+        promptTokens: 0, modelSeconds: 0, reReads: [], errors: [] }) as MonitorReport, watches).length + 3
+      : 0; // border(2) + title(1)
     const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
     const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
@@ -1747,6 +1815,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /sources refresh (argument form).
               if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
               if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSkills(trimmed.slice("/skills".length).trim()); return; }
+              if (cmd.startsWith("/watch ")) { setScroll(0); setDraft(""); setDraftCursor(0); doWatch(trimmed.slice("/watch".length).trim()); return; }
               if (cmd.startsWith("/monitor ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMonitor(trimmed.slice("/monitor".length).trim()); return; }
               if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); doParallel(trimmed.slice("/parallel".length).trim()); return; }
               if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMcp(trimmed.slice("/mcp".length).trim()); return; }
@@ -1781,7 +1850,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         ) : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel?.() || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
-        {showMonitor ? <RunMonitor report={monitorReport as MonitorReport} cols={size.cols} /> : null}
+        {showMonitor ? <RunMonitor
+          report={(monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
+            promptTokens: 0, modelSeconds: 0, reReads: [], errors: [] }) as MonitorReport}
+          watches={watches} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}
       </Box>

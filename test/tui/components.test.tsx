@@ -3,6 +3,7 @@ import { render } from "ink-testing-library";
 import React from "react";
 import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, LONG_RUNNING_MS, RunMonitor, monitorLines, ChoiceInput } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
+import type { WatchStatus } from "../../src/obs/watch.js";
 
 const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -588,5 +589,41 @@ describe("RunMonitor", () => {
     expect(lines.some((l) => l.includes("implementation"))).toBe(true);
     expect(lines.some((l) => l.includes("tools/turn"))).toBe(true);
     expect(monitorLines(report({ records: 0 }))).toHaveLength(1);
+  });
+});
+
+/**
+ * The run monitor answers fixed questions about horse-code; a watch answers whatever the user is actually
+ * waiting on — the dev server the agents just started, a CI run, a log the app writes. Both are monitors, so
+ * both belong in the same panel.
+ */
+describe("watches in the monitor panel", () => {
+  const empty = { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0, promptTokens: 0, modelSeconds: 0, reReads: [], errors: [] };
+  const watch = (over: Partial<WatchStatus> = {}): WatchStatus => ({
+    id: 1, name: "tail", command: "tail -f app.log", startedAt: Date.now(), events: 12, suppressed: 0, alive: true, ...over,
+  });
+
+  it("counts the live ones in the title", () => {
+    const f = strip(render(<RunMonitor report={empty} watches={[watch(), watch({ id: 2, alive: false })]} cols={120} />).lastFrame());
+    expect(f).toContain("1 watch(es)");
+  });
+
+  /** The last line it printed is the whole reason it was started. */
+  it("shows each watch with its latest line", () => {
+    const f = strip(render(<RunMonitor report={empty} watches={[watch({ last: "ERROR connection refused" })]} cols={120} />).lastFrame());
+    expect(f).toContain("tail");
+    expect(f).toContain("12 event(s)");
+    expect(f).toContain("ERROR connection refused");
+  });
+
+  it("says why a watch is no longer running", () => {
+    const f = strip(render(<RunMonitor report={empty} watches={[watch({ alive: false, exit: "exited (1)" })]} cols={120} />).lastFrame());
+    expect(f).toContain("exited (1)");
+  });
+
+  /** The panel exists for the watches even before any telemetry has landed. */
+  it("draws for watches alone, without waiting for telemetry", () => {
+    expect(monitorLines(empty, [watch()])).toHaveLength(1);
+    expect(monitorLines(empty, [])).toEqual(["waiting for the first records…"]);
   });
 });
