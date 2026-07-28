@@ -856,21 +856,29 @@ export async function runCodeReview(
   const crit = severityTotal(assessments, "critical");
   const med = severityTotal(assessments, "medium");
 
-  // TIERED BAR, same rule the doc stages use — here an "attempt" is the loop, not a review round. The FIRST
-  // review of a task is the thorough pass (critical OR medium blocks); once the code has already been revised
-  // for reviewer notes, only CRITICAL blocks. Otherwise inexhaustible medium nitpicks would keep failing the
-  // task and each retry costs a full re-implementation, which is far more expensive than a doc revision.
-  if (attempt === 0) {
-    if (assessments.length && crit === 0 && med === 0 && approve / assessments.length >= TEAM_CONSENSUS) {
-      emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the code passed.` });
-      return { verdict: "pass", notes: [] };
-    }
-  } else if (crit === 0) {
+  /**
+   * CRITICAL blocks; medium and low are put to the council, which decides whether to defer them.
+   *
+   * The first review used to block on medium too, and measured on a real board that is what stopped anything
+   * from landing: two reviews completed with genuine findings — a mistyped return, an output named like a
+   * native event — both `medium`, and both sent their task back for a FULL re-implementation. A review costs
+   * about five minutes and an implementation three, so every medium finding was an eight-minute round, with
+   * a fresh chance of a new medium each time.
+   *
+   * Deferring is not dropping: the notes ride the board to the end of the run and the revision pass
+   * adjudicates them on the MERGED result, where one pass fixes all of them at once instead of one
+   * re-implementation each. That machinery already existed; it was simply unreachable on the first attempt.
+   */
+  if (crit === 0) {
     const deferred = nonBlockingNotes(assessments, "code");
     if (!deferred.length) {
-      emit({ kind: "note", text: `✅ **Team** — nothing left to fix → the code passed.` });
-      return { verdict: "pass", notes: [] };
-    }
+      // A split team on an otherwise clean review is still a disagreement worth the council's time, and on
+      // the first pass that judgement is the thorough one this stage is for.
+      if (attempt > 0 || !assessments.length || approve / assessments.length >= TEAM_CONSENSUS) {
+        emit({ kind: "note", text: `✅ **Team** — nothing to fix → the code passed.` });
+        return { verdict: "pass", notes: [] };
+      }
+    } else {
     // Same judgment call as the doc stages: whether a leftover medium is really blocking is the COUNCIL's call,
     // not a hard rule. A "pass" defers them to the PR revision pass; a "revise" sends the task back once more.
     emit({ kind: "note", text: `👥 **Team** — no criticals, ${deferred.length} medium/low finding(s) → asking the **council** whether to defer them.` });
@@ -887,6 +895,7 @@ export async function runCodeReview(
     const dJudge = await runJudge(deps, "code", workdir, taskTitle, assessments, dVotes, request, emit);
     if (dJudge.decision === "pass") return { verdict: "pass", notes: [], deferred };
     return { verdict: "fail", notes: dJudge.feedback.length ? dJudge.feedback : deferred };
+    }
   }
 
   const reason = crit || med ? `surfaced ${crit} critical / ${med} medium finding(s)` : `is split (${approve}/${assessments.length} approve)`;

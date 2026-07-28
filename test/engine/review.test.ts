@@ -1250,3 +1250,47 @@ describe("a lens with no model is a missing lens, not a broken review", () => {
     expect(gap.findings[0].note).toMatch(/roles adjust/);
   });
 });
+
+/**
+ * The first review used to block on MEDIUM too, and measured on a real board that is what stopped anything
+ * from landing: two reviews completed with genuine findings — a mistyped return, an output named like a
+ * native event — both medium, and both sent their task back for a FULL re-implementation. A review costs
+ * about five minutes and an implementation three, so every medium was an eight-minute round with a fresh
+ * chance of another medium next time.
+ */
+describe("a medium finding does not cost a re-implementation", () => {
+  const withFindings = (severity: "medium" | "critical") =>
+    reviewProvider({ assessments: { security: JSON.stringify({
+      recommendation: "revise", findings: [{ severity, note: `a ${severity} thing` }] }) } });
+
+  it("asks the council to defer mediums on the FIRST attempt, as it always did on later ones", async () => {
+    const notes: string[] = [];
+    const v = await runCodeReview(rdeps(withFindings("medium")), dir, "add the store", undefined,
+      (ev) => { if (ev.kind === "note") notes.push(ev.text); }, 0);
+    expect(v.verdict).toBe("pass");
+    expect(v.deferred?.length).toBeGreaterThan(0); // carried to the revision pass, not dropped
+    expect(notes.join("\n")).toMatch(/whether to defer/);
+  });
+
+  /**
+   * A CRITICAL never takes the deferral path: it goes to the council, exactly as it did before — the change
+   * is about what happens with mediums, and must not quietly soften a blocking finding.
+   */
+  it("hands a critical finding to the council, which can still send it back", async () => {
+    const p = reviewProvider({
+      assessments: { security: JSON.stringify({ recommendation: "revise", findings: [{ severity: "critical", note: "a critical thing" }] }) },
+      councilVotes: allRevise,
+    });
+    const notes: string[] = [];
+    const v = await runCodeReview(rdeps(p), dir, "add the store", undefined,
+      (ev) => { if (ev.kind === "note") notes.push(ev.text); }, 0);
+    expect(v.verdict).toBe("fail");
+    expect(notes.join("\n")).not.toMatch(/whether to defer/); // never the deferral question
+  });
+
+  it("still passes a clean review outright", async () => {
+    const v = await runCodeReview(rdeps(reviewProvider({})), dir, "add the store", undefined, () => undefined, 0);
+    expect(v.verdict).toBe("pass");
+    expect(v.deferred ?? []).toEqual([]);
+  });
+});
