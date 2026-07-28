@@ -1209,3 +1209,44 @@ describe("the review is scaled to the change", () => {
     expect(lensesFor(custom, diff(2))).toEqual(custom);
   });
 });
+
+/**
+ * `resolve` throws for a role that was never assigned a model, and it used to throw where nothing caught it:
+ * the rejection took down the whole `Promise.all` and the ENTIRE review died in 48ms, failing the task with
+ * it. Seen live — one unconfigured lens stopped every review in the run.
+ */
+describe("a lens with no model is a missing lens, not a broken review", () => {
+  const teamOf = (names: string[]): ReviewerConfig[] =>
+    names.map((name) => ({ name, perspective: `${name} perspective`, models: ["m"] }));
+
+  it("still reviews with the lenses that do have models", async () => {
+    const configured = teamOf(["correctness"]);
+    const withGap = [...configured, { name: "no-model", perspective: "gap", models: [] }];
+    const d = { ...rdeps(reviewProvider({})), teams: { spec: withGap, plan: withGap, code: withGap },
+      teamRegistries: {
+        spec: buildTeamRegistry("spec", configured), // the gap lens is absent from the registry entirely
+        plan: buildTeamRegistry("plan", configured),
+        code: buildTeamRegistry("code", configured),
+      } };
+    const out = await runTeam(d, "spec", dir, "spec.md");
+    expect(out).toHaveLength(2);
+    expect(out.some((a) => a.name === "correctness")).toBe(true);
+  });
+
+  /** Silently dropping it would let the review approve a dimension nobody checked. */
+  it("marks the missing lens's dimension as unverified and blocking", async () => {
+    const configured = teamOf(["correctness"]);
+    const withGap = [...configured, { name: "no-model", perspective: "gap", models: [] }];
+    const d = { ...rdeps(reviewProvider({})), teams: { spec: withGap, plan: withGap, code: withGap },
+      teamRegistries: {
+        spec: buildTeamRegistry("spec", configured),
+        plan: buildTeamRegistry("plan", configured),
+        code: buildTeamRegistry("code", configured),
+      } };
+    const gap = (await runTeam(d, "spec", dir, "spec.md")).find((a) => a.name === "no-model")!;
+    expect(gap.recommendation).toBe("revise");
+    expect(gap.findings[0].severity).toBe("critical");
+    expect(gap.findings[0].note).toMatch(/no model assigned/);
+    expect(gap.findings[0].note).toMatch(/roles adjust/);
+  });
+});

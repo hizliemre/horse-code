@@ -312,8 +312,24 @@ export async function runTeam(
   try {
     const fresh = await Promise.all(
       team.map(async (c): Promise<Assessment> => {
-        const resolved = registry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 }; // this member's own token spend (like the shimmer)
+        /**
+         * A lens with no model is a MISSING lens, not a broken review.
+         *
+         * `resolve` throws for a role that was never assigned one, and it used to throw here where nothing
+         * caught it: the rejection took down the whole `Promise.all` and the entire review died in 48ms,
+         * failing the task with it. Reported the same way any other unusable lens is — its dimension is
+         * unverified, the council must adjudicate it — so the review is degraded rather than absent.
+         */
+        let resolved;
+        try {
+          resolved = registry.resolve(c.name);
+        } catch (e) {
+          emit({ kind: "agent-result", id: `team:${c.name}`, status: "⚠ UNVERIFIED (no model)" });
+          return { name: c.name, recommendation: "revise", findings: [{ severity: "critical",
+            note: `The "${c.name}" lens has no model assigned (${errText(e)}) — this dimension is UNVERIFIED. ` +
+              `Run \`/roles adjust\` to give every review lens a model.` }] };
+        }
         const hints = hintsByLens.get(c.name)!;
         const id = `team:${c.name}`;
         let serving = registry.peekModel(c.name); // the row starts on the chain head; corrected as calls land
@@ -426,8 +442,16 @@ export async function runCouncil(
   try {
     const results = await Promise.all(
       deps.council.map(async (c): Promise<CouncilVote> => {
-        const resolved = deps.councilRegistry.resolve(c.name);
         const tok = { promptTokens: 0, completionTokens: 0 };
+        // A decider with no model votes the conservative way, exactly as one that cannot answer does.
+        let resolved;
+        try {
+          resolved = deps.councilRegistry.resolve(c.name);
+        } catch (e) {
+          emit({ kind: "agent-result", id: `council:${c.name}`, status: "⚠ UNVERIFIED (no model)" });
+          return { name: c.name, vote: "revise" as const,
+            rationale: `The "${c.name}" decider has no model assigned (${errText(e)}) — counted as revise to be safe.` };
+        }
         const hints = hintsByMember.get(c.name)!;
         const id = `council:${c.name}`;
         let serving = deps.councilRegistry.peekModel(c.name);
