@@ -198,3 +198,30 @@ describe("default role skills", () => {
     expect(await withBrainstormer({ models: ["m"], systemPrompt: "mine", skills: [] })).not.toContain("SKILL-BODY");
   });
 });
+
+/**
+ * The lens registries are built from `config.team` (or the shipped defaults), whose entries carry no models —
+ * while `/roles adjust` writes every role's chain, lenses included, into `config.roles`. Nothing joined the
+ * two, so a user with sixty-two tuned roles still had fifteen lenses with an empty chain. Every code review
+ * then failed in 48ms and no task could pass. Seen live.
+ */
+describe("a review lens picks up the chain /roles adjust wrote for it", () => {
+  it("takes its models from config.roles when its team entry has none", async () => {
+    const d = await deps(baseConfig({ roles: { "code-correctness": { models: ["cc/opus", "cx/gpt"] } } }));
+    expect(d.teamRegistries.code.chain("code-correctness")).toEqual(["cc/opus", "cx/gpt"]);
+  });
+
+  /** An explicit team entry is the more specific statement and still wins. */
+  it("prefers an explicit team entry over the role's chain", async () => {
+    const d = await deps(baseConfig({
+      roles: { "code-correctness": { models: ["from-roles"] } },
+      team: { code: [{ name: "code-correctness", perspective: "p", models: ["from-team"] }] },
+    }));
+    expect(d.teamRegistries.code.chain("code-correctness")).toEqual(["from-team"]);
+  });
+
+  it("does the same for the council", async () => {
+    const d = await deps(baseConfig({ roles: { "risk-judge": { models: ["cc/opus"] } } }));
+    expect(d.councilRegistry.chain("risk-judge")).toEqual(["cc/opus"]);
+  });
+});

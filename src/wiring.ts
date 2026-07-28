@@ -67,7 +67,19 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   }
   const roleRegistry = new RoleRegistry(roles, DEFAULT_PROMPTS, opts.skillRegistry);
 
-  const fillModels = (r: ReviewerConfig): ReviewerConfig => ({ ...r, models: r.models.length > 0 ? r.models : sessionChain });
+  /**
+   * A review lens takes its chain from `config.roles` when its own team entry does not carry one.
+   *
+   * The lens registries are built from `config.team` (or the shipped defaults), whose entries have NO models —
+   * while `/roles adjust` writes every role's chain, lenses included, into `config.roles`. Nothing joined the
+   * two, so a user with sixty-two carefully tuned roles still had fifteen lenses with an empty chain: they
+   * resolved to the session placeholder, which is not a model id, and every code review failed. Seen live —
+   * `stage.code_review` erroring in 48ms, every task blocked behind it.
+   */
+  const fillModels = (r: ReviewerConfig): ReviewerConfig => ({
+    ...r,
+    models: r.models.length > 0 ? r.models : (config.roles[r.name]?.models ?? sessionChain),
+  });
   // One finder-lens set per review stage (a spec, a plan and code each need different questions asked).
   const teams: Record<ReviewStage, ReviewerConfig[]> = {
     spec: (config.team?.spec ?? SPEC_TEAM).map(fillModels),
