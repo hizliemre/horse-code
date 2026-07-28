@@ -25,18 +25,25 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/skills", desc: "Show loaded skills (/skills add <github-url> installs one, /skills update re-installs them)" },
   { name: "/mode", desc: "Permission mode (/mode ask|acceptEdits|auto)" },
   { name: "/parallel", desc: "How many tasks run at once (/parallel N) — takes effect on the running job too" },
-  { name: "/monitor", desc: "What the run is spending its time on (/monitor off hides the panel, /monitor log shows the file)" },
+  { name: "/monitor", desc: "Where the run's time is going (/monitor enable shows the panel, disable hides it, log shows the file)" },
   { name: "/watch", desc: "Watch any command — each line it prints becomes an event (/watch <cmd>, /watch stop N)" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },
 ];
 
-/** Commands whose name starts with the (trimmed, lowercased) draft — empty unless the draft starts with "/". */
+/**
+ * Commands whose name starts with the (trimmed, lowercased) draft — empty unless the draft starts with "/".
+ *
+ * Ordered SHORTEST FIRST, then alphabetically. Declaration order put `/model` above `/mode` for the query
+ * "/mod": the exact word the user had finished typing sat under a longer command that merely extends it.
+ * The shorter name is the one they have already fully typed, so it is the one they mean.
+ */
 export function matchCommands(draft: string): SlashCommand[] {
   const q = draft.trim().toLowerCase();
   if (!q.startsWith("/")) return [];
-  return COMMANDS.filter((c) => c.name.startsWith(q));
+  return COMMANDS.filter((c) => c.name.startsWith(q))
+    .sort((a, b) => a.name.length - b.name.length || a.name.localeCompare(b.name));
 }
 
 /** The text shown by /help (one line per command). */

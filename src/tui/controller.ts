@@ -38,7 +38,7 @@ export interface RunningAgent {
   model?: string;
   /** The role doing the work — "coder", "senior-designer", a review lens. */
   role?: string;
-  /** This agent's most recent tool calls, newest last. */
+  /** This agent's most recent tool calls, newest last. Kept for the activity line, not shown as a list. */
   calls?: AgentCall[];
   /** How many calls it has made in total; the kept list is only the tail. */
   callCount?: number;

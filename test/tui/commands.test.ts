@@ -9,7 +9,23 @@ describe("slash commands", () => {
   });
 
   it("'/' alone lists every command", () => {
-    expect(matchCommands("/")).toEqual(COMMANDS);
+    expect(matchCommands("/").map((c) => c.name).sort()).toEqual(COMMANDS.map((c) => c.name).sort());
+  });
+
+  /**
+   * Declaration order put `/model` above `/mode` for the query "/mod": the exact word the user had finished
+   * typing sat under a longer command that merely extends it.
+   */
+  it("puts the shorter name first, then orders alphabetically", () => {
+    expect(matchCommands("/mod").map((c) => c.name)).toEqual(["/mode", "/model"]);
+    const names = matchCommands("/").map((c) => c.name);
+    const lengths = names.map((n) => n.length);
+    expect(lengths).toEqual([...lengths].sort((a, b) => a - b)); // never a longer name above a shorter one
+  });
+
+  it("orders same-length names alphabetically", () => {
+    const five = matchCommands("/").filter((c) => c.name.length === 5).map((c) => c.name);
+    expect(five).toEqual([...five].sort());
   });
 
   it("filters by prefix (case-insensitive) and trims", () => {
@@ -38,6 +54,6 @@ describe("slash commands", () => {
     for (const internal of ["/constitution", "/specify", "/clarify", "/plan", "/tasks"]) {
       expect(names).not.toContain(internal);
     }
-    expect(matchCommands("/")).toEqual(COMMANDS); // only the 4 session commands
+    expect(matchCommands("/")).toHaveLength(COMMANDS.length); // only horse-code's own session commands
   });
 });

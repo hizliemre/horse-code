@@ -644,13 +644,49 @@ export function agentDetail(a: RunningAgent): string[] {
     `  time   ${dur}${spend}${a.callCount ? ` · ${a.callCount} call${a.callCount === 1 ? "" : "s"}` : ""}`,
   ];
   if (a.status) out.push(`  result ${a.status}`);
-  if (a.calls?.length) {
-    out.push("");
-    // Newest last, the way it happened. The tool's own output is deliberately absent: it is what made the
-    // chat unreadable, and what it was ASKED is the part that says what the agent is doing.
-    for (const c of a.calls) out.push(`  ${c.ok === false ? "✗" : "·"} ${c.tool}(${c.target})`);
-  }
+  const doing = agentActivity(a);
+  if (doing) out.push("", `  ${doing}`);
   return out;
+}
+
+/**
+ * One line saying what the agent is DOING, in place of a list of its tool calls.
+ *
+ * The list was a transcript of mechanics — `read_file(…transport.ts)` eight times over — and reading it told
+ * you nothing you could act on. What a person wants from a row they highlighted is the sentence they would
+ * have written themselves: it is running the tests, it is editing this file, it is searching for that.
+ */
+export function agentActivity(a: RunningAgent): string {
+  const calls = a.calls ?? [];
+  const last = calls[calls.length - 1];
+  if (!last) return a.status ? "" : "starting up…";
+  const name = (p: string): string => p.slice(p.lastIndexOf("/") + 1) || p;
+  const recent = calls.slice(-4);
+  switch (last.tool) {
+    case "write_file":
+    case "edit_file":
+      return `writing ${name(last.target)}`;
+    case "shell": {
+      const cmd = last.target.replace(/^cd\s+\S+\s*&&\s*/, "").trim();
+      if (/\b(test|vitest|jest|karma|ng test)\b/.test(cmd)) return "running the tests";
+      if (/\b(build|tsc|ng build)\b/.test(cmd)) return "building";
+      if (/^git\b/.test(cmd)) return "checking git";
+      if (/\b(install|npm i|pnpm add|yarn add)\b/.test(cmd)) return "installing dependencies";
+      return `running ${cmd.split(/\s+/)[0]}`;
+    }
+    case "grep":
+    case "glob":
+      return `searching for ${last.target.slice(0, 40)}`;
+    case "read_file": {
+      // Several reads in a row is orientation, not a single lookup — say that rather than naming the last file.
+      const reads = recent.filter((c) => c.tool === "read_file").length;
+      return reads >= 3 ? `reading through the code (${name(last.target)}…)` : `reading ${name(last.target)}`;
+    }
+    case "submit":
+      return "writing up its answer";
+    default:
+      return `${last.tool} · ${name(last.target).slice(0, 40)}`;
+  }
 }
 
 /**
@@ -1039,7 +1075,14 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     return pasteToken(id, text);
   };
   const slashCmds = matchCommands(draft);
-  const slashOpen = (state.mode ?? "running") === "input" && !state.pending && draft.startsWith("/") && slashCmds.length > 0;
+  /**
+   * The palette opens whenever a slash is typed — including while a job runs.
+   *
+   * It used to require the idle state, so pressing `/` during a run showed nothing at all: the commands were
+   * still there and still worked, they simply could not be seen or completed. Typing is allowed during a run
+   * (that is what the send-mode picker is for), so the help for what can be typed has to be as well.
+   */
+  const slashOpen = !state.pending && draft.startsWith("/") && slashCmds.length > 0;
   const slashIdx = Math.min(slashSel, Math.max(0, slashCmds.length - 1));
   const completeSlash = (): void => { const c = slashCmds[slashIdx]; if (c) { setDraft(c.name); setDraftCursor(c.name.length); } };
   // @-file picker: active when the draft has an "@query" token at the cursor (and no other overlay owns input).
@@ -1207,12 +1250,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   /**
    * The monitor panel's own state: a tail that only reads what the log has appended, polled on a timer.
    *
-   * Shown by default whenever there IS telemetry — the numbers are the reason it exists, and a panel you have
-   * to remember to open is one nobody opens. `/monitor off` hides it, `/monitor` brings it back.
+   * OFF by default. The panel answers a question people ask occasionally — where is the time going — and
+   * showing it always costs rows in the bottom region on every single run, which is the scarcest space in
+   * the interface. `/monitor enable` turns it on for the session, `/monitor disable` turns it back off.
    */
   const tailRef = useRef<TelemetryTail | undefined>(undefined);
   if (telemetryPath && !tailRef.current) tailRef.current = new TelemetryTail(telemetryPath);
-  const [monitorOn, setMonitorOn] = useState(true);
+  const [monitorOn, setMonitorOn] = useState(false);
   const [monitorReport, setMonitorReport] = useState<MonitorReport | undefined>(undefined);
   useEffect(() => {
     const tail = tailRef.current;
@@ -1277,10 +1321,19 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const doMonitor = (arg = ""): void => {
     if (!telemetryPath) { controller.note("Telemetry is off for this session — nothing to monitor."); return; }
     const a = arg.trim().toLowerCase();
-    if (a === "off") { setMonitorOn(false); controller.note("Monitor panel hidden — `/monitor` brings it back."); return; }
+    if (a === "disable" || a === "off") {
+      setMonitorOn(false);
+      controller.note("Monitor panel off — `/monitor enable` turns it back on.");
+      return;
+    }
     if (a === "log") { controller.note(`📈 Telemetry log: \`${telemetryPath}\``); return; }
-    setMonitorOn(true);
-    // Also written to the chat, so the numbers at THIS moment survive in the transcript.
+    if (a === "enable" || a === "on") {
+      setMonitorOn(true);
+      controller.note("Monitor panel on — `/monitor disable` turns it off.");
+      return;
+    }
+    // Bare `/monitor` is a one-off reading, written to the chat so the numbers at THIS moment survive in the
+    // transcript. It does not turn the panel on: showing it is a separate, deliberate choice.
     const tail = tailRef.current;
     if (tail) controller.note(`📈 ${describeReport(tail.read())}`);
   };

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, LONG_RUNNING_MS, RunMonitor, monitorLines, ChoiceInput } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, agentActivity, LONG_RUNNING_MS, RunMonitor, monitorLines, ChoiceInput } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 import type { WatchStatus } from "../../src/obs/watch.js";
 
@@ -140,15 +140,15 @@ describe("Ink components", () => {
     };
     await waitFrame("> ");
     stdin.write("/");
-    await waitFrame("/model"); // palette opens, windowed around the selection (top → /model visible)
+    await waitFrame("/mcp"); // palette opens, windowed around the selection (shortest names first)
     const f = clean(lastFrame());
-    expect(f).toContain("/model");
+    expect(f).toContain("/mcp");
     expect(f).toContain("Enter run"); // hint line
     stdin.write("cl"); // filter → only /clear
-    // wait for the filter to actually apply (/model gone) — "/clear" alone is ambiguous since its
+    // wait for the filter to actually apply (/mcp gone) — "/clear" alone is ambiguous since its
     // description is present in the unfiltered list too.
-    for (let i = 0; i < 200 && clean(lastFrame()).includes("/model"); i++) await sleep(15);
-    expect(clean(lastFrame())).not.toContain("/model");
+    for (let i = 0; i < 200 && clean(lastFrame()).includes("/mcp"); i++) await sleep(15);
+    expect(clean(lastFrame())).not.toContain("/mcp");
     expect(clean(lastFrame())).toContain("/clear");
     stdin.write("\x1b[C"); // → completes the selected command into the input
     await waitFrame("> /clear");
@@ -282,18 +282,19 @@ describe("Ink components", () => {
     expect(f).toContain("role");
     expect(f).toContain("coder");
     expect(f).toContain("41 calls");
-    expect(f).toContain("read_file(src/auth.ts)");
-    expect(f).toContain("shell(npm test)");
     expect(f).toContain("↑12.3k ↓4.5k");
+    // What it is DOING, not a transcript of its mechanics.
+    expect(f).toContain("running the tests");
+    expect(f).not.toContain("read_file(src/auth.ts)");
   });
 
   /** The panel's rows are counted from this, so it must describe exactly what is drawn. */
-  it("agentDetail names role, model and the recent calls", () => {
+  it("agentDetail names role, model and what it is doing", () => {
     const lines = agentDetail({ id: "t1", title: "task", role: "coder", model: "m", startedAt: Date.now(),
-      calls: [{ tool: "grep", target: "x" }] });
+      calls: [{ tool: "grep", target: "TaskFlowStore" }] });
     expect(lines[0]).toBe("task");
     expect(lines.some((l) => l.includes("role") && l.includes("coder"))).toBe(true);
-    expect(lines.some((l) => l.includes("grep(x)"))).toBe(true);
+    expect(lines.some((l) => l.includes("searching for TaskFlowStore"))).toBe(true);
   });
 
   it("agentDetail says so when there is nothing yet rather than leaving a blank", () => {
@@ -625,5 +626,36 @@ describe("watches in the monitor panel", () => {
   it("draws for watches alone, without waiting for telemetry", () => {
     expect(monitorLines(empty, [watch()])).toHaveLength(1);
     expect(monitorLines(empty, [])).toEqual(["waiting for the first records…"]);
+  });
+});
+
+/**
+ * Pressing `/` during a run showed nothing at all: the palette required the idle state, so the commands were
+ * still there and still worked, they simply could not be seen or completed. Typing IS allowed during a run —
+ * that is what the send-mode picker exists for — so the help for what can be typed has to be as well.
+ */
+describe("the slash palette while a job is running", () => {
+  const running = (): TuiController => {
+    const c = new TuiController();
+    c.beginRun(); // mode "running" — the state that used to suppress the palette entirely
+    return c;
+  };
+
+  it("opens for a slash typed mid-run", async () => {
+    const { stdin, lastFrame } = render(<App controller={running()} fullscreen />);
+    for (let i = 0; i < 300 && !strip(lastFrame()).includes("> "); i++) await new Promise((r) => setTimeout(r, 15));
+    stdin.write("/");
+    for (let i = 0; i < 300 && !strip(lastFrame()).includes("/mcp"); i++) await new Promise((r) => setTimeout(r, 15));
+    expect(strip(lastFrame())).toContain("/mcp");
+  });
+
+  it("still opens when nothing is running", async () => {
+    const c = new TuiController();
+    c.awaitTask();
+    const { stdin, lastFrame } = render(<App controller={c} fullscreen />);
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("> "); i++) await new Promise((r) => setTimeout(r, 15));
+    stdin.write("/");
+    for (let i = 0; i < 200 && !strip(lastFrame()).includes("/mcp"); i++) await new Promise((r) => setTimeout(r, 15));
+    expect(strip(lastFrame())).toContain("/mcp");
   });
 });
