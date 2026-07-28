@@ -22,6 +22,8 @@ import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
 import { shouldCollapsePaste, pasteToken, expandPasteTokens } from "./paste.js";
 import type { AskChoice } from "../engine/review.js";
 import { asChoice } from "../engine/review.js";
+import { readTelemetry, summarize, describeReport, type RunReport as MonitorReport } from "../obs/report.js";
+import { TelemetryTail } from "../obs/tail.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
 
@@ -47,6 +49,60 @@ export function pendingWidth(cols: number): number {
 /** Body wrap width: the box width minus the 2-space hanging indent under the header. */
 export function pendingBodyWidth(cols: number): number {
   return Math.max(16, pendingWidth(cols) - 2);
+}
+
+/**
+ * What the run is spending itself on, drawn under the agents in the same shape.
+ *
+ * The agent panel says WHO is working; this says what it is costing — the slot time by stage, how many tool
+ * calls a turn asks for, and whether one agent is reading one file over and over. Those three questions came
+ * from watching real runs from the outside with a script; a tool that cannot answer them about itself makes
+ * everyone rediscover them by hand.
+ */
+export function RunMonitor({ report, cols }: { report: MonitorReport; cols: number }): React.ReactElement {
+  const width = Math.max(20, cols - 2);
+  return (
+    <Box flexDirection="column" width={width} borderStyle="round" borderColor="gray" paddingX={1}>
+      <Text dimColor>Running monitors</Text>
+      {monitorLines(report).map((l, i) => (
+        <Text key={i} wrap="truncate-end" dimColor={i > 0}>{l.length ? l : " "}</Text>
+      ))}
+    </Box>
+  );
+}
+
+/**
+ * The panel's rows, shared with the height math — the two disagreeing is how Ink ends up painting the
+ * bottom region over the transcript, which has happened twice.
+ */
+export function monitorLines(r: MonitorReport): string[] {
+  if (!r.records) return ["waiting for the first records…"];
+  const out: string[] = [];
+  const secs = (n: number): string => (n < 90 ? `${Math.round(n)}s` : `${Math.round(n / 60)}m`);
+  if (r.stages.length) {
+    const total = r.stages.reduce((n, s) => n + s.seconds, 0) || 1;
+    for (const s of r.stages.slice(0, 5)) {
+      out.push(`  ${s.stage.padEnd(16)} ${secs(s.seconds).padStart(5)}  ${String(Math.round((s.seconds / total) * 100)).padStart(3)}%  ` +
+        `${s.runs}x${s.failed ? ` · ${s.failed} failed` : ""}`);
+    }
+  } else {
+    out.push("  no stage has finished yet");
+  }
+  if (r.turns) {
+    const single = Math.round((r.singleToolTurns / r.turns) * 100);
+    out.push(`  ${"model".padEnd(16)} ${secs(r.modelSeconds).padStart(5)}  ${r.turns} turns · ` +
+      `${(r.toolCalls / r.turns).toFixed(2)} tools/turn (${single}% single) · ${(r.promptTokens / 1e6).toFixed(1)}M tok`);
+  }
+  if (r.errors.length) {
+    out.push(`  ${"failed calls".padEnd(16)} ${r.errors.map((e) => `${e.model} x${e.count}`).join(", ")}`);
+  }
+  // The signature of a context-elision loop: one agent, one file, over and over.
+  const worst = r.reReads[0];
+  if (worst) {
+    const name = worst.subject.slice(worst.subject.lastIndexOf("/") + 1);
+    out.push(`  ${"re-read most".padEnd(16)} ${worst.task} ${name} x${worst.count}`);
+  }
+  return out;
 }
 
 /**
@@ -502,6 +558,9 @@ export const RAW_MODE_CHECK_MS = 250;
 /** When a running agent's clock stops being reassuring. Three quarters of the implementer's own budget. */
 export const LONG_RUNNING_MS = 15 * 60 * 1000;
 
+/** How often `/monitor watch` reports. Long enough that a change means something, short enough to notice. */
+export const MONITOR_INTERVAL_MS = 5 * 60 * 1000;
+
 export function RunningAgents({ agents, cols, cursor }: { agents: RunningAgent[]; cols: number; cursor?: number }): React.ReactElement {
   const [, tick] = useState(0);
   useEffect(() => {
@@ -849,7 +908,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, answerByTheWay, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -879,6 +938,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   migrate?: () => Promise<string>; // /migrate
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   answerByTheWay?: (question: string) => void; // a question asked while work is running
+  telemetryPath?: string; // this run's telemetry log → /monitor reads it
   parallel?: () => number; // how many tasks may run at once
   setParallel?: (n: number) => void; // /parallel N — live, and persisted
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
@@ -1119,6 +1179,45 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   };
   // /mcp → show connected MCP servers + tool counts.
   /**
+   * `/monitor` — what the run is spending its time on, from its own telemetry.
+   *
+   * The same three questions that turned out to matter while watching real runs from the outside: where the
+   * slot time goes, whether turns are asking for one tool at a time, and whether an agent is reading one file
+   * over and over. `watch` repeats it, because the useful version of this was never a snapshot — it was
+   * noticing that a number had moved.
+   */
+  /**
+   * The monitor panel's own state: a tail that only reads what the log has appended, polled on a timer.
+   *
+   * Shown by default whenever there IS telemetry — the numbers are the reason it exists, and a panel you have
+   * to remember to open is one nobody opens. `/monitor off` hides it, `/monitor` brings it back.
+   */
+  const tailRef = useRef<TelemetryTail | undefined>(undefined);
+  if (telemetryPath && !tailRef.current) tailRef.current = new TelemetryTail(telemetryPath);
+  const [monitorOn, setMonitorOn] = useState(true);
+  const [monitorReport, setMonitorReport] = useState<MonitorReport | undefined>(undefined);
+  useEffect(() => {
+    const tail = tailRef.current;
+    if (!tail || !monitorOn) return undefined;
+    const poll = (): void => setMonitorReport(tail.read());
+    poll();
+    const timer = setInterval(poll, MONITOR_INTERVAL_MS);
+    timer.unref?.(); // a repeating read must never be the reason the process stays alive
+    return () => clearInterval(timer);
+  }, [monitorOn]);
+
+  const doMonitor = (arg = ""): void => {
+    if (!telemetryPath) { controller.note("Telemetry is off for this session — nothing to monitor."); return; }
+    const a = arg.trim().toLowerCase();
+    if (a === "off") { setMonitorOn(false); controller.note("Monitor panel hidden — `/monitor` brings it back."); return; }
+    if (a === "log") { controller.note(`📈 Telemetry log: \`${telemetryPath}\``); return; }
+    setMonitorOn(true);
+    // Also written to the chat, so the numbers at THIS moment survive in the transcript.
+    const tail = tailRef.current;
+    if (tail) controller.note(`📈 ${describeReport(tail.read())}`);
+  };
+
+  /**
    * `/parallel` — how many tasks run at once.
    *
    * The right number is a property of the user's subscriptions, not of this tool: it is how many parallel
@@ -1281,6 +1380,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/migrate") doMigrate();
     else if (c.name === "/mode") doMode("");
     else if (c.name === "/parallel") doParallel("");
+    else if (c.name === "/monitor") doMonitor("");
     else if (c.name === "/help") controller.note(helpText());
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
@@ -1552,13 +1652,16 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const agentsH = agentListH === 0 ? 0
       : size.cols - 2 >= 100 ? Math.max(agentListH, detailLines) // side by side → the taller of the two
         : agentListH + detailLines;
+    // Counted from the same function that draws it — see agentDetail for what happens when those disagree.
+    const showMonitor = monitorOn && monitorReport !== undefined && running;
+    const monitorH = showMonitor ? monitorLines(monitorReport as MonitorReport).length + 3 : 0; // border(2) + title(1)
     const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
     const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
     // Counted from the SAME function that renders it — a bottom region that under-reports its height gets
     // painted straight over the transcript.
     const asideH = state.aside ? asideLines(state.aside.question, state.aside.answer, size.cols).length : 0;
-    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH + asideH;
+    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH + asideH + monitorH;
     /**
      * While a question is pending, the transcript yields every row it can.
      *
@@ -1644,6 +1747,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /sources refresh (argument form).
               if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
               if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSkills(trimmed.slice("/skills".length).trim()); return; }
+              if (cmd.startsWith("/monitor ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMonitor(trimmed.slice("/monitor".length).trim()); return; }
               if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); doParallel(trimmed.slice("/parallel".length).trim()); return; }
               if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMcp(trimmed.slice("/mcp".length).trim()); return; }
               if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); doGraph(trimmed.slice("/graph".length).trim()); return; }
@@ -1677,6 +1781,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         ) : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel?.() || model} /> : null}
         {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
+        {showMonitor ? <RunMonitor report={monitorReport as MonitorReport} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}
       </Box>

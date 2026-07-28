@@ -74,7 +74,15 @@ export function subjectOf(argumentsJson: string): string {
   try {
     const parsed: unknown = JSON.parse(argumentsJson);
     if (typeof parsed !== "object" || parsed === null) return "";
-    const args = parsed as Record<string, unknown>;
+    return subjectOfArgs(parsed as Record<string, unknown>);
+  } catch {
+    return "";
+  }
+}
+
+/** The same key from already-parsed arguments — what the executor has, and what telemetry records. */
+export function subjectOfArgs(args: Record<string, unknown>): string {
+  {
     let primary = "";
     for (const key of ["path", "file", "file_path", "symbol", "pattern", "query", "command", "name", "url"]) {
       const v = args[key];
@@ -89,8 +97,6 @@ export function subjectOf(argumentsJson: string): string {
       .map(([k, v]) => `${k}=${String(v)}`)
       .sort();
     return rest.length ? `${primary}|${rest.join("|")}` : primary;
-  } catch {
-    return "";
   }
 }
 

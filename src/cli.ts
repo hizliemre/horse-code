@@ -360,6 +360,7 @@ export async function main(argv: string[]): Promise<void> {
         mcp: config.mcp,
         maxParallel: config.maxParallel,
         ...(telemetryNote ? { startupNote: telemetryNote } : {}),
+        ...(sink ? { telemetryPath: sink.path } : {}),
         refreshSources,
         sourcesInfo,
         probeModel,

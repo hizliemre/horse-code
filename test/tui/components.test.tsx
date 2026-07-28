@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import React from "react";
-import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, LONG_RUNNING_MS, ChoiceInput } from "../../src/tui/components.js";
+import { Board, PhaseBar, Prompt, App, Message, Splash, InputLine, PendingQuestion, parsePending, RunningAgents, agentDetail, LONG_RUNNING_MS, RunMonitor, monitorLines, ChoiceInput } from "../../src/tui/components.js";
 import { TuiController } from "../../src/tui/controller.js";
 
 const strip = (f: string | undefined): string => (f ?? "").replace(/\x1b\[[0-9;]*m/g, "");
@@ -537,5 +537,56 @@ describe("a running agent that has been going too long", () => {
   it("does not warn about an agent that has already reported", () => {
     const rows = agent(LONG_RUNNING_MS + 60_000, { status: "pass", doneAt: Date.now() });
     expect(() => render(<RunningAgents agents={rows} cols={90} />)).not.toThrow();
+  });
+});
+
+/**
+ * The agent panel says WHO is working; this says what it is COSTING. The three questions came from watching
+ * real runs from the outside with a script — a tool that cannot answer them about itself makes everyone
+ * rediscover them by hand.
+ */
+describe("RunMonitor", () => {
+  const report = (over: Record<string, unknown> = {}) => ({
+    stages: [
+      { stage: "implementation", seconds: 1200, runs: 4, failed: 1 },
+      { stage: "test suite", seconds: 300, runs: 6, failed: 0 },
+    ],
+    turns: 100, toolCalls: 142, singleToolTurns: 80, promptTokens: 2_800_000, modelSeconds: 600,
+    reReads: [{ task: "T036", subject: "path:src/app/core/store/taskflow.store.ts", count: 23 }],
+    errors: [{ model: "cx/gpt-5.6", count: 2 }], records: 500, ...over,
+  });
+
+  it("is a titled box naming each stage with its share", () => {
+    const f = strip(render(<RunMonitor report={report()} cols={120} />).lastFrame());
+    expect(f).toContain("Running monitors");
+    expect(f).toContain("implementation");
+    expect(f).toMatch(/20m\s+80%/);
+    expect(f).toContain("1 failed");
+  });
+
+  it("reports how many turns asked for a single tool", () => {
+    const f = strip(render(<RunMonitor report={report()} cols={120} />).lastFrame());
+    expect(f).toContain("1.42 tools/turn");
+    expect(f).toContain("80% single");
+  });
+
+  /** One agent, one file, over and over is the signature of a context-elision loop. */
+  it("names the file one agent keeps re-reading", () => {
+    const f = strip(render(<RunMonitor report={report()} cols={120} />).lastFrame());
+    expect(f).toContain("T036");
+    expect(f).toContain("taskflow.store.ts x23");
+  });
+
+  it("says it is waiting rather than drawing an empty box", () => {
+    const f = strip(render(<RunMonitor report={report({ records: 0 })} cols={120} />).lastFrame());
+    expect(f).toContain("waiting for the first records");
+  });
+
+  /** The panel's rows are counted from this; the two disagreeing is how Ink paints over the transcript. */
+  it("monitorLines describes exactly what is drawn", () => {
+    const lines = monitorLines(report());
+    expect(lines.some((l) => l.includes("implementation"))).toBe(true);
+    expect(lines.some((l) => l.includes("tools/turn"))).toBe(true);
+    expect(monitorLines(report({ records: 0 }))).toHaveLength(1);
   });
 });

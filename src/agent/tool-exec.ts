@@ -2,6 +2,7 @@ import type { AgentEvent, PermissionDescriptor, Tool, ToolCall, ToolResult } fro
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { telemetry } from "../obs/telemetry.js";
+import { subjectOfArgs } from "./elide.js";
 
 export interface ToolExecResult {
   id: string;
@@ -94,10 +95,18 @@ async function runTool(
   // Every tool call, with what it was asked and what came back — the record that made "496 calls in two
   // minutes, the same three files" visible in the first place, now available without reading a screenshot.
   const tel = telemetry();
-  const result = await tel.span(`tool.${tool.name}`, { "hc.tool": tool.name, "hc.tool.subject": subject }, run);
+  /**
+   * `subject` is what the chat line shows — the path, kept short. `key` is the call's full identity,
+   * including the range, because a monitor that counts pages of one file as re-reads of it reports a loop
+   * that is not there. Found by using the monitor: it showed 16 re-reads that were 16 different pages.
+   */
+  const key = subjectOfArgs(args);
+  const result = await tel.span(`tool.${tool.name}`,
+    { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key }, run);
   tel.event("tool.result", {
     "hc.tool": tool.name,
     "hc.tool.subject": subject,
+    "hc.tool.key": key,
     "hc.result_chars": (result.content ?? "").length,
     "hc.status": result.isError ? "error" : "ok",
   });
