@@ -28,8 +28,11 @@ import type { Delivery } from "./engine/wave-engine.js";
 import { runInit } from "./init.js";
 import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 import { telemetryProvider } from "./providers/telemetry.js";
-import { Telemetry, setTelemetry, telemetry } from "./obs/telemetry.js";
+import { Telemetry, setTelemetry, telemetry, sampleMemory } from "./obs/telemetry.js";
 import { FileSink } from "./obs/sink.js";
+
+/** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
+const HEAP_MB = 12_288;
 
 export interface CliArgs {
   prompt: string;
@@ -144,6 +147,25 @@ export async function main(argv: string[]): Promise<void> {
   });
   const home = process.env.HOME ?? "";
   /**
+   * A long run needs more heap than V8 gives a CLI by default.
+   *
+   * Three runs have now died on the 4 GB ceiling, each after hours of work that was then lost. The ceiling is
+   * not a diagnosis — something is growing and `process.memory` samples now record what — but a coding agent
+   * holding eight parallel histories legitimately needs more than a script does, and losing five hours of
+   * work to a limit nobody chose is the worse failure.
+   *
+   * Re-exec ONCE, with a marker so the child cannot do it again. Skipped when the user has set their own
+   * NODE_OPTIONS: an explicit choice outranks this one.
+   */
+  if (!process.env.HC_HEAP_SET && !process.env.NODE_OPTIONS) {
+    const { spawnSync } = await import("node:child_process");
+    const r = spawnSync(process.execPath, [`--max-old-space-size=${HEAP_MB}`, ...process.argv.slice(1)], {
+      stdio: "inherit",
+      env: { ...process.env, HC_HEAP_SET: "1" },
+    });
+    process.exit(r.status ?? 0);
+  }
+  /**
    * Telemetry is wired at the composition root, before anything can make a call.
    *
    * The sink is per RUN, so one file is one session and `jq`/Loki can select a run without a filter. The
@@ -154,6 +176,7 @@ export async function main(argv: string[]): Promise<void> {
   const sink = config.telemetry ? new FileSink(home, runId) : undefined;
   if (sink) {
     setTelemetry(new Telemetry(sink));
+    sampleMemory(telemetry()); // three heap deaths so far, each diagnosed from a guess — record the curve
     // Flushed on the way out, however the process ends — an unwritten tail is the part you needed.
     const flush = (): void => { void sink.flush(); };
     process.once("exit", flush);

@@ -162,6 +162,37 @@ function clean(a: Attributes): Attributes {
   return out;
 }
 
+/**
+ * How often the process's own memory is recorded.
+ *
+ * This project has now died to the V8 heap limit three times, and each post-mortem started from a stack
+ * trace and a guess — the crash names whichever allocation happened to be last, not whatever grew. A
+ * sample every half minute costs one number and turns the next one into a curve.
+ */
+export const HEAP_SAMPLE_MS = 30_000;
+
+/**
+ * Starts sampling heap usage into the log. Returns a stop function.
+ *
+ * `heapUsed` is what the limit is measured against; `rss` says whether the growth is JS objects or something
+ * outside the heap (buffers, native memory), which are different problems with different fixes.
+ */
+export function sampleMemory(t: Telemetry, everyMs = HEAP_SAMPLE_MS): () => void {
+  const tick = (): void => {
+    const m = process.memoryUsage();
+    t.event("process.memory", {
+      "hc.heap_used_mb": Math.round(m.heapUsed / 1048576),
+      "hc.heap_total_mb": Math.round(m.heapTotal / 1048576),
+      "hc.rss_mb": Math.round(m.rss / 1048576),
+      "hc.external_mb": Math.round(m.external / 1048576),
+    });
+  };
+  tick();
+  const timer = setInterval(tick, everyMs);
+  timer.unref?.(); // a sampler must never be the reason the process stays alive
+  return () => clearInterval(timer);
+}
+
 /** Telemetry that records nothing, for code paths (and tests) that have no sink. */
 export const NO_TELEMETRY = new Telemetry({ write: () => undefined, flush: async () => undefined });
 

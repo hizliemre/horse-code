@@ -102,6 +102,10 @@ export function monitorLines(r: MonitorReport, watches: WatchStatus[] = []): str
   if (r.errors.length) {
     out.push(`  ${"failed calls".padEnd(16)} ${r.errors.map((e) => `${e.model} x${e.count}`).join(", ")}`);
   }
+  // Three heap deaths so far. A number on screen turns the fourth into something seen coming.
+  if (r.heap) {
+    out.push(`  ${"memory".padEnd(16)} heap ${r.heap.usedMb}MB (peak ${r.heap.peakMb}) · rss ${r.heap.rssMb}MB`);
+  }
   // A whole attempt spent on a model that answered in prose and called no tool at all.
   if (r.wroteNothing.length) {
     out.push(`  ${"wrote nothing".padEnd(16)} ${r.wroteNothing.map((e) => `${e.model} x${e.count}`).join(", ")}`);

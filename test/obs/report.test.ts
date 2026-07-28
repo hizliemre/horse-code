@@ -183,3 +183,30 @@ describe("models that write nothing", () => {
     expect(describeReport(summarize([chat()]))).not.toContain("Wrote nothing");
   });
 });
+
+/**
+ * This project has died to the V8 heap limit three times, and each post-mortem started from a stack trace
+ * and a guess — a crash names whichever allocation happened to be last, not whatever grew. A sample every
+ * half minute costs one number and turns the next one into a curve.
+ */
+describe("memory", () => {
+  const mem = (usedMb: number): Record_ => ({
+    ts: "2026-07-28T00:00:00.000Z", name: "process.memory", kind: "event",
+    attributes: { "hc.heap_used_mb": usedMb, "hc.rss_mb": usedMb + 200, "hc.heap_total_mb": usedMb + 50 },
+  });
+
+  it("keeps the latest reading and the highest one", () => {
+    const r = summarize([mem(400), mem(3900), mem(1200)]);
+    expect(r.heap).toEqual({ usedMb: 1200, peakMb: 3900, rssMb: 1400 });
+  });
+
+  it("reports both, because a peak that has passed still says what happened", () => {
+    expect(describeReport(summarize([mem(3900), mem(1200)])))
+      .toMatch(/Memory.*heap 1200MB \(peak 3900MB\)/);
+  });
+
+  it("says nothing about memory before the first sample", () => {
+    expect(summarize([]).heap).toBeUndefined();
+    expect(describeReport(summarize([chat()]))).not.toContain("Memory");
+  });
+});
