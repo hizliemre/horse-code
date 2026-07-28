@@ -290,7 +290,24 @@ export async function runTeam(
     emit({ kind: "note", text: `↩︎ ${carriedByName.size} lens(es) approved last round — carrying their verdict; re-reviewing ${team.length}.` });
   }
   const scope = request ? `\n\nThe user's original request (the scope you must judge against):\n"""\n${request}\n"""` : "";
-  const what = stage === "code" ? `Review the code for: ${target}.` : `Review the "${target}" document.`;
+  /**
+   * ONE task's change is the subject. The rest of the plan is not.
+   *
+   * Caught live, and it was a deadlock: the plan-conformance lens failed task T001 with five CRITICAL
+   * findings that read "T002 not implemented", "T005/T006/T007/T008 not implemented", "T010 not
+   * implemented" — every one of them a DIFFERENT task, with its own card, most of them not started yet.
+   * Under that reading no task can pass until all of them are done, and none of them can be done because
+   * each is judged the same way. Nothing merged for hours.
+   *
+   * The lens was not wrong about the facts; it was wrong about its subject.
+   */
+  const what = stage === "code"
+    ? `Review the code for ONE task: ${target}.\n` +
+      `The subject is THIS task's change and nothing else. Other tasks in the plan — including ones this ` +
+      `change references, depends on, or leaves for later — are NOT your subject: each has its own card and ` +
+      `its own review, and work that has not started yet is not a defect in this change. Judge whether what ` +
+      `is here does THIS task correctly, and say nothing about what other tasks have not done.`
+    : `Review the "${target}" document.`;
   /**
    * Fetched ONCE and given to all fifteen lenses.
    *

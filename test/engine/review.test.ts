@@ -1294,3 +1294,31 @@ describe("a medium finding does not cost a re-implementation", () => {
     expect(v.deferred ?? []).toEqual([]);
   });
 });
+
+/**
+ * A deadlock, caught live: the plan-conformance lens failed task T001 with five CRITICAL findings that read
+ * "T002 not implemented", "T005/T006/T007/T008 not implemented", "T010 not implemented" — every one a
+ * DIFFERENT task, with its own card, most not started yet. Under that reading no task can pass until all of
+ * them are done, and none can be done because each is judged the same way. Nothing merged for hours.
+ */
+describe("a code review judges one task, not the whole plan", () => {
+  it("tells the lenses that other tasks are not their subject", async () => {
+    const p = reviewProvider({});
+    const rec: { messages: { content: string }[] }[] = [];
+    const spy: Provider = { chat: (req, sig) => { rec.push(req as never); return p.chat(req, sig); } };
+    await runTeam({ ...rdeps(spy), baseRef: "HEAD~1" }, "code", process.cwd(), "Create the scaffolding");
+    const sent = rec.map((r) => r.messages.map((m) => m.content).join("\n")).join("\n");
+    expect(sent).toMatch(/subject is THIS task's change and nothing else/);
+    expect(sent).toMatch(/work that has not started yet is not a defect/);
+  });
+
+  /** A document review has no sibling tasks to confuse — the instruction would be noise there. */
+  it("says none of it when reviewing a document", async () => {
+    const p = reviewProvider({});
+    const rec: { messages: { content: string }[] }[] = [];
+    const spy: Provider = { chat: (req, sig) => { rec.push(req as never); return p.chat(req, sig); } };
+    await runTeam(rdeps(spy), "spec", dir, "spec.md");
+    const sent = rec.map((r) => r.messages.map((m) => m.content).join("\n")).join("\n");
+    expect(sent).not.toMatch(/not your subject/i);
+  });
+});
