@@ -9,6 +9,7 @@ import { memoryHints, emitBatchInjection, reinforceUsed } from "./memory-inject.
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
+import { taskDiff, describeDiff } from "./task-diff.js";
 
 /** Which artifact is under review — each stage has its OWN finder lenses and its own framing. */
 export type ReviewStage = "spec" | "plan" | "code";
@@ -288,6 +289,17 @@ export async function runTeam(
   }
   const scope = request ? `\n\nThe user's original request (the scope you must judge against):\n"""\n${request}\n"""` : "";
   const what = stage === "code" ? `Review the code for: ${target}.` : `Review the "${target}" document.`;
+  /**
+   * Fetched ONCE and given to all fifteen lenses.
+   *
+   * Each of them used to be told "review the code for X" and handed read/grep/glob to go and find it — in
+   * parallel, each burning its own budget on the same search. Measured over one session: of 85 review
+   * failures, 29 said the lens "could not complete" and 13 that its tool-call budget was exhausted. Only four
+   * were about the code. Every one of the other 42 sent the task back for a full re-implementation, which is
+   * a twenty-minute attempt spent to answer a question the review had not managed to ask.
+   */
+  const diff = stage === "code" && deps.baseRef ? await taskDiff(workdir, deps.baseRef) : "";
+  const evidence = stage === "code" ? `\n\n${describeDiff(diff)}` : "";
   // What earlier runs learned, addressed to each lens by name. A lens is the narrowest audience in the system:
   // "the concurrency lens keeps missing X" is precisely the kind of lesson that must reach one agent and no other.
   const query = `${stage} ${target} ${request ?? ""}`;
@@ -303,7 +315,7 @@ export async function runTeam(
         const hints = hintsByLens.get(c.name)!;
         const id = `team:${c.name}`;
         let serving = registry.peekModel(c.name); // the row starts on the chain head; corrected as calls land
-        const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}` };
+        const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}${evidence}` };
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
@@ -392,6 +404,9 @@ export async function runCouncil(
   const digest = findingsDigest(assessments);
   const scope = request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : "";
   const subject = stage === "code" ? `the code for: ${target}` : `the "${target}" ${stage}`;
+  // The deciders judge the same change the lenses did; making them hunt for it is the same waste.
+  const councilDiff = stage === "code" && deps.baseRef ? await taskDiff(workdir, deps.baseRef) : "";
+  const councilEvidence = stage === "code" ? `\n\n${describeDiff(councilDiff)}` : "";
   // The deferral question is deliberately calibrated: without it a pile of "medium" findings always reads as
   // "revise", which is what turns the loop into endless polish. The council still holds the judgment — it can
   // promote a mislabelled finding to blocking — but "it could be clearer" is explicitly not a reason to revise.
@@ -412,7 +427,7 @@ export async function runCouncil(
         const hints = hintsByMember.get(c.name)!;
         const id = `council:${c.name}`;
         let serving = deps.councilRegistry.peekModel(c.name);
-        const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}\n\nCast your vote (pass/revise) with a rationale.` };
+        const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}${councilEvidence}\n\nCast your vote (pass/revise) with a rationale.` };
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,

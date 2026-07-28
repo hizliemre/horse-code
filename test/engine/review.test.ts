@@ -1127,3 +1127,39 @@ describe("a reviewer whose whole chain dies heals and retries", () => {
     expect(models).toContain("healthy-1"); // the panel names who is doing the work, not the dead chain head
   });
 });
+
+/**
+ * Fifteen lenses were each told "review the code for X" and handed read/grep/glob to go and find it — in
+ * parallel, each burning its own budget on the same search.
+ *
+ * Measured over one session: of 85 review failures, 29 said the lens "could not complete" and 13 that its
+ * tool-call budget was exhausted. Only four were about the code. Every one of the other 42 sent the task back
+ * for a full re-implementation — a twenty-minute attempt spent to answer a question the review never asked.
+ */
+describe("the code lenses are handed the change", () => {
+  const seen = (p: Provider & { requests?: unknown[] }): string =>
+    ((p as unknown as { requests: { messages: { content: string }[] }[] }).requests ?? [])
+      .map((r) => r.messages.map((m) => m.content).join("\n")).join("\n@@@\n");
+
+  it("puts the diff in the lenses' request", async () => {
+    const p = reviewProvider({}) as Provider & { requests: unknown[] };
+    const rec: { messages: { content: string }[] }[] = [];
+    const spy: Provider = { chat: (req, sig) => { rec.push(req as never); return p.chat(req, sig); } };
+    // A real diff, from this repository's own last commit — the shape a lens actually receives.
+    await runTeam({ ...rdeps(spy), baseRef: "HEAD~1" }, "code", process.cwd(), "add the store");
+    expect(rec.length).toBeGreaterThan(0);
+    for (const r of rec) {
+      expect(r.messages.map((m) => m.content).join("\n")).toMatch(/diff of this task's changes/);
+    }
+  });
+
+  /** A document review has no branch to diff — the lens reads the file it was named. */
+  it("says nothing about diffs when reviewing a document", async () => {
+    const p = reviewProvider({});
+    const rec: { messages: { content: string }[] }[] = [];
+    const spy: Provider = { chat: (req, sig) => { rec.push(req as never); return p.chat(req, sig); } };
+    await runTeam({ ...rdeps(spy), baseRef: "HEAD~1" }, "spec", dir, "spec.md");
+    const all = rec.map((r) => r.messages.map((m) => m.content).join("\n")).join("\n");
+    expect(all).not.toMatch(/diff of this task's changes/);
+  });
+});
