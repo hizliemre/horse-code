@@ -11,6 +11,8 @@ import type { WorktreeSession } from "../../src/worktree/manager.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 import type { RoleConfig } from "../../src/config/config.js";
 import { Board } from "../../src/board/board.js";
+import { Telemetry, setTelemetry, NO_TELEMETRY } from "../../src/obs/telemetry.js";
+import { MemorySink } from "../../src/obs/sink.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
@@ -241,6 +243,39 @@ describe("an implementer that writes nothing", () => {
       const sys = p.requests.map((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : ""));
       expect(sys.some((x) => x.includes("review TEAM member"))).toBe(false);
     } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The stage spans each carried the task id, but plenty of work happens between and around them — the
+ * escalation council, the router, a retry's setup — and every tool call made there was recorded with no task
+ * at all. Reading a real log back, the busiest reads in a run all said "-": true, and useless for answering
+ * "what did T049 actually do".
+ */
+describe("everything a task does is attributed to the task", () => {
+  it("puts the task id on work that happens outside any stage", async () => {
+    const repo = await initTmpRepo();
+    const sink = new MemorySink();
+    setTelemetry(new Telemetry(sink));
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const p = new MockProvider([
+        submit('{"role":"coder"}'),
+        writeTurn("out.txt", "code"), doneTurn,
+        ...codeReviewPass(),
+      ]);
+      await runWaveTask(wdeps(p, mgr), session, board1(), "t1");
+      const task = sink.records.find((r) => r.kind !== "event" && r.name === "task");
+      expect(task).toBeDefined();
+      expect(task?.attributes["hc.task.id"]).toBe("t1");
+      // Everything the task did hangs off it: the stage spans are its children.
+      const stages = sink.records.filter((r) => r.kind !== "event" && r.name.startsWith("stage."));
+      expect(stages.every((sp) => sp.attributes["hc.task.id"] === "t1")).toBe(true);
+    } finally {
+      setTelemetry(NO_TELEMETRY);
       await rm(repo, { recursive: true, force: true });
     }
   });

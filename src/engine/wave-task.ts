@@ -2,6 +2,7 @@ import type { Board } from "../board/board.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult } from "../worktree/manager.js";
 import { runTaskWithEscalation, type EscalationDeps } from "./escalation.js";
 import { squashTask } from "./operational.js";
+import { telemetry } from "../obs/telemetry.js";
 
 /** E4a only uses these three methods (a narrow interface for stub/mock injection). */
 export type WaveTaskManager = Pick<WorktreeManager, "deriveTask" | "commitTask" | "mergeTask">;
@@ -51,7 +52,20 @@ export async function runWaveTask(
   // job. A real cancel (aborted signal) still propagates. The job then ends "partial" with this task listed.
   let v;
   try {
-    v = await runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree, slot);
+    /**
+     * One span around the WHOLE task, so everything under it is attributed to the task.
+     *
+     * The stage spans each carried the task id, but plenty of work happens between and around them — the
+     * escalation council, the router, a retry's setup — and every tool call made there was recorded with no
+     * task at all. Reading the log back, the busiest reads in a run all said "-": true, and useless for
+     * answering "what did T049 actually do".
+     */
+    v = await telemetry().span("task", {
+      "hc.task.id": taskId,
+      "hc.task.title": card.title.slice(0, 120),
+      "hc.slot": slot,
+      "hc.attempt": card.attempts,
+    }, () => runTaskWithEscalation({ ...deps, rounds }, board, taskId, tw.worktree, slot));
   } catch (e) {
     if (deps.signal.aborted) throw e; // genuine cancellation → propagate
     const msg = e instanceof Error ? e.message : String(e);
