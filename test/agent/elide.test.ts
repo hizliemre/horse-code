@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { elideOldToolResults, subjectOf, MAX_KEY_VALUE_CHARS, RECENT_RESULT_BUDGET, ELIDE_MIN_CHARS } from "../../src/agent/elide.js";
+import { elideOldToolResults, elideInPlace, subjectOf, MAX_KEY_VALUE_CHARS, RECENT_RESULT_BUDGET, ELIDE_MIN_CHARS } from "../../src/agent/elide.js";
 import type { Message } from "../../src/core/types.js";
 
 const toolMsg = (id: string, content: string): Message => ({ role: "tool", content, name: "read_file", toolCallId: id });
@@ -178,5 +178,66 @@ describe("two pages of one file are two different things", () => {
     const out = elideOldToolResults(w);
     const stubs = out.filter((m) => m.role === "tool" && m.content.startsWith("["));
     expect(stubs.every((m) => !m.content.includes("Do not run it again"))).toBe(true);
+  });
+});
+
+/**
+ * Assistant prose was the one thing elision never touched, and the one thing nothing else bounds.
+ *
+ * A tool result is capped by the tool; a write's arguments are capped by the file; but a model that thinks
+ * out loud for a hundred turns pays for all hundred on every turn after. Measured on a real run:
+ * implementations reached 125,000 prompt tokens by turn 100 with every tool result ALREADY elided, and 22 of
+ * 26 attempts were killed at the twenty-minute deadline having finished nothing.
+ */
+describe("old reasoning is elided with the exchange it belonged to", () => {
+  const REASONING = "I should now consider ".repeat(400); // ~9k chars of prose per turn
+  const RESULT = "x".repeat(20_000);
+  const convo = (turns: number): Message[] => {
+    const out: Message[] = [{ role: "system", content: "sys" }];
+    for (let i = 0; i < turns; i++) {
+      out.push({ role: "assistant", content: REASONING, toolCalls: [{ id: `c${i}`, name: "read_file", arguments: JSON.stringify({ path: `f${i}.ts` }) }] } as Message);
+      out.push({ role: "tool", toolCallId: `c${i}`, name: "read_file", content: RESULT } as Message);
+    }
+    return out;
+  };
+
+  it("releases the prose of exchanges that have scrolled out of the window", () => {
+    const w = convo(40);
+    const proseBefore = w.filter((m) => m.role === "assistant").reduce((n, m) => n + m.content.length, 0);
+    elideInPlace(w);
+    const proseAfter = w.filter((m) => m.role === "assistant").reduce((n, m) => n + m.content.length, 0);
+    expect(proseBefore).toBeGreaterThan(300_000);
+    expect(proseAfter / proseBefore).toBeLessThan(0.2);
+  });
+
+  it("leaves the newest turns' reasoning intact — it is what the agent is acting on", () => {
+    const w = convo(40);
+    elideInPlace(w);
+    const assistants = w.filter((m) => m.role === "assistant");
+    expect(assistants[assistants.length - 1].content).toBe(REASONING);
+  });
+
+  /** The ids must keep pairing with their results, or the provider rejects the request outright. */
+  it("keeps every tool call and its pairing", () => {
+    const w = convo(30);
+    const ids = w.flatMap((m) => m.toolCalls?.map((c) => c.id) ?? []);
+    elideInPlace(w);
+    expect(w.flatMap((m) => m.toolCalls?.map((c) => c.id) ?? [])).toEqual(ids);
+    expect(w.filter((m) => m.role === "tool")).toHaveLength(30);
+  });
+
+  it("says what it dropped, rather than leaving a bare gap", () => {
+    const w = convo(40);
+    elideInPlace(w);
+    const stubbed = w.find((m) => m.role === "assistant" && m.content.startsWith("["))!;
+    expect(stubbed.content).toMatch(/earlier reasoning elided/);
+    expect(stubbed.content).toMatch(/chars/);
+  });
+
+  it("leaves a short conversation alone", () => {
+    const w = convo(1);
+    const before = w.map((m) => m.content);
+    elideInPlace(w);
+    expect(w.map((m) => m.content)).toEqual(before);
   });
 });

@@ -31,6 +31,23 @@ const IMPLEMENTER_MAX_TURNS = 200;
  * partial work stays and the next tier continues from it.
  */
 export const IMPLEMENTER_TIMEOUT_MS = 20 * 60 * 1000;
+/** How far into the budget the agent is warned. Late enough not to rush it, early enough to land the work. */
+export const DEADLINE_WARNING_AT = 0.75;
+
+/**
+ * The warning an implementer gets when most of its budget is gone, or undefined while there is time left.
+ *
+ * A pure function so the wording and the threshold can be asserted without racing a real clock — the
+ * behaviour it encodes was measured, not guessed: 22 of 26 attempts died at exactly the deadline, around a
+ * hundred turns in, with no notice at all.
+ */
+export function deadlineWarning(elapsedMs: number, budgetMs: number): string | undefined {
+  if (elapsedMs < budgetMs * DEADLINE_WARNING_AT) return undefined;
+  const left = Math.max(1, Math.round((budgetMs - elapsedMs) / 60_000));
+  return `You have about ${left} minute(s) of budget left for this attempt, and it will be stopped when ` +
+    `they are gone. Finish and WRITE what you have now — a partial implementation that is on disk is kept ` +
+    `and continued from; work still in your head is lost. Stop exploring.`;
+}
 
 /** Runs the implementer role with worktree-scoped tools + a new-vs-returning message. */
 export async function runImplementer(
@@ -95,7 +112,27 @@ export async function runImplementer(
 
   // A timeout here is NOT a cancellation: the job is fine, this one attempt ran too long. The two are
   // distinguished below so a genuine Ctrl-C still propagates as a cancellation.
-  const budget = AbortSignal.timeout(deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS);
+  const budgetMs = deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS;
+  const budget = AbortSignal.timeout(budgetMs);
+  /**
+   * A warning before the deadline, delivered as a turn-start note.
+   *
+   * Measured on a real run: 22 of 26 attempts were killed at exactly 20.0 minutes, each around a hundred
+   * turns in — the TIME budget always bit first (the 200-turn budget would need forty minutes at twelve
+   * seconds a turn), and it arrived without notice. An agent that is told it has minutes left can commit
+   * what it has; one that is simply killed leaves the attempt to be redone from nothing.
+   *
+   * The loop already drains `inbox` at the top of each turn, so this needs no new machinery: the note is
+   * handed over once, when most of the budget is gone.
+   */
+  let warned = false;
+  const startedAt = Date.now();
+  const deadlineNote = (): string | undefined => {
+    if (warned) return undefined; // twice is nagging, and each repetition costs a turn's worth of prompt
+    const note = deadlineWarning(Date.now() - startedAt, budgetMs);
+    if (note) warned = true;
+    return note;
+  };
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
@@ -113,6 +150,8 @@ export async function runImplementer(
     permission: deps.permission,
     approve: deps.approve,
     cwd,
+    // The agent's own inbox first (a by-the-way note), then the deadline warning when it is due.
+    inbox: () => deps.inbox?.() ?? deadlineNote(),
     signal: AbortSignal.any([deps.signal, budget]),
     // Stamped with the card id: the agent panel is keyed by it, and unattributed activity goes to the chat.
     onActivity: deps.onActivity ? (a) => deps.onActivity?.({ ...a, agent: task.id }) : undefined,

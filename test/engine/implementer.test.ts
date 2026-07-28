@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runImplementer } from "../../src/engine/implementer.js";
+import { runImplementer, deadlineWarning, DEADLINE_WARNING_AT } from "../../src/engine/implementer.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
@@ -138,5 +138,41 @@ describe("one implementation attempt is bounded in wall-clock time", () => {
       },
     };
     await expect(runImplementer({ ...ideps(ok), implementerTimeoutMs: 60_000 }, "coder", card(), dir)).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Measured on a real run: 22 of 26 attempts were killed at exactly 20.0 minutes, each around a hundred turns
+ * in. The TIME budget always bit first — the 200-turn budget would need forty minutes at twelve seconds a
+ * turn — and it arrived without notice. An agent told it has minutes left can commit what it has; one simply
+ * killed leaves the attempt to be redone from nothing.
+ */
+describe("the implementer is warned before its deadline", () => {
+  const seen = (p: MockProvider): string[] =>
+    p.requests.flatMap((r) => r.messages.filter((m) => m.role === "user").map((m) => String(m.content)));
+
+  it("says nothing while there is plenty of budget left", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer({ ...deps(p), implementerTimeoutMs: 600_000 }, "coder", card(), dir);
+    expect(seen(p).join("\n")).not.toMatch(/budget left/);
+  });
+
+  it("says nothing until three quarters of the budget is spent", () => {
+    const twenty = 20 * 60 * 1000;
+    expect(deadlineWarning(twenty * 0.5, twenty)).toBeUndefined();
+    expect(deadlineWarning(twenty * (DEADLINE_WARNING_AT - 0.01), twenty)).toBeUndefined();
+    expect(deadlineWarning(twenty * DEADLINE_WARNING_AT, twenty)).toBeDefined();
+  });
+
+  /** "Write what you have" is the whole point: a partial implementation on disk is kept and continued from. */
+  it("tells it to land what it has rather than keep exploring", () => {
+    const w = deadlineWarning(16 * 60 * 1000, 20 * 60 * 1000)!;
+    expect(w).toMatch(/4 minute\(s\) of budget left/);
+    expect(w).toMatch(/WRITE what you have now/);
+    expect(w).toMatch(/Stop exploring/);
+  });
+
+  it("never claims zero minutes are left", () => {
+    expect(deadlineWarning(20 * 60 * 1000, 20 * 60 * 1000)).toMatch(/1 minute/);
   });
 });

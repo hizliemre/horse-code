@@ -107,6 +107,18 @@ export function subjectOfArgs(args: Record<string, unknown>): string {
  * where re-running means writing the file a second time. What the agent needs to know here is that the
  * value was sent and is gone, not that it should be sent again.
  */
+/**
+ * The stub for an assistant's own prose from an exchange that has scrolled out of the window.
+ *
+ * Its tool CALLS stay — the ids must keep pairing with their results — but the reasoning it wrote alongside
+ * them is as stale as the result it was reasoning about, and unlike the result it was never bounded by
+ * anything. Measured on a real run: implementations reached 125,000 prompt tokens by turn 100 with every
+ * tool result already elided, because a hundred turns of prose had accumulated underneath them.
+ */
+function textStub(chars: number): string {
+  return `[earlier reasoning elided to save context — ${chars.toLocaleString("en-US")} chars.]`;
+}
+
 function argStub(chars: number): string {
   return `[argument elided to save context — ${chars.toLocaleString("en-US")} chars, already applied. Read the file if you need it.]`;
 }
@@ -123,16 +135,24 @@ function planElision(
   messages: Message[],
   budget: number,
   distinctBudget: number,
-): { results: Set<number>; superseded: Set<number>; argIds: Set<string> } {
+): { results: Set<number>; superseded: Set<number>; argIds: Set<string>; texts: Set<number> } {
   const results = new Set<number>();
   const superseded = new Set<number>();
   const argIds = new Set<string>();
+  const texts = new Set<number>();
   const toolIdx: number[] = [];
   for (let i = 0; i < messages.length; i++) if (messages[i].role === "tool") toolIdx.push(i);
-  if (toolIdx.length <= ALWAYS_KEEP_NEWEST) return { results, superseded, argIds };
+  if (toolIdx.length <= ALWAYS_KEEP_NEWEST) return { results, superseded, argIds, texts };
 
   const call = new Map<string, { name?: string; arguments: string }>();
-  for (const m of messages) for (const c of m.toolCalls ?? []) call.set(c.id, { name: c.name, arguments: c.arguments });
+  /** Which assistant message made each call — an exchange is the assistant's turn AND the reply to it. */
+  const askedAt = new Map<string, number>();
+  for (let i = 0; i < messages.length; i++) {
+    for (const c of messages[i].toolCalls ?? []) {
+      call.set(c.id, { name: c.name, arguments: c.arguments });
+      askedAt.set(c.id, i);
+    }
+  }
   /**
    * The budget is spent on the WHOLE exchange — what was sent as well as what came back.
    *
@@ -158,6 +178,7 @@ function planElision(
   const seen = new Set<string>();
   let used = 0;
   let usedDistinct = 0;
+  let oldestKept = messages.length; // the index where the live window begins
   for (let k = toolIdx.length - 1; k >= 0; k--) {
     const i = toolIdx[k];
     const key = keyOf(i);
@@ -165,7 +186,13 @@ function planElision(
     if (key !== "") seen.add(key);
 
     // Inside the recency window nothing is touched — it is what the agent is working with right now.
-    if (k >= toolIdx.length - ALWAYS_KEEP_NEWEST || used + cost(i) <= budget) { used += cost(i); continue; }
+    if (k >= toolIdx.length - ALWAYS_KEEP_NEWEST || used + cost(i) <= budget) {
+      used += cost(i);
+      // The exchange starts at the ASSISTANT turn that asked, not at the reply: its reasoning is what the
+      // agent is acting on right now, and cutting it would elide the newest turn's own thinking.
+      oldestKept = Math.min(oldestKept, askedAt.get(messages[i].toolCallId ?? "") ?? i);
+      continue;
+    }
 
     // Outside it, the arguments always shrink: a write's arguments are the body it already sent, and no
     // amount of keeping them saves a later look-up.
@@ -182,7 +209,18 @@ function planElision(
     // covered the same ground, and telling the agent not to look again would be a guess.
     if (!first && key !== "") superseded.add(i);
   }
-  return { results, superseded, argIds };
+  /**
+   * Everything OLDER than the live window loses its prose too.
+   *
+   * The boundary is the oldest exchange still kept whole: before it, nothing is being reasoned about any
+   * more. Assistant text is the one thing elision never touched, and it is the one thing nothing else
+   * bounds — a tool result is capped by the tool, a write's arguments are capped by the file, but a model
+   * that thinks out loud for a hundred turns pays for all hundred on every turn after.
+   */
+  for (let i = 0; i < oldestKept; i++) {
+    if (messages[i].role === "assistant" && messages[i].content.length >= 0) texts.add(i);
+  }
+  return { results, superseded, argIds, texts };
 }
 
 /**
@@ -200,13 +238,20 @@ export function elideOldToolResults(
   opts: { budget?: number; minChars?: number; distinctBudget?: number } = {},
 ): Message[] {
   const min = opts.minChars ?? ELIDE_MIN_CHARS;
-  const { results, superseded } = planElision(
+  const { results, superseded, texts } = planElision(
     messages, opts.budget ?? RECENT_RESULT_BUDGET, opts.distinctBudget ?? DISTINCT_RESULT_BUDGET);
   let changed = false;
   const out = messages.map((m, i) => {
-    if (!results.has(i) || m.content.length < min) return m;
-    changed = true;
-    return { ...m, content: (superseded.has(i) ? supersededStub : stub)(m.content.length) };
+    if (m.content.length < min) return m;
+    if (results.has(i)) {
+      changed = true;
+      return { ...m, content: (superseded.has(i) ? supersededStub : stub)(m.content.length) };
+    }
+    if (texts.has(i)) {
+      changed = true;
+      return { ...m, content: textStub(m.content.length) };
+    }
+    return m;
   });
   return changed ? out : messages;
 }
@@ -271,10 +316,19 @@ export function elideInPlace(
    * arguments and came back as "written" seven times over, so by a result-only measure nothing was ever old
    * enough to elide at all.
    */
-  const { results: oldIdx, superseded, argIds: oldIds } = planElision(
+  const { results: oldIdx, superseded, argIds: oldIds, texts } = planElision(
     messages, opts.budget ?? RECENT_RESULT_BUDGET, opts.distinctBudget ?? DISTINCT_RESULT_BUDGET);
 
   let freed = 0;
+  // The assistant's own prose from exchanges that have scrolled out — the one thing nothing else bounded.
+  for (const i of texts) {
+    const m = messages[i];
+    if (m.content.length < min) continue;
+    const text = textStub(m.content.length);
+    freed += m.content.length - text.length;
+    messages[i] = { ...m, content: text };
+  }
+
   for (const i of oldIdx) {
     const m = messages[i];
     if (m.content.length < min) continue;
