@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildTeamRegistry, buildCouncilRegistry, runTeam, runCouncil, runJudge, runReviewLoop, runCodeReview,
-  REVIEW_MAX_TURNS,
+  REVIEW_MAX_TURNS, changedLines, lensesFor, CORE_CODE_LENSES, SMALL_CHANGE_LINES,
   type ReviewDeps,
 } from "../../src/engine/review.js";
 import type { ReviewerConfig, RoleConfig } from "../../src/config/config.js";
@@ -13,6 +13,7 @@ import { SkillRegistry } from "../../src/skills/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { Provider } from "../../src/core/types.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
+import { CODE_TEAM } from "../../src/prompts.js";
 import type { MemoryEntry } from "../../src/engine/memory-retrieval.js";
 import type { MemoryEvent } from "../../src/engine/memory-inject.js";
 
@@ -1161,5 +1162,50 @@ describe("the code lenses are handed the change", () => {
     await runTeam({ ...rdeps(spy), baseRef: "HEAD~1" }, "spec", dir, "spec.md");
     const all = rec.map((r) => r.messages.map((m) => m.content).join("\n")).join("\n");
     expect(all).not.toMatch(/diff of this task's changes/);
+  });
+});
+
+/**
+ * Every task paid the same review, whatever it contained.
+ *
+ * One small app's task list included "Install all exact dependencies", "Create package.json scripts" and
+ * "Add Material M3 theme to angular.json" — three-line edits, each convening fifteen reviewers. The per-task
+ * overhead is fixed and the task count is the multiplier.
+ */
+describe("the review is scaled to the change", () => {
+  const diff = (added: number, removed = 0): string =>
+    ["--- a/src/x.ts", "+++ b/src/x.ts", "@@ -1,1 +1,1 @@",
+      ...Array.from({ length: added }, (_, i) => `+ line ${i}`),
+      ...Array.from({ length: removed }, (_, i) => `- old ${i}`)].join("\n");
+
+  it("counts added and removed lines, not the file headers", () => {
+    expect(changedLines(diff(3, 2))).toBe(5);
+    expect(changedLines("")).toBe(0);
+  });
+
+  it("convenes only the core lenses for a small change", () => {
+    const chosen = lensesFor(CODE_TEAM, diff(5));
+    expect(chosen.length).toBe(CORE_CODE_LENSES.length);
+    expect(chosen.every((c) => CORE_CODE_LENSES.includes(c.name))).toBe(true);
+  });
+
+  it("convenes the whole team once the change is big enough to hide something", () => {
+    expect(lensesFor(CODE_TEAM, diff(SMALL_CHANGE_LINES + 1))).toHaveLength(CODE_TEAM.length);
+  });
+
+  /** The four it always runs must actually exist in the shipped team, or the scaling silently does nothing. */
+  it("names lenses the shipped team really has", () => {
+    for (const n of CORE_CODE_LENSES) expect(CODE_TEAM.map((c) => c.name)).toContain(n);
+  });
+
+  /** An unreviewed task is a far worse outcome than an over-reviewed one. */
+  it("falls back to the whole team when the size is unknown", () => {
+    expect(lensesFor(CODE_TEAM, "")).toHaveLength(CODE_TEAM.length);
+    expect(lensesFor(CODE_TEAM, "   ")).toHaveLength(CODE_TEAM.length);
+  });
+
+  it("falls back to the whole team when it has been customised past the core names", () => {
+    const custom: ReviewerConfig[] = [{ name: "my-lens", perspective: "p", models: ["m"] }];
+    expect(lensesFor(custom, diff(2))).toEqual(custom);
   });
 });

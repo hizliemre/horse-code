@@ -753,6 +753,49 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
 }
 
 /**
+ * The lenses that run on EVERY change, however small.
+ *
+ * They answer the four questions a change cannot be waved through without: is it right, is it what was
+ * asked for, is it tested, is it safe. The other eleven are quality dimensions — performance, observability,
+ * accessibility, API surface — and a three-line edit to a config file does not have room to get them wrong.
+ */
+export const CORE_CODE_LENSES = [
+  "code-correctness", "code-plan-conformance", "code-tests", "code-security",
+];
+
+/**
+ * Below this many changed lines a task gets the core lenses only.
+ *
+ * The task list for one small app included "Install all exact dependencies", "Create package.json scripts"
+ * and "Add Material M3 theme to angular.json" — three-line edits, each convening fifteen reviewers and then
+ * an acceptance gate. The per-task overhead is fixed and the task count is the multiplier; this makes the
+ * overhead follow the size of what is actually being reviewed.
+ */
+export const SMALL_CHANGE_LINES = 40;
+
+/** How many lines a diff adds or removes — the size a review should be scaled to. */
+export function changedLines(diff: string): number {
+  let n = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue; // file headers, not content
+    if (line.startsWith("+") || line.startsWith("-")) n++;
+  }
+  return n;
+}
+
+/**
+ * The lenses to convene for a change of this size.
+ *
+ * Falls back to the whole team whenever the size is unknown (no diff) or the core names are not present in a
+ * customised team — an unreviewed task is a far worse outcome than an over-reviewed one.
+ */
+export function lensesFor(team: ReviewerConfig[], diff: string): ReviewerConfig[] {
+  if (!diff.trim() || changedLines(diff) > SMALL_CHANGE_LINES) return team;
+  const core = team.filter((c) => CORE_CODE_LENSES.includes(c.name));
+  return core.length ? core : team;
+}
+
+/**
  * CODE-stage review: runs the code lens team on one task's implementation, then the same
  * team → council → judge escalation as the doc stages — but SINGLE-SHOT (no revise loop here: the task cycle's
  * escalation ladder owns retries). Returns the task-cycle Verdict, with the blocking findings as notes.
@@ -762,8 +805,14 @@ export async function runCodeReview(
   emit: (ev: ProgressEvent) => void = () => {},
   attempt = 0, // how many times this task has already been reviewed+revised → drives the tiered bar
 ): Promise<Verdict> {
-  emit({ kind: "note", text: `🔍 **Reviewing the code** for "${taskTitle}" — the team (${deps.teams.code.length}) is discussing it…` });
-  const assessments = await runTeam(deps, "code", workdir, taskTitle, request, emit);
+  // Scaled to the change: the review a three-line config edit needs is not the review a new module needs.
+  const diff = deps.baseRef ? await taskDiff(workdir, deps.baseRef) : "";
+  const team = lensesFor(deps.teams.code, diff);
+  const scaled = team.length < deps.teams.code.length;
+  emit({ kind: "note", text:
+    `🔍 **Reviewing the code** for "${taskTitle}" — ${team.length} lens(es)` +
+    `${scaled ? ` (${changedLines(diff)} changed lines — the core set)` : ""} discussing it…` });
+  const assessments = await runTeam({ ...deps, teams: { ...deps.teams, code: team } }, "code", workdir, taskTitle, request, emit);
   if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, "code") });
 
   const approve = assessments.filter((a) => a.recommendation === "approve").length;
