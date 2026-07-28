@@ -10,6 +10,7 @@ import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
 import { taskDiff, describeDiff } from "./task-diff.js";
+import { telemetry } from "../obs/telemetry.js";
 
 /** Which artifact is under review — each stage has its OWN finder lenses and its own framing. */
 export type ReviewStage = "spec" | "plan" | "code";
@@ -809,6 +810,13 @@ export async function runCodeReview(
   const diff = deps.baseRef ? await taskDiff(workdir, deps.baseRef) : "";
   const team = lensesFor(deps.teams.code, diff);
   const scaled = team.length < deps.teams.code.length;
+  telemetry().event("decision.review_scale", {
+    "hc.decision": "review_scale",
+    "hc.changed_lines": changedLines(diff),
+    "hc.lenses": team.length,
+    "hc.lenses.full": deps.teams.code.length,
+    "hc.scaled": scaled,
+  });
   emit({ kind: "note", text:
     `🔍 **Reviewing the code** for "${taskTitle}" — ${team.length} lens(es)` +
     `${scaled ? ` (${changedLines(diff)} changed lines — the core set)` : ""} discussing it…` });

@@ -1,6 +1,7 @@
 import type { AgentEvent, PermissionDescriptor, Tool, ToolCall, ToolResult } from "../core/types.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import { telemetry } from "../obs/telemetry.js";
 
 export interface ToolExecResult {
   id: string;
@@ -85,12 +86,23 @@ async function runTool(
   const onActivity = deps.onActivity
     ? (a: import("../core/types.js").ToolActivity): void => { reported = true; deps.onActivity?.(a); }
     : undefined;
-  const result = await tool.run(args, {
+  const subject = callSubject(args);
+  const run = (): Promise<import("../core/types.js").ToolResult> => tool.run(args, {
     cwd: deps.cwd, signal: deps.signal, onActivity, remember: deps.remember,
     proposeMemory: deps.proposeMemory, readFiles: deps.readFiles,
   });
+  // Every tool call, with what it was asked and what came back — the record that made "496 calls in two
+  // minutes, the same three files" visible in the first place, now available without reading a screenshot.
+  const tel = telemetry();
+  const result = await tel.span(`tool.${tool.name}`, { "hc.tool": tool.name, "hc.tool.subject": subject }, run);
+  tel.event("tool.result", {
+    "hc.tool": tool.name,
+    "hc.tool.subject": subject,
+    "hc.result_chars": (result.content ?? "").length,
+    "hc.status": result.isError ? "error" : "ok",
+  });
   if (!reported) {
-    const target = callSubject(args);
+    const target = subject;
     deps.onActivity?.({
       tool: tool.name, target, lines: 0,
       /**

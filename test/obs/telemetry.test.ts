@@ -1,0 +1,137 @@
+import { describe, it, expect } from "vitest";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry } from "../../src/obs/telemetry.js";
+import type { SpanRecord, EventRecord } from "../../src/obs/telemetry.js";
+import { MemorySink, FileSink } from "../../src/obs/sink.js";
+
+const spans = (s: MemorySink): SpanRecord[] => s.records.filter((r): r is SpanRecord => r.kind !== "event");
+const events = (s: MemorySink): EventRecord[] => s.records.filter((r): r is EventRecord => r.kind === "event");
+
+/**
+ * Every "why was that slow / why did that fail" question in this project was answered by reading a board file
+ * and counting outcomes — blind to how long one model call took, what a tool returned, or which deterministic
+ * branch was chosen. The shape here is OpenTelemetry's so the log can be read by tools built for it.
+ */
+describe("Telemetry", () => {
+  it("records a span with its duration and an ok status", async () => {
+    const sink = new MemorySink();
+    let t = 0;
+    const tel = new Telemetry(sink, () => t);
+    await tel.span("stage.implementation", { "hc.role": "coder" }, async () => { t += 4_000; });
+    expect(spans(sink)).toHaveLength(1);
+    expect(spans(sink)[0]).toMatchObject({
+      name: "stage.implementation", status: "ok", durationMs: 4_000,
+      attributes: { "hc.role": "coder" },
+    });
+  });
+
+  /** A stage that dies after twenty minutes is the most interesting row in the log. */
+  it("records a span that threw, with the reason, and re-throws", async () => {
+    const sink = new MemorySink();
+    const tel = new Telemetry(sink);
+    await expect(tel.span("stage.implementation", {}, async () => { throw new Error("past its budget"); }))
+      .rejects.toThrow("past its budget");
+    expect(spans(sink)[0].status).toBe("error");
+    expect(spans(sink)[0].error).toContain("past its budget");
+  });
+
+  /**
+   * The parent is found through async context, not through an argument — instrumenting four chokepoints has
+   * to yield a whole tree, or every new call site becomes a place to forget the plumbing.
+   */
+  it("nests a child span under whatever it ran inside", async () => {
+    const sink = new MemorySink();
+    const tel = new Telemetry(sink);
+    await tel.span("stage.code_review", {}, async () => {
+      await tel.span("tool.read_file", {}, async () => undefined);
+    });
+    const [child, parent] = spans(sink); // the child finishes first, so it is written first
+    expect(child.name).toBe("tool.read_file");
+    expect(child.parentSpanId).toBe(parent.spanId);
+    expect(child.traceId).toBe(parent.traceId);
+  });
+
+  it("starts a new trace for work that runs under nothing", async () => {
+    const sink = new MemorySink();
+    const tel = new Telemetry(sink);
+    await tel.span("a", {}, async () => undefined);
+    await tel.span("b", {}, async () => undefined);
+    const [a, b] = spans(sink);
+    expect(a.traceId).not.toBe(b.traceId);
+    expect(a.parentSpanId).toBeUndefined();
+  });
+
+  /** `hc.*` says WHOSE work this is and is true all the way down; a token count is true of one span only. */
+  it("passes hc.* attributes down to children and nothing else", async () => {
+    const sink = new MemorySink();
+    const tel = new Telemetry(sink);
+    await tel.span("stage.implementation", { "hc.task.id": "T032", "gen_ai.usage.input_tokens": 5 }, async () => {
+      await tel.span("tool.grep", {}, async () => undefined);
+    });
+    const child = spans(sink).find((s) => s.name === "tool.grep")!;
+    expect(child.attributes["hc.task.id"]).toBe("T032");
+    expect(child.attributes["gen_ai.usage.input_tokens"]).toBeUndefined();
+  });
+
+  it("records an event with the trace it happened in", async () => {
+    const sink = new MemorySink();
+    const tel = new Telemetry(sink);
+    await tel.span("stage.code_review", { "hc.task.id": "T1" }, async () => {
+      tel.event("decision.review_scale", { "hc.lenses": 4 });
+    });
+    const e = events(sink)[0];
+    expect(e.attributes).toMatchObject({ "hc.lenses": 4, "hc.task.id": "T1" });
+    expect(e.traceId).toBe(spans(sink)[0].traceId);
+  });
+
+  it("drops attributes that were never set, rather than writing nulls", async () => {
+    const sink = new MemorySink();
+    const tel = new Telemetry(sink);
+    tel.event("gen_ai.chat", { "gen_ai.usage.input_tokens": undefined, "gen_ai.request.model": "m" });
+    expect(Object.keys(events(sink)[0].attributes)).toEqual(["gen_ai.request.model"]);
+  });
+
+  /** Off unless something deliberately turns it on: a test or a library consumer records nothing. */
+  it("is silent by default", async () => {
+    expect(telemetry()).toBe(NO_TELEMETRY);
+    await expect(NO_TELEMETRY.span("x", {}, async () => 7)).resolves.toBe(7);
+  });
+
+  it("can be turned on and off for the process", async () => {
+    const sink = new MemorySink();
+    setTelemetry(new Telemetry(sink));
+    try {
+      telemetry().event("x");
+      expect(sink.records).toHaveLength(1);
+    } finally {
+      setTelemetry(NO_TELEMETRY);
+    }
+  });
+});
+
+describe("FileSink", () => {
+  it("writes one JSON object per line, which is what Loki and jq read unchanged", async () => {
+    const home = await mkdtemp(join(tmpdir(), "hc-tel-"));
+    try {
+      const sink = new FileSink(home, "run-1");
+      const tel = new Telemetry(sink);
+      await tel.span("stage.implementation", { "hc.task.id": "T1" }, async () => undefined);
+      tel.event("decision.route", { "hc.role": "coder" });
+      await sink.flush();
+      const lines = (await readFile(sink.path, "utf8")).trim().split("\n");
+      expect(lines).toHaveLength(2);
+      const parsed = lines.map((l) => JSON.parse(l) as { name: string });
+      expect(parsed.map((p) => p.name)).toEqual(["stage.implementation", "decision.route"]);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  });
+
+  /** An observer that can fail the thing it observes is worse than no observer. */
+  it("never raises when the log cannot be opened", async () => {
+    const sink = new FileSink("/proc/nonexistent-and-unwritable", "run-1");
+    const tel = new Telemetry(sink);
+    await expect(tel.span("x", {}, async () => 1)).resolves.toBe(1);
+    await expect(sink.flush()).resolves.toBeUndefined();
+  });
+});

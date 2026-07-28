@@ -4,6 +4,7 @@ import { runCycleWithRole } from "./task-cycle.js";
 import { runEscalationCouncil } from "./council.js";
 import type { Verdict, RunnableRole } from "./task-types.js";
 import type { ReviewDeps } from "./review.js";
+import { telemetry } from "../obs/telemetry.js";
 
 export type HumanDecision =
   | { action: "accept" }
@@ -72,6 +73,9 @@ export async function runTaskWithEscalation(
   for (;;) {
     const attempts = board.get(taskId)!.attempts;
     const tier = tierOf(attempts, deps.rounds);
+    telemetry().event("decision.tier", {
+      "hc.decision": "tier", "hc.task.id": taskId, "hc.tier": tier, "hc.attempt": attempts, "hc.family": family,
+    });
 
     if (tier < 2) {
       const role: RunnableRole =

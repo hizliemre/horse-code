@@ -12,6 +12,7 @@ import { loadGraphSync } from "./project-graph.js";
 import { applySkills } from "../skills/apply.js";
 import { contextTools, projectToolsNote } from "./task-types.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
+import { telemetry } from "../obs/telemetry.js";
 
 // A real coding task (scaffold a project, write code + tests, iterate until green) legitimately needs far
 // more turns than the 50-turn default meant for short role agents. Give the implementer a generous budget so
@@ -132,9 +133,17 @@ export async function runImplementer(
      * still held at 26 minutes on a 20-minute budget — the abort had fired, the loop had not come back round.
      * The attempt now ends when the budget does; the loop unwinds behind it on the same signal.
      */
-    await (deps.timings
-      ? deps.timings.time("implementation", () => withDeadline(runToCompletion(opts), budget, overran))
-      : withDeadline(runToCompletion(opts), budget, overran));
+    const attempt = (): Promise<unknown> => withDeadline(runToCompletion(opts), budget, overran);
+    const timed = (): Promise<unknown> => deps.timings ? deps.timings.time("implementation", attempt) : attempt();
+    // Everything this implementer does — its model calls, its tool calls — hangs off this span.
+    await telemetry().span("stage.implementation", {
+      "hc.stage": "implementation",
+      "hc.role": role,
+      "hc.task.id": task.id,
+      "hc.task.title": task.title.slice(0, 120),
+      "hc.model": chain[0],
+      "hc.attempt": task.attempts,
+    }, timed);
   } catch (e) {
     if (deps.signal.aborted || !budget.aborted) throw e; // a real cancel, or a real error → unchanged
     throw new Error(overran);

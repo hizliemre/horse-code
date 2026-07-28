@@ -9,6 +9,7 @@ import { splitFileConflicts, waveStats, describeWaves, normalizePath, type FileC
 import { describeTimings } from "./timings.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { buildSkillTool } from "../skills/apply.js";
+import { telemetry } from "../obs/telemetry.js";
 
 export interface WaveEngineDeps extends EscalationDeps {
   manager: WorktreeManager;
@@ -129,6 +130,14 @@ export async function runReady(
       const files = filesOf(id);
       if (files.some((f) => busy.has(f))) continue; // a running task owns that file → take it on the next pass
       pending.delete(id);
+      telemetry().event("decision.schedule", {
+        "hc.decision": "schedule",
+        "hc.task.id": id,
+        "hc.slot": free[free.length - 1] ?? minted,
+        "hc.running": running.size + 1,
+        "hc.limit": limit,
+        "hc.pending": pending.size,
+      });
       for (const f of files) busy.add(f);
       const slot = free.pop() ?? minted++;
       running.set(slot, (async () => {
@@ -270,6 +279,12 @@ export async function runWaves(
   // Where the time went, not just what happened: the two answer different questions and only one of them
   // says what to fix.
   if (deps.timings && !deps.timings.empty) deps.note?.(describeTimings(deps.timings));
+  const shape = waveStats(board, waves, clashes);
+  telemetry().event("run.summary", {
+    "hc.tasks": shape.tasks, "hc.layers": shape.waves, "hc.widest": shape.widest,
+    "hc.clashes": shape.clashes, "hc.conflicts": shape.conflicts,
+    "hc.failed": shape.failed, "hc.skipped": shape.skipped, "hc.attempts": shape.attempts,
+  });
 
   /**
    * Only the PULL REQUEST is opened here. The merge is not.

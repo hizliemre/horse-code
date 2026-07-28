@@ -6,6 +6,7 @@ import { ToolRegistry } from "../tools/registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 import type { TaskCycleDeps, ImplementerRole } from "./task-types.js";
 import { routeByEvidence } from "./route-role.js";
+import { telemetry } from "../obs/telemetry.js";
 
 const RouteSchema = z.object({ role: z.enum(["coder", "designer"]) });
 
@@ -16,6 +17,13 @@ const RouteSchema = z.object({ role: z.enum(["coder", "designer"]) });
  */
 export async function routeTask(deps: TaskCycleDeps, task: Card): Promise<ImplementerRole> {
   const evidence = routeByEvidence(task);
+  telemetry().event("decision.route", {
+    "hc.decision": "route",
+    "hc.task.id": task.id,
+    "hc.role": evidence.role,
+    "hc.route.why": evidence.why,
+    "hc.route.by": evidence.role ? "evidence" : "model",
+  });
   if (evidence.role) return evidence.role;
   try {
     const resolved = deps.roleRegistry.resolve("router");

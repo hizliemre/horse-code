@@ -27,6 +27,9 @@ import type { JobResult, JobDeps } from "./engine/job.js";
 import type { Delivery } from "./engine/wave-engine.js";
 import { runInit } from "./init.js";
 import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
+import { telemetryProvider } from "./providers/telemetry.js";
+import { Telemetry, setTelemetry, telemetry } from "./obs/telemetry.js";
+import { FileSink } from "./obs/sink.js";
 
 export interface CliArgs {
   prompt: string;
@@ -139,8 +142,27 @@ export async function main(argv: string[]): Promise<void> {
     env: process.env,
     readFile: (p) => { try { return readFileSync(p, "utf8"); } catch { return undefined; } },
   });
-  const provider = new OmniRouteProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey });
   const home = process.env.HOME ?? "";
+  /**
+   * Telemetry is wired at the composition root, before anything can make a call.
+   *
+   * The sink is per RUN, so one file is one session and `jq`/Loki can select a run without a filter. The
+   * wrapper goes on the provider for the same reason the meter and the firewall do: every model call in the
+   * system passes through it, so nothing can be added later that forgets to be observed.
+   */
+  const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+  const sink = config.telemetry ? new FileSink(home, runId) : undefined;
+  if (sink) {
+    setTelemetry(new Telemetry(sink));
+    // Flushed on the way out, however the process ends — an unwritten tail is the part you needed.
+    const flush = (): void => { void sink.flush(); };
+    process.once("exit", flush);
+    process.once("SIGTERM", flush);
+  }
+  // Where the log is has to be discoverable, or a log nobody can find is a log nobody reads.
+  const telemetryNote = sink ? `📈 Telemetry → \`${sink.path}\` (one JSON object per line)` : undefined;
+  const raw = new OmniRouteProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey });
+  const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();
   // Built-ins FIRST, the project's own second: the registry is keyed by name, so a project skill with the
   // same name deliberately replaces the shipped one.
@@ -337,6 +359,7 @@ export async function main(argv: string[]): Promise<void> {
         listModels,
         mcp: config.mcp,
         maxParallel: config.maxParallel,
+        ...(telemetryNote ? { startupNote: telemetryNote } : {}),
         refreshSources,
         sourcesInfo,
         probeModel,

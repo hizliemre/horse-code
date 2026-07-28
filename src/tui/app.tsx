@@ -72,6 +72,7 @@ export interface RunTuiReplOpts {
   migrate?: () => Promise<string>; // /migrate
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   maxParallel?: number; // configured task parallelism → /parallel shows and changes it
+  startupNote?: string; // one line shown once at start (e.g. where the telemetry log is)
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: () => Promise<string>; // /graph trace, after consent
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
@@ -484,6 +485,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       mcpHolder.bundle = b;
       const ok = b.status.filter((s) => s.ok);
       if (ok.length) controller.note(`MCP connected: ${ok.map((s) => `${s.name} (${s.toolCount} tools)`).join(", ")}`);
+      if (opts.startupNote) controller.note(opts.startupNote);
       for (const f of b.status.filter((s) => !s.ok)) controller.note(`MCP ${f.name} failed: ${f.error}`);
     }, (e) => controller.note(`MCP connect error: ${e instanceof Error ? e.message : String(e)}`));
   }

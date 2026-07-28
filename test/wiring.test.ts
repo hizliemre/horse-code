@@ -31,6 +31,7 @@ function baseConfig(over: Partial<ResolvedConfig> = {}): ResolvedConfig {
     modelSources: [],
     skillSources: [],
     maxParallel: DEFAULT_CONFIG.maxParallel,
+    telemetry: false,
     ...over,
   };
 }

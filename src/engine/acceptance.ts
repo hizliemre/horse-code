@@ -7,6 +7,7 @@ import type { ReviewDeps } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
 import { runProjectTests, describeTestRun } from "./test-runner.js";
 import { taskDiff, describeDiff } from "./task-diff.js";
+import { telemetry } from "../obs/telemetry.js";
 
 export interface CriterionCheck { criterion: string; met: boolean; evidence: string }
 export interface AcceptanceResult {
@@ -54,7 +55,15 @@ export async function verifyAcceptance(
    * "it promised nothing" is no reason to let a red suite through.
    */
   // Split out of the gate: a suite that takes minutes and a verifier that takes minutes are different problems.
-  const tests = await (deps.timings ? deps.timings.time("test suite", () => runProjectTests(cwd)) : runProjectTests(cwd));
+  const suite = (): Promise<import("./test-runner.js").TestRun> =>
+    deps.timings ? deps.timings.time("test suite", () => runProjectTests(cwd)) : runProjectTests(cwd);
+  const tests = await telemetry().span("stage.test_suite", { "hc.stage": "test suite" }, suite);
+  telemetry().event("tests.run", {
+    "hc.tests.ran": !tests.skipped,
+    "hc.tests.passed": tests.passed,
+    "hc.tests.timed_out": tests.timedOut === true,
+    "hc.tests.command": tests.command,
+  });
   if (!tests.skipped) {
     emit({ kind: "note", text: tests.passed
       ? `✅ **Tests passed** for "${card.title}" — \`${tests.command}\``

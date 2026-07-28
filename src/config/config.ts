@@ -57,6 +57,14 @@ export interface ResolvedConfig {
    * no default can know that.
    */
   maxParallel: number;
+  /**
+   * Whether every stage, model call and tool call is recorded to a local JSONL log.
+   *
+   * On by default: it is a few hundred kilobytes an hour, written fire-and-forget, and the alternative is
+   * answering "why was that slow" by reading a board file and counting outcomes — which is how every such
+   * question in this project was answered before it existed.
+   */
+  telemetry: boolean;
 }
 
 /**
@@ -81,6 +89,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   modelSources: [],
   skillSources: [],
   maxParallel: 8,
+  telemetry: true,
 };
 
 const reviewerSchema = z.object({ name: z.string(), perspective: z.string(), models: z.array(z.string()) });
@@ -116,6 +125,7 @@ const fileSchema = z
     modelSources: z.array(z.string()).optional(),
     // Bounded: below 1 nothing runs; above 32 the git merge lock, not the models, becomes the limit.
     maxParallel: z.number().int().min(1).max(32).optional(),
+    telemetry: z.boolean().optional(),
     skillSources: z.array(z.object({
       name: z.string(),
       repo: z.string(),
@@ -180,6 +190,7 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // maxParallel: most specific wins — a heavy project may want a different number from the machine default.
   merged.maxParallel = projectSafe.maxParallel ?? global.maxParallel ?? DEFAULT_CONFIG.maxParallel;
+  merged.telemetry = projectSafe.telemetry ?? global.telemetry ?? DEFAULT_CONFIG.telemetry;
 
   // skillSources MERGE by name: a machine-wide skill set stays available in every project, and a project may
   // add its own or pin a different ref for one of them.
