@@ -657,30 +657,38 @@ describe("runCodeReview tiered bar (attempt-driven)", () => {
     architectural: '{"findings":[{"severity":"low","note":"naming"}],"recommendation":"revise"}',
   };
 
-  it("first attempt: a medium finding still fails the task (thorough first review)", async () => {
-    const p = reviewProvider({ assessments: mediumOnlyCode, councilVotes: allRevise });
-    const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined, () => {}, 0);
-    expect(v.verdict).toBe("fail");
-    expect(v.notes.some((n) => /medium.*tighten validation/i.test(n))).toBe(true);
+  /**
+   * The council used to be asked whether to defer, and over one measured run it kept answering "revise":
+   * T078 came back twice in a row on medium-only findings, T031 after it had already fixed its one
+   * critical. Worse, the rework a medium triggered introduced REAL defects — T050 and T076 went back for
+   * mediums and returned with four and three FRESH criticals. Every rework round is another chance to break
+   * what already worked.
+   */
+  it("passes on medium-only findings, on the first attempt and every later one", async () => {
+    for (const attempt of [0, 1, 3]) {
+      const p = reviewProvider({ assessments: mediumOnlyCode, councilVotes: allRevise }); // council would say revise
+      const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined, () => {}, attempt);
+      expect(v.verdict).toBe("pass");
+    }
   });
 
-  it("a later attempt: the COUNCIL is asked whether to defer the leftover mediums (pass → no re-implementation)", async () => {
-    const p = reviewProvider({ assessments: mediumOnlyCode }); // council defaults to "pass" → defer
+  /** Deferring is not dropping: the notes ride the verdict to the board and on to the revision pass. */
+  it("carries the mediums forward as deferred notes", async () => {
+    const p = reviewProvider({ assessments: mediumOnlyCode });
     const notes: string[] = [];
     const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined,
       (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); }, 1);
-    expect(v.verdict).toBe("pass");
-    expect(notes.join("\n")).toMatch(/asking the \*\*council\*\* whether to defer/i);
-    expect(notes.join("\n")).toMatch(/voted to defer/i);
-    // Not dropped: they ride the Verdict to the board, and from there to the PR revision pass.
     expect(v.deferred).toEqual(expect.arrayContaining([expect.stringContaining("[code][medium] security: tighten validation")]));
+    expect(notes.join("\n")).toMatch(/deferred to the revision pass/i);
   });
 
-  it("a later attempt: the council can still say a leftover medium must be fixed now → task fails", async () => {
-    const p = reviewProvider({ assessments: mediumOnlyCode, councilVotes: allRevise });
-    const v = await runCodeReview(rdeps(p), dir, "add endpoint", undefined, () => {}, 1);
-    expect(v.verdict).toBe("fail");
-    expect(v.notes.some((n) => /tighten validation/.test(n))).toBe(true);
+  /** And it costs nothing: a question whose answer is always "defer" is a council call not worth paying for. */
+  it("does not convene the council for medium-only findings", async () => {
+    const p = reviewProvider({ assessments: mediumOnlyCode });
+    const notes: string[] = [];
+    await runCodeReview(rdeps(p), dir, "add endpoint", undefined,
+      (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); }, 1);
+    expect(notes.join("\n")).not.toMatch(/council/i);
   });
 
   it("a later attempt with a CRITICAL still goes to the council and can fail", async () => {
@@ -1263,13 +1271,13 @@ describe("a medium finding does not cost a re-implementation", () => {
     reviewProvider({ assessments: { security: JSON.stringify({
       recommendation: "revise", findings: [{ severity, note: `a ${severity} thing` }] }) } });
 
-  it("asks the council to defer mediums on the FIRST attempt, as it always did on later ones", async () => {
+  it("defers mediums on the FIRST attempt, as on every later one", async () => {
     const notes: string[] = [];
     const v = await runCodeReview(rdeps(withFindings("medium")), dir, "add the store", undefined,
       (ev) => { if (ev.kind === "note") notes.push(ev.text); }, 0);
     expect(v.verdict).toBe("pass");
     expect(v.deferred?.length).toBeGreaterThan(0); // carried to the revision pass, not dropped
-    expect(notes.join("\n")).toMatch(/whether to defer/);
+    expect(notes.join("\n")).toMatch(/deferred to the revision pass/);
   });
 
   /**

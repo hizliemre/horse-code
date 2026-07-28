@@ -895,24 +895,22 @@ export async function runCodeReview(
         emit({ kind: "note", text: `✅ **Team** — nothing to fix → the code passed.` });
         return { verdict: "pass", notes: [] };
       }
-    } else {
-    // Same judgment call as the doc stages: whether a leftover medium is really blocking is the COUNCIL's call,
-    // not a hard rule. A "pass" defers them to the PR revision pass; a "revise" sends the task back once more.
-    emit({ kind: "note", text: `👥 **Team** — no criticals, ${deferred.length} medium/low finding(s) → asking the **council** whether to defer them.` });
-    const dVotes = await runCouncil(deps, "code", workdir, taskTitle, assessments, request, emit, "deferral");
-    const dTally = tallyCouncil(dVotes);
-    if (dTally === "pass") {
-      emit({ kind: "note", text: `✅ **Council** voted to defer → the code passed; ${deferred.length} note(s) go to the PR revision pass.` });
-      return { verdict: "pass", notes: [], deferred };
     }
-    if (dTally === "revise") {
-      emit({ kind: "note", text: `🔄 **Council** found a non-critical finding worth fixing now → sending the code back.` });
-      return { verdict: "fail", notes: deferred };
-    }
-    const dJudge = await runJudge(deps, "code", workdir, taskTitle, assessments, dVotes, request, emit);
-    if (dJudge.decision === "pass") return { verdict: "pass", notes: [], deferred };
-    return { verdict: "fail", notes: dJudge.feedback.length ? dJudge.feedback : deferred };
-    }
+    /**
+     * No criticals → the task PASSES and its medium/low notes are deferred. The council is not asked.
+     *
+     * It used to be, and measured over one run it kept answering "revise": tasks came back on medium-only
+     * findings again and again — T078 twice in a row, T031 after it had already fixed its one critical.
+     * Worse, the rework a medium triggered introduced REAL defects: T050 and T076 each went back for
+     * mediums and returned with four and three FRESH criticals. Every rework round is another chance to
+     * break something that already worked, so buying a nitpick with one is a bad trade twice over.
+     *
+     * Deferring is not dropping. The notes ride the board to the end of the run and the revision pass
+     * adjudicates them on the MERGED result — one pass over everything, and one that cannot regress a task
+     * which has already landed.
+     */
+    emit({ kind: "note", text: `✅ **Team** — no critical findings; ${deferred.length} medium/low note(s) deferred to the revision pass.` });
+    return { verdict: "pass", notes: [], deferred };
   }
 
   const reason = crit || med ? `surfaced ${crit} critical / ${med} medium finding(s)` : `is split (${approve}/${assessments.length} approve)`;
