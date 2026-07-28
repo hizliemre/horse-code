@@ -10,7 +10,7 @@ import { adjudicateSkills } from "../skills/adjudicate.js";
 import { placedSkills } from "../prompts.js";
 import { loadGraphSync } from "./project-graph.js";
 import { applySkills } from "../skills/apply.js";
-import { contextTools, projectToolsNote } from "./task-types.js";
+import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 import { telemetry } from "../obs/telemetry.js";
 
@@ -91,7 +91,7 @@ export async function runImplementer(
     ? applySkills(resolved.systemPrompt, kept.map((m) => m.name), deps.skillRegistry)
     : resolved.systemPrompt;
   // Registering a tool puts it in the list; it does not make the agent reach for it.
-  const systemPrompt = withSkills + projectToolsNote(tools.list(), !!loadGraphSync(cwd));
+  const systemPrompt = withSkills + projectToolsNote(tools.list(), !!loadGraphSync(cwd)) + BATCH_TOOLS_NOTE;
 
   // A timeout here is NOT a cancellation: the job is fine, this one attempt ran too long. The two are
   // distinguished below so a genuine Ctrl-C still propagates as a cancellation.

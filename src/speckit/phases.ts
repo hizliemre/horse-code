@@ -1,7 +1,7 @@
 import { relative } from "node:path";
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
-import { contextTools, projectToolsNote } from "../engine/task-types.js";
+import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "../engine/task-types.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { applySkills } from "../skills/apply.js";
 import { placedSkills } from "../prompts.js";
@@ -65,7 +65,7 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     onFallback,
     systemPrompt: (routed.length
       ? applySkills(`${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`, routed.map((m) => m.name), p.deps.skillRegistry)
-      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)),
+      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)) + BATCH_TOOLS_NOTE,
     tools,
     maxTurns: PHASE_MAX_TURNS,
     // Project memory (conventions/decisions/lessons) reaches the authoring roles too, not just the coach.

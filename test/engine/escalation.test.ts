@@ -104,9 +104,9 @@ describe("runTaskWithEscalation", () => {
     expect(board.get("t1")!.attempts).toBe(2);
     // each tier used the right role
     const sys = p.requests.map((r) => r.messages[0].content);
-    expect(sys).toContain("P-coder");
-    expect(sys).toContain("P-senior-coder");
-    expect(sys).toContain("P-architect");
+    expect(sys.some((x) => x.includes("P-coder"))).toBe(true);
+    expect(sys.some((x) => x.includes("P-senior-coder"))).toBe(true);
+    expect(sys.some((x) => x.includes("P-architect"))).toBe(true);
   });
 
   it("designer family (N=1): designer fail → senior-designer takes over", async () => {
@@ -119,8 +119,8 @@ describe("runTaskWithEscalation", () => {
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.column).toBe("DONE");
     const sys = p.requests.map((r) => r.messages[0].content);
-    expect(sys).toContain("P-designer");
-    expect(sys).toContain("P-senior-designer");
+    expect(sys.some((x) => x.includes("P-designer"))).toBe(true);
+    expect(sys.some((x) => x.includes("P-senior-designer"))).toBe(true);
   });
 
   it("an attempt that THROWS (turn-count ceiling) escalates to the next tier — does NOT kill the task", async () => {
@@ -230,8 +230,8 @@ describe("a no-op attempt tries the role's next model before spending a stronger
     board.incrementAttempts("t1"); // mid-tier already (rounds=3 → tier 0 spans 0..2)
     await runTaskWithEscalation(edeps(p, { rounds: 3 }), board, "t1", dir);
     const roles = p.requests.map((r) => r.messages[0].content);
-    expect(roles).toContain("P-coder");
-    expect(roles).not.toContain("P-senior-coder"); // the tier was not spent
+    expect(roles.some((x) => x.includes("P-coder"))).toBe(true);
+    expect(roles.some((x) => x.includes("P-senior-coder"))).toBe(false); // the tier was not spent
   });
 
   it("escalates once the tier's second model has also written nothing", async () => {

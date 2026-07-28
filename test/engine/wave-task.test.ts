@@ -190,8 +190,8 @@ describe("runWaveTask", () => {
       const res = await runWaveTask(wdeps(p, stub, { rounds: 0 }), {} as WorktreeSession, board, "t1");
       expect(res.status).toBe("merged");
       const sys = p.requests.map((r) => r.messages[0].content);
-      expect(sys).toContain("P-coder");
-      expect(sys).not.toContain("P-architect");
+      expect(sys.some((x) => x.includes("P-coder"))).toBe(true);
+      expect(sys.some((x) => x.includes("P-architect"))).toBe(false);
     } finally {
       await rm(wt, { recursive: true, force: true });
     }

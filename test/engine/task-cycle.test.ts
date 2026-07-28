@@ -113,7 +113,7 @@ describe("runTaskCycle", () => {
     expect(v.verdict).toBe("pass");
     expect(board.get("t1")!.column).toBe("DONE");
     // implementer ran with the senior-coder system prompt
-    expect(p.requests[0].messages[0].content).toBe("senior-coder");
+    expect(p.requests[0].messages[0].content).toContain("senior-coder");
   });
 });
 

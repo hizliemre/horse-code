@@ -71,7 +71,7 @@ describe("runEscalationCouncil", () => {
     expect(actions).toContain("council:implemented");
     expect(actions).toContain("reviewed:pass");
     // senior implement (requests[1]) saw the architect's plan (reviewNotes) in its message
-    expect(p.requests[1].messages[0].content).toBe("P-senior-coder");
+    expect(p.requests[1].messages[0].content).toContain("P-senior-coder");
     expect(p.requests[1].messages.some((m) => typeof m.content === "string" && m.content.includes("add tests"))).toBe(true);
     expect(await readFile(join(dir, "out.txt"), "utf8")).toBe("code");
   });
@@ -98,6 +98,6 @@ describe("runEscalationCouncil", () => {
     ]);
     const board = boardWithTask();
     await runEscalationCouncil(deps(p), board, "t1", dir, "designer");
-    expect(p.requests[1].messages[0].content).toBe("P-senior-designer");
+    expect(p.requests[1].messages[0].content).toContain("P-senior-designer");
   });
 });

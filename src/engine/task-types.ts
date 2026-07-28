@@ -134,6 +134,21 @@ export const MAX_TOOL_NOTE_CHARS = 900;
  * that matters (prefer the tool to recollection). The tools' own descriptions carry the detail, and repeating
  * them here would pay for the same text twice in the same prompt.
  */
+/**
+ * Independent lookups belong in ONE turn.
+ *
+ * Measured on a live run: of 527 agent turns, 419 requested exactly one tool. Each turn is a full round-trip
+ * that re-sends the entire conversation — six seconds and twenty-eight thousand prompt tokens on that run —
+ * so reading ten files one per turn cost ten times what one ten-call turn would have. The models are capable
+ * of batching (56 turns asked for two, 16 asked for five); nothing had ever told them it mattered.
+ */
+export const BATCH_TOOLS_NOTE =
+  "\n\n# Asking for several things at once\n" +
+  "When lookups do not depend on each other — three files to read, a read and a grep, several greps — ask " +
+  "for them ALL IN ONE TURN as multiple tool calls. Every turn re-sends this whole conversation, so ten " +
+  "single-call turns cost ten times what one ten-call turn costs, and you wait for the round-trip each time. " +
+  "Only take them one at a time when a call's arguments genuinely depend on what a previous call returned.";
+
 export function projectToolsNote(tools: import("../core/types.js").Tool[], hasGraph = false): string {
   const sections: string[] = [];
 

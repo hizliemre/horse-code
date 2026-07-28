@@ -13,7 +13,7 @@ import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { placedSkills } from "../prompts.js";
 import { loadGraphSync } from "./project-graph.js";
-import { contextTools, projectToolsNote } from "./task-types.js";
+import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import { taskDiff, describeDiff } from "./task-diff.js";
 
@@ -75,7 +75,7 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
     ...resolved,
     systemPrompt: (routed.length
       ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
-      : resolved.systemPrompt) + projectToolsNote(reviewerTools.list(), !!loadGraphSync(cwd)),
+      : resolved.systemPrompt) + projectToolsNote(reviewerTools.list(), !!loadGraphSync(cwd)) + BATCH_TOOLS_NOTE,
     tools: reviewerTools,
     proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "code-reviewer") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],

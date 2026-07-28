@@ -11,6 +11,7 @@ import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
 import { taskDiff, describeDiff } from "./task-diff.js";
 import { telemetry } from "../obs/telemetry.js";
+import { BATCH_TOOLS_NOTE } from "./task-types.js";
 
 /** Which artifact is under review — each stage has its OWN finder lenses and its own framing. */
 export type ReviewStage = "spec" | "plan" | "code";
@@ -320,6 +321,8 @@ export async function runTeam(
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
+          // Fifteen lenses reading the same change, one file per turn each, is the same waste multiplied.
+          systemPrompt: resolved.systemPrompt + BATCH_TOOLS_NOTE,
           tools: readOnlyRegistry(deps, { propose: true }),
           // A slide down the chain is a visible event: rename the row, then let the registry's own note run.
           onFallback: (from, to, why) => { serving = to; emit({ kind: "agent-model", id, model: to }); resolved.onFallback?.(from, to, why); },
@@ -432,6 +435,8 @@ export async function runCouncil(
         const signal = reviewerSignal(deps);
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
+          // Fifteen lenses reading the same change, one file per turn each, is the same waste multiplied.
+          systemPrompt: resolved.systemPrompt + BATCH_TOOLS_NOTE,
           tools: readOnlyRegistry(deps, { propose: true }),
           // A slide down the chain is a visible event: rename the row, then let the registry's own note run.
           onFallback: (from, to, why) => { serving = to; emit({ kind: "agent-model", id, model: to }); resolved.onFallback?.(from, to, why); },

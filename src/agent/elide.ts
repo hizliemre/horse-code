@@ -57,21 +57,38 @@ function supersededStub(chars: number): string {
 }
 
 /**
- * What a call was about — the path, pattern or command that identifies what it looked at.
+ * What a call was about — enough to tell two looks at the SAME thing from two looks at different things.
  *
- * The same list the chat line uses to label a call, for the same reason: it is the argument that says which
- * thing this was, so two calls that share it are two looks at one thing.
+ * The primary argument alone was not enough, and getting that wrong caused the very loop this elision exists
+ * to prevent: `read_file` takes `offset`/`limit`, so paging through a large file produced several calls that
+ * all keyed on the path. The newest page was kept and the earlier ones were stubbed "a later call looked at
+ * the same thing; do not run it again" — which is false. The agent needed the earlier range, and re-read it.
+ * Measured live: one task read one store file TWENTY-THREE times in six minutes.
+ *
+ * So the key carries the identifying argument AND every other SHORT scalar — the ranges, the flags, the
+ * limits. A `write_file` body is excluded by the length bound, which is what keeps this cheap.
  */
+export const MAX_KEY_VALUE_CHARS = 80;
+
 export function subjectOf(argumentsJson: string): string {
   try {
     const parsed: unknown = JSON.parse(argumentsJson);
     if (typeof parsed !== "object" || parsed === null) return "";
     const args = parsed as Record<string, unknown>;
+    let primary = "";
     for (const key of ["path", "file", "file_path", "symbol", "pattern", "query", "command", "name", "url"]) {
       const v = args[key];
-      if (typeof v === "string" && v.trim()) return `${key}:${v.trim()}`;
+      if (typeof v === "string" && v.trim()) { primary = `${key}:${v.trim()}`; break; }
     }
-    return "";
+    if (!primary) return "";
+    // Sorted, so two calls that pass the same arguments in a different order are still one target.
+    const rest = Object.entries(args)
+      .filter(([k, v]) => !primary.startsWith(`${k}:`)
+        && (typeof v === "number" || typeof v === "boolean"
+          || (typeof v === "string" && v.length <= MAX_KEY_VALUE_CHARS)))
+      .map(([k, v]) => `${k}=${String(v)}`)
+      .sort();
+    return rest.length ? `${primary}|${rest.join("|")}` : primary;
   } catch {
     return "";
   }

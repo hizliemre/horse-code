@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { projectToolsNote, MAX_TOOL_NOTE_CHARS } from "../../src/engine/task-types.js";
+import { projectToolsNote, MAX_TOOL_NOTE_CHARS, BATCH_TOOLS_NOTE } from "../../src/engine/task-types.js";
 import type { Tool } from "../../src/core/types.js";
 
 const tool = (name: string, description: string): Tool => ({ name, description } as Tool);
@@ -95,5 +95,29 @@ describe("the graph tools are pointed at too", () => {
 
   it("still says nothing at all when an agent has neither", () => {
     expect(projectToolsNote([tool("read_file", "Reads a file")], true)).toBe("");
+  });
+});
+
+/**
+ * Of 527 agent turns on a live run, 419 requested exactly ONE tool.
+ *
+ * Every turn re-sends the whole conversation — six seconds and twenty-eight thousand prompt tokens on that
+ * run — so reading ten files one per turn cost ten times what one ten-call turn would have. The models can
+ * batch (56 turns asked for two, 16 for five); nothing had ever told them it mattered.
+ */
+describe("BATCH_TOOLS_NOTE", () => {
+  it("says to ask for independent lookups in one turn", () => {
+    expect(BATCH_TOOLS_NOTE).toMatch(/ALL IN ONE TURN/);
+    expect(BATCH_TOOLS_NOTE).toMatch(/do not depend on each other/);
+  });
+
+  /** The reason is what makes it stick: it is a cost argument, not a style preference. */
+  it("says why — every turn re-sends the whole conversation", () => {
+    expect(BATCH_TOOLS_NOTE).toMatch(/re-sends this whole conversation/);
+  });
+
+  /** Batching a call that needs the previous result is worse than not batching at all. */
+  it("says when NOT to batch", () => {
+    expect(BATCH_TOOLS_NOTE).toMatch(/depend on what a previous call returned/);
   });
 });

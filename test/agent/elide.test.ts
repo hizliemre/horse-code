@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { elideOldToolResults, RECENT_RESULT_BUDGET, ELIDE_MIN_CHARS } from "../../src/agent/elide.js";
+import { elideOldToolResults, subjectOf, MAX_KEY_VALUE_CHARS, RECENT_RESULT_BUDGET, ELIDE_MIN_CHARS } from "../../src/agent/elide.js";
 import type { Message } from "../../src/core/types.js";
 
 const toolMsg = (id: string, content: string): Message => ({ role: "tool", content, name: "read_file", toolCallId: id });
@@ -131,5 +131,52 @@ describe("the newest look at each file survives the recency window", () => {
       .reduce((n, m) => n + m.content.length, 0);
     expect(kept).toBeLessThan(200_000); // 60 × 20k = 1.2 MB unbounded
     expect(out.some((m) => m.role === "tool" && m.content.startsWith("["))).toBe(true);
+  });
+});
+
+/**
+ * The elision key used only the primary argument, and that caused the very loop it exists to prevent.
+ *
+ * `read_file` takes `offset`/`limit`, so paging through a large file produced several calls keyed on one
+ * path: the newest page was kept and the earlier ones stubbed "a later call looked at the same thing; do not
+ * run it again" — which is false. The agent needed the earlier range and read it again. Measured live on a
+ * running job: one task read one store file TWENTY-THREE times in six minutes.
+ */
+describe("two pages of one file are two different things", () => {
+  const read = (id: string, args: object): Message =>
+    ({ role: "assistant", content: "", toolCalls: [{ id, name: "read_file", arguments: JSON.stringify(args) }] });
+  const page = (path: string, offset?: number): string =>
+    subjectOf(JSON.stringify(offset === undefined ? { path } : { path, offset, limit: 400 }));
+
+  it("keys a paged read by its range, not only by its path", () => {
+    expect(page("a.ts", 1)).not.toBe(page("a.ts", 400));
+  });
+
+  it("still treats two identical calls as one target", () => {
+    expect(page("a.ts", 1)).toBe(page("a.ts", 1));
+  });
+
+  it("does not care in which order the arguments were written", () => {
+    expect(subjectOf('{"path":"a.ts","offset":5}')).toBe(subjectOf('{"offset":5,"path":"a.ts"}'));
+  });
+
+  /** The whole point of the length bound: a write's body must never become part of a key. */
+  it("leaves a large argument out of the key", () => {
+    const body = "x".repeat(MAX_KEY_VALUE_CHARS + 1);
+    expect(subjectOf(JSON.stringify({ path: "a.ts", content: body })))
+      .toBe(subjectOf(JSON.stringify({ path: "a.ts", content: "different but also long".repeat(20) })));
+  });
+
+  it("keeps both pages of a file instead of stubbing one as superseded", () => {
+    const big = "line\n".repeat(6_000); // ~30k, so the two together exceed the recency budget
+    const w: Message[] = [
+      { role: "system", content: "sys" },
+      read("c1", { path: "store.ts", offset: 1, limit: 400 }), { role: "tool", toolCallId: "c1", name: "read_file", content: big } as Message,
+      read("c2", { path: "store.ts", offset: 401, limit: 400 }), { role: "tool", toolCallId: "c2", name: "read_file", content: big } as Message,
+      read("c3", { path: "other.ts" }), { role: "tool", toolCallId: "c3", name: "read_file", content: big } as Message,
+    ];
+    const out = elideOldToolResults(w);
+    const stubs = out.filter((m) => m.role === "tool" && m.content.startsWith("["));
+    expect(stubs.every((m) => !m.content.includes("Do not run it again"))).toBe(true);
   });
 });
