@@ -99,3 +99,52 @@ describe("OmniRouteProvider — text streaming + error", () => {
     ]);
   });
 });
+
+/**
+ * A caller's cancellation and a deadline of ours both abort the same signal, and treating them alike is
+ * wrong twice over: our own deadline is reported as "cancelled" — a word that says a person did it — and
+ * marked NON-retryable, so the chain never tries the next model even though another might answer in time.
+ *
+ * Every deadline in the pipeline arrives composed onto the caller's signal — the implementer's budget, a
+ * review's timeout, a short call's own limit — so every one of them read as the user pressing Ctrl+C.
+ */
+describe("a deadline is not a cancellation", () => {
+  const provider = (fetchFn: FetchLike): OmniRouteProvider =>
+    new OmniRouteProvider({ apiKey: "k", baseUrl: "http://x", fetch: fetchFn });
+  // A real fetch rejects when its signal aborts; the point here is what the provider makes of that.
+  const hang: FetchLike = (_u, init) => new Promise((_res, rej) => {
+    init?.signal?.addEventListener("abort", () => rej(init.signal!.reason), { once: true });
+  });
+
+  const drain = async (p: OmniRouteProvider, signal: AbortSignal): Promise<ChatEvent[]> => {
+    const out: ChatEvent[] = [];
+    for await (const ev of p.chat({ model: "m", messages: [{ role: "user", content: "hi" }], tools: [] }, signal)) out.push(ev);
+    return out;
+  };
+
+  it("says the deadline passed, and lets the chain try another model", async () => {
+    const evs = await drain(provider(hang), AbortSignal.timeout(30));
+    const err = evs.find((e) => e.type === "error") as { message: string; retryable: boolean } | undefined;
+    expect(err?.message).toMatch(/deadline/i);
+    expect(err?.retryable).toBe(true);
+  });
+
+  /** A person cancelling still ends it — trying another model would be ignoring them. */
+  it("still reports a caller's cancel as cancelled, and does not retry", async () => {
+    const ac = new AbortController();
+    const p = drain(provider(hang), ac.signal);
+    ac.abort();
+    const err = (await p).find((e) => e.type === "error") as { message: string; retryable: boolean } | undefined;
+    expect(err?.message).toBe("cancelled");
+    expect(err?.retryable).toBe(false);
+  });
+
+  /** The composite the pipeline actually passes: the job's signal AND the call's own deadline. */
+  it("tells them apart through a composed signal", async () => {
+    const job = new AbortController();
+    const evs = await drain(provider(hang), AbortSignal.any([job.signal, AbortSignal.timeout(30)]));
+    const err = evs.find((e) => e.type === "error") as { message: string; retryable: boolean } | undefined;
+    expect(err?.retryable).toBe(true); // the job was never cancelled — only our deadline passed
+    expect(job.signal.aborted).toBe(false);
+  });
+});

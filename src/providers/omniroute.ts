@@ -112,8 +112,27 @@ function pathOf(args: string): string | undefined {
  * The idle-timeout abort is deliberately NOT this: nothing arriving for two minutes is a real transport
  * failure and a fallback may well complete the same request.
  */
+/**
+ * A caller's cancellation, as distinct from a deadline of ours running out.
+ *
+ * Both abort the same signal, and treating them alike is wrong in two ways at once: our own deadline is
+ * reported to the user as "cancelled" — a word that says a person did it — and it is marked NON-retryable,
+ * so the chain never tries the next model even though another one might answer in time.
+ *
+ * Every deadline in the pipeline arrives this way: the implementer's budget, a review's timeout, a short
+ * call's own limit are all composed onto the caller's signal, so every one of them was being read as the
+ * user pressing Ctrl+C.
+ *
+ * `AbortSignal.any` keeps the reason of whichever source fired, so the two are actually distinguishable:
+ * a timeout leaves a `TimeoutError`, a caller's `abort()` leaves an `AbortError`.
+ */
 function isCallerAbort(signal: AbortSignal): boolean {
-  return signal.aborted;
+  return signal.aborted && (signal.reason as { name?: string } | undefined)?.name !== "TimeoutError";
+}
+
+/** Our own deadline, not the caller's decision — worth saying differently and worth retrying elsewhere. */
+function isDeadline(signal: AbortSignal): boolean {
+  return signal.aborted && (signal.reason as { name?: string } | undefined)?.name === "TimeoutError";
 }
 
 export class OmniRouteProvider implements Provider {
@@ -151,6 +170,8 @@ export class OmniRouteProvider implements Provider {
     } catch (e) {
       // The caller cancelling is not a failure of anything: no fallback, no benching.
       if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
+      // A deadline is OURS. Another model in the chain may answer inside it, so this is retryable.
+      if (isDeadline(signal)) { yield { type: "error", message: "the model did not answer within its deadline", retryable: true }; return; }
       // Network/connection failure (DNS, refused, reset) — transient; a fallback may connect.
       yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
       return;
@@ -244,6 +265,8 @@ export class OmniRouteProvider implements Provider {
       }
     } catch (e) {
       if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
+      // A deadline is OURS. Another model in the chain may answer inside it, so this is retryable.
+      if (isDeadline(signal)) { yield { type: "error", message: "the model did not answer within its deadline", retryable: true }; return; }
       // Mid-stream failure or idle-timeout stall — transient; a fallback may complete.
       yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
       return;
