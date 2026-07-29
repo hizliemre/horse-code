@@ -533,3 +533,44 @@ describe("delivery information", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * TODO used to mean both "not started yet" and "the run gave up on this".
+ *
+ * A user watching 21 cards sit in TODO asked why they were not being handed out. Five had exhausted the
+ * escalation ladder and sixteen had been skipped because a dependency failed; the scheduler's own queue held
+ * two, with five of eight slots free. Nothing was waiting for a slot — but the board could not say so, and
+ * neither could the "25 tasks remain" line the coach read off it.
+ */
+describe("a card the run gave up on leaves TODO", () => {
+  it("moves a skipped task to ABANDONED, not back to TODO", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "the one that fails" });
+      board.addCard({ id: "t2", title: "the one that waits", deps: ["t1"] });
+      // A deps object whose task always fails → t1 fails, t2 can never run.
+      const res = await runWaves(edeps(mgr, fakeAdapter(), { failTasks: ["the one that fails"], rounds: 1 }), session, board, { base: "main" });
+      expect(res.status).not.toBe("completed");
+      expect(board.get("t2")!.column).toBe("ABANDONED");
+      expect(board.get("t2")!.stageHistory.some((h) => h.action === "skipped")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** Not permanent: a fresh run picks up anything that is not MERGED, so a later attempt starts it again. */
+  it("still queues an ABANDONED card on the next run", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "given up on last time" });
+      board.move("t1", "ABANDONED", "team-lead");
+      const res = await runWaves(edeps(mgr, fakeAdapter()), session, board, { base: "main" });
+      expect(res.status).toBe("completed");
+      expect(board.get("t1")!.column).toBe("MERGED"); // it ran, and this time it landed
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});

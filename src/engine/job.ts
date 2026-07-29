@@ -40,6 +40,8 @@ function moveNote(card: Card, to: Column, actor?: string): string {
   if (to === "DONE") return `✅ ${who ? `\`${who}\` finished ${title}` : `${title} — reviewed`}`;
   // Landing is a separate event from finishing, and the one that means the work was delivered.
   if (to === "MERGED") return `🚢 ${title} — merged into the base branch`;
+  // Said plainly: a card nobody is going to pick up should not read like one that is waiting for a slot.
+  if (to === "ABANDONED") return `🛑 ${title} — given up on for this run`;
   return `↩︎ ${title} — sent back for rework`;
 }
 

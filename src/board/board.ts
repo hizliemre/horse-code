@@ -7,8 +7,17 @@ import { z } from "zod";
  * branch, which is a different claim and the only one that means the work was delivered. They were the same
  * column, and a merge that hit a conflict left the card reading DONE with its code nowhere: a real board
  * reported 70 done against ONE merge commit, and a resumed run then skipped all of them as already finished.
+ *
+ * ABANDONED is the same lesson at the other end. TODO used to mean both "not started yet" and "the run gave
+ * up on this", and the second is not waiting for anything: a user watching 21 cards sit in TODO asked why
+ * they were not being handed out, when five had exhausted the escalation ladder and sixteen had been skipped
+ * because a dependency failed. The scheduler's own queue held two. A count that mixes work with wreckage
+ * cannot be read.
+ *
+ * ABANDONED is not permanent: a fresh run picks up anything that is not MERGED, so a later attempt — with
+ * more budget, a fixed dependency, or a repaired plan — starts them again.
  */
-export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE" | "MERGED";
+export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE" | "MERGED" | "ABANDONED";
 
 /** How much of a card's history is kept. Enough to see the pattern of a struggling task, not unbounded. */
 export const MAX_STAGE_EVENTS = 200;
@@ -59,7 +68,7 @@ const stageEventSchema = z.object({
 const cardSchema = z.object({
   id: z.string(),
   title: z.string(),
-  column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED"]),
+  column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED", "ABANDONED"]),
   worktree: z.string().optional(),
   deps: z.array(z.string()),
   acceptance: z.array(z.string()).default([]), // default: boards persisted before the gate existed still load

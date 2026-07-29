@@ -124,6 +124,7 @@ export async function runReady(
         skipped.push(id);
         blocked.add(id);
         board.appendStage(id, { role: "team-lead", action: "skipped", note: "dependency failed" });
+        board.move(id, "ABANDONED", "team-lead"); // nothing will make it runnable in THIS run
         changed = true;
       }
     }
@@ -182,6 +183,7 @@ export async function runReady(
       for (const id of pending) {
         skipped.push(id);
         board.appendStage(id, { role: "team-lead", action: "skipped", note: "its dependencies never completed" });
+        board.move(id, "ABANDONED", "team-lead");
       }
       pending.clear();
       break;

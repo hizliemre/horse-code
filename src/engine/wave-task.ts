@@ -70,12 +70,14 @@ export async function runWaveTask(
     if (deps.signal.aborted) throw e; // genuine cancellation → propagate
     const msg = e instanceof Error ? e.message : String(e);
     board.appendStage(taskId, { role: "team-lead", action: "task-failed", note: msg });
+    board.move(taskId, "ABANDONED", "team-lead"); // the ladder is spent — this is not waiting for a slot
     return { status: "task-failed", task: tw };
   }
   deps.signal.throwIfAborted(); // don't proceed to commit/merge if an abort came in during escalation
 
   if (v.verdict === "fail") {
     board.appendStage(taskId, { role: "team-lead", action: "task-failed" });
+    board.move(taskId, "ABANDONED", "team-lead");
     return { status: "task-failed", task: tw };
   }
 
