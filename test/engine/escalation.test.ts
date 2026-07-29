@@ -223,6 +223,26 @@ describe("runTaskWithEscalation", () => {
  * Measured on a real 94-task board: 41 no-op attempts pushed tasks to attempt counts of 6, 8 and 12, so
  * everything ran at council tier and the plain coder finished only 4 of the 28 completed tasks.
  */
+describe("no-change circuit breaker", () => {
+  it("escalates to a human after three no-change transitions instead of dispatching again", async () => {
+    const board = boardWithTask();
+    for (let i = 0; i < 3; i++) {
+      board.appendStage("t1", { role: "coder", action: "no-changes", note: `attempt ${i + 1}` });
+    }
+    const askHuman: AskHuman = async ({ verdict }) => {
+      expect(verdict.notes[0]).toMatch(/three attempts produced no file changes/i);
+      return { action: "abandon" };
+    };
+    const p = new MockProvider([submit('{"role":"coder"}')]);
+
+    const v = await runTaskWithEscalation(edeps(p, { askHuman }), board, "t1", dir);
+
+    expect(v.verdict).toBe("fail");
+    expect(board.get("t1")!.stageHistory.some((s) => s.action === "human:required")).toBe(true);
+    expect(contents(p).some((x) => x.includes("P-coder") || x.includes("P-senior-coder") || x.includes("P-architect"))).toBe(false);
+  });
+});
+
 describe("a no-op attempt tries the role's next model before spending a stronger role", () => {
   it("advances one attempt — a different model, same tier — on the first no-op", async () => {
     const p = new MockProvider([submit('{"role":"coder"}'), noopImpl, ...codeReviewPass()]);

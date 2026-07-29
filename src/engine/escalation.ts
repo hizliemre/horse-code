@@ -67,6 +67,27 @@ export async function runTaskWithEscalation(
   const task = board.get(taskId);
   if (!task) throw new Error(`runTaskWithEscalation: unknown task: ${taskId}`);
 
+  const noChangeCount = task.stageHistory.filter((s) => s.action === "no-changes").length;
+  if (noChangeCount >= 3) {
+    const notes = ["Three attempts produced no file changes. The task needs a human decision before another agent is dispatched."];
+    board.appendStage(taskId, { role: "system", action: "human:required", note: notes[0] });
+    const decision = await deps.askHuman({ card: board.get(taskId)!, verdict: { verdict: "fail", notes } });
+    if (decision.action === "accept") {
+      board.appendStage(taskId, { role: "human", action: "human:accept" });
+      board.move(taskId, "DONE", "human");
+      return { verdict: "pass", notes: [] };
+    }
+    if (decision.action === "retry" && decision.notes.some((note) => note.trim())) {
+      board.appendStage(taskId, { role: "human", action: "human:retry", note: decision.notes.join("; ") });
+      board.clearReviewNotes(taskId);
+      for (const note of decision.notes) board.addReviewNote(taskId, note);
+      board.move(taskId, "TODO", "human");
+    } else {
+      board.appendStage(taskId, { role: "human", action: decision.action === "retry" ? "human:retry-blocked" : "human:abandon" });
+    }
+    return { verdict: "fail", notes };
+  }
+
   const family = await routeTask(deps, task); // once: coder | designer
   board.setWorktree(taskId, cwd);
 

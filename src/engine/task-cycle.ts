@@ -75,8 +75,25 @@ export async function runCycleWithRole(
   // `attempts` drives the tiered bar: the first review of a task is the thorough pass, later attempts (the code
   // has already been revised for reviewer notes) are blocked only by CRITICAL findings.
   const review = () => runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
-  const v = await telemetry().span("stage.code_review", { "hc.stage": "code review", "hc.task.id": taskId },
-    () => (deps.timings ? deps.timings.time("code review", review) : review()));
+  let v: Verdict;
+  try {
+    v = await telemetry().span("stage.code_review", { "hc.stage": "code review", "hc.task.id": taskId },
+      () => (deps.timings ? deps.timings.time("code review", review) : review()));
+  } catch (e) {
+    if (!deps.signal.aborted) throw e;
+    const note = "Review was cancelled. Add a human note before retrying this task.";
+    board.clearReviewNotes(taskId);
+    board.addReviewNote(taskId, note);
+    board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:cancelled", note });
+    return { verdict: "fail", notes: [note] };
+  }
+  if (deps.signal.aborted) {
+    const note = "Review was cancelled. Add a human note before retrying this task.";
+    board.clearReviewNotes(taskId);
+    board.addReviewNote(taskId, note);
+    board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:cancelled", note });
+    return { verdict: "fail", notes: [note] };
+  }
   // The review says the code is GOOD; the gate says the code does WHAT WAS ASKED. A task that quietly
   // implemented half the requirement passes review — only the criteria catch that.
   if (v.verdict === "pass") {

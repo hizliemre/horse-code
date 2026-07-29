@@ -81,6 +81,32 @@ describe("runTaskCycle", () => {
     expect(c.stageHistory.some((s) => s.action === "reviewed:fail")).toBe(true);
   });
 
+  it("a cancelled review stays in REVIEW and requires a human note before retry", async () => {
+    const controller = new AbortController();
+    class CancellingProvider extends MockProvider {
+      override async *chat(req: Parameters<MockProvider["chat"]>[0], signal: AbortSignal) {
+        if (this.requests.length >= 3) {
+          controller.abort(new Error("cancelled"));
+          throw new Error("cancelled");
+        }
+        yield* super.chat(req, signal);
+      }
+    }
+    const d = deps(new CancellingProvider([submit('{"role":"coder"}'), writeTurn(), doneTurn]));
+    d.signal = controller.signal;
+    const board = boardWithTask();
+
+    const v = await runTaskCycle(d, board, "t1", dir);
+    expect(v.verdict).toBe("fail");
+
+    const c = board.get("t1")!;
+    expect(c.column).toBe("REVIEW");
+    expect(c.stageHistory.some((s) => s.action === "reviewed:cancelled")).toBe(true);
+    expect(c.stageHistory.some((s) => s.action === "reviewed:fail")).toBe(false);
+    expect(c.reviewNotes).toEqual(["Review was cancelled. Add a human note before retrying this task."]);
+    expect(c.attempts).toBe(0);
+  });
+
   it("unknown task → error", async () => {
     const p = new MockProvider([]);
     await expect(runTaskCycle(deps(p), boardWithTask(), "missing", dir)).rejects.toThrow(/unknown task/);
