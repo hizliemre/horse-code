@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry, writeHeapSnapshot } from "../../src/obs/telemetry.js";
+import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry, writeHeapSnapshot, estimateFreezeSeconds } from "../../src/obs/telemetry.js";
 import type { SpanRecord, EventRecord } from "../../src/obs/telemetry.js";
 import { MemorySink, FileSink } from "../../src/obs/sink.js";
 
@@ -167,5 +167,37 @@ describe("writeHeapSnapshot", () => {
   it("returns nothing rather than throwing when it cannot write", async () => {
     await expect(writeHeapSnapshot("/proc/nowhere-writable", new Telemetry(new MemorySink())))
       .resolves.toBeUndefined();
+  });
+});
+
+/**
+ * A heap cannot be walked while it changes, so a snapshot stops the world for as long as the walk takes.
+ *
+ * Measured on a live session with a 2.7 GB heap: 70 seconds frozen and a 2.1 GB file. The first version of
+ * this called it "a moment", the user's terminal locked up, and they had no way to tell a long pause from a
+ * hang. A number that undersells the pause is worse than no number.
+ */
+describe("estimateFreezeSeconds", () => {
+  const GB = 1_073_741_824;
+
+  it("matches what was measured: about 70s for 2.7 GB", () => {
+    const s = estimateFreezeSeconds(2.7 * GB);
+    expect(s).toBeGreaterThanOrEqual(65);
+    expect(s).toBeLessThanOrEqual(80);
+  });
+
+  it("scales with the heap it has to walk", () => {
+    expect(estimateFreezeSeconds(4 * GB)).toBeGreaterThan(estimateFreezeSeconds(1 * GB));
+  });
+
+  /** Never zero: "it will freeze for 0s" reads as "it will not freeze". */
+  it("never claims less than a second", () => {
+    expect(estimateFreezeSeconds(1024)).toBe(1);
+    expect(estimateFreezeSeconds(0)).toBe(1);
+  });
+
+  /** Rounded UP, because a pause that outlasts its estimate is what makes someone kill a healthy session. */
+  it("rounds up rather than down", () => {
+    expect(estimateFreezeSeconds(1.01 * GB)).toBeGreaterThanOrEqual(27);
   });
 });

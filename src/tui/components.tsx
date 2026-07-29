@@ -23,7 +23,7 @@ import { shouldCollapsePaste, pasteToken, expandPasteTokens } from "./paste.js";
 import type { AskChoice } from "../engine/review.js";
 import { asChoice } from "../engine/review.js";
 import { readTelemetry, summarize, describeReport, type RunReport as MonitorReport } from "../obs/report.js";
-import { writeHeapSnapshot } from "../obs/telemetry.js";
+import { writeHeapSnapshot, estimateFreezeSeconds } from "../obs/telemetry.js";
 import { TelemetryTail } from "../obs/tail.js";
 import { WatchManager, type WatchStatus } from "../obs/watch.js";
 
@@ -1339,8 +1339,21 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     }
     if (a === "log") { controller.note(`📈 Telemetry log: \`${telemetryPath}\``); return; }
     if (a === "heap") {
-      controller.note("Writing a heap snapshot — the process pauses for a moment while V8 walks the heap…");
-      void writeHeapSnapshot(telemetryPath.slice(0, telemetryPath.lastIndexOf("/"))).then((path) => {
+      /**
+       * Say the cost, paint it, THEN freeze.
+       *
+       * A heap cannot be walked while it changes, so this stops the world for as long as the walk takes — 70
+       * seconds on a 2.7 GB heap. The first version called it "a moment", a user's terminal locked up, and
+       * they had no way to tell a long pause from a hang. The delay before the blocking call is there so Ink
+       * gets a frame out first: a warning nobody can see is not a warning.
+       */
+      const secs = estimateFreezeSeconds();
+      controller.note(
+        `🧠 Writing a heap snapshot. **Everything freezes for about ${secs}s** — the UI, the agents, all of it — ` +
+        `because a heap cannot be walked while it changes. The file will be roughly the size of the heap.`);
+      void new Promise((r) => setTimeout(r, 200))
+        .then(() => writeHeapSnapshot(telemetryPath.slice(0, telemetryPath.lastIndexOf("/"))))
+        .then((path) => {
         controller.note(path
           ? `🧠 Heap snapshot → \`${path}\`. Take a second one later and compare them in Chrome DevTools ` +
             `(Memory → Load profile → Comparison) to see what grew.`

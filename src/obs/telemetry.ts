@@ -203,7 +203,23 @@ export function sampleMemory(t: Telemetry, everyMs = HEAP_SAMPLE_MS): () => void
  *
  * Two snapshots taken an hour apart, compared in Chrome DevTools (Load profile → Comparison view), turn
  * "something is growing" into a class name and a retainer path.
+ *
+ * It STOPS THE WORLD, and there is no way around that: a heap cannot be walked while it changes. Measured on
+ * a live session with a 2.7 GB heap — 70 seconds frozen and a 2.1 GB file. The first version of this called it
+ * "a moment", the user's terminal locked up, and they had no way to tell a long pause from a hang. Callers
+ * must say what it will cost BEFORE they call, which is what `estimateFreezeSeconds` is for.
  */
+/**
+ * Roughly how long the freeze will last, from the heap it has to walk.
+ *
+ * Measured: 2.7 GB took about 70 seconds, so ~26 seconds per gigabyte. Deliberately rounded up and never
+ * below one second — a number that undersells the pause is worse than no number, because the user is left
+ * deciding whether to kill a session that is merely working.
+ */
+export function estimateFreezeSeconds(heapUsedBytes = process.memoryUsage().heapUsed): number {
+  return Math.max(1, Math.ceil((heapUsedBytes / 1_073_741_824) * 26));
+}
+
 export async function writeHeapSnapshot(dir: string, tel: Telemetry = active): Promise<string | undefined> {
   try {
     const v8 = await import("node:v8");
