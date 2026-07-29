@@ -28,8 +28,8 @@ import type { Delivery } from "./engine/wave-engine.js";
 import { runInit } from "./init.js";
 import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 import { telemetryProvider } from "./providers/telemetry.js";
-import { Telemetry, setTelemetry, telemetry, sampleMemory } from "./obs/telemetry.js";
-import { FileSink } from "./obs/sink.js";
+import { Telemetry, setTelemetry, telemetry, sampleMemory, writeHeapSnapshot } from "./obs/telemetry.js";
+import { FileSink, telemetryDir } from "./obs/sink.js";
 
 /** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
 const HEAP_MB = 12_288;
@@ -177,6 +177,13 @@ export async function main(argv: string[]): Promise<void> {
   if (sink) {
     setTelemetry(new Telemetry(sink));
     sampleMemory(telemetry()); // three heap deaths so far, each diagnosed from a guess — record the curve
+    /**
+     * `kill -USR2 <pid>` takes a heap snapshot without touching the session.
+     *
+     * The moment worth snapshotting is usually one nobody is sitting in front of — a run five hours in, at
+     * three in the morning. This needs no TUI, no keystroke and no restart.
+     */
+    process.on("SIGUSR2", () => { void writeHeapSnapshot(telemetryDir(home), telemetry()); });
     // Flushed on the way out, however the process ends — an unwritten tail is the part you needed.
     const flush = (): void => { void sink.flush(); };
     process.once("exit", flush);

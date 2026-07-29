@@ -176,3 +176,56 @@ describe("the implementer is warned before its deadline", () => {
     expect(deadlineWarning(20 * 60 * 1000, 20 * 60 * 1000)).toMatch(/1 minute/);
   });
 });
+
+/**
+ * The implementer was handed the TITLE and nothing else — "This is a NEW task: X. Implement it." — while the
+ * card already carried the acceptance criteria it would be judged against and the file list the plan named
+ * for it. Every attempt began by rediscovering, from one line, a shape written down two stages earlier.
+ *
+ * It matters because this is where the time goes: measured over one run, implementation was 86% of all slot
+ * time (546 minutes against 35 for review), and the commonest way an attempt ended was running out of budget
+ * mid-exploration.
+ */
+describe("the implementer gets the task's own brief", () => {
+  const sent = (p: MockProvider): string =>
+    p.requests.flatMap((r) => r.messages.map((m) => String(m.content))).join("\n");
+
+  it("names the acceptance criteria it will be judged against", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(deps(p), "coder", card({
+      acceptance: ["src/store/todo.ts exports addTodo", "adding twice yields two entries"],
+    }), dir);
+    expect(sent(p)).toContain("src/store/todo.ts exports addTodo");
+    expect(sent(p)).toMatch(/exactly what the review will check/);
+  });
+
+  it("names the files the plan expected it to touch", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(deps(p), "coder", card({ files: ["src/store/todo.ts", "test/store.spec.ts"] }), dir);
+    expect(sent(p)).toContain("src/store/todo.ts");
+    expect(sent(p)).toContain("test/store.spec.ts");
+  });
+
+  /** A plan written before the code cannot know everything the work will touch. */
+  it("says the file list is a starting point, not a fence", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(deps(p), "coder", card({ files: ["src/a.ts"] }), dir);
+    expect(sent(p)).toMatch(/not a limit on it/);
+  });
+
+  it("says nothing extra when the card carries neither", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(deps(p), "coder", card(), dir);
+    expect(sent(p)).not.toMatch(/It is done when|The plan expects/);
+  });
+
+  /** A returning attempt still leads with the notes — that is what it is there to fix. */
+  it("keeps the reviewer notes first on a returning task", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(deps(p), "coder", card({
+      reviewNotes: ["the store never persists"], acceptance: ["src/store.ts exports save"],
+    }), dir);
+    const msg = sent(p);
+    expect(msg.indexOf("the store never persists")).toBeLessThan(msg.indexOf("src/store.ts exports save"));
+  });
+});

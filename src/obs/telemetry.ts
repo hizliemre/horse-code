@@ -193,6 +193,35 @@ export function sampleMemory(t: Telemetry, everyMs = HEAP_SAMPLE_MS): () => void
   return () => clearInterval(timer);
 }
 
+/**
+ * Writes a V8 heap snapshot next to the run's telemetry, and records where it went.
+ *
+ * Three heap deaths were each diagnosed from a stack trace and a guess, and the sampling added afterwards
+ * proved a real rise — the post-GC floor climbing from 11 MB to over 1.5 GB in a working run — without
+ * saying WHAT was being retained. A stack trace names the last allocation; a curve names the shape; only a
+ * snapshot names the objects.
+ *
+ * Two snapshots taken an hour apart, compared in Chrome DevTools (Load profile → Comparison view), turn
+ * "something is growing" into a class name and a retainer path.
+ */
+export async function writeHeapSnapshot(dir: string, tel: Telemetry = active): Promise<string | undefined> {
+  try {
+    const v8 = await import("node:v8");
+    const { mkdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    mkdirSync(dir, { recursive: true });
+    const used = Math.round(process.memoryUsage().heapUsed / 1048576);
+    // Named by heap size, so a pair of snapshots says which is which before either is opened.
+    const path = join(dir, `heap-${new Date().toISOString().replace(/[:.]/g, "-")}-${used}mb.heapsnapshot`);
+    v8.writeHeapSnapshot(path);
+    tel.event("process.heap_snapshot", { "hc.path": path, "hc.heap_used_mb": used });
+    return path;
+  } catch {
+    // A snapshot is a diagnostic; failing to take one must never disturb the run it is diagnosing.
+    return undefined;
+  }
+}
+
 /** Telemetry that records nothing, for code paths (and tests) that have no sink. */
 export const NO_TELEMETRY = new Telemetry({ write: () => undefined, flush: async () => undefined });
 

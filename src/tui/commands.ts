@@ -25,7 +25,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/skills", desc: "Show loaded skills (/skills add <github-url> installs one, /skills update re-installs them)" },
   { name: "/mode", desc: "Permission mode (/mode ask|acceptEdits|auto)" },
   { name: "/parallel", desc: "How many tasks run at once (/parallel N) — takes effect on the running job too" },
-  { name: "/monitor", desc: "Where the run's time is going (/monitor enable shows the panel, disable hides it, log shows the file)" },
+  { name: "/monitor", desc: "Where the run's time is going (/monitor enable shows the panel, disable hides it, log shows the file, heap writes a snapshot)" },
   { name: "/watch", desc: "Watch any command — each line it prints becomes an event (/watch <cmd>, /watch stop N)" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },

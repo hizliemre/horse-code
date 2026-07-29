@@ -71,9 +71,35 @@ export async function runImplementer(
   for (const t of contextTools(deps)) tools.register(t);
 
   const returning = task.reviewNotes.length > 0;
-  const content = returning
+  /**
+   * The task's own brief: what it must deliver, and which files it was planned to touch.
+   *
+   * The implementer used to be handed the TITLE and nothing else — "This is a NEW task: X. Implement it." —
+   * while the card already carried the acceptance criteria it would be judged against and the file list the
+   * plan named for it. So every attempt began by rediscovering, from a one-line title, a shape that was
+   * written down two stages earlier.
+   *
+   * It matters because this is where the time goes: measured over one run, implementation was 86% of all
+   * slot time (546 minutes against 35 for review), averaging thirteen minutes an attempt, and the commonest
+   * way an attempt ended was running out of its budget mid-exploration.
+   *
+   * The files are a STARTING POINT, not a fence: a plan written before the code cannot know everything the
+   * work will touch, and saying otherwise would trade one wrong instruction for another.
+   */
+  const brief = [
+    task.acceptance.length
+      ? `It is done when ALL of these are true — they are exactly what the review will check:\n` +
+        task.acceptance.map((a) => `- ${a}`).join("\n")
+      : "",
+    task.files.length
+      ? `The plan expects this task to create or change these files:\n${task.files.map((f) => `- ${f}`).join("\n")}\n` +
+        `Start there. Touch anything else the work genuinely needs — this is where the plan expected the ` +
+        `change to live, not a limit on it.`
+      : "",
+  ].filter(Boolean).join("\n\n");
+  const content = (returning
     ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
-    : `This is a NEW task: "${task.title}". Implement it.`;
+    : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "");
   // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
   // blind to them and kept re-learning the same things.
   const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role });

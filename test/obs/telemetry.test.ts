@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry } from "../../src/obs/telemetry.js";
+import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry, writeHeapSnapshot } from "../../src/obs/telemetry.js";
 import type { SpanRecord, EventRecord } from "../../src/obs/telemetry.js";
 import { MemorySink, FileSink } from "../../src/obs/sink.js";
 
@@ -133,5 +133,39 @@ describe("FileSink", () => {
     const tel = new Telemetry(sink);
     await expect(tel.span("x", {}, async () => 1)).resolves.toBe(1);
     await expect(sink.flush()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Three heap deaths were each diagnosed from a stack trace and a guess. The sampling added afterwards proved
+ * a real rise — the post-GC floor climbing past 1.5 GB in a working run — without saying WHAT was retained.
+ * A stack trace names the last allocation; a curve names the shape; only a snapshot names the objects.
+ */
+describe("writeHeapSnapshot", () => {
+  it("writes a snapshot and records where it went", async () => {
+    const home = await mkdtemp(join(tmpdir(), "hc-heap-"));
+    try {
+      const sink = new MemorySink();
+      const path = await writeHeapSnapshot(home, new Telemetry(sink));
+      expect(path).toBeDefined();
+      expect(path).toMatch(/\.heapsnapshot$/);
+      expect((await readFile(path!, "utf8")).slice(0, 20)).toContain("snapshot"); // V8's own format
+      const rec = sink.records.find((r) => r.name === "process.heap_snapshot");
+      expect(rec?.attributes["hc.path"]).toBe(path);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  }, 30_000);
+
+  /** Named by heap size, so a pair says which is which before either is opened. */
+  it("puts the heap size in the filename", async () => {
+    const home = await mkdtemp(join(tmpdir(), "hc-heap-"));
+    try {
+      expect(await writeHeapSnapshot(home, new Telemetry(new MemorySink()))).toMatch(/-\d+mb\.heapsnapshot$/);
+    } finally { await rm(home, { recursive: true, force: true }); }
+  }, 30_000);
+
+  /** A snapshot is a diagnostic; failing to take one must never disturb the run it is diagnosing. */
+  it("returns nothing rather than throwing when it cannot write", async () => {
+    await expect(writeHeapSnapshot("/proc/nowhere-writable", new Telemetry(new MemorySink())))
+      .resolves.toBeUndefined();
   });
 });

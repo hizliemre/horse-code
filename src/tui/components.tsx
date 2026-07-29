@@ -23,6 +23,7 @@ import { shouldCollapsePaste, pasteToken, expandPasteTokens } from "./paste.js";
 import type { AskChoice } from "../engine/review.js";
 import { asChoice } from "../engine/review.js";
 import { readTelemetry, summarize, describeReport, type RunReport as MonitorReport } from "../obs/report.js";
+import { writeHeapSnapshot } from "../obs/telemetry.js";
 import { TelemetryTail } from "../obs/tail.js";
 import { WatchManager, type WatchStatus } from "../obs/watch.js";
 
@@ -1367,6 +1368,16 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       return;
     }
     if (a === "log") { controller.note(`📈 Telemetry log: \`${telemetryPath}\``); return; }
+    if (a === "heap") {
+      controller.note("Writing a heap snapshot — the process pauses for a moment while V8 walks the heap…");
+      void writeHeapSnapshot(telemetryPath.slice(0, telemetryPath.lastIndexOf("/"))).then((path) => {
+        controller.note(path
+          ? `🧠 Heap snapshot → \`${path}\`. Take a second one later and compare them in Chrome DevTools ` +
+            `(Memory → Load profile → Comparison) to see what grew.`
+          : "The heap snapshot could not be written.");
+      });
+      return;
+    }
     if (a === "enable" || a === "on") {
       setMonitorOn(true);
       controller.note("Monitor panel on — `/monitor disable` turns it off.");
