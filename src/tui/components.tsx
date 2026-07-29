@@ -583,6 +583,37 @@ export const LONG_RUNNING_MS = 15 * 60 * 1000;
 /** How often `/monitor watch` reports. Long enough that a change means something, short enough to notice. */
 export const MONITOR_INTERVAL_MS = 5 * 60 * 1000;
 
+/** History rows kept while panels are being dropped — below this the transcript is not worth calling one. */
+export const MIN_VIEWPORT_ROWS = 3;
+
+/**
+ * Drops optional blocks, in the order given, until the whole frame fits the terminal.
+ *
+ * The bottom region grows with everything that is happening at once — eight agent rows, a detail box, the
+ * monitor, a pinned answer, the next-step list — and nothing bounded the total. Past the terminal's height
+ * the frame is simply TALLER than the screen: Ink writes it, the terminal scrolls to make room, and the
+ * input box is carried off the top. From then on every keystroke lands at the bottom of a scrolled terminal
+ * and is wiped by the next repaint, which is exactly what a user reported after scrolling.
+ *
+ * Dropped in a deliberate order — the run's own numbers before the agents' names, and everything before the
+ * input. `keep` is checked by name at each render site.
+ */
+export function dropToFit(
+  rows: number,
+  fixedHeight: number,
+  optional: { name: string; height: number }[],
+): Set<string> {
+  const keep = new Set(optional.map((o) => o.name));
+  let total = fixedHeight + optional.reduce((n, o) => n + o.height, 0);
+  for (const o of optional) {
+    if (total + MIN_VIEWPORT_ROWS + 1 <= rows) break; // +1: the scroll-hint line
+    if (o.height <= 0) continue;
+    keep.delete(o.name);
+    total -= o.height;
+  }
+  return keep;
+}
+
 export function RunningAgents({ agents, cols, cursor }: { agents: RunningAgent[]; cols: number; cursor?: number }): React.ReactElement {
   const [, tick] = useState(0);
   useEffect(() => {
@@ -1790,7 +1821,24 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     // Counted from the SAME function that renders it — a bottom region that under-reports its height gets
     // painted straight over the transcript.
     const asideH = state.aside ? asideLines(state.aside.question, state.aside.answer, size.cols).length : 0;
-    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH + agentsH + nextH + asideH + monitorH;
+    /**
+     * Nothing optional may push the input box off the screen.
+     *
+     * The input, the status line and whatever the user just opened (the palette, the file picker) are fixed;
+     * everything else is given up, in this order, until the frame fits. An agent panel nobody can type
+     * underneath is worth less than the ability to type.
+     */
+    const keep = dropToFit(size.rows, statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH, [
+      { name: "monitor", height: monitorH },
+      { name: "next", height: nextH },
+      { name: "agents", height: agentsH },
+      { name: "aside", height: asideH },
+    ]);
+    const bottomH = statusH + paletteH + atH + inputBoxH + metricsH + queuedH + metricsGapH
+      + (keep.has("agents") ? agentsH : 0)
+      + (keep.has("next") ? nextH : 0)
+      + (keep.has("aside") ? asideH : 0)
+      + (keep.has("monitor") ? monitorH : 0);
     /**
      * While a question is pending, the transcript yields every row it can.
      *
@@ -1819,7 +1867,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
           </Box>
         ) : null}
-        {state.aside ? <AsidePanel question={state.aside.question} answer={state.aside.answer} cols={size.cols} /> : null}
+        {state.aside && keep.has("aside") ? <AsidePanel question={state.aside.question} answer={state.aside.answer} cols={size.cols} /> : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
         {atOpen ? <FilePicker matches={atMatches} selected={atIdx} query={at?.query ?? ""} cols={size.cols} /> : null}
         {sendModeText !== null ? (
@@ -1903,15 +1951,15 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         </Box>
         )}
         {state.attachments > 0 ? <Text color="#ff9a2e">{`  ${ICONS.attach} ${state.attachments} image${state.attachments === 1 ? "" : "s"} staged — Enter to send`}</Text> : null}
-        {state.nextSteps.length > 0 ? (
+        {state.nextSteps.length > 0 && keep.has("next") ? (
           <Box flexDirection="column">
             <Text color="#ff9a2e" wrap="truncate-end">{"  Suggested next steps — /next N:"}</Text>
             {state.nextSteps.map((s, i) => <Text key={i} dimColor wrap="truncate-end">{`    ${i + 1}. ${s}`}</Text>)}
           </Box>
         ) : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel?.() || model} /> : null}
-        {state.runningAgents.length > 0 ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
-        {showMonitor ? <RunMonitor
+        {state.runningAgents.length > 0 && keep.has("agents") ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
+        {showMonitor && keep.has("monitor") ? <RunMonitor
           report={(monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
             promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [] }) as MonitorReport}
           watches={watches} cols={size.cols} /> : null}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { choiceHeight, wrapPlain, pendingBodyWidth, asideLines } from "../../src/tui/components.js";
+import { choiceHeight, wrapPlain, pendingBodyWidth, asideLines, dropToFit, MIN_VIEWPORT_ROWS } from "../../src/tui/components.js";
 import { flattenMarkdown } from "../../src/tui/lines.js";
 
 /**
@@ -194,5 +194,59 @@ describe("asideLines", () => {
 
   it("never lets the question itself wrap — it is one truncated row", () => {
     expect(asideLines("x".repeat(400), "short", 80)).toHaveLength(2);
+  });
+});
+
+/**
+ * The bottom region grew with everything happening at once — eight agent rows, a detail box, the monitor, a
+ * pinned answer, the next-step list — and nothing bounded the total. Past the terminal's height the frame is
+ * simply TALLER than the screen: Ink writes it, the terminal scrolls to make room, and the input box is
+ * carried off the top. From then on every keystroke lands at the bottom of a scrolled terminal and is wiped
+ * by the next repaint — which is what a user reported, twice, after scrolling.
+ */
+describe("dropToFit", () => {
+  const panels = () => [
+    { name: "monitor", height: 8 },
+    { name: "next", height: 4 },
+    { name: "agents", height: 11 },
+    { name: "aside", height: 3 },
+  ];
+
+  it("keeps everything when the terminal has room", () => {
+    expect(dropToFit(60, 10, panels())).toEqual(new Set(["monitor", "next", "agents", "aside"]));
+  });
+
+  /** The run's own numbers go before the agents' names; everything goes before the input. */
+  it("drops in the order given, and only as far as it must", () => {
+    const keep = dropToFit(36, 10, panels()); // 10 + 26 = 36; needs 4 more rows
+    expect(keep.has("monitor")).toBe(false);
+    expect(keep.has("agents")).toBe(true);
+    expect(keep.has("aside")).toBe(true);
+  });
+
+  /** It stops the moment it fits — a panel that still has room is not thrown away for tidiness. */
+  it("keeps whatever still fits after the bigger ones are gone", () => {
+    const keep = dropToFit(18, 10, panels()); // 10 + aside(3) + 3 history + 1 hint = 17 ≤ 18
+    expect([...keep]).toEqual(["aside"]);
+  });
+
+  it("gives up everything optional when even the smallest will not fit", () => {
+    expect(dropToFit(13, 10, panels()).size).toBe(0);
+  });
+
+  /** The point of the whole exercise: the frame must never be taller than the screen. */
+  it("always leaves room for the input, the hint line and some history", () => {
+    for (const rows of [12, 16, 20, 24, 30, 40, 50]) {
+      const keep = dropToFit(rows, 10, panels());
+      const used = 10 + panels().filter((p) => keep.has(p.name)).reduce((n, p) => n + p.height, 0);
+      // Either it fits with history to spare, or everything optional is already gone.
+      expect(used + MIN_VIEWPORT_ROWS + 1 <= rows || keep.size === 0).toBe(true);
+    }
+  });
+
+  it("does not count a panel that is not being shown", () => {
+    const keep = dropToFit(30, 10, [{ name: "monitor", height: 0 }, { name: "agents", height: 11 }]);
+    expect(keep.has("agents")).toBe(true); // 10 + 11 + 4 = 25 ≤ 30
+    expect(keep.has("monitor")).toBe(true); // zero-height: nothing to gain by dropping it
   });
 });
