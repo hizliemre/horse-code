@@ -93,6 +93,8 @@ export async function runWaveTask(
   };
   const mr = await (deps.timings ? deps.timings.time("git", land) : land());
   if (mr.status === "merged") {
+    // Only git can say this. The review said the code was GOOD; this says it is in the base branch.
+    board.move(taskId, "MERGED", "team-lead");
     board.appendStage(taskId, { role: "team-lead", action: "merged" });
     return { status: "merged", task: tw };
   }

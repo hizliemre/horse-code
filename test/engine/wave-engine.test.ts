@@ -279,7 +279,7 @@ describe("runReady", () => {
       const { mgr, peak } = watched(base);
       const board = new Board();
       board.addCard({ id: "t1", title: "task-a" });
-      board.move("t1", "DONE", "coder");
+      board.move("t1", "MERGED", "coder");
       board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
       const o = await runReady({ ...edeps(base, fakeAdapter()), manager: mgr }, session, board);
       expect(o.merged.sort()).toEqual(["t1", "t2"]); // t1 counts as delivered…
@@ -461,7 +461,7 @@ describe("runWaveEngine", () => {
 });
 
 describe("resuming a partially finished board", () => {
-  it("tasks already in DONE are not re-implemented — they count as merged", async () => {
+  it("tasks already MERGED are not re-implemented — they are already in the base branch", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
@@ -474,7 +474,7 @@ describe("resuming a partially finished board", () => {
       const d = edeps(mgr, adapter);
       const res = await runWaves(d, session, board, { base: "main" });
       expect(res.status).toBe("completed");
-      expect(board.get("t1")!.column).toBe("DONE"); // untouched
+      expect(board.get("t1")!.column).toBe("MERGED"); // untouched
       // it was never re-routed/re-implemented: no request mentions its title
       const convo = (d.provider as { requests?: { messages: { content?: unknown }[] }[] }).requests ?? [];
       const text = convo.flatMap((r) => r.messages.map((m) => (typeof m.content === "string" ? m.content : ""))).join("\n");

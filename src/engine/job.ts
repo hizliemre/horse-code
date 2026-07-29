@@ -37,7 +37,9 @@ function moveNote(card: Card, to: Column, actor?: string): string {
   const title = `**${card.title}**`;
   if (to === "IN-PROGRESS") return `🤖 ${who ? `\`${who}\` picked up ${title}` : `${title} → in progress`}`;
   if (to === "REVIEW") return `🔍 ${title} — ${who ? `\`${who}\` handed it to review` : "in review"}`;
-  if (to === "DONE") return `✅ ${who ? `\`${who}\` finished ${title}` : `${title} — done`}`;
+  if (to === "DONE") return `✅ ${who ? `\`${who}\` finished ${title}` : `${title} — reviewed`}`;
+  // Landing is a separate event from finishing, and the one that means the work was delivered.
+  if (to === "MERGED") return `🚢 ${title} — merged into the base branch`;
   return `↩︎ ${title} — sent back for rework`;
 }
 
@@ -265,7 +267,7 @@ export async function runJob(
        */
       const interrupted = board.list().filter((c) => c.column === "IN-PROGRESS" || c.column === "REVIEW");
       for (const c of interrupted) board.reopen(c.id);
-      const done = board.list().filter((c) => c.column === "DONE").length;
+      const done = board.list().filter((c) => c.column === "MERGED").length;
       emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` +
         (interrupted.length ? ` ${interrupted.length} was interrupted mid-flight and goes back in the queue.` : "") });
     } else {
@@ -293,7 +295,7 @@ export async function runJob(
      *
      * Nothing to review is the one case that skips it: a run where every task failed has no diff.
      */
-    const reviewable = board.list().some((c) => c.column === "DONE");
+    const reviewable = board.list().some((c) => c.column === "MERGED");
     if (reviewable) {
       emit({ kind: "phase", phase: "pr", detail: wave.pr?.url ?? wave.delivery.branch });
       const prDiff = await deps.manager.diff(session, opts.fromBranch);
@@ -348,7 +350,7 @@ export async function runJob(
      * WHICH nine were left, and the remaining work became unreachable. "Resume" then had nothing to resume
      * and would have started the whole job again from the beginning.
      */
-    const unfinished = board.list().filter((c) => c.column !== "DONE");
+    const unfinished = board.list().filter((c) => c.column !== "MERGED");
     if (!unfinished.length) {
       clearCheckpoint(session.root); // nothing left — the state is what makes a resume possible, not clutter
       await rm(join(session.root, "board.json"), { force: true }).catch(() => { /* best-effort */ });

@@ -75,7 +75,7 @@ function stubManager(worktree: string, merge: () => Promise<{ status: "merged" }
 }
 
 describe("runWaveTask", () => {
-  it("merged: derive → escalate(pass) → commit → merge; base worktree gets the file, card DONE", async () => {
+  it("merged: derive → escalate(pass) → commit → merge; base worktree gets the file, card MERGED", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
@@ -88,7 +88,7 @@ describe("runWaveTask", () => {
       const board = board1();
       const res = await runWaveTask(wdeps(p, mgr), session, board, "t1");
       expect(res.status).toBe("merged");
-      expect(board.get("t1")!.column).toBe("DONE");
+      expect(board.get("t1")!.column).toBe("MERGED"); // only git can say this
       expect(await readFile(join(session.baseWorktree, "out.txt"), "utf8")).toBe("code");
     } finally {
       await rm(repo, { recursive: true, force: true });
@@ -278,5 +278,52 @@ describe("everything a task does is attributed to the task", () => {
       setTelemetry(NO_TELEMETRY);
       await rm(repo, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * DONE meant "reviewed" and was also being read as "delivered".
+ *
+ * The card reaches DONE the moment its review and acceptance gate pass — before the merge is even attempted.
+ * A conflict then left it reading DONE with its code sitting in a task branch nobody would look at again,
+ * and the next resume skipped it as finished. Measured on a real board: 70 DONE, 7 of them never merged, and
+ * ONE merge commit in five and a half hours.
+ */
+describe("only git can say a task landed", () => {
+  it("leaves a conflicted task at DONE, not MERGED", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const p = new MockProvider([
+        submit('{"role":"coder"}'),
+        writeTurn("out.txt", "code"), doneTurn,
+        ...codeReviewPass(),
+      ]);
+      // A manager whose merge always conflicts: the review still passes, the landing does not.
+      const conflicting = Object.create(mgr) as WorktreeManager;
+      conflicting.mergeTask = async () => ({ status: "conflict", files: ["out.txt"] });
+      const board = board1();
+      const res = await runWaveTask(wdeps(p, conflicting), session, board, "t1");
+      expect(res.status).toBe("conflict");
+      expect(board.get("t1")!.column).toBe("DONE");     // reviewed…
+      expect(board.get("t1")!.column).not.toBe("MERGED"); // …but never delivered
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("moves it to MERGED when the merge actually succeeds", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const p = new MockProvider([
+        submit('{"role":"coder"}'),
+        writeTurn("out.txt", "code"), doneTurn,
+        ...codeReviewPass(),
+      ]);
+      const board = board1();
+      await runWaveTask(wdeps(p, mgr), session, board, "t1");
+      expect(board.get("t1")!.column).toBe("MERGED");
+    } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

@@ -86,7 +86,15 @@ export async function runReady(
   const cards = board.list();
   // A task already in DONE was implemented and merged by an earlier (interrupted) run — re-running it would
   // redo the whole implementation.
-  const done = new Set(cards.filter((c) => c.column === "DONE").map((c) => c.id));
+  /**
+   * Only MERGED means delivered.
+   *
+   * This used to accept DONE, which a card reaches when its review passes — before the merge is even
+   * attempted. A conflict then left the card reading DONE with its code in a task branch nobody would look
+   * at again, and the next resume skipped it as finished. Measured on a real board: 70 DONE, 7 of them never
+   * merged, and one merge commit in five and a half hours.
+   */
+  const done = new Set(cards.filter((c) => c.column === "MERGED").map((c) => c.id));
   const merged = [...done];
   const failed: string[] = [];
   const skipped: string[] = [];
@@ -238,7 +246,7 @@ export async function runWaves(
    * is one call over a hundred task cards, and while it runs there is no agent and no tool line — a resumed
    * job sat at "Coding… 0 calls" for a minute with nothing on screen to say anything was happening.
    */
-  const todo = board.list().filter((c) => c.column !== "DONE").length;
+  const todo = board.list().filter((c) => c.column !== "MERGED").length;
   deps.note?.(`🧭 Planning the run — ${todo} task(s) left, up to ${deps.maxParallel ?? MAX_PARALLEL_TASKS} at a time. ` +
     `Checking their dependencies before scheduling.`);
   const plan = await runTeamLead(teamLeadOpts(deps, session), board);

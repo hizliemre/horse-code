@@ -1,6 +1,14 @@
 import { z } from "zod";
 
-export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE";
+/**
+ * A card's place in the pipeline.
+ *
+ * DONE means REVIEWED — the code passed its review and its acceptance gate. MERGED means it is in the base
+ * branch, which is a different claim and the only one that means the work was delivered. They were the same
+ * column, and a merge that hit a conflict left the card reading DONE with its code nowhere: a real board
+ * reported 70 done against ONE merge commit, and a resumed run then skipped all of them as already finished.
+ */
+export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE" | "MERGED";
 
 /** How much of a card's history is kept. Enough to see the pattern of a struggling task, not unbounded. */
 export const MAX_STAGE_EVENTS = 200;
@@ -51,7 +59,7 @@ const stageEventSchema = z.object({
 const cardSchema = z.object({
   id: z.string(),
   title: z.string(),
-  column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE"]),
+  column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED"]),
   worktree: z.string().optional(),
   deps: z.array(z.string()),
   acceptance: z.array(z.string()).default([]), // default: boards persisted before the gate existed still load

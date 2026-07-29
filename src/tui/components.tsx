@@ -26,7 +26,7 @@ import { readTelemetry, summarize, describeReport, type RunReport as MonitorRepo
 import { TelemetryTail } from "../obs/tail.js";
 import { WatchManager, type WatchStatus } from "../obs/watch.js";
 
-const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE"];
+const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED"];
 
 /** Splits a pending prompt into its kind + clean body (terminal.ts tags them "[question]"/"[permission]"/"[human]"). */
 export function parsePending(raw: string): { kind: "question" | "permission" | "human"; body: string } {
