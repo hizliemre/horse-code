@@ -308,12 +308,26 @@ export async function runJob(
         emit({ kind: "note", text: `📝 ${deferred.length} deferred code note(s) handed to the PR revision pass (and recorded in review-notes.md).` });
       }
       emit({ kind: "phase", phase: "revision" });
-      revision = await runRevision(
-        deps, session, board,
-        (c) => deps.prAdapter.postComments(c),
-        opts.askUser, opts.revisionRounds ?? 3, prDiff, deferred,
-      );
-      emit({ kind: "phase", phase: "revision-done", detail: revision.status });
+      /**
+       * The revision pass may fail; the DELIVERY must still happen.
+       *
+       * A real run spent 162 minutes, merged 71 tasks, and then threw here on a bookkeeping row — and the
+       * whole job ended with the work sitting on a branch and no report saying where. Whatever this pass is
+       * worth, it is worth less than telling the user what was built and where it is.
+       */
+      try {
+        revision = await runRevision(
+          deps, session, board,
+          (c) => deps.prAdapter.postComments(c),
+          opts.askUser, opts.revisionRounds ?? 3, prDiff, deferred,
+        );
+        emit({ kind: "phase", phase: "revision-done", detail: revision.status });
+      } catch (e) {
+        if (deps.signal.aborted) throw e; // a real cancel still ends the job
+        emit({ kind: "note", text:
+          `⚠️ The PR revision pass could not run (${e instanceof Error ? e.message : String(e)}). ` +
+          `The merged work is unaffected — it is delivered below, and the deferred notes are in review-notes.md.` });
+      }
     }
 
     /**

@@ -111,7 +111,18 @@ export async function runRevision(
   prDiff?: string,
   deferred?: string[], // non-blocking findings carried over from the per-task code reviews
 ): Promise<RevisionResult> {
-  board.addCard({ id: "__revision__", title: "PR revision" });
+  /**
+   * The revision pass keeps its own card, and a RESUMED board already has it.
+   *
+   * `addCard` throws on a duplicate id, and the board is persisted across runs — so the second run of any
+   * job died here, at the very end, after all the work was done: "card already exists: revision". Measured
+   * on a real run: 162 minutes, 71 tasks merged, 22 deferred notes ready to adjudicate, and the delivery
+   * never happened because of a bookkeeping row.
+   *
+   * Reusing it is also the right behaviour, not just the safe one: the card's history is the record of the
+   * earlier revision rounds, and a resumed run continues them.
+   */
+  if (!board.get("__revision__")) board.addCard({ id: "__revision__", title: "PR revision" });
   const base = session.baseWorktree;
   const rounds = Math.max(1, maxRounds);
 

@@ -223,3 +223,32 @@ describe("a revision pass that changes nothing", () => {
     } finally { await rm(dir2, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * The revision pass keeps its own bookkeeping card, and a resumed board already has it.
+ *
+ * `addCard` throws on a duplicate id and the board is persisted across runs, so the SECOND run of any job
+ * died at the very end — after all the work. Measured on a real run: 162 minutes, 71 tasks merged, 22
+ * deferred notes ready to adjudicate, and nothing delivered because of a bookkeeping row.
+ */
+describe("a resumed board already has the revision card", () => {
+  it("does not throw when the card is already there", async () => {
+    const mgr = fakeManager();
+    const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
+    const board = new Board();
+    board.addCard({ id: "__revision__", title: "PR revision" }); // as a resumed board carries it
+    const res = await runRevision(rdeps(p, mgr), session(dir), board, async () => {}, async () => "x", 3);
+    expect(res.status).toBe("approved");
+  });
+
+  /** Its history is the record of the earlier rounds — a resumed run continues them, it does not restart. */
+  it("keeps the history the earlier rounds wrote", async () => {
+    const mgr = fakeManager();
+    const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
+    const board = new Board();
+    board.addCard({ id: "__revision__", title: "PR revision" });
+    board.appendStage("__revision__", { role: "principal-coder", action: "revise", note: "round 1" });
+    await runRevision(rdeps(p, mgr), session(dir), board, async () => {}, async () => "x", 3);
+    expect(board.get("__revision__")!.stageHistory.some((h) => h.note === "round 1")).toBe(true);
+  });
+});

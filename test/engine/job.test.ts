@@ -370,3 +370,27 @@ describe("runJob — a continue request never starts a new project", () => {
     }
   });
 });
+
+/**
+ * A real run spent 162 minutes, merged 71 tasks, and then threw at the very end on a bookkeeping row —
+ * "card already exists: revision" — and the whole job ended with the work on a branch and no report saying
+ * where. Whatever the revision pass is worth, it is worth less than telling the user what was built.
+ */
+describe("a failing revision pass does not swallow the delivery", () => {
+  it("still finishes the job and reports where the work is", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const p = jobProvider({});
+      const notes: string[] = [];
+      // A PR adapter that throws is the simplest stand-in for "the revision pass blew up".
+      const adapter = { ...fakeAdapter(), async postComments() { throw new Error("boom"); } };
+      const res = await runJob({ ...jdeps(p, mgr, adapter as never), revisionRounds: 1 } as never, {
+        prompt: "build it", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2,
+        onEvent: (e) => { if (e.kind === "note") notes.push(e.text); },
+      });
+      expect(res.kind).toBe("done");
+      if (res.kind === "done") expect(res.report).toBeTruthy();
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
