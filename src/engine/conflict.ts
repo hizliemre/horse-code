@@ -14,6 +14,7 @@ import { editFileTool } from "../tools/edit.js";
 import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
 import { buildSkillTool } from "../skills/apply.js";
+import { callSignal, LONG_CALL_MS } from "../agent/deadline.js";
 
 export interface ConflictDeps extends EscalationDeps {
   manager: Pick<WorktreeManager, "unmergedFiles" | "commitMerge" | "abortMerge">;
@@ -83,7 +84,7 @@ export async function resolveMergeConflict(
           `markers (<<<<<<<, =======, >>>>>>>) and combine BOTH sides' changes so the intent of each is ` +
           `preserved (don't just pick one side unless the changes are truly incompatible). ` +
           `Conflicted files: ${conflicted.join(", ")}.${notes}` }],
-        permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
+        permission: deps.permission, approve: deps.approve, cwd: base, signal: callSignal(deps.signal, LONG_CALL_MS),
       };
       await runToCompletion(resolveOpts);
       board.appendStage(taskId, { role: "operational", action: "conflict:resolve-attempt" });

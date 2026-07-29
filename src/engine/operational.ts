@@ -3,6 +3,7 @@ import { runStructuredRole } from "../agent/structured.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 import type { TaskCycleDeps } from "./task-types.js";
+import { callSignal, SHORT_CALL_MS } from "../agent/deadline.js";
 
 export const CommitSchema = z.object({
   message: z.string().describe("A Conventional Commits message: `type(scope): subject`, English, imperative."),
@@ -25,7 +26,7 @@ export async function runOperational(deps: TaskCycleDeps, diff: string, context:
     permission: deps.permission,
     approve: deps.approve,
     cwd: ".",
-    signal: deps.signal,
+    signal: callSignal(deps.signal, SHORT_CALL_MS),
     // One sentence from a diff it was handed. Uncapped, a model that would not call `submit` walked its whole
     // fallback chain at fifty turns an attempt — to phrase a commit message.
     maxTurns: OPERATIONAL_MAX_TURNS,

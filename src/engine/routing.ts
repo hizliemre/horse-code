@@ -7,6 +7,7 @@ import { buildSkillTool } from "../skills/apply.js";
 import type { TaskCycleDeps, ImplementerRole } from "./task-types.js";
 import { routeByEvidence } from "./route-role.js";
 import { telemetry } from "../obs/telemetry.js";
+import { callSignal, SHORT_CALL_MS } from "../agent/deadline.js";
 
 const RouteSchema = z.object({ role: z.enum(["coder", "designer"]) });
 
@@ -45,7 +46,7 @@ export async function routeTask(deps: TaskCycleDeps, task: Card): Promise<Implem
       permission: deps.permission,
       approve: deps.approve,
       cwd: "/",
-      signal: deps.signal,
+      signal: callSignal(deps.signal, SHORT_CALL_MS),
       // One question, one answer, from the text in front of it. Nothing here is worth a fifty-turn budget —
       // and an unbounded structured role walks its entire fallback chain when a model will not submit.
       maxTurns: 3,
