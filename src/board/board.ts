@@ -70,6 +70,23 @@ const cardSchema = z.object({
 });
 const boardDataSchema = z.object({ version: z.literal(1), cards: z.array(cardSchema) });
 
+/**
+ * A board written before MERGED existed used DONE to mean DELIVERED.
+ *
+ * Splitting the two changed what a persisted column MEANS, and an old board says DONE for work that really
+ * is in the base branch. Read literally, every one of those cards looks undelivered: a real board came back
+ * with 69 DONE, one MERGED, and 24 tasks that could never start because their dependencies were all in that
+ * 69 — the whole run collapsed to one task at a time, redoing finished work.
+ *
+ * The evidence is already on the card. A `merged` stage event is git having said so at the time, so those
+ * become MERGED; a DONE card without one was reviewed and never landed, which is exactly what DONE now means
+ * and exactly the card that should be retried.
+ */
+function migrateDelivered(c: Card): Card {
+  if (c.column !== "DONE") return c;
+  return c.stageHistory.some((e) => e.action === "merged") ? { ...c, column: "MERGED" } : c;
+}
+
 function cloneCard(c: Card): Card {
   return {
     ...c,
@@ -227,6 +244,6 @@ export class Board {
 
   static fromJSON(data: unknown): Board {
     const parsed = boardDataSchema.parse(data);
-    return new Board(parsed.cards);
+    return new Board(parsed.cards.map(migrateDelivered));
   }
 }

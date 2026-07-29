@@ -89,3 +89,39 @@ describe("reopening an interrupted card", () => {
     expect(b.get("t1")!.acceptance).toEqual(["x"]);
   });
 });
+
+/**
+ * Splitting DONE (reviewed) from MERGED (in the base branch) changed what a PERSISTED column means, and an
+ * old board says DONE for work that really is delivered. Read literally, a real board came back with 69 DONE,
+ * one MERGED and 24 tasks that could never start — their dependencies were all in that 69 — so the run
+ * collapsed to one task at a time, redoing finished work.
+ */
+describe("a board written before MERGED existed", () => {
+  const old = (cards: unknown[]): string => JSON.stringify({ version: 1, cards });
+  const card = (id: string, column: string, history: { role: string; action: string }[]) => ({
+    id, title: id, column, deps: [], reviewNotes: [], attempts: 1, stageHistory: history,
+  });
+
+  it("reads a DONE card that git merged as MERGED", async () => {
+    const path = join(dir, "old.json");
+    await writeFile(path, old([card("t1", "DONE", [{ role: "team-lead", action: "merged" }])]));
+    expect((await loadBoard(path)).get("t1")!.column).toBe("MERGED");
+  });
+
+  /** DONE without a merge event is exactly what DONE now means: reviewed, never landed, worth retrying. */
+  it("leaves a DONE card that never merged in DONE", async () => {
+    const path = join(dir, "old.json");
+    await writeFile(path, old([card("t1", "DONE", [{ role: "team-lead", action: "merge-conflict" }])]));
+    expect((await loadBoard(path)).get("t1")!.column).toBe("DONE");
+  });
+
+  it("does not touch the other columns", async () => {
+    const path = join(dir, "old.json");
+    await writeFile(path, old([
+      card("a", "TODO", []), card("b", "REVIEW", []), card("c", "IN-PROGRESS", []),
+      card("d", "MERGED", [{ role: "team-lead", action: "merged" }]),
+    ]));
+    const b = await loadBoard(path);
+    expect(["a", "b", "c", "d"].map((i) => b.get(i)!.column)).toEqual(["TODO", "REVIEW", "IN-PROGRESS", "MERGED"]);
+  });
+});
