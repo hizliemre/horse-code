@@ -31,6 +31,29 @@ const IMPLEMENTER_MAX_TURNS = 200;
  * partial work stays and the next tier continues from it.
  */
 export const IMPLEMENTER_TIMEOUT_MS = 20 * 60 * 1000;
+/** How many times a task's budget may be extended. Past this, more time is not what is missing. */
+export const MAX_BUDGET_EXTENSIONS = 2;
+
+/**
+ * The budget for this attempt: the base, plus one for each deadline death in a row.
+ *
+ * Counted backwards from the newest event and stopped at the first failure of any OTHER kind — a review
+ * rejection means the code was wrong, not that the clock was short, and it should start again from the base.
+ */
+export function attemptBudget(task: Card, baseMs: number): number {
+  let deaths = 0;
+  for (let i = task.stageHistory.length - 1; i >= 0 && deaths < MAX_BUDGET_EXTENSIONS; i--) {
+    const e = task.stageHistory[i];
+    if (e.action === "attempt-error") {
+      if (!/budget/i.test(e.note ?? "")) break; // a turn-count or model error is not a shortage of time
+      deaths += 1;
+      continue;
+    }
+    if (e.action === "reviewed:fail" || e.action === "acceptance:failed" || e.action === "no-changes") break;
+  }
+  return baseMs * (1 + deaths);
+}
+
 /** How far into the budget the agent is warned. Late enough not to rush it, early enough to land the work. */
 export const DEADLINE_WARNING_AT = 0.75;
 
@@ -138,7 +161,18 @@ export async function runImplementer(
 
   // A timeout here is NOT a cancellation: the job is fine, this one attempt ran too long. The two are
   // distinguished below so a genuine Ctrl-C still propagates as a cancellation.
-  const budgetMs = deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS;
+  /**
+   * A task that ran out of TIME gets more of it; a task that was rejected does not.
+   *
+   * The ladder answers every failure the same way — escalate to a stronger role — and for a rejected review
+   * that is right. For a deadline it is not: measured on a real board, T035 reached its eleventh attempt with
+   * the last SIX all ending "ran past its 20-minute budget", never once judged on its code. A stronger model
+   * does not make a twenty-minute job fit in twenty minutes; it just spends more per minute failing to.
+   *
+   * The evidence is on the card, so the extension is earned rather than guessed: each consecutive
+   * deadline death adds one budget, capped, and any other kind of failure resets it to the base.
+   */
+  const budgetMs = attemptBudget(task, deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS);
   const budget = AbortSignal.timeout(budgetMs);
   /**
    * A warning before the deadline, delivered as a turn-start note.
@@ -184,7 +218,11 @@ export async function runImplementer(
     onLiveActivity: deps.onLiveActivity,
     onWrite: (path) => commitFile(deps, cwd, path).then(() => {}), // per-write conventional commit in the task worktree
   };
-  const mins = Math.round((deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS) / 60_000);
+  const mins = Math.round(budgetMs / 60_000);
+  const baseMins = Math.round((deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS) / 60_000);
+  if (mins > baseMins) {
+    deps.note?.(`⏳ **${task.title}** ran out of time, not out of ideas — this attempt gets ${mins} minutes.`);
+  }
   // Surfaced as a failed ATTEMPT (the escalation ladder catches it and moves up a tier), with a note that
   // says what happened so the next tier does not simply repeat it.
   const overran = `the implementer ran past its ${mins}-minute budget for a single attempt and was stopped. ` +

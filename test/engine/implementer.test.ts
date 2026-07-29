@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runImplementer, deadlineWarning, DEADLINE_WARNING_AT } from "../../src/engine/implementer.js";
+import { runImplementer, deadlineWarning, attemptBudget, DEADLINE_WARNING_AT, MAX_BUDGET_EXTENSIONS } from "../../src/engine/implementer.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
@@ -227,5 +227,49 @@ describe("the implementer gets the task's own brief", () => {
     }), dir);
     const msg = sent(p);
     expect(msg.indexOf("the store never persists")).toBeLessThan(msg.indexOf("src/store.ts exports save"));
+  });
+});
+
+/**
+ * The ladder answers every failure the same way — escalate to a stronger role — and for a rejected review
+ * that is right. For a deadline it is not: measured on a real board, T035 reached its eleventh attempt with
+ * the last SIX all ending "ran past its 20-minute budget", never once judged on its code. A stronger model
+ * does not make a twenty-minute job fit in twenty minutes.
+ */
+describe("attemptBudget", () => {
+  const BASE = 20 * 60 * 1000;
+  const hist = (...actions: [string, string?][]) =>
+    actions.map(([action, note]) => ({ role: "coder", action, ...(note ? { note } : {}) }));
+  const withHistory = (h: ReturnType<typeof hist>) => card({ stageHistory: h });
+  const overran = "the implementer ran past its 20-minute budget for a single attempt and was stopped.";
+
+  it("gives the base budget to a fresh task", () => {
+    expect(attemptBudget(card(), BASE)).toBe(BASE);
+  });
+
+  it("adds one budget for each deadline death in a row", () => {
+    expect(attemptBudget(withHistory(hist(["attempt-error", overran])), BASE)).toBe(2 * BASE);
+    expect(attemptBudget(withHistory(hist(["attempt-error", overran], ["attempt-error", overran])), BASE)).toBe(3 * BASE);
+  });
+
+  /** More time is not always what is missing — past the cap, something else is wrong. */
+  it("stops extending after the cap", () => {
+    const many = hist(...Array.from({ length: 6 }, () => ["attempt-error", overran] as [string, string]));
+    expect(attemptBudget(withHistory(many), BASE)).toBe((1 + MAX_BUDGET_EXTENSIONS) * BASE);
+  });
+
+  /** A rejection means the code was wrong, not that the clock was short. */
+  it("resets to the base after a review rejection", () => {
+    const h = hist(["attempt-error", overran], ["reviewed:fail", "a critical finding"]);
+    expect(attemptBudget(withHistory(h), BASE)).toBe(BASE);
+  });
+
+  it("resets after an attempt that wrote nothing", () => {
+    expect(attemptBudget(withHistory(hist(["attempt-error", overran], ["no-changes"])), BASE)).toBe(BASE);
+  });
+
+  /** A turn-count ceiling or a model error is a different failure — more minutes would not have helped. */
+  it("does not extend for an error that is not about time", () => {
+    expect(attemptBudget(withHistory(hist(["attempt-error", "maximum turn count exceeded (200)"])), BASE)).toBe(BASE);
   });
 });
