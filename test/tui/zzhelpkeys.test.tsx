@@ -54,8 +54,8 @@ describe("the frame never exceeds the terminal height", () => {
     })) });
     c.selectAgent(1);                                   // opens the detail box
     for (let i = 0; i < 6; i++) c.pushActivity({ agent: "t0", tool: "shell", target: `command ${i}`, lines: 0, summary: "" });
-    c.addInboxNote("how many tasks are left?", () => {}); // pins an aside
-    c.streamAside()("There are 63 tasks in TODO. ".repeat(6));
+    c.addInboxNote("how many tasks are left?", () => {});
+    c.liveNote()("There are 63 tasks in TODO. ".repeat(6));
     c.onEvent({ kind: "note", text: "a note".repeat(20) });
     return c;
   };
@@ -71,7 +71,7 @@ describe("the frame never exceeds the terminal height", () => {
   };
 
   for (const rows of [14, 20, 24, 30, 40]) {
-    it(`fits ${rows} rows with eight agents, a detail box and a pinned answer`, async () => {
+    it(`fits ${rows} rows with eight agents and a detail box`, async () => {
       const { stdout, frame } = screen(rows);
       const app = render(<App controller={busy(8)} fullscreen />, {
         stdout: stdout as never, patchConsole: false, exitOnCtrlC: false,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { choiceHeight, wrapPlain, pendingBodyWidth, asideLines, dropToFit, MIN_VIEWPORT_ROWS } from "../../src/tui/components.js";
+import { choiceHeight, wrapPlain, pendingBodyWidth, dropToFit, MIN_VIEWPORT_ROWS } from "../../src/tui/components.js";
 import { flattenMarkdown } from "../../src/tui/lines.js";
 
 /**
@@ -175,34 +175,6 @@ describe("a paragraph-long question wraps rather than overflowing", () => {
  *
  * They disagreed once already on the pending question, and Ink painted the bottom region straight over the
  * transcript — the user answered a question they could no longer read.
- */
-describe("asideLines", () => {
-  it("is one row for the question plus the wrapped answer", () => {
-    const lines = asideLines("kaç task kaldı", "59 in TODO, 5 in progress", 100);
-    expect(lines[0]).toContain("kaç task kaldı");
-    expect(lines).toHaveLength(2);
-  });
-
-  it("wraps a long answer to the available width", () => {
-    const answer = "word ".repeat(60).trim();
-    expect(asideLines("q", answer, 60).length).toBeGreaterThan(4);
-  });
-
-  it("holds a row for the answer that has not arrived yet, so the panel does not jump", () => {
-    expect(asideLines("q", "", 100)).toHaveLength(2);
-  });
-
-  it("never lets the question itself wrap — it is one truncated row", () => {
-    expect(asideLines("x".repeat(400), "short", 80)).toHaveLength(2);
-  });
-});
-
-/**
- * The bottom region grew with everything happening at once — eight agent rows, a detail box, the monitor, a
- * pinned answer, the next-step list — and nothing bounded the total. Past the terminal's height the frame is
- * simply TALLER than the screen: Ink writes it, the terminal scrolls to make room, and the input box is
- * carried off the top. From then on every keystroke lands at the bottom of a scrolled terminal and is wiped
- * by the next repaint — which is what a user reported, twice, after scrolling.
  */
 describe("dropToFit", () => {
   const panels = () => [

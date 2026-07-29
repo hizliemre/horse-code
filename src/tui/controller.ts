@@ -69,14 +69,6 @@ export interface TuiState {
   liveActivity?: string; // transient "writing <file> · N chars" while a tool call is being generated
   attachments: number; // count of pasted images staged for the next prompt (shown under the input)
   nextSteps: string[]; // coach-suggested follow-ups (run with /next N); cleared when a new turn starts
-  /**
-   * The last "by-the-way" exchange, pinned above the input.
-   *
-   * Answering the question in the transcript was not enough. A coding run writes hundreds of tool lines, and
-   * the answer — one paragraph among them, in the same style — scrolled past before it was read. This is the
-   * same text, held still until the user types again.
-   */
-  aside?: { question: string; answer: string };
 }
 
 /**
@@ -380,8 +372,6 @@ export class TuiController {
      * count to seventeen; every one of them would have started a turn on "" once the job ended.
      */
     if (!task.trim()) return;
-    // Typing again is the signal that the pinned answer has been read.
-    if (this.state.aside) this.state = { ...this.state, aside: undefined };
     if (this.taskResolve) {
       const resolve = this.taskResolve;
       this.taskResolve = undefined;
@@ -437,8 +427,6 @@ export class TuiController {
   addInboxNote(text: string, answerNow?: (q: string) => void): void {
     if (answerNow) {
       this.note(`↳ by-the-way: ${text}`);
-      this.state = { ...this.state, aside: { question: text, answer: "" } };
-      this.notify();
       answerNow(text);
       return;
     }
@@ -640,27 +628,29 @@ export class TuiController {
   }
 
   /**
-   * Streams an answer into BOTH the pinned aside and the transcript.
+   * A single assistant note that is REWRITTEN as it grows, rather than appended to.
    *
-   * The aside is what gets read; the transcript copy is the record — it scrolls back, and it is what the
-   * session store persists for a resume. Neither alone does both jobs.
+   * `streamNote` only ever appends, which is right for reasoning that arrives in order. An answer whose text
+   * has to be cleaned as it streams — a model that emits its own thinking tags, say — needs the note to be
+   * replaceable: the caller holds the raw text, decides what the reader should see, and hands over the whole
+   * of it each time.
+   *
+   * Created lazily, so a call that never produces anything leaves no empty bubble.
    */
-  streamAside(): (delta: string) => void {
-    const toTranscript = this.streamNote("");
-    return (delta: string): void => {
-      toTranscript(delta);
-      const a = this.state.aside;
-      if (!a) return;
-      this.state = { ...this.state, aside: { ...a, answer: a.answer + delta } };
+  liveNote(): (fullText: string) => void {
+    let idx = -1;
+    return (fullText: string): void => {
+      if (!fullText) return;
+      if (idx < 0) {
+        idx = this.state.transcript.length;
+        this.state = { ...this.state, transcript: this.cap([...this.state.transcript, { role: "assistant", text: fullText }]) };
+      } else {
+        const t = [...this.state.transcript];
+        if (t[idx] && "role" in t[idx]) t[idx] = { role: "assistant", text: fullText };
+        this.state = { ...this.state, transcript: t };
+      }
       this.notify();
     };
-  }
-
-  /** Drops the pinned aside — it has been read, or the user has moved on. */
-  clearAside(): void {
-    if (!this.state.aside) return;
-    this.state = { ...this.state, aside: undefined };
-    this.notify();
   }
 
   /** Append an assistant-style note to the transcript (used by /help). */

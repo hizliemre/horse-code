@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtTokens, fmtDuration, relTime } from "../../src/tui/format.js";
+import { fmtTokens, fmtDuration, relTime, stripThinking } from "../../src/tui/format.js";
 import { donePhrase } from "../../src/tui/labels.js";
 
 describe("fmtTokens", () => {
@@ -40,5 +40,44 @@ describe("donePhrase", () => {
     expect(donePhrase("chat")).toBe("zottired");
     expect(donePhrase("upstream")).toBe("refined");
     expect(donePhrase("whatever")).toBe("done");
+  });
+});
+
+/**
+ * Some models emit `<think>…</think>` in the ordinary text stream. It is not an answer and was never meant to
+ * be read: a by-the-way reply came back on screen as `</think>Şu an 65 görev merge edildi…`, the closing tag
+ * in front of the sentence because the opening one had streamed past earlier.
+ */
+describe("stripThinking", () => {
+  it("removes a complete thinking block", () => {
+    expect(stripThinking("<think>weighing it up</think>The answer is 42.")).toBe("The answer is 42.");
+  });
+
+  /** The reported case: the run began before anything was watching, so only the closing tag arrives. */
+  it("drops everything up to a lone closing tag", () => {
+    expect(stripThinking("</think>Şu an 65 görev merge edildi")).toBe("Şu an 65 görev merge edildi");
+  });
+
+  /**
+   * Mid-stream, everything after an unclosed tag really IS thinking. Showing it and retracting it a second
+   * later is worse than waiting for the answer.
+   */
+  it("hides an unfinished thinking block until it closes", () => {
+    expect(stripThinking("Here it is. <think>but wait, actually")).toBe("Here it is.");
+  });
+
+  it("leaves ordinary text exactly as it is", () => {
+    expect(stripThinking("63 tasks in TODO, 5 running.")).toBe("63 tasks in TODO, 5 running.");
+    expect(stripThinking("")).toBe("");
+  });
+
+  it("handles several blocks, and is not fooled by case", () => {
+    expect(stripThinking("<THINK>a</THINK>one <think>b</think>two")).toBe("one two");
+  });
+
+  /** Markdown is the point — the chat renders it, so nothing may be mangled on the way through. */
+  it("does not touch markdown", () => {
+    const md = "**65 merged**\n- 5 running\n- `24` waiting";
+    expect(stripThinking(md)).toBe(md);
   });
 });

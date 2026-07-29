@@ -510,64 +510,47 @@ describe("TuiController", () => {
   });
 
   /**
-   * Answering into the transcript was not enough.
+   * The answer belongs in the CHAT, like every other answer.
    *
-   * A coding run writes hundreds of tool lines a minute. The answer — one paragraph, in the same style as
-   * everything around it — went past unread; the user reported missing it while watching the screen. It is
-   * held above the input instead, until they type again.
+   * It was pinned above the input for a while so it could not scroll away. That panel drew raw text — no
+   * markdown, and a model that emits its own `<think>` tags leaked them onto the screen — and it held one
+   * answer, so a second question erased the first. In the transcript it renders like everything else, it
+   * stays, and the newest is at the bottom where the eye already is.
    */
-  describe("the answer is pinned where it cannot scroll away", () => {
-    it("pins the question the moment it is asked, before any answer exists", () => {
-      const c = new TuiController();
-      c.addInboxNote("how many tasks are left?", () => {});
-      expect(c.getState().aside).toEqual({ question: "how many tasks are left?", answer: "" });
-    });
+  describe("a by-the-way answer goes into the transcript", () => {
+    const said = (c: TuiController): string[] =>
+      c.getState().transcript.filter((m) => "role" in m).map((m) => (m as { text: string }).text);
 
-    it("streams the answer into the pin", () => {
+    it("writes the answer as an assistant message", () => {
       const c = new TuiController();
       c.addInboxNote("q", () => {});
-      const append = c.streamAside();
-      append("59 in TODO"); append(", 5 running");
-      expect(c.getState().aside?.answer).toBe("59 in TODO, 5 running");
+      c.liveNote()("59 in TODO");
+      expect(said(c)).toContain("59 in TODO");
     });
 
-    /** The pin is read; the transcript copy is the record — it scrolls back and it is what a resume keeps. */
-    it("also writes the answer to the transcript", () => {
+    /** Rewritten as it grows, so text that has to be cleaned mid-stream never appears half-cleaned. */
+    it("replaces the same message as the text grows, rather than appending", () => {
       const c = new TuiController();
-      c.addInboxNote("q", () => {});
-      c.streamAside()("59 in TODO");
-      const said = c.getState().transcript.filter((m) => "role" in m).map((m) => (m as { text: string }).text);
-      expect(said).toContain("59 in TODO");
+      const show = c.liveNote();
+      show("59 in");
+      show("59 in TODO, 5 running");
+      expect(said(c)).toEqual(["59 in TODO, 5 running"]);
     });
 
-    it("clears when the user types again — that is the signal it was read", () => {
+    it("leaves no empty message when nothing ever arrives", () => {
       const c = new TuiController();
-      c.awaitTask();
-      c.addInboxNote("q", () => {});
-      c.submitTask("carry on");
-      expect(c.getState().aside).toBeUndefined();
+      c.liveNote();
+      expect(said(c)).toEqual([]);
     });
 
-    it("is replaced, not stacked, by a second question", () => {
+    /** Two questions are two answers — the second must not erase the first. */
+    it("keeps an earlier answer when a second question is asked", () => {
       const c = new TuiController();
       c.addInboxNote("first", () => {});
-      c.streamAside()("a");
+      c.liveNote()("the first answer");
       c.addInboxNote("second", () => {});
-      expect(c.getState().aside).toEqual({ question: "second", answer: "" });
-    });
-
-    it("clearAside drops it", () => {
-      const c = new TuiController();
-      c.addInboxNote("q", () => {});
-      c.clearAside();
-      expect(c.getState().aside).toBeUndefined();
-    });
-
-    // A queued note is answered by a later turn, in the transcript — there is nothing to pin.
-    it("pins nothing when the question is only queued", () => {
-      const c = new TuiController();
-      c.addInboxNote("q");
-      expect(c.getState().aside).toBeUndefined();
+      c.liveNote()("the second answer");
+      expect(said(c).filter((t) => t.includes("answer"))).toEqual(["the first answer", "the second answer"]);
     });
   });
 
