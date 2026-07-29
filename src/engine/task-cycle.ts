@@ -7,18 +7,13 @@ import { verifyAcceptance } from "./acceptance.js";
 import type { Verdict, RunnableRole } from "./task-types.js";
 import { telemetry } from "../obs/telemetry.js";
 import { UNFIT_AFTER } from "./role-fitness.js";
+import { worktreeState } from "./worktree-state.js";
 
 /**
  * Fingerprint of a worktree's work: HEAD + dirty state. Per-write auto-commits mean finished work may already
  * be committed, so a plain `status --porcelain` is not enough — HEAD must be part of the signal. Returns
  * undefined when the path is not a usable git worktree (tests/stubs), which disables the guard.
  */
-async function worktreeState(git: GitRunner, cwd: string): Promise<string | undefined> {
-  const head = await git(["rev-parse", "HEAD"], cwd);
-  if (head.code !== 0) return undefined;
-  const status = await git(["status", "--porcelain"], cwd);
-  return `${head.stdout.trim()}|${status.stdout.trim()}`;
-}
 
 /** Single-round core with an explicit given role (NO routing): implement → review → Board transitions. */
 export async function runCycleWithRole(

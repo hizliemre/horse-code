@@ -5,6 +5,9 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import { runReviewer, readOnlyRegistry } from "./reviewer.js";
 import { runImplementer } from "./implementer.js";
 import type { TaskCycleDeps, Verdict, ImplementerRole } from "./task-types.js";
+import { worktreeState } from "./worktree-state.js";
+import { defaultGitRunner } from "../worktree/git.js";
+import { telemetry } from "../obs/telemetry.js";
 
 export const ArchitectPlanSchema = z.object({
   rootCause: z.string(),
@@ -56,7 +59,31 @@ export async function runEscalationCouncil(
   for (const step of plan.plan) board.addReviewNote(taskId, step);
   board.move(taskId, "IN-PROGRESS", senior);
   board.setWorker(taskId, senior, deps.roleRegistry.peekModel(senior)); // surface who is working it in the live-agents UI
+  /**
+   * The council's senior gets the same no-change check as every other implementer.
+   *
+   * It did not have one: it moved to REVIEW whatever happened. Measured live — five tasks each ran a
+   * council implementation of one turn and ZERO tool calls, went to review with an unchanged worktree, and
+   * the reviewer spent all 25 of its turns looking for a change that was not there before failing with
+   * "tool call budget exceeded before review could be conducted". Every one of those reviews was pure cost:
+   * there was nothing to judge.
+   */
+  const before = await worktreeState(defaultGitRunner, cwd);
   await runImplementer(deps, senior, board.get(taskId)!, cwd);
+  const after = await worktreeState(defaultGitRunner, cwd);
+  if (before !== undefined && after !== undefined && before === after) {
+    const served = deps.roleRegistry.chainFor(senior, 0)[0] ?? "";
+    telemetry().event("implementer.no_changes", {
+      "hc.task.id": taskId, "hc.role": senior, "hc.model": served, "hc.council": true,
+    });
+    if (served) deps.fitness?.record(senior, served, "answered in prose instead of implementing");
+    board.appendStage(taskId, { role: senior, action: "no-changes", note: served ? `model: ${served}` : undefined });
+    board.move(taskId, "TODO", senior);
+    deps.note?.(`⚠️ **${board.get(taskId)!.title}** — the council's \`${senior}\` wrote nothing; not sending an unchanged worktree to review.`);
+    return { verdict: "fail", notes: [
+      "The council's implementation produced NO file changes. Write the code with write_file/edit_file — describing it is not enough.",
+    ] };
+  }
   board.appendStage(taskId, { role: senior, action: "council:implemented" });
   board.move(taskId, "REVIEW", senior);
 

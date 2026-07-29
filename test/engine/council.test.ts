@@ -3,6 +3,7 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runEscalationCouncil } from "../../src/engine/council.js";
+import { initTmpRepo } from "../worktree/helpers.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 import type { RoleConfig } from "../../src/config/config.js";
 import { Board } from "../../src/board/board.js";
@@ -99,5 +100,48 @@ describe("runEscalationCouncil", () => {
     const board = boardWithTask();
     await runEscalationCouncil(deps(p), board, "t1", dir, "designer");
     expect(p.requests[1].messages[0].content).toContain("P-senior-designer");
+  });
+});
+
+/**
+ * The council's senior implementation went to REVIEW whatever happened — it had no no-change check, unlike
+ * every other implementer.
+ *
+ * Measured live: five tasks each ran a council implementation of ONE turn and ZERO tool calls, moved to
+ * review with an unchanged worktree, and the reviewer spent all 25 of its turns hunting for a change that was
+ * not there before failing with "tool call budget exceeded before review could be conducted". Every one of
+ * those reviews was pure cost: there was nothing to judge.
+ */
+describe("the council does not send an unchanged worktree to review", () => {
+  it("fails the round instead, and says which model wrote nothing", async () => {
+    const repo = await initTmpRepo();
+    try {
+      // architect diagnoses, then the senior answers in prose and writes nothing.
+      const p = new MockProvider([submit('{"rootCause":"r","plan":["p"]}'), doneTurn]);
+      const board = boardWithTask();
+      const notes: string[] = [];
+      const v = await runEscalationCouncil({ ...deps(p), note: (t) => notes.push(t) }, board, "t1", repo, "coder");
+      expect(v.verdict).toBe("fail");
+      expect(board.get("t1")!.column).toBe("TODO");                        // not REVIEW
+      expect(board.get("t1")!.stageHistory.some((h) => h.action === "no-changes")).toBe(true);
+      expect(board.get("t1")!.stageHistory.some((h) => h.action === "council:implemented")).toBe(false);
+      expect(notes.join("\n")).toMatch(/wrote nothing/);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** And when it DOES write, nothing changes: the round proceeds to its review exactly as before. */
+  it("still reviews an implementation that actually wrote something", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const p = new MockProvider([
+        submit('{"rootCause":"r","plan":["p"]}'),
+        writeTurn(), doneTurn,
+        submit('{"verdict":"pass","notes":[]}'),
+      ]);
+      const board = boardWithTask();
+      const v = await runEscalationCouncil(deps(p), board, "t1", repo, "coder");
+      expect(v.verdict).toBe("pass");
+      expect(board.get("t1")!.stageHistory.some((h) => h.action === "council:implemented")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

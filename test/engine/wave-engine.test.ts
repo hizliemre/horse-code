@@ -31,12 +31,35 @@ function engineProvider(failTasks: string[] = []): Provider {
       };
       if (sys.includes("P-router")) { yield* emitSubmit('{"role":"coder"}'); return; }
       if (sys.includes("P-architect")) { yield* emitSubmit('{"rootCause":"x","plan":["y"]}'); return; }
+      // The review TEAM (one lens here) and the council judge: an assessment, not a verdict.
+      if (sys.includes("code-correctness") || sys.includes("risk-judge") || sys.includes("logical correctness")
+        || sys.includes("blast radius")) {
+        const fail = failTasks.some((t) => convo.includes(t));
+        yield* emitSubmit(fail
+          ? '{"recommendation":"revise","findings":[{"severity":"critical","note":"nope"}]}'
+          : '{"recommendation":"approve","findings":[]}');
+        return;
+      }
       if (sys.includes("P-reviewer")) {
         const fail = failTasks.some((t) => convo.includes(t));
         yield* emitSubmit(fail ? '{"verdict":"fail","notes":["nope"]}' : '{"verdict":"pass","notes":[]}');
         return;
       }
-      // coder / senior / team-lead / other → no-op (no submit)
+      /**
+       * An implementer WRITES. The fixture used to answer in prose and write nothing, which meant these tests
+       * passed only because the pipeline would send an unchanged worktree to review and the reviewer would
+       * approve it — the exact defect the council's no-change guard now catches. A fixture that cannot fail
+       * that guard is a fixture that does not exercise the real path.
+       */
+      if (sys.includes("P-coder") || sys.includes("P-senior-coder") || sys.includes("P-senior-designer") || sys.includes("P-designer")) {
+        if (!req.messages.some((m) => m.role === "tool")) {
+          const slug = (convo.match(/task-[a-z0-9]+/i)?.[0] ?? "work").replace(/[^a-z0-9-]/gi, "");
+          yield { type: "tool-call", toolCall: { id: "w", name: "write_file", arguments: JSON.stringify({ path: `${slug}.ts`, content: `export const ${slug.replace(/-/g, "_")} = 1;\n` }) } } as const;
+          yield { type: "done", finishReason: "tool_calls" } as const;
+          return;
+        }
+      }
+      // team-lead / anything else → no-op (no submit)
       yield { type: "text-delta", text: "ok" };
       yield { type: "done", finishReason: "stop" };
     },
