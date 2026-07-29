@@ -555,7 +555,7 @@ describe("RunMonitor", () => {
     ],
     turns: 100, toolCalls: 142, singleToolTurns: 80, promptTokens: 2_800_000, modelSeconds: 600,
     reReads: [{ task: "T036", subject: "path:src/app/core/store/taskflow.store.ts", count: 23 }],
-    errors: [{ model: "cx/gpt-5.6", count: 2 }], wroteNothing: [], records: 500, ...over,
+    errors: [{ model: "cx/gpt-5.6", count: 2 }], wroteNothing: [], inFlight: { count: 0, oldestMs: 0, models: [] }, records: 500, ...over,
   });
 
   it("is a titled box naming each stage with its share", () => {
@@ -599,7 +599,7 @@ describe("RunMonitor", () => {
  * both belong in the same panel.
  */
 describe("watches in the monitor panel", () => {
-  const empty = { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0, promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [] };
+  const empty = { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0, promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [], inFlight: { count: 0, oldestMs: 0, models: [] } };
   const watch = (over: Partial<WatchStatus> = {}): WatchStatus => ({
     id: 1, name: "tail", command: "tail -f app.log", startedAt: Date.now(), events: 12, suppressed: 0, alive: true, ...over,
   });

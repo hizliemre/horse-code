@@ -102,6 +102,11 @@ export function monitorLines(r: MonitorReport, watches: WatchStatus[] = []): str
   if (r.errors.length) {
     out.push(`  ${"failed calls".padEnd(16)} ${r.errors.map((e) => `${e.model} x${e.count}`).join(", ")}`);
   }
+  // A pipeline can go completely quiet while one request hangs; this is the only thing that says so.
+  if (r.inFlight.count) {
+    const age = r.inFlight.oldestMs >= 90_000 ? `${Math.round(r.inFlight.oldestMs / 60_000)}m` : `${Math.round(r.inFlight.oldestMs / 1000)}s`;
+    out.push(`  ${"in flight".padEnd(16)} ${r.inFlight.count} call(s), oldest ${age}  ${r.inFlight.models.join(", ").slice(0, 46)}`);
+  }
   // Three heap deaths so far. A number on screen turns the fourth into something seen coming.
   if (r.heap) {
     out.push(`  ${"memory".padEnd(16)} heap ${r.heap.usedMb}MB (peak ${r.heap.peakMb}) · rss ${r.heap.rssMb}MB`);
@@ -1813,7 +1818,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     const showMonitor = monitorOn && (monitorReport !== undefined || watches.length > 0) && running;
     const monitorH = showMonitor
       ? monitorLines((monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
-        promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [] }) as MonitorReport, watches).length + 3
+        promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [],
+        inFlight: { count: 0, oldestMs: 0, models: [] } }) as MonitorReport, watches).length + 3
       : 0; // border(2) + title(1)
     const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
@@ -1961,7 +1967,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         {state.runningAgents.length > 0 && keep.has("agents") ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
         {showMonitor && keep.has("monitor") ? <RunMonitor
           report={(monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
-            promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [] }) as MonitorReport}
+            promptTokens: 0, modelSeconds: 0, reReads: [], errors: [], wroteNothing: [],
+        inFlight: { count: 0, oldestMs: 0, models: [] } }) as MonitorReport}
           watches={watches} cols={size.cols} /> : null}
         {state.queued > 0 ? <Text dimColor>{`  ${state.queued} queued`}</Text> : null}
         {state.meta ? <Text> </Text> : null}

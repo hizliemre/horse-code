@@ -85,3 +85,42 @@ describe("telemetryProvider", () => {
     expect(out).toEqual(events);
   });
 });
+
+/**
+ * The finished record is written when the stream closes, so a call that never closes left no trace at all —
+ * and that is precisely the case worth seeing.
+ */
+describe("a call is recorded when it starts, not only when it ends", () => {
+  const startEvents = (s: MemorySink): EventRecord[] =>
+    s.records.filter((r): r is EventRecord => r.kind === "event" && r.name === "gen_ai.chat.start");
+
+  it("records the start before any of the stream has arrived", async () => {
+    const sink = new MemorySink();
+    const stream = telemetryProvider(provider([{ type: "done", finishReason: "stop" }]), new Telemetry(sink))
+      .chat(req as never, new AbortController().signal);
+    for await (const _ of stream) break; // one event pulled — the start must already be on the log
+    expect(startEvents(sink)).toHaveLength(1);
+    expect(startEvents(sink)[0].attributes["gen_ai.request.model"]).toBe("cc/claude-opus-4-8");
+  });
+
+  /** Paired, so a reader can subtract the finishes from the starts and name what is still out. */
+  it("gives the start and its finish the same id", async () => {
+    const sink = new MemorySink();
+    await drain(telemetryProvider(provider([{ type: "done", finishReason: "stop" }]), new Telemetry(sink)));
+    const started = startEvents(sink)[0].attributes["hc.call_id"];
+    const finished = chatEvents(sink)[0].attributes["hc.call_id"];
+    expect(started).toBeDefined();
+    expect(finished).toBe(started);
+  });
+
+  it("leaves the start unmatched when the stream never closes", async () => {
+    const sink = new MemorySink();
+    const hanging: Provider = { async *chat() { await new Promise(() => undefined); yield { type: "done", finishReason: "stop" } as ChatEvent; } };
+    void (async () => {
+      for await (const _ of telemetryProvider(hanging, new Telemetry(sink)).chat(req as never, new AbortController().signal)) break;
+    })();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(startEvents(sink)).toHaveLength(1);
+    expect(chatEvents(sink)).toHaveLength(0); // nothing finished — which is the whole point
+  });
+});

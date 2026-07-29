@@ -210,3 +210,54 @@ describe("memory", () => {
     expect(describeReport(summarize([chat()]))).not.toContain("Memory");
   });
 });
+
+/**
+ * A pipeline went completely quiet for eight minutes: live process, full heap, no turns, no tools, nothing.
+ *
+ * It was waiting on ONE request that had been in flight the whole time — and the log could not say so,
+ * because a call is only recorded when its stream closes. The case worth seeing was the one case invisible.
+ */
+describe("calls that are still in flight", () => {
+  const start = (id: string, model = "cc/opus", ts = "2026-07-28T00:00:00.000Z"): Record_ => ({
+    ts, name: "gen_ai.chat.start", kind: "event",
+    attributes: { "hc.call_id": id, "gen_ai.request.model": model, "hc.messages": 12 },
+  });
+  const finish = (id: string, ts = "2026-07-28T00:00:10.000Z"): Record_ => ({
+    ts, name: "gen_ai.chat", kind: "event",
+    attributes: { "hc.call_id": id, "gen_ai.request.model": "cc/opus", "hc.duration_ms": 10_000, "hc.status": "ok" },
+  });
+
+  it("counts what started and never finished", () => {
+    const r = summarize([start("a"), finish("a"), start("b"), start("c")]);
+    expect(r.inFlight.count).toBe(2);
+    expect(r.turns).toBe(1); // only the finished one is a turn
+  });
+
+  it("says how long the oldest has been out", () => {
+    const r = summarize([
+      start("a", "cc/opus", "2026-07-28T00:00:00.000Z"),
+      { ...finish("z", "2026-07-28T00:08:00.000Z"), attributes: { "hc.call_id": "z" } } as Record_,
+    ]);
+    expect(r.inFlight.oldestMs).toBe(8 * 60 * 1000);
+  });
+
+  /** Read after the fact, a finished log must not claim a call has been hanging for three hours. */
+  it("measures against the log's own last record, not the wall clock", () => {
+    const r = summarize([start("a", "cc/opus", "2020-01-01T00:00:00.000Z"), start("b", "cc/opus", "2020-01-01T00:01:00.000Z")]);
+    expect(r.inFlight.oldestMs).toBe(60_000);
+  });
+
+  it("names the models still waiting", () => {
+    expect(summarize([start("a", "cx/gpt"), start("b", "cx/gpt")]).inFlight.models).toEqual(["cx/gpt"]);
+  });
+
+  it("reports nothing when every call came back", () => {
+    const r = summarize([start("a"), finish("a")]);
+    expect(r.inFlight.count).toBe(0);
+    expect(describeReport(r)).not.toContain("In flight");
+  });
+
+  it("puts it in the report when something is stuck", () => {
+    expect(describeReport(summarize([start("a"), start("b")]))).toMatch(/In flight.*2 call\(s\)/);
+  });
+});

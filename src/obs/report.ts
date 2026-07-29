@@ -28,6 +28,13 @@ export interface RunReport {
   wroteNothing: { model: string; count: number }[];
   /** Heap in megabytes: where it is now, and the highest it has been. Absent until the first sample. */
   heap?: { usedMb: number; peakMb: number; rssMb: number };
+  /**
+   * Model calls that started and have not finished.
+   *
+   * A pipeline can go completely quiet while one request hangs — no turns, no tools, nothing to see. This is
+   * the only thing in the log that says so, and `oldestMs` is what separates "working" from "stuck".
+   */
+  inFlight: { count: number; oldestMs: number; models: string[] };
   records: number;
 }
 
@@ -65,6 +72,8 @@ export class ReportAccumulator {
   private reads = new Map<string, ReReadTotal>();
   private errors = new Map<string, number>();
   private nothing = new Map<string, number>();
+  private open = new Map<string, { model: string; at: number }>();
+  private lastTs = 0;
   private heapUsed = 0;
   private heapPeak = 0;
   private rss = 0;
@@ -88,6 +97,13 @@ export class ReportAccumulator {
     }
     if (!isEvent(r)) return;
     const a = r.attributes;
+    const ts = Date.parse(r.ts);
+    if (!Number.isNaN(ts)) this.lastTs = Math.max(this.lastTs, ts);
+    if (r.name === "gen_ai.chat.start") {
+      const id = String(a["hc.call_id"] ?? "");
+      if (id) this.open.set(id, { model: String(a["gen_ai.request.model"] ?? "?"), at: Number.isNaN(ts) ? 0 : ts });
+      return;
+    }
     if (r.name === "process.memory") {
       this.heapUsed = Number(a["hc.heap_used_mb"] ?? 0);
       this.heapPeak = Math.max(this.heapPeak, this.heapUsed);
@@ -100,6 +116,7 @@ export class ReportAccumulator {
       return;
     }
     if (r.name === "gen_ai.chat") {
+      this.open.delete(String(a["hc.call_id"] ?? ""));
       this.turns += 1;
       const asked = Number(a["hc.tools_requested"] ?? 0);
       this.toolCalls += asked;
@@ -137,6 +154,13 @@ export class ReportAccumulator {
       reReads: [...this.reads.values()].filter((r) => r.count > 1).sort((a, b) => b.count - a.count).slice(0, 5),
       errors: [...this.errors.entries()].map(([model, count]) => ({ model, count })).sort((a, b) => b.count - a.count),
       wroteNothing: [...this.nothing.entries()].map(([model, count]) => ({ model, count })).sort((a, b) => b.count - a.count),
+      inFlight: {
+        count: this.open.size,
+        // Measured against the newest record rather than the wall clock: a log read after the fact must not
+        // report a call as "hanging for three hours" because three hours have passed since the run.
+        oldestMs: this.open.size ? Math.max(0, this.lastTs - Math.min(...[...this.open.values()].map((o) => o.at))) : 0,
+        models: [...new Set([...this.open.values()].map((o) => o.model))].slice(0, 3),
+      },
       ...(this.heapPeak ? { heap: { usedMb: this.heapUsed, peakMb: this.heapPeak, rssMb: this.rss } } : {}),
       records: this.records,
     };
@@ -176,6 +200,11 @@ export function describeReport(r: RunReport): string {
 
   if (r.errors.length) {
     lines.push(`**Failed calls** — ${r.errors.map((e) => `${e.model} x${e.count}`).join(" · ")}`);
+  }
+
+  if (r.inFlight.count) {
+    lines.push(`**In flight** — ${r.inFlight.count} call(s) still open, oldest ${mins(r.inFlight.oldestMs / 1000)} ` +
+      `(${r.inFlight.models.join(", ")})`);
   }
 
   if (r.heap) {
