@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { rm } from "node:fs/promises";
+import { rm, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { WorktreeManager } from "../../src/worktree/manager.js";
@@ -198,5 +198,70 @@ describe("WorktreeManager.deriveTask", () => {
     expect(t.branch).toBe("hc/job/t/model");
     expect(existsSync(t.worktree)).toBe(true);
     expect(await branchExists(repo, "hc/job/t/model")).toBe(true);
+  });
+});
+
+/**
+ * A task's worktree used to be minted fresh every time, so a task got `…-1`, `…-2`, `…-9`, and each run began
+ * from base with the previous run's work stranded in a directory nobody would open again.
+ *
+ * Measured live: 321 worktrees on disk, TEN of them for one task, and the newest empty while `…-9` held 8
+ * commits and 7.6 KB of finished work. It also made the pipeline lie — the deadline warning tells the
+ * implementer "whatever it wrote is committed and kept, continue from there", and across runs that was false.
+ */
+describe("deriveTask reuses a task's worktree", () => {
+  it("returns the same worktree and branch the second time", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const a = await mgr.deriveTask(session, "Wire the store");
+      const b = await mgr.deriveTask(session, "Wire the store");
+      expect(b.worktree).toBe(a.worktree);
+      expect(b.branch).toBe(a.branch);
+      expect(b.taskSlug).toBe(a.taskSlug);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** The whole point: work from the earlier run is still there. */
+  it("keeps the work the first run committed", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const first = await mgr.deriveTask(session, "Add the store");
+      await writeFile(join(first.worktree, "store.ts"), "export const store = 1;\n");
+      await defaultGitRunner(["add", "-A"], first.worktree);
+      await defaultGitRunner(["commit", "-m", "wip"], first.worktree);
+      const again = await mgr.deriveTask(session, "Add the store");
+      expect(existsSync(join(again.worktree, "store.ts"))).toBe(true);
+      const log = await defaultGitRunner(["log", "--oneline"], again.worktree);
+      expect(log.stdout).toContain("wip");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** Two DIFFERENT tasks still get their own, even when their titles slugify close to each other. */
+  it("gives different tasks different worktrees", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const a = await mgr.deriveTask(session, "Add the store");
+      const b = await mgr.deriveTask(session, "Add the router");
+      expect(b.worktree).not.toBe(a.worktree);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** A leftover directory that is not this branch's worktree must not stop the task. */
+  it("mints a fresh slug when the existing path is not a usable worktree", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      await mkdir(join(session.root, "tasks", "add-the-store"), { recursive: true });
+      const t = await mgr.deriveTask(session, "Add the store");
+      expect(t.taskSlug).not.toBe("add-the-store");
+      expect(existsSync(join(t.worktree, ".git"))).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

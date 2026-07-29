@@ -162,13 +162,36 @@ export class WorktreeManager {
     return candidates[0].session;
   }
 
+  /**
+   * The worktree for a task — REUSED when the task already has one.
+   *
+   * It used to mint a fresh slug every time, so a task got `…-1`, `…-2`, `…-9` and each run began from base
+   * with the previous run's work stranded in a directory nobody would open again. Measured live: 321
+   * worktrees on disk, TEN of them for one task, and the newest empty while `…-9` held 8 commits and 7.6 KB
+   * of finished work.
+   *
+   * It also made the pipeline lie. The deadline warning tells the implementer "whatever it wrote is committed
+   * and kept — continue from there rather than starting over", and across runs that was simply false: a task
+   * needing more than one run's worth of work could never accumulate any.
+   *
+   * A fresh slug is still minted when the existing directory is not a usable worktree for this task's branch,
+   * because a broken one must not stop the task.
+   */
   async deriveTask(session: WorktreeSession, taskName: string): Promise<TaskWorktree> {
     const tasksDir = join(session.root, "tasks");
-    const taskSlug = uniqueSlug(toSlug(taskName), (s) => existsSync(join(tasksDir, s)));
-    const worktree = join(tasksDir, taskSlug);
-    const branch = `hc/${session.jobSlug}/t/${taskSlug}`;
-    await this.run(["worktree", "add", "-b", branch, worktree, session.baseBranch], this.repoRoot);
-    return { taskSlug, worktree, branch };
+    const slug = toSlug(taskName);
+    const branch = `hc/${session.jobSlug}/t/${slug}`;
+    const existing = join(tasksDir, slug);
+    if (existsSync(existing)) {
+      // `rev-parse` is the cheapest question that distinguishes a live worktree from a leftover directory.
+      const ok = await this.git(["rev-parse", "--abbrev-ref", "HEAD"], existing);
+      if (ok.code === 0 && ok.stdout.trim() === branch) return { taskSlug: slug, worktree: existing, branch };
+    }
+    const taskSlug = uniqueSlug(slug, (s) => existsSync(join(tasksDir, s)));
+    const wt = join(tasksDir, taskSlug);
+    const br = `hc/${session.jobSlug}/t/${taskSlug}`;
+    await this.run(["worktree", "add", "-b", br, wt, session.baseBranch], this.repoRoot);
+    return { taskSlug, worktree: wt, branch: br };
   }
 
   async mergeTask(session: WorktreeSession, task: TaskWorktree): Promise<MergeResult> {
