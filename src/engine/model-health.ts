@@ -24,6 +24,8 @@ export interface RoleModelPort {
 }
 
 export interface ModelHealthOpts {
+  /** What each model has actually managed to do in each role — see RoleFitness. */
+  fitness?: { unfit(role: string, model: string): boolean };
   port: RoleModelPort;
   listModels: () => Promise<string[]>;
   /**
@@ -44,6 +46,8 @@ export interface Rechained {
 
 export class ModelHealth {
   private readonly port: RoleModelPort;
+  /** What each model has actually managed to do in each role — see RoleFitness. */
+  private readonly fitness?: { unfit(role: string, model: string): boolean };
   private readonly listModels: () => Promise<string[]>;
   private readonly probe?: (model: string) => Promise<boolean>;
   private readonly note: (msg: string) => void;
@@ -82,6 +86,7 @@ export class ModelHealth {
     this.probe = opts.probe;
     this.note = opts.note ?? ((): void => {});
     this.now = opts.now ?? ((): number => Date.now());
+    this.fitness = opts.fitness;
   }
 
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
@@ -184,7 +189,10 @@ export class ModelHealth {
   /** Assigns each role a fresh chain drawn only from `healthy`, and applies it to its own registry. */
   private reassign(roles: string[], healthy: string[]): Rechained[] {
     if (!roles.length) return [];
-    const picked = adjustRoleModels(roles, healthy);
+    // The re-assignment reads the record of what each model has managed in each role. Without it, benching
+    // one model hands its roles to whatever the catalogue ranks next — including models already known to be
+    // useless there, which is how a coder chain filled up with models that only ever answered in prose.
+    const picked = adjustRoleModels(roles, healthy, this.fitness ? (r, m) => this.fitness!.unfit(r, m) : undefined);
     const out: Rechained[] = [];
     for (const { role, models } of picked) {
       const chain = models.filter((m) => healthy.includes(m));

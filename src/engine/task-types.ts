@@ -8,6 +8,17 @@ import type { SpecKitTemplates } from "../speckit/templates.js";
 export interface TaskCycleDeps {
   provider: Provider;
   roleRegistry: RoleRegistry;
+  /**
+   * What each model has actually managed to do in each role.
+   *
+   * Recorded when a model fails a role's job — prose instead of an implementation — so the next automatic
+   * re-assignment does not hand it that role again. Optional: a run without it simply learns nothing.
+   */
+  fitness?: {
+    record(role: string, model: string, reason: string): number;
+    ok(role: string, model: string): void;
+    unfit(role: string, model: string): boolean;
+  };
   skillRegistry: SkillRegistry;
   permission: PermissionEngine;
   approve: (req: PermissionRequest) => Promise<boolean>;

@@ -21,7 +21,9 @@ export class RoleRegistry {
   // reason and the time so a coordinator can report them and later re-probe whether the limit has reset.
   private readonly quarantine = new Map<string, { at: number; reason: string }>();
   private notify?: (msg: string) => void; // fallback UI note sink (wired once the controller exists)
-  private onQuarantine?: (model: string, reason: string) => void; // a model was benched → re-chain who used it
+  private onQuarantine?: (model: string, reason: string) => void;
+  /** What each model has actually managed to do in each ROLE — see setFitness. */
+  private fitness?: { unfit(role: string, model: string): boolean };
   // Models that answered in prose instead of calling the submit tool. Not a transport error, so nothing ever
   // benched them: the chain quietly slid to the fallback on EVERY call, forever, in every role that held them.
   private readonly strikes = new Map<string, number>();
@@ -65,6 +67,17 @@ export class RoleRegistry {
     const chain = (typeof models === "string" ? [models] : models ?? []).filter((m) => m.length > 0);
     if (chain.length) this.roleOverrides.set(roleName, chain);
     else this.roleOverrides.delete(roleName);
+  }
+
+  /**
+   * Wire the record of what each model has actually managed to do in each role.
+   *
+   * Without it a chain is only a list of names from a catalogue. With it, a model that has twice answered
+   * this role in prose instead of doing its work stops being offered to this role — while staying available
+   * to every other role, where it may be perfectly good.
+   */
+  setFitness(f: { unfit(role: string, model: string): boolean }): void {
+    this.fitness = f;
   }
 
   /** Wire the quarantine hook: whatever benches a model, every role still holding it must be re-assigned. */
@@ -146,7 +159,11 @@ export class RoleRegistry {
     // fall back to the raw chain (better to retry a spent model than to have no model at all). `chainCollapsed`
     // is how a caller detects that this fallback is in effect and asks for a replacement chain instead.
     const live = base.filter((m) => !this.quarantine.has(m));
-    return live.length ? live : base;
+    const usable = live.length ? live : base;
+    // Then drop what this ROLE has proven it cannot use. Never strand: a role with no model stops the run,
+    // which is worse than a role with a model that wastes one attempt and rotates.
+    const fit = this.fitness ? usable.filter((m) => !this.fitness!.unfit(roleName, m)) : usable;
+    return fit.length ? fit : usable;
   }
 
   /**

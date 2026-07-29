@@ -317,7 +317,19 @@ export const FALLBACK_COUNT = 2;
  * Fallbacks prefer a different source so an exhausted source drops cleanly. This is the deterministic
  * backstop; {@link ROLE_PROFILES} lets the LLM tuner refine it with reasoning.
  */
-export function adjustRoleModels(roles: string[], models: string[]): { role: string; models: string[] }[] {
+export function adjustRoleModels(
+  roles: string[],
+  models: string[],
+  /**
+   * What each model has already proven it cannot do in a given role.
+   *
+   * Assignment was decided entirely from catalogue metadata — name patterns, a capability band, a spread
+   * across subscriptions — and nothing in it had ever seen a model do the work. Measured on a real board,
+   * that handed `coder` and `senior-coder` to two models that answered in prose 33 times without writing a
+   * file, and put them straight back after every manual correction.
+   */
+  unfit?: (role: string, model: string) => boolean,
+): { role: string; models: string[] }[] {
   if (models.length === 0) return [];
   // Unrecognised endpoints (video/vanity models) are kept only as a last resort: they must not win a tier slot
   // over a real LLM just because source round-robin reached their source first.
@@ -337,21 +349,39 @@ export function adjustRoleModels(roles: string[], models: string[]): { role: str
   const midPool = primaryPool.filter((m) => modelBand(m) === "mid");
 
   const wanted = new Set(roles);
+  /** Per role, the pool minus what this role has proven it cannot use — never empty (see fitFor). */
+  const forRole = (role: string, pool: string[]): string[] => {
+    if (!unfit) return pool;
+    const fit = pool.filter((m) => !unfit(role, m));
+    return fit.length ? fit : pool; // a role with no model stops the run; a bad one wastes an attempt
+  };
   const known = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES, ...FAST_ROLES]);
   const primary = new Map<string, string>();
 
   // Flagship roles: the most capable models, greedy (judge → fable, principal → next-most-capable).
   const flagSrc = primaryPool; // top of the capable pool is the flagship
-  FLAGSHIP_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, flagSrc[i % flagSrc.length]));
+  FLAGSHIP_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => {
+    const src = forRole(r, flagSrc);
+    primary.set(r, src[i % src.length]);
+  });
   // Strong roles (+ any unknown role): Opus-tier, source-spread so they don't pile on one subscription.
   const strongSrc = interleaveBySource(strongPool.length ? strongPool : nonFlagship.length ? nonFlagship : primaryPool);
   STRONG_ROLES.filter((r) => wanted.has(r)).concat(roles.filter((r) => !known.has(r)))
-    .forEach((r, i) => primary.set(r, strongSrc[i % strongSrc.length]));
+    .forEach((r, i) => {
+      const src = forRole(r, strongSrc);
+      primary.set(r, src[i % src.length]);
+    });
   // Mid roles: capable-but-NOT-flagship, source-spread (coach/coder must not get the flagship).
   const midSrc = interleaveBySource(midPool.length ? midPool : nonFlagship.length ? nonFlagship : primaryPool);
-  MID_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, midSrc[i % midSrc.length]));
+  MID_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => {
+    const src = forRole(r, midSrc);
+    primary.set(r, src[i % src.length]);
+  });
   // Fast roles: cheap models, round-robin.
-  FAST_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => primary.set(r, primaryFast[i % primaryFast.length]));
+  FAST_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => {
+    const src = forRole(r, primaryFast);
+    primary.set(r, src[i % src.length]);
+  });
 
   return roles.map((role) => {
     const head = primary.get(role) ?? primaryPool[0];
@@ -359,6 +389,8 @@ export function adjustRoleModels(roles: string[], models: string[]): { role: str
     // NB: drawn from capablePool (all versions), not primaryPool — an older sibling is a fine fallback.
     const capForFb = MID_ROLES.includes(role) ? capablePool.filter((m) => modelBand(m) !== "flagship") : capablePool;
     const pool = FAST_ROLES.includes(role) ? [...fastPool, ...capForFb] : [...capForFb, ...fastPool];
-    return { role, models: [head, ...pickFallbacks(head, pool, FALLBACK_COUNT)] };
+    // The FALLBACKS are filtered too. A model that cannot implement is no better as the coder's second
+    // choice than as its first — it just fails one attempt later.
+    return { role, models: [head, ...pickFallbacks(head, forRole(role, pool), FALLBACK_COUNT)] };
   });
 }

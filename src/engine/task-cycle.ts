@@ -6,6 +6,7 @@ import { runCodeReview, type ReviewDeps } from "./review.js";
 import { verifyAcceptance } from "./acceptance.js";
 import type { Verdict, RunnableRole } from "./task-types.js";
 import { telemetry } from "../obs/telemetry.js";
+import { UNFIT_AFTER } from "./role-fitness.js";
 
 /**
  * Fingerprint of a worktree's work: HEAD + dirty state. Per-write auto-commits mean finished work may already
@@ -60,6 +61,21 @@ export async function runCycleWithRole(
     telemetry().event("implementer.no_changes", {
       "hc.task.id": taskId, "hc.role": role, "hc.model": servedBy, "hc.attempt": board.get(taskId)!.attempts,
     });
+    /**
+     * The evidence goes on the record, not just in the log.
+     *
+     * A model that answers the implementer in prose has not had a bad call — it cannot do this role. Left
+     * unrecorded, the automatic re-assignment hands it the same role again the next time anything is
+     * benched, which is exactly how two models that never wrote a file ended up as `coder` and
+     * `senior-coder` and stayed there through every manual correction.
+     */
+    if (servedBy) {
+      const strikes = deps.fitness?.record(role, servedBy, "answered in prose instead of implementing") ?? 0;
+      if (strikes === UNFIT_AFTER) {
+        deps.note?.(`🚫 \`${servedBy}\` will no longer be assigned to \`${role}\` — ${strikes} attempts that wrote nothing. ` +
+          `It stays available to every other role.`);
+      }
+    }
     board.appendStage(taskId, { role, action: "no-changes", note: servedBy ? `model: ${servedBy}` : undefined });
     board.clearReviewNotes(taskId);
     board.addReviewNote(taskId, note);
@@ -68,6 +84,9 @@ export async function runCycleWithRole(
     return { verdict: "fail", notes: [note], noProgress: true };
   }
 
+  // The attempt produced changes, so this model CAN do this role. Recorded as the denominator the strikes
+  // are judged against — without it, a model used a hundred times looks worse than one used twice.
+  deps.fitness?.ok(role, deps.roleRegistry.chainFor(role, rotation)[0] ?? "");
   board.move(taskId, "REVIEW", role);
 
   // Code stage of the same team → council → judge review the docs get (single-shot; the escalation ladder retries).

@@ -251,3 +251,41 @@ describe("a model that will not produce structured output gets benched too", () 
     expect(reg().rolesUsing("bad/m").sort()).toEqual(["coach", "judge"]);
   });
 });
+
+/**
+ * A chain is only a list of names from a catalogue until something has watched the models work.
+ *
+ * Measured on a real board: two models were handed `coder` and `senior-coder` by the automatic
+ * re-assignment — neither was in those chains, one was in no role at all — and answered the implementer in
+ * prose 33 times without writing a file.
+ */
+describe("a role's chain skips what that role has proven it cannot use", () => {
+  const reg = (): RoleRegistry => new RoleRegistry(
+    { coder: { models: ["a/one", "b/two", "c/three"], systemPrompt: "p" },
+      judge: { models: ["a/one"], systemPrompt: "p" } },
+    {}, new SkillRegistry());
+
+  it("drops an unfit model from that role's chain", () => {
+    const r = reg();
+    r.setFitness({ unfit: (role, m) => role === "coder" && m === "a/one" });
+    expect(r.chain("coder")).toEqual(["b/two", "c/three"]);
+  });
+
+  /** Per-role, which is the point: the same model stays the judge's. */
+  it("leaves every other role's chain alone", () => {
+    const r = reg();
+    r.setFitness({ unfit: (role, m) => role === "coder" && m === "a/one" });
+    expect(r.chain("judge")).toEqual(["a/one"]);
+  });
+
+  /** A role with no model stops the run — worse than one that wastes an attempt and rotates. */
+  it("never empties a chain", () => {
+    const r = reg();
+    r.setFitness({ unfit: () => true });
+    expect(r.chain("coder")).toEqual(["a/one", "b/two", "c/three"]);
+  });
+
+  it("changes nothing when no record is wired", () => {
+    expect(reg().chain("coder")).toEqual(["a/one", "b/two", "c/three"]);
+  });
+});

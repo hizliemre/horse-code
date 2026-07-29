@@ -12,6 +12,7 @@ import { firewallProvider } from "../providers/firewall.js";
 import { connectAllMcp, type McpBundle } from "../mcp/registry.js";
 import type { McpServerSpec } from "../config/config.js";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { basename } from "node:path";
 import { TuiController } from "./controller.js";
 import { App } from "./components.js";
@@ -33,6 +34,7 @@ import type { MemoryEntry } from "../engine/memory-retrieval.js";
 import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
 import { stripThinking } from "./format.js";
+import { RoleFitness } from "../engine/role-fitness.js";
 
 export interface RunTuiOpts {
   buildDeps: (read: LineReader) => Promise<JobDeps>;
@@ -125,9 +127,21 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const chain = regFor(r).chain(r);
       return { name: r, model: chain[0] ?? "", models: chain, council: reviewNames.has(r), decider: councilNames.includes(r) };
     });
+  /**
+   * What each model has actually managed to do in each role, kept across sessions.
+   *
+   * Wired into every registry so a chain never offers a role a model that role has already proven unusable,
+   * and into ModelHealth so the automatic re-assignment cannot hand it back.
+   */
+  const fitness = deps0.fitness ?? new RoleFitness(join(homedir(), ".horsecode", "model-fitness.json"));
+  for (const r of [deps0.roleRegistry, deps0.teamRegistries.spec, deps0.teamRegistries.plan, deps0.teamRegistries.code, deps0.councilRegistry]) {
+    r.setFitness(fitness);
+  }
+
   // Model health: a role whose whole chain dies gets a new one, and the dead models are quarantined across
   // EVERY registry so they stop being handed out — to this role or any other.
   const health = new ModelHealth({
+    fitness,
     port: {
       roles: tunableRoles,
       registries: () => [deps0.roleRegistry, deps0.teamRegistries.spec, deps0.teamRegistries.plan, deps0.teamRegistries.code, deps0.councilRegistry],

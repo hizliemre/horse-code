@@ -18,6 +18,9 @@ import type { JobDeps } from "./engine/job.js";
 import type { RevisionPRAdapter } from "./adapters/pr.js";
 import { loadSpecKit } from "./speckit/templates.js";
 import type { SpecKitTemplates } from "./speckit/templates.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { RoleFitness } from "./engine/role-fitness.js";
 
 export interface BuildJobDepsOpts {
   /** Live source of the durable behavioral rules → appended to EVERY role's system prompt. */
@@ -115,9 +118,19 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   let kitPromise: Promise<SpecKitTemplates> | undefined;
   const specKit = () => (kitPromise ??= loadSpecKit({ version: config.specKit.version, home: opts.home, fetch: opts.fetch }));
 
+  /**
+   * What each model has managed to do in each role, kept across sessions.
+   *
+   * Lives beside the config rather than inside it: config.json holds the user's API key, and a file that
+   * rewrites itself on every strike does not belong next to a secret.
+   */
+  const fitness = new RoleFitness(join(opts.home ?? homedir(), ".horsecode", "model-fitness.json"));
+  roleRegistry.setFitness(fitness);
+
   return {
     provider: opts.provider,
     roleRegistry,
+    fitness,
     skillRegistry: opts.skillRegistry,
     permission,
     approve: opts.approve,
