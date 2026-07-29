@@ -11,6 +11,14 @@ export interface RoleAgentOptions {
   provider: Provider;
   model: string;
   fallbacks?: string[]; // ordered fallback models: on a retryable error before any output, drop to the next
+  /**
+   * A deadline for EACH model attempt, rather than one for the whole chain.
+   *
+   * One deadline for the whole call is worse than none: a first model that hangs eats the entire budget and
+   * every fallback then sees an already-aborted signal. Honoured by runStructuredRole, which owns the chain
+   * walk; a per-model clock is also the honest reading of "this model did not answer in time".
+   */
+  perAttemptMs?: number;
   systemPrompt: string;
   tools: ToolRegistry;
   messages: Message[];

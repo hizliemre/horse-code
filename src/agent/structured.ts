@@ -86,6 +86,19 @@ export async function runStructuredRole<T>(
   // EVERY model in the chain has failed do we give up. (runRoleAgent is driven per-model with fallbacks:[] so
   // THIS loop owns the chain walk — otherwise a retryable error would skip models out from under it.)
   const chain = [opts.model, ...(opts.fallbacks ?? [])];
+  /**
+   * Each model in the chain gets its OWN deadline.
+   *
+   * One deadline for the whole call is worse than none: measured live, `antigravity/gemini-2.5-pro` hung on a
+   * commit-message call, was cut at exactly 180.0s — the whole budget — and every fallback then saw an
+   * already-aborted signal and could not run. The task landed with `chore: <title>` instead of a written
+   * message, and the retryable flag on the timeout was meaningless because nothing was left to retry with.
+   *
+   * A per-model deadline is also the honest reading of "this model did not answer in time": it is a statement
+   * about that model, so the next one deserves its own clock.
+   */
+  const signalFor = (): AbortSignal =>
+    opts.perAttemptMs ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.perAttemptMs)]) : opts.signal;
   let lastError: string | undefined; // most recent hard error → preserved so the final throw is informative
   for (let ci = 0; ci < chain.length; ci++) {
     const model = chain[ci];
@@ -94,7 +107,7 @@ export async function runStructuredRole<T>(
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       let lastText = "";
       let errored: string | undefined;
-      for await (const ev of runRoleAgent({ ...opts, model, fallbacks: [], messages, tools: registry })) {
+      for await (const ev of runRoleAgent({ ...opts, model, fallbacks: [], messages, tools: registry, signal: signalFor() })) {
         if (ev.type === "error") { errored = ev.message; break; }
         if (ev.type === "abort") throw new Error("cancelled");
         // NB: runRoleAgent reports usage itself (it knows which chain link actually served the call), so

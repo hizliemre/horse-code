@@ -26,7 +26,8 @@ export async function runOperational(deps: TaskCycleDeps, diff: string, context:
     permission: deps.permission,
     approve: deps.approve,
     cwd: ".",
-    signal: callSignal(deps.signal, SHORT_CALL_MS),
+    signal: deps.signal,
+    perAttemptMs: SHORT_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
     // One sentence from a diff it was handed. Uncapped, a model that would not call `submit` walked its whole
     // fallback chain at fifty turns an attempt — to phrase a commit message.
     maxTurns: OPERATIONAL_MAX_TURNS,

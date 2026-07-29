@@ -46,7 +46,8 @@ export async function routeTask(deps: TaskCycleDeps, task: Card): Promise<Implem
       permission: deps.permission,
       approve: deps.approve,
       cwd: "/",
-      signal: callSignal(deps.signal, SHORT_CALL_MS),
+      signal: deps.signal,
+    perAttemptMs: SHORT_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
       // One question, one answer, from the text in front of it. Nothing here is worth a fifty-turn budget —
       // and an unbounded structured role walks its entire fallback chain when a model will not submit.
       maxTurns: 3,

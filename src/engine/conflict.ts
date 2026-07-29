@@ -84,7 +84,8 @@ export async function resolveMergeConflict(
           `markers (<<<<<<<, =======, >>>>>>>) and combine BOTH sides' changes so the intent of each is ` +
           `preserved (don't just pick one side unless the changes are truly incompatible). ` +
           `Conflicted files: ${conflicted.join(", ")}.${notes}` }],
-        permission: deps.permission, approve: deps.approve, cwd: base, signal: callSignal(deps.signal, LONG_CALL_MS),
+        permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
+    perAttemptMs: LONG_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
       };
       await runToCompletion(resolveOpts);
       board.appendStage(taskId, { role: "operational", action: "conflict:resolve-attempt" });

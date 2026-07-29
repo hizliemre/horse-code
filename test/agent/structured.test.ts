@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { runStructuredRole } from "../../src/agent/structured.js";
+import type { Provider } from "../../src/core/types.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
@@ -158,4 +159,54 @@ describe("runStructuredRole — a spent turn budget is not a model failure", () 
     expect(p.requests.map((r) => r.model)).toEqual(["m", "m"]);
     expect(p.requests[1].messages.some((m) => typeof m.content === "string" && /entire tool-call budget/i.test(m.content))).toBe(true);
   });
+});
+
+/**
+ * One deadline for the whole call is worse than none.
+ *
+ * Measured live: `antigravity/gemini-2.5-pro` hung on a commit-message call, was cut at exactly 180.0s — the
+ * whole budget — and every fallback then saw an already-aborted signal and could not run. The task landed
+ * with `chore: <title>` instead of a written message, and the `retryable` flag on the timeout was meaningless
+ * because nothing was left to retry with.
+ */
+describe("each model in the chain gets its own deadline", () => {
+  /**
+   * The first model never answers; the second does. Mirrors what the real provider does when a deadline
+   * fires: an error EVENT that is retryable, not a thrown exception (see omniroute's isDeadline).
+   */
+  const hangThenAnswer = (): Provider => {
+    let call = 0;
+    return {
+      async *chat(_req, signal) {
+        call += 1;
+        if (call === 1) {
+          await new Promise<void>((r) => signal.addEventListener("abort", () => r(), { once: true }));
+          yield { type: "error", message: "the model did not answer within its deadline", retryable: true };
+          return;
+        }
+        yield { type: "tool-call", toolCall: { id: "s", name: "submit", arguments: '{"message":"feat: real"}' } };
+        yield { type: "done", finishReason: "tool_calls" };
+      },
+    };
+  };
+
+  it("falls through to the next model after the first one's clock runs out", async () => {
+    const out = await runStructuredRole({
+      ...opts(new MockProvider([])), provider: hangThenAnswer(),
+      model: "slow/one", fallbacks: ["fast/two"],
+      perAttemptMs: 40,
+    }, z.object({ message: z.string() }));
+    expect(out.message).toBe("feat: real");
+  }, 10_000);
+
+  /** Without a per-attempt clock the old behaviour stands: the caller's signal is the only one. */
+  it("uses the caller's signal alone when no per-attempt deadline is given", async () => {
+    const p = runStructuredRole({
+      ...opts(new MockProvider([])), provider: hangThenAnswer(),
+      model: "slow/one", fallbacks: ["fast/two"],
+    }, z.object({ message: z.string() })).catch(() => "threw");
+    // Nothing bounds the first model, so the call is still waiting when the race resolves.
+    await expect(Promise.race([p, new Promise((r) => setTimeout(() => r("still-waiting"), 200))]))
+      .resolves.toBe("still-waiting");
+  }, 10_000);
 });
