@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { rm, writeFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { commitStep, commitFile, fileCommitMessage, squashTask, runOperational } from "../../src/engine/operational.js";
+import { commitStep, commitFile, fileCommitMessage, squashTask, runOperational, isScratch } from "../../src/engine/operational.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -184,5 +184,56 @@ describe("squashTask", () => {
   it("does not raise when the base ref is unknown", async () => {
     repo = await initTmpRepo();
     await expect(squashTask(deps(new MockProvider([])), repo, "no-such-ref", "X")).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * T057 was rejected twice, both times with the reviewer saying the work was right — "the payload code itself
+ * is approved" — and then listing `taskflow-state-type-repro.tmp.ts`, `tsconfig.angular-test-only.tmp.json`
+ * and `tsconfig.state-repro.tmp.json` as the reason it could not pass. Every file the implementer writes is
+ * committed, so its scratchpad and its deliverable were the same thing. Ten attempts later the task was
+ * abandoned with working code in it.
+ */
+describe("an agent's scratchpad stays out of the diff", () => {
+  it("recognises the names no deliverable carries", () => {
+    for (const p of ["taskflow-state-type-repro.tmp.ts", "tsconfig.angular-test-only.tmp.json",
+      "src/tmp.helper.ts", "a/b/scratch.notes.md", "x.repro.json"]) {
+      expect(isScratch(p)).toBe(true);
+    }
+  });
+
+  /**
+   * Deliberately narrow. Wrongly dropping real work costs far more than one more review note, so a file that
+   * merely LOOKS temporary to a human is left alone.
+   */
+  it("leaves anything ambiguous alone", () => {
+    for (const p of ["src/debug.ts", "test2.js", "src/temporary-fix.ts", "tsconfig.spec.json",
+      "src/features/repository.ts", "src/scratchpad-view.component.ts"]) {
+      expect(isScratch(p)).toBe(false);
+    }
+  });
+
+  it("does not commit a scratch file the agent wrote", async () => {
+    const repo = await initTmpRepo();
+    try {
+      await writeFile(join(repo, "repro.tmp.ts"), "const x = 1;\n");
+      const msg = await commitFile(deps(new MockProvider([])), repo, "repro.tmp.ts");
+      expect(msg).toBeUndefined();
+      const log = await defaultGitRunner(["log", "--oneline"], repo);
+      expect(log.stdout).not.toContain("repro.tmp");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** `add -A` sweeps in whatever is lying around — which is exactly how a scratchpad reached a review. */
+  it("keeps a scratch file out of a whole-worktree commit, and the real file in", async () => {
+    const repo = await initTmpRepo();
+    try {
+      await writeFile(join(repo, "real.ts"), "export const real = 1;\n");
+      await writeFile(join(repo, "state-repro.tmp.json"), "{}\n");
+      await commitStep(deps(new MockProvider([submit("chore: work")])), repo, "ctx");
+      const files = await defaultGitRunner(["show", "--name-only", "--format=", "HEAD"], repo);
+      expect(files.stdout).toContain("real.ts");
+      expect(files.stdout).not.toContain("state-repro.tmp.json");
+    } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

@@ -60,9 +60,32 @@ export function fileCommitMessage(path: string): string {
   return `wip(${type}${dir ? `/${dir}` : ""}): ${p.slice(p.lastIndexOf("/") + 1)}`;
 }
 
+/**
+ * Files an agent made for ITSELF, which must never reach the review.
+ *
+ * Caught live and it cost a whole task: T057 was rejected twice, both times with the reviewer saying the
+ * work was right — "the payload code itself is approved" — and then listing `taskflow-state-type-repro.tmp.ts`,
+ * `tsconfig.angular-test-only.tmp.json` and `tsconfig.state-repro.tmp.json` as the reason it could not pass.
+ * Every file the implementer writes is committed, so its scratchpad and its deliverable were the same thing.
+ * Ten attempts later the task was abandoned with working code in it.
+ *
+ * Deliberately narrow. These are names no deliverable carries — `.tmp.`, `-repro.`, `.scratch.` — so the
+ * rule can be mechanical without guessing at intent. A file that merely LOOKS temporary to a human (a
+ * `debug.ts`, a `test2.js`) is left alone: the cost of wrongly dropping real work is far higher than the
+ * cost of one more review note.
+ */
+export const SCRATCH_RE = /(^|\/|\.)(tmp|scratch|repro|sandbox)\.|[-_.](tmp|scratch|repro)\.[a-z]+$/i;
+
+/** True when this path is an agent's own working file rather than part of the change it was asked to make. */
+export function isScratch(path: string): boolean {
+  return SCRATCH_RE.test(path.split("/").pop() ?? path);
+}
+
 export async function commitFile(
   deps: TaskCycleDeps, workdir: string, path: string, git: GitRunner = defaultGitRunner,
 ): Promise<string | undefined> {
+  // An agent's scratchpad stays in the worktree and out of the diff the reviewer judges.
+  if (isScratch(path)) return undefined;
   await git(["add", "--", path], workdir);
   const staged = await git(["diff", "--cached", "--quiet", "--", path], workdir);
   if (staged.code === 0) return undefined; // this file didn't actually change
@@ -89,6 +112,10 @@ export async function commitStep(
   deps: TaskCycleDeps, workdir: string, context: string, git: GitRunner = defaultGitRunner,
 ): Promise<string | undefined> {
   await git(["add", "-A"], workdir);
+  // `add -A` sweeps in whatever is lying around, which is exactly how a scratchpad reached a review.
+  const dirty = await git(["diff", "--cached", "--name-only"], workdir);
+  const scratch = dirty.stdout.split("\n").map((l) => l.trim()).filter((l) => l && isScratch(l));
+  if (scratch.length) await git(["reset", "--quiet", "--", ...scratch], workdir);
   const staged = await git(["diff", "--cached", "--quiet"], workdir);
   if (staged.code === 0) return undefined; // nothing staged → nothing to commit
   const diff = await git(["diff", "--cached"], workdir);

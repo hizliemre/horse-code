@@ -120,9 +120,22 @@ export async function runImplementer(
         `change to live, not a limit on it.`
       : "",
   ].filter(Boolean).join("\n\n");
+  /**
+   * What the reviewer will actually be shown.
+   *
+   * The diff is the deliverable, and an agent's own working files were landing in it: T057 was rejected
+   * twice with the reviewer calling the work right — "the payload code itself is approved" — and failing it
+   * over three scratch files and a test config narrowed to a single spec. Ten attempts later a task with
+   * working code in it was abandoned. Names like `*.tmp.*` are now dropped mechanically; this covers what a
+   * pattern cannot, which is a real config edited for the agent's own convenience.
+   */
+  const hygiene =
+    `Your whole diff is what the review judges. Before you finish: undo anything you changed for your OWN ` +
+    `convenience — a test config narrowed to one spec, a widened timeout, a disabled lint rule — and delete ` +
+    `any scratch, repro or debug file you made. Leaving them in fails the review even when the work is right.`;
   const content = (returning
     ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
-    : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "");
+    : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "") + `\n\n${hygiene}`;
   // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
   // blind to them and kept re-learning the same things.
   const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role });
