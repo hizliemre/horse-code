@@ -34,6 +34,31 @@ export interface EscalationDeps extends ReviewDeps {
   askHuman: AskHuman;
 }
 
+/**
+ * How many attempts IN A ROW have produced no file changes, counting back from the newest event.
+ *
+ * This used to count the card's whole history, and that made the gate permanent: once a task had ever
+ * written nothing three times, every later run hit the gate before the ladder ran at all. Measured live —
+ * five tasks were scheduled, each opened and closed its span in 0.0 seconds, with no `decision.tier` event
+ * between them. Three or four no-changes each, spread over earlier runs — enough to trip a lifetime
+ * counter forever, and they could never be attempted again whatever was fixed in the meantime.
+ *
+ * A streak is the honest reading of "three attempts produced no file changes": three in a row, now. A task
+ * that wrote nothing three times yesterday and has since produced code is not that task.
+ */
+export function noChangeStreak(task: Card): number {
+  let n = 0;
+  for (let i = task.stageHistory.length - 1; i >= 0; i--) {
+    const a = task.stageHistory[i].action;
+    if (a === "no-changes") { n += 1; continue; }
+    // Column moves and the bookkeeping around an attempt say nothing either way; anything else — a review,
+    // a merge, a reset, a human decision — means work happened and the streak is over.
+    if (a.startsWith("→") || a === "attempt-error") continue;
+    break;
+  }
+  return n;
+}
+
 /** Derives the tier from attempts + turns-per-tier: 0 implementer, 1 senior, 2 council. */
 export function tierOf(attempts: number, rounds: number): 0 | 1 | 2 {
   return attempts < rounds ? 0 : attempts < 2 * rounds ? 1 : 2;
@@ -67,7 +92,7 @@ export async function runTaskWithEscalation(
   const task = board.get(taskId);
   if (!task) throw new Error(`runTaskWithEscalation: unknown task: ${taskId}`);
 
-  const noChangeCount = task.stageHistory.filter((s) => s.action === "no-changes").length;
+  const noChangeCount = noChangeStreak(task);
   if (noChangeCount >= 3) {
     const notes = ["Three attempts produced no file changes. The task needs a human decision before another agent is dispatched."];
     board.appendStage(taskId, { role: "system", action: "human:required", note: notes[0] });

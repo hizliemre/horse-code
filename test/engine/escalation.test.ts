@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTaskWithEscalation, tierOf, autonomousAskHuman } from "../../src/engine/escalation.js";
+import { runTaskWithEscalation, tierOf, autonomousAskHuman, noChangeStreak } from "../../src/engine/escalation.js";
 import type { EscalationDeps, AskHuman } from "../../src/engine/escalation.js";
 import type { Card } from "../../src/board/board.js";
 import type { Verdict } from "../../src/engine/task-types.js";
@@ -269,5 +269,51 @@ describe("a no-op attempt tries the role's next model before spending a stronger
     const board = boardWithTask();
     await runTaskWithEscalation(edeps(p, { rounds: 6 }), board, "t1", dir);
     expect(board.get("t1")!.stageHistory.filter((s) => s.action === "no-changes").length).toBeLessThanOrEqual(4);
+  });
+});
+
+/**
+ * The "three attempts produced no file changes" gate used to count the card's WHOLE history, which made it
+ * permanent: once a task had ever written nothing three times, every later run hit the gate before the ladder
+ * ran at all.
+ *
+ * Measured live — five tasks were scheduled, each opened and closed its span in 0.0 seconds with no
+ * `decision.tier` event between them. They carried three or four no-changes each from earlier runs — enough to trip a
+ * lifetime counter forever — and could never be attempted again whatever had been fixed since.
+ */
+describe("noChangeStreak", () => {
+  const card = (...actions: string[]): Card => ({
+    id: "t1", title: "t", column: "TODO", deps: [], acceptance: [], files: [], reviewNotes: [],
+    attempts: 0, stageHistory: actions.map((action) => ({ role: "coder", action })),
+  });
+
+  it("counts the run of empty attempts at the end", () => {
+    expect(noChangeStreak(card("no-changes", "no-changes", "no-changes"))).toBe(3);
+  });
+
+  /** The case that poisoned five real tasks: old failures with real work after them. */
+  it("does not count empty attempts that work has since followed", () => {
+    expect(noChangeStreak(card(
+      "no-changes", "no-changes", "no-changes", "no-changes",
+      "→REVIEW", "reviewed:fail", "→TODO",
+    ))).toBe(0);
+  });
+
+  it("counts only back to the last thing that happened", () => {
+    expect(noChangeStreak(card("no-changes", "reviewed:fail", "no-changes", "no-changes"))).toBe(2);
+  });
+
+  /** Column moves and a thrown attempt are bookkeeping around an attempt, not evidence about it. */
+  it("looks past the column moves between attempts", () => {
+    expect(noChangeStreak(card("no-changes", "→TODO", "→IN-PROGRESS", "no-changes", "→TODO"))).toBe(2);
+  });
+
+  it("is zero for a task that has never run", () => {
+    expect(noChangeStreak(card())).toBe(0);
+  });
+
+  /** A reset is a human saying "start over"; it must clear the streak like any other real event. */
+  it("stops at a reset", () => {
+    expect(noChangeStreak(card("no-changes", "no-changes", "reset", "no-changes"))).toBe(1);
   });
 });
