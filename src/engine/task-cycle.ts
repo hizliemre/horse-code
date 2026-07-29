@@ -7,7 +7,7 @@ import { verifyAcceptance } from "./acceptance.js";
 import type { Verdict, RunnableRole } from "./task-types.js";
 import { telemetry } from "../obs/telemetry.js";
 import { UNFIT_AFTER } from "./role-fitness.js";
-import { worktreeState } from "./worktree-state.js";
+import { worktreeState, hasWorkAgainst } from "./worktree-state.js";
 
 /**
  * Fingerprint of a worktree's work: HEAD + dirty state. Per-write auto-commits mean finished work may already
@@ -41,7 +41,18 @@ export async function runCycleWithRole(
   // the code review has nothing to reject, commitTask is a no-op and mergeTask reports "already up to date" —
   // so the task would be marked DONE having done nothing at all. Treat it as a failed attempt instead, which
   // sends it up the escalation ladder (senior-coder next) with an explicit instruction.
-  if (before !== undefined && after !== undefined && before === after) {
+  /**
+   * …unless the worktree ALREADY holds work relative to base.
+   *
+   * The question before a review is not "did this attempt add something" but "is there anything to judge".
+   * A retried task carries its earlier work, so an implementer that looks, sees the job already done and
+   * writes nothing is making a correct observation — not failing. Treating those as failures did real
+   * damage: it recorded strikes against `cc/claude-opus-4-8` and benched it from `senior-coder` on 2 of 2,
+   * for declining to rewrite code that was already there.
+   */
+  const idle = before !== undefined && after !== undefined && before === after
+    && !(deps.baseRef && await hasWorkAgainst(git, cwd, deps.baseRef));
+  if (idle) {
     const note = "The previous attempt produced NO file changes. You must actually write the code with write_file/edit_file — describing it is not enough.";
     /**
      * WHICH model wrote nothing, not just that something did.

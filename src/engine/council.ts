@@ -5,7 +5,7 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import { runReviewer, readOnlyRegistry } from "./reviewer.js";
 import { runImplementer } from "./implementer.js";
 import type { TaskCycleDeps, Verdict, ImplementerRole } from "./task-types.js";
-import { worktreeState } from "./worktree-state.js";
+import { worktreeState, hasWorkAgainst } from "./worktree-state.js";
 import { defaultGitRunner } from "../worktree/git.js";
 import { telemetry } from "../obs/telemetry.js";
 
@@ -71,7 +71,18 @@ export async function runEscalationCouncil(
   const before = await worktreeState(defaultGitRunner, cwd);
   await runImplementer(deps, senior, board.get(taskId)!, cwd);
   const after = await worktreeState(defaultGitRunner, cwd);
-  if (before !== undefined && after !== undefined && before === after) {
+  /**
+   * …unless the worktree ALREADY holds work relative to base.
+   *
+   * The question before a review is not "did this attempt add something" but "is there anything to judge".
+   * A retried task carries its earlier work, so an implementer that looks, sees the job already done and
+   * writes nothing is making a correct observation — not failing. Treating those as failures did real
+   * damage: it recorded strikes against `cc/claude-opus-4-8` and benched it from `senior-coder` on 2 of 2,
+   * for declining to rewrite code that was already there.
+   */
+  const idle = before !== undefined && after !== undefined && before === after
+    && !(deps.baseRef && await hasWorkAgainst(defaultGitRunner, cwd, deps.baseRef));
+  if (idle) {
     const served = deps.roleRegistry.chainFor(senior, 0)[0] ?? "";
     telemetry().event("implementer.no_changes", {
       "hc.task.id": taskId, "hc.role": senior, "hc.model": served, "hc.council": true,
