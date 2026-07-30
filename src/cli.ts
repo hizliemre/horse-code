@@ -28,7 +28,7 @@ import type { Delivery } from "./engine/wave-engine.js";
 import { runInit } from "./init.js";
 import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 import { telemetryProvider } from "./providers/telemetry.js";
-import { Telemetry, setTelemetry, telemetry, sampleMemory, writeHeapSnapshot } from "./obs/telemetry.js";
+import { Telemetry, setTelemetry, telemetry, sampleMemory, writeHeapSnapshot, clearPerfMarks } from "./obs/telemetry.js";
 import { FileSink, telemetryDir } from "./obs/sink.js";
 
 /** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
@@ -161,7 +161,18 @@ export async function main(argv: string[]): Promise<void> {
     const { spawnSync } = await import("node:child_process");
     const r = spawnSync(process.execPath, [`--max-old-space-size=${HEAP_MB}`, ...process.argv.slice(1)], {
       stdio: "inherit",
-      env: { ...process.env, HC_HEAP_SET: "1" },
+      /**
+       * `NODE_ENV=production` is set here because it must be set BEFORE React is imported.
+       *
+       * Without it, react-reconciler loads its development build, which calls `performance.measure()` on
+       * every render. Node keeps every entry forever: a heap snapshot of a live session found 1,381,896
+       * `PerformanceMeasure` objects, with React's own labels — `Components ⚛`, `Changed Props`,
+       * `+ children` — among the largest classes on the heap. That is the ~700 MB/hour the floor was
+       * climbing by, in a TUI that re-renders several times a second for hours.
+       *
+       * A user who has chosen their own NODE_ENV keeps it.
+       */
+      env: { ...process.env, HC_HEAP_SET: "1", NODE_ENV: process.env.NODE_ENV ?? "production" },
     });
     process.exit(r.status ?? 0);
   }
@@ -177,6 +188,7 @@ export async function main(argv: string[]): Promise<void> {
   if (sink) {
     setTelemetry(new Telemetry(sink));
     sampleMemory(telemetry()); // three heap deaths so far, each diagnosed from a guess — record the curve
+    clearPerfMarks();           // belt to NODE_ENV=production's braces — see clearPerfMarks
     /**
      * `kill -USR2 <pid>` takes a heap snapshot without touching the session.
      *

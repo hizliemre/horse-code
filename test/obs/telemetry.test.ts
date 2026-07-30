@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry, writeHeapSnapshot, estimateFreezeSeconds } from "../../src/obs/telemetry.js";
+import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry, writeHeapSnapshot, estimateFreezeSeconds, clearPerfMarks } from "../../src/obs/telemetry.js";
 import type { SpanRecord, EventRecord } from "../../src/obs/telemetry.js";
 import { MemorySink, FileSink } from "../../src/obs/sink.js";
 
@@ -199,5 +199,45 @@ describe("estimateFreezeSeconds", () => {
   /** Rounded UP, because a pause that outlasts its estimate is what makes someone kill a healthy session. */
   it("rounds up rather than down", () => {
     expect(estimateFreezeSeconds(1.01 * GB)).toBeGreaterThanOrEqual(27);
+  });
+});
+
+/**
+ * React's development build calls `performance.measure()` on every render — `Components ⚛`, `Changed Props`,
+ * `+ children` — and Node keeps every entry forever.
+ *
+ * A heap snapshot of a live session named the leak outright: 1,381,896 `PerformanceMeasure` objects, with
+ * those labels among the largest classes on a 2.7 GB heap. Ink re-renders several times a second, so an
+ * hours-long run accumulates millions of records nothing will ever read — the ~700 MB/hour the floor climbed.
+ */
+describe("clearPerfMarks", () => {
+  it("empties the user-timing buffer", async () => {
+    performance.mark("hc-test-a");
+    performance.measure("hc-test-m", "hc-test-a");
+    expect(performance.getEntriesByType("measure").length).toBeGreaterThan(0);
+    const stop = clearPerfMarks(10);
+    try {
+      await new Promise((r) => setTimeout(r, 40));
+      expect(performance.getEntriesByType("measure")).toHaveLength(0);
+      expect(performance.getEntriesByType("mark")).toHaveLength(0);
+    } finally { stop(); }
+  });
+
+  it("keeps clearing, not just once", async () => {
+    const stop = clearPerfMarks(10);
+    try {
+      await new Promise((r) => setTimeout(r, 25));
+      performance.mark("hc-test-b");
+      await new Promise((r) => setTimeout(r, 40));
+      expect(performance.getEntriesByType("mark")).toHaveLength(0);
+    } finally { stop(); }
+  });
+
+  it("stops when told to", async () => {
+    clearPerfMarks(10)();
+    performance.mark("hc-test-c");
+    await new Promise((r) => setTimeout(r, 40));
+    expect(performance.getEntriesByType("mark").length).toBeGreaterThan(0);
+    performance.clearMarks();
   });
 });

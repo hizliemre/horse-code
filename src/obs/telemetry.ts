@@ -238,6 +238,35 @@ export async function writeHeapSnapshot(dir: string, tel: Telemetry = active): P
   }
 }
 
+/**
+ * How often the performance timeline is emptied.
+ *
+ * React's development build calls `performance.measure()` on every render — `Components ⚛`, `Changed Props`,
+ * `+ children` — and Node keeps every entry forever. A heap snapshot of a live session named the leak
+ * outright: 1,381,896 `PerformanceMeasure` objects, and the labels above among the largest classes on the
+ * heap. Ink re-renders several times a second, so an hours-long run accumulates millions of records nothing
+ * will ever read.
+ *
+ * `NODE_ENV=production` stops React emitting them at all and is the root fix; this is the belt to that
+ * braces, for any path that still does.
+ */
+export const CLEAR_MARKS_MS = 60_000;
+
+/** Empties the user-timing buffer on an interval. Returns a stop function. */
+export function clearPerfMarks(everyMs = CLEAR_MARKS_MS): () => void {
+  const tick = (): void => {
+    try {
+      performance.clearMarks();
+      performance.clearMeasures();
+    } catch {
+      // A runtime without user timing has nothing to clear, which is the same outcome.
+    }
+  };
+  const timer = setInterval(tick, everyMs);
+  timer.unref?.(); // housekeeping must never be the reason the process stays alive
+  return () => clearInterval(timer);
+}
+
 /** Telemetry that records nothing, for code paths (and tests) that have no sink. */
 export const NO_TELEMETRY = new Telemetry({ write: () => undefined, flush: async () => undefined });
 
