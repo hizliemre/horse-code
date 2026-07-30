@@ -30,6 +30,7 @@ import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 import { telemetryProvider } from "./providers/telemetry.js";
 import { Telemetry, setTelemetry, telemetry, sampleMemory, writeHeapSnapshot, clearPerfMarks } from "./obs/telemetry.js";
 import { FileSink, telemetryDir } from "./obs/sink.js";
+import { restoreTerminal } from "./tui/restore-terminal.js";
 
 /** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
 const HEAP_MB = 12_288;
@@ -174,6 +175,14 @@ export async function main(argv: string[]): Promise<void> {
        */
       env: { ...process.env, HC_HEAP_SET: "1", NODE_ENV: process.env.NODE_ENV ?? "production" },
     });
+    /**
+     * The child owned the terminal; if it died without putting it back, this is the last chance.
+     *
+     * A hard kill (SIGKILL, a crash inside the renderer) runs none of the child's handlers, and the parent
+     * shares the same tty — so it can hand it back on the child's behalf. Costs two syscalls on a path that
+     * runs once per session.
+     */
+    restoreTerminal({ stdin: process.stdin, write: (x) => process.stdout.write(x) });
     process.exit(r.status ?? 0);
   }
   /**

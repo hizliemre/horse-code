@@ -35,6 +35,7 @@ import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
 import { stripThinking } from "./format.js";
 import { RoleFitness } from "../engine/role-fitness.js";
+import { restoreTerminal, restoreOnExit } from "./restore-terminal.js";
 
 export interface RunTuiOpts {
   buildDeps: (read: LineReader) => Promise<JobDeps>;
@@ -555,9 +556,24 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     title.stop(); // stop the spinner, reset the tab title
     void mcpHolder.bundle?.closeAll(); // shut down MCP servers
     process.stdout.write = origWrite;
-    // pop bracketed paste + the kitty protocol, then close the alt-screen + restore the cursor.
-    try { origWrite("\x1b[?2004l\x1b[<u\x1b[?1049l\x1b[?25h"); } catch { /* swallow */ }
+    /**
+     * Raw mode too — not only the display modes.
+     *
+     * `process.exit()` does not unmount Ink, so Ink's own `setRawMode(false)` never runs on the paths that
+     * call it. Reported after a real session: quitting left the shell echoing `^M` for Enter and `^C` for
+     * interrupt, with commands typed as `clear^M^C^C^C…` and never executed.
+     */
+    restoreTerminal({ stdin: process.stdin, write: (x) => origWrite(x) });
+    unhook();
   };
+  /**
+   * …and on every way out, including the ones this code does not control.
+   *
+   * A signal that reaches the process runs no `exit` handler by default, so a `kill` or a Ctrl+C that gets
+   * past the TUI would leave the terminal raw. Registered here rather than at each `process.exit` call site
+   * so a new exit path cannot forget it.
+   */
+  const unhook = restoreOnExit({ stdin: process.stdin, write: (x) => origWrite(x) });
   // alt-screen + kitty keyboard protocol (flag 1: disambiguate) → Shift+Enter arrives as a separate
   // sequence (\x1b[13;2u) (plain Enter is still \r, arrows are still legacy → Ink scroll isn't broken).
   // Terminals that don't support it ignore \x1b[>1u (harmless; those terminals need Alt+Enter or
