@@ -159,6 +159,18 @@ export async function runReady(
               // abort → rethrow (base may be left mid-merge; cleanup is left to session teardown).
               // If a queued sibling merge hits a dirty tree, git rejects it (won't return merged) → no false PR.
               if (deps.signal.aborted) throw e;
+              /**
+               * WHY the resolution failed, on the card.
+               *
+               * `conflict:resolve-attempt` is only written once the resolver has finished, so a resolution
+               * that THREW left no trace at all: a real board showed T060 passing its review, hitting a
+               * merge conflict, and stopping — with nothing to say whether the resolver had run, failed, or
+               * never started. Three tasks waited behind that silence.
+               */
+              board.appendStage(id, {
+                role: "operational", action: "conflict:resolve-failed",
+                note: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+              });
               try { await deps.manager.abortMerge(session); } catch { /* zaten temiz olabilir */ }
               return { status: "conflict", files: conflicted };
             }

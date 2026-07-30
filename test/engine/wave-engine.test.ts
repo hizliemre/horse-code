@@ -597,3 +597,31 @@ describe("a card the run gave up on leaves TODO", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * `conflict:resolve-attempt` is only written once the resolver has FINISHED, so a resolution that threw left
+ * no trace at all. A real board showed T060 passing its review, hitting a merge conflict, and stopping — with
+ * nothing to say whether the resolver had run, failed, or never started. Three tasks waited behind that
+ * silence.
+ */
+describe("a conflict resolution that throws says why", () => {
+  it("records the reason on the card", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      // A manager whose merge always conflicts, and whose unmergedFiles throws inside the resolver.
+      const broken = Object.create(mgr) as WorktreeManager;
+      broken.mergeTask = async () => ({ status: "conflict", files: ["a.ts"] });
+      broken.unmergedFiles = async () => { throw new Error("git index is locked"); };
+      broken.abortMerge = async () => undefined;
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      await runReady(edeps(broken, fakeAdapter()), session, board);
+      const h = board.get("t1")!.stageHistory;
+      const failed = h.find((e) => e.action === "conflict:resolve-failed");
+      expect(failed).toBeDefined();
+      expect(failed?.note).toContain("index is locked");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
