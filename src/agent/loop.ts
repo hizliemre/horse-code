@@ -135,7 +135,22 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
        * provider reports, a model cannot have failed during a turn the user stopped. Getting this wrong told
        * the user their model had died and re-assigned every role that used it — for pressing Ctrl+C.
        */
-      if (opts.signal.aborted) { fatal = { message: "cancelled", retryable: false }; break; }
+      if (opts.signal.aborted) {
+        /**
+         * A DEADLINE of ours is not a cancellation, and this is the layer that has to tell them apart.
+         *
+         * Since each model attempt is given its own clock, the signal this loop owns fires for two very
+         * different reasons: a person stopping the run, and one model taking too long. Reporting both as
+         * "cancelled — not retryable" made the per-attempt clock useless: the first slow model ended the
+         * whole chain walk. Measured on a real run — six models reporting a deadline in the same second, over
+         * and over, and not one review finishing in four hours.
+         */
+        const byDeadline = (opts.signal.reason as { name?: string } | undefined)?.name === "TimeoutError";
+        fatal = byDeadline
+          ? { message: "the model did not answer within its deadline", retryable: true }
+          : { message: "cancelled", retryable: false };
+        break;
+      }
       /**
        * A capability refusal falls back without benching.
        *

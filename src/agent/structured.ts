@@ -109,7 +109,23 @@ export async function runStructuredRole<T>(
       let errored: string | undefined;
       for await (const ev of runRoleAgent({ ...opts, model, fallbacks: [], messages, tools: registry, signal: signalFor() })) {
         if (ev.type === "error") { errored = ev.message; break; }
-        if (ev.type === "abort") throw new Error("cancelled");
+        if (ev.type === "abort") {
+          /**
+           * Whose abort was it?
+           *
+           * The caller's signal means a person cancelled: stop, and do not try another model — that would be
+           * ignoring them. OUR per-attempt clock means this model was slow, which is a statement about the
+           * model and nothing else, so the next one deserves its turn.
+           *
+           * Treating both as cancellation made `perAttemptMs` useless the moment it was added: the first
+           * model's deadline killed the whole chain walk. Measured on a real run — six models reporting
+           * "did not answer within its deadline" in the same second, again and again, and not one review
+           * finishing in four hours.
+           */
+          if (opts.signal.aborted) throw new Error("cancelled");
+          errored = "the model did not answer within its deadline";
+          break;
+        }
         // NB: runRoleAgent reports usage itself (it knows which chain link actually served the call), so
         // forwarding the yielded event here too would double-count every reviewer's tokens.
         if (ev.type === "message.done") lastText = ev.message.content ?? lastText;

@@ -993,8 +993,11 @@ describe("a stuck reviewer cannot hold the round hostage", () => {
       async *chat(req, signal) {
         const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
         if (sys.includes("security vulnerabilities")) {
-          // Never answers; only an abort ends it — exactly what a stuck model looks like.
-          await new Promise((_r, rej) => signal?.addEventListener("abort", () => rej(new Error("aborted"))));
+          // Never answers; its own deadline ends it. Mirrors the real provider, which yields an error EVENT
+          // on a deadline rather than throwing — see omniroute's isDeadline.
+          await new Promise<void>((r) => signal?.addEventListener("abort", () => r(), { once: true }));
+          yield { type: "error", message: "the model did not answer within its deadline", retryable: true };
+          return;
         }
         yield* reviewProvider({}).chat(req, signal);
       },
@@ -1113,8 +1116,8 @@ describe("a reviewer whose whole chain dies heals and retries", () => {
     let healed = 0;
     const hang: Provider = {
       async *chat(_req, signal) {
-        await new Promise((_r, rej) => signal?.addEventListener("abort", () => rej(new Error("aborted"))));
-        yield { type: "done", finishReason: "stop" };
+        await new Promise<void>((r) => signal?.addEventListener("abort", () => r(), { once: true }));
+        yield { type: "error", message: "the model did not answer within its deadline", retryable: true };
       },
     };
     const out = await runTeam({ ...rdeps(hang), reviewTimeoutMs: 200, rechainRole: async () => { healed++; return ["x"]; } },

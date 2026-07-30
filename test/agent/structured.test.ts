@@ -210,3 +210,41 @@ describe("each model in the chain gets its own deadline", () => {
       .resolves.toBe("still-waiting");
   }, 10_000);
 });
+
+/**
+ * The per-attempt clock was useless the moment it was added, and it took a live run to see why.
+ *
+ * `runRoleAgent` reported ANY aborted signal as "cancelled — not retryable", and since each model attempt is
+ * now given its own clock, the first slow model ended the whole chain walk. The log showed it exactly: six
+ * models reporting a deadline in the same second, again and again, and not one review finishing in four
+ * hours. A deadline of ours is a statement about ONE model; a cancellation is a statement about the run.
+ */
+describe("a per-attempt deadline is not a cancellation", () => {
+  /**
+   * A provider whose request dies when the signal fires, reporting it as a transport fault — which is what an
+   * aborted fetch looks like from below. Classifying it is the loop's job, and the point of this test.
+   */
+  const hang = (): Provider => ({
+    async *chat(_req, signal) {
+      await new Promise<void>((r) => signal.addEventListener("abort", () => r(), { once: true }));
+      yield { type: "error", message: "fetch failed", retryable: true };
+    },
+  });
+
+  it("reports the deadline, not 'cancelled', when our own clock fires", async () => {
+    await expect(runStructuredRole({
+      ...opts(new MockProvider([])), provider: hang(), model: "slow/one", perAttemptMs: 30,
+    }, z.object({ a: z.string() }))).rejects.toThrow(/deadline/i);
+  }, 10_000);
+
+  /** And a real cancellation still ends everything — trying another model would be ignoring the person. */
+  it("still says cancelled when the caller aborts", async () => {
+    const ac = new AbortController();
+    const p = runStructuredRole({
+      ...opts(new MockProvider([])), provider: hang(), model: "slow/one", fallbacks: ["f"],
+      signal: ac.signal, perAttemptMs: 60_000,
+    }, z.object({ a: z.string() }));
+    setTimeout(() => ac.abort(), 20);
+    await expect(p).rejects.toThrow(/cancelled/i);
+  }, 10_000);
+});

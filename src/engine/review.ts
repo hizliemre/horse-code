@@ -188,8 +188,32 @@ export const REVIEW_TIMEOUT_MS = 3 * 60 * 1000;
  * A per-reviewer signal that trips on the job being cancelled OR on the reviewer running out of time. Both
  * are aborts, but they mean different things: the caller distinguishes them by checking which one fired.
  */
-function reviewerSignal(deps: ReviewDeps): AbortSignal {
-  return AbortSignal.any([deps.signal, AbortSignal.timeout(deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS)]);
+/**
+ * The review's own deadline, PER MODEL rather than once for the whole chain.
+ *
+ * A composed signal here was a regression waiting for a partner: making a timeout `retryable` (so a slow
+ * model could hand off to the next) turned one expired clock into a chain that burns every model instantly.
+ * The log showed it exactly — SIX models reporting "did not answer within its deadline" in the same second,
+ * over and over, roughly every twenty minutes. Not six slow models: one dead signal walked six times.
+ *
+ * Returning the job's signal and letting `runStructuredRole` mint the per-attempt clock fixes both halves:
+ * a lens that stalls still ends, and the next model gets a real chance to answer.
+ */
+/**
+ * Was this failure a deadline, or something broken?
+ *
+ * It used to be read off the signal — `signal.aborted` — which worked only while the deadline WAS the signal.
+ * Now each model gets its own clock inside the chain walk, so the composed signal never fires and the fact
+ * has to come from the error itself. The distinction is not cosmetic: a slow model is reachable and must not
+ * be benched, while a broken chain should be re-chained. Reading it from the wrong place would have started
+ * quarantining models for being slow.
+ */
+function isDeadlineFailure(e: unknown): boolean {
+  return /within its deadline|timed? ?out/i.test(e instanceof Error ? e.message : String(e));
+}
+
+function reviewerDeadlineMs(deps: ReviewDeps): number {
+  return deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS;
 }
 
 /** Applies to every stage: judge the work against what was ASKED FOR, not against an idealized system. */
@@ -261,7 +285,8 @@ async function runWithHealing<T>(
   try {
     return await runStructuredRole(opts, schema);
   } catch (e) {
-    if (deps.signal.aborted || signal.aborted || !deps.rechainRole) throw e;
+    // A deadline says the model was reachable and slow; re-chaining it would bench a healthy model.
+    if (deps.signal.aborted || isDeadlineFailure(e) || !deps.rechainRole) throw e;
     const chain = await deps.rechainRole(role, errText(e));
     if (!chain?.length) throw e;
     emit({ kind: "note", text: `🔁 \`${role}\` lost its whole model chain — retrying on \`${chain[0]}\`.` });
@@ -351,7 +376,7 @@ export async function runTeam(
         const id = `team:${c.name}`;
         let serving = registry.peekModel(c.name); // the row starts on the chain head; corrected as calls land
         const ask = { role: "user" as const, content: `${what} Evaluate it through your lens.${scope}${evidence}` };
-        const signal = reviewerSignal(deps);
+        const signal = deps.signal;
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           // Fifteen lenses reading the same change, one file per turn each, is the same waste multiplied.
@@ -362,6 +387,8 @@ export async function runTeam(
           proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
+          // Per MODEL, not once for the chain — see reviewerDeadlineMs.
+          perAttemptMs: reviewerDeadlineMs(deps),
           maxTurns: REVIEW_MAX_TURNS,
           // Stream the running total onto this member's row as each call lands — a row that shows only a
           // ticking clock for minutes says nothing about what it is costing while it is still costing it.
@@ -392,7 +419,7 @@ export async function runTeam(
           // and the council must adjudicate it. (Root cause is usually an unavailable/misassigned model chain.)
           // A timeout is reported as such: "it never answered" and "it ran past three minutes" have different
           // fixes (a broken model chain vs. a lens that needs a cheaper model or a narrower artifact).
-          const timedOut = signal.aborted;
+          const timedOut = isDeadlineFailure(e);
           const why = timedOut
             ? `did not finish within its ${Math.round((deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS) / 1000)}s budget`
             : `every model in its chain failed — ${errText(e)}`;
@@ -473,7 +500,7 @@ export async function runCouncil(
         const id = `council:${c.name}`;
         let serving = deps.councilRegistry.peekModel(c.name);
         const vote = { role: "user" as const, content: `You are reviewing ${subject} (the ${stage} stage), plus the team's findings:\n${digest}${scope}${ask}${councilEvidence}\n\nCast your vote (pass/revise) with a rationale.` };
-        const signal = reviewerSignal(deps);
+        const signal = deps.signal;
         const opts: RoleAgentOptions = {
           provider: deps.provider, ...resolved,
           // Fifteen lenses reading the same change, one file per turn each, is the same waste multiplied.
@@ -484,6 +511,8 @@ export async function runCouncil(
           proposeMemory: (t, k) => deps.proposeMemory?.(t, k, c.name) ?? false,
           messages: hints.message ? [{ role: "user", content: hints.message }, vote] : [vote],
           permission: deps.permission, approve: deps.approve, cwd: workdir, signal,
+          // Per MODEL, not once for the chain — see reviewerDeadlineMs.
+          perAttemptMs: reviewerDeadlineMs(deps),
           maxTurns: REVIEW_MAX_TURNS,
           // Stream the running total onto this member's row as each call lands — a row that shows only a
           // ticking clock for minutes says nothing about what it is costing while it is still costing it.
@@ -506,7 +535,7 @@ export async function runCouncil(
           if (deps.signal.aborted) throw e; // genuine cancellation → propagate
           // Fail-SAFE: a decider that can't vote counts as a conservative REVISE (we can't confirm the doc is
           // fine), never silently dropped — otherwise a shrunk council could accidentally reach a "pass".
-          const timedOut = signal.aborted;
+          const timedOut = isDeadlineFailure(e);
           emit({ kind: "agent-result", id: `council:${c.name}`, status: timedOut ? "⚠ UNVERIFIED (timed out)" : "⚠ UNVERIFIED (no response)", ...tok });
           return { name: c.name, vote: "revise", rationale: `The "${c.name}" decider could not vote (${timedOut ? "timed out" : `chain failed — ${errText(e)}`}) — counted as revise to be safe.` };
         }
@@ -559,7 +588,8 @@ export async function runJudge(
     tools: readOnlyRegistry(deps, { propose: true }),
     proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "judge") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, brief] : [brief],
-    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: reviewerSignal(deps),
+    permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
+    perAttemptMs: reviewerDeadlineMs(deps),
     maxTurns: REVIEW_MAX_TURNS,
   };
   let d: JudgeDecision;
