@@ -625,3 +625,58 @@ describe("a conflict resolution that throws says why", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * `attempts` drives the tier — implementer, then senior, then council — and it was persisted, so a task that
+ * had failed a lot came back BORN EXHAUSTED.
+ *
+ * Measured on a real board: four tasks at 12, 16, 18 and 21 attempts, every one starting at the council tier
+ * — the most expensive path, and the one that had already failed them repeatedly. They never got another
+ * cheap, direct attempt however much the machinery around them had been fixed. The evidence that this was
+ * wrong is that a human kept correcting it: the same board was reset by hand five times in one day.
+ */
+describe("a new run restarts the escalation ladder", () => {
+  it("puts an unfinished task back at the first tier", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      for (let i = 0; i < 21; i++) board.incrementAttempts("t1");
+      await runReady(edeps(mgr, fakeAdapter()), session, board);
+      expect(board.get("t1")!.stageHistory.some((h) => h.action === "reset")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** Nothing that happened is forgotten — only the counter that picks the tier. */
+  it("keeps the history the earlier attempts wrote", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      board.appendStage("t1", { role: "code-reviewer", action: "reviewed:fail", note: "an old finding" });
+      for (let i = 0; i < 9; i++) board.incrementAttempts("t1");
+      await runReady(edeps(mgr, fakeAdapter()), session, board);
+      expect(board.get("t1")!.stageHistory.some((h) => h.note === "an old finding")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** Delivered work is not touched: a MERGED card is not in the queue at all. */
+  it("leaves a merged card alone", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      for (let i = 0; i < 5; i++) board.incrementAttempts("t1");
+      board.move("t1", "MERGED", "team-lead");
+      await runReady(edeps(mgr, fakeAdapter()), session, board);
+      expect(board.get("t1")!.attempts).toBe(5);
+      expect(board.get("t1")!.stageHistory.some((h) => h.action === "reset")).toBe(false);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});

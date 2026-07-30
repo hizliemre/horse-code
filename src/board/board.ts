@@ -235,6 +235,21 @@ export class Board {
     this.onChange?.();
   }
 
+  /**
+   * Starts the escalation ladder over for one card, keeping its history.
+   *
+   * The tier is derived from `attempts`, so a task carrying a large count from earlier runs begins at the
+   * council — the most expensive tier, and the one that had already failed it. Everything that actually
+   * happened stays in `stageHistory`; only the counter that picks the tier goes back to zero.
+   */
+  resetAttempts(id: string): void {
+    const c = this.require(id);
+    if (c.attempts === 0) return;
+    c.stageHistory.push({ role: "team-lead", action: "reset", note: `new run — ladder restarted (was ${c.attempts})` });
+    c.attempts = 0;
+    this.onChange?.();
+  }
+
   incrementAttempts(id: string): number {
     const c = this.require(id);
     c.attempts += 1;

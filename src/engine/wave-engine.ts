@@ -100,6 +100,26 @@ export async function runReady(
   const skipped: string[] = [];
   const blocked = new Set<string>();
   const pending = new Set(cards.filter((c) => !done.has(c.id)).map((c) => c.id));
+  /**
+   * A NEW run gives every unfinished task a fresh ladder.
+   *
+   * `attempts` drives the tier — implementer, then senior, then council — and it was persisted, so a task
+   * that had failed a lot came back BORN EXHAUSTED. Measured on a real board: four tasks at 12, 16, 18 and 21
+   * attempts, every one of them starting at the council tier, which is the most expensive path and the one
+   * that had already failed them repeatedly. They never got another cheap, direct attempt, however much the
+   * machinery around them had been fixed in the meantime.
+   *
+   * The evidence that this was wrong is that a human kept correcting it: this board was reset by hand five
+   * times in one day, and every time the point was to let the fixed pipeline try again from the bottom.
+   *
+   * The history is NOT lost — `stageHistory` keeps every attempt, and the streak gate reads it. Only the
+   * tier counter starts over, and only for work that has not been delivered.
+   */
+  for (const id of pending) {
+    const c = board.get(id);
+    if (!c || c.attempts === 0) continue;
+    board.resetAttempts(id);
+  }
   const busy = new Set<string>();                     // files held by a task that is running right now
   const running = new Map<number, Promise<number>>(); // slot → its task, resolving to the slot it frees
   /**
