@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { resolveMergeConflict } from "../../src/engine/conflict.js";
+import { resolveMergeConflict, conflictHunks, resolveTurnBudget, RESOLVE_TURNS_MIN, RESOLVE_TURNS_PER_FILE } from "../../src/engine/conflict.js";
 import type { ConflictDeps } from "../../src/engine/conflict.js";
 import type { AskHuman } from "../../src/engine/escalation.js";
 import { createMergeConflict } from "../worktree/helpers.js";
@@ -153,5 +153,53 @@ describe("resolveMergeConflict", () => {
     await expect(
       resolveMergeConflict(cdeps(p, c.mgr), c.session, new Board(), "missing", c.task),
     ).rejects.toThrow(/unknown task/);
+  });
+});
+
+/**
+ * A three-file conflict ended with `conflict:resolve-failed: maximum turn count exceeded (50)` — fifty turns
+ * spent, and the merge abandoned with the task's review already passed. The resolver carried grep, glob, the
+ * skill loader and the code-graph tools; tools it does not need are turns it will spend.
+ */
+describe("the resolver is handed the conflict, not sent to find it", () => {
+  it("extracts the conflicted regions and nothing else", () => {
+    const text = [
+      "const a = 1;",
+      "<<<<<<< HEAD",
+      "const b = 2;",
+      "=======",
+      "const b = 3;",
+      ">>>>>>> branch",
+      "const c = 4;",
+    ].join("\n");
+    const h = conflictHunks(text);
+    expect(h).toContain("const b = 2;");
+    expect(h).toContain("const b = 3;");
+    expect(h).not.toContain("const a = 1;");   // untouched code is not the decision
+    expect(h).not.toContain("const c = 4;");
+  });
+
+  it("keeps every conflict in a file, not just the first", () => {
+    const one = "<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> b";
+    expect(conflictHunks(`${one}\nmiddle\n${one}`).match(/<<<<<<</g)).toHaveLength(2);
+  });
+
+  /** A file with hundreds of conflicts must not become the whole prompt. */
+  it("stops at its budget and says it did", () => {
+    const one = "<<<<<<< HEAD\n" + "x".repeat(500) + "\n=======\ny\n>>>>>>> b";
+    const h = conflictHunks(Array(20).fill(one).join("\n"), 2000);
+    expect(h.length).toBeLessThan(3000);
+    expect(h).toContain("further conflicts");
+  });
+
+  it("says nothing about a file with no conflict markers", () => {
+    expect(conflictHunks("const a = 1;\n")).toBe("");
+  });
+
+  /** The budget says what the job is: a few turns per file, never fewer than the floor. */
+  it("scales the turn budget with the number of files", () => {
+    expect(resolveTurnBudget(1)).toBe(RESOLVE_TURNS_MIN);
+    expect(resolveTurnBudget(10)).toBe(10 * RESOLVE_TURNS_PER_FILE);
+    expect(resolveTurnBudget(0)).toBe(RESOLVE_TURNS_MIN);
   });
 });

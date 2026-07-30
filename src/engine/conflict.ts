@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { Board } from "../board/board.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree } from "../worktree/manager.js";
 import type { EscalationDeps } from "./escalation.js";
@@ -15,6 +13,8 @@ import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { callSignal, LONG_CALL_MS } from "../agent/deadline.js";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 export interface ConflictDeps extends EscalationDeps {
   manager: Pick<WorktreeManager, "unmergedFiles" | "commitMerge" | "abortMerge">;
@@ -23,16 +23,53 @@ export interface ConflictDeps extends EscalationDeps {
 export type ConflictResult = { status: "resolved" } | { status: "unresolved"; task: TaskWorktree };
 
 /** Resolver toolset: file editing (read/write/edit/grep/glob) + skill — NO SHELL. */
-function resolverRegistry(deps: ConflictDeps): ToolRegistry {
+/**
+ * Resolving a conflict is a text edit on files git has already named. It is not an investigation.
+ *
+ * The resolver used to carry grep, glob, the skill loader and the code-graph tools as well, and it spent its
+ * whole budget using them: measured live, a three-file conflict ended with
+ * `conflict:resolve-failed: maximum turn count exceeded (50)` — fifty turns, and the merge was abandoned with
+ * the task's review already passed. Tools it does not need are turns it will spend.
+ */
+function resolverRegistry(): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
   r.register(writeFileTool);
   r.register(editFileTool);
-  r.register(grepTool);
-  r.register(globTool);
-  r.register(buildSkillTool(deps.skillRegistry));
-  for (const t of contextTools(deps)) r.register(t);
   return r;
+}
+
+/**
+ * A turn budget that scales with the work: a few turns per conflicted file, with a floor.
+ *
+ * The default of fifty was both too many (it let the resolver wander) and, for a large conflict, potentially
+ * too few. Tying it to the file count says what the job actually is.
+ */
+export const RESOLVE_TURNS_PER_FILE = 6;
+export const RESOLVE_TURNS_MIN = 12;
+export function resolveTurnBudget(fileCount: number): number {
+  return Math.max(RESOLVE_TURNS_MIN, fileCount * RESOLVE_TURNS_PER_FILE);
+}
+
+/**
+ * The conflicted regions themselves, handed over rather than hunted for.
+ *
+ * Each hunk is the text between `<<<<<<<` and `>>>>>>>`, which is the whole of what has to be decided. With
+ * these in the prompt the resolver can edit straight away instead of spending turns reading files to find
+ * markers it was already told about.
+ */
+export function conflictHunks(text: string, maxChars = 4000): string {
+  const out: string[] = [];
+  const re = /^<<<<<<<[^\n]*\n([\s\S]*?)^>>>>>>>[^\n]*$/gm;
+  let m: RegExpExecArray | null;
+  let used = 0;
+  while ((m = re.exec(text)) !== null) {
+    const hunk = m[0];
+    if (used + hunk.length > maxChars) { out.push("… (further conflicts in this file, not shown)"); break; }
+    used += hunk.length;
+    out.push(hunk);
+  }
+  return out.join("\n\n");
 }
 
 /** Whether any of the given files still contains a conflict marker (`<<<<<<<`). */
@@ -67,6 +104,24 @@ export async function resolveMergeConflict(
   const base = session.baseWorktree;
   deps.note?.(`🔀 Merge conflict in ${conflicted.join(", ")} — operational resolving…`);
 
+  /**
+   * The conflicted regions, read once and handed over — the resolver should not spend turns finding them.
+   *
+   * Measured live: a three-file conflict ended with "maximum turn count exceeded (50)", the merge abandoned
+   * with the task's review already passed. The same lesson as the reviewers: handed, not hunted.
+   */
+  const handedHunks = async (files: string[], cwd: string): Promise<string> => {
+    const parts: string[] = [];
+    for (const f of files.slice(0, 10)) {
+      try {
+        const text = await readFile(join(cwd, f), "utf8");
+        const hunks = conflictHunks(text);
+        if (hunks) parts.push(`--- ${f}\n${hunks}`);
+      } catch { /* unreadable → the resolver can still open it itself */ }
+    }
+    return parts.length ? `The conflicted regions:\n\n${parts.join("\n\n")}\n\n` : "";
+  };
+
   for (;;) {
     for (let i = 0; i < rounds; i++) {
       const card = board.get(taskId)!;
@@ -78,14 +133,15 @@ export async function resolveMergeConflict(
       const op = deps.roleRegistry.resolve("operational");
       const resolveOpts: RoleAgentOptions = {
         provider: deps.provider, ...op,
-        tools: resolverRegistry(deps),
+        tools: resolverRegistry(),
         messages: [{ role: "user", content:
           `A git merge left conflicts in the base worktree. Resolve them: for EACH file, remove all conflict ` +
           `markers (<<<<<<<, =======, >>>>>>>) and combine BOTH sides' changes so the intent of each is ` +
           `preserved (don't just pick one side unless the changes are truly incompatible). ` +
-          `Conflicted files: ${conflicted.join(", ")}.${notes}` }],
+          `Conflicted files: ${conflicted.join(", ")}.\n\n${await handedHunks(conflicted, base)}${notes}` }],
         permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
-    perAttemptMs: LONG_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
+        perAttemptMs: LONG_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
+        maxTurns: resolveTurnBudget(conflicted.length),
       };
       await runToCompletion(resolveOpts);
       board.appendStage(taskId, { role: "operational", action: "conflict:resolve-attempt" });
