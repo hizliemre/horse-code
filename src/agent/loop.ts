@@ -19,6 +19,16 @@ export interface RoleAgentOptions {
    * walk; a per-model clock is also the honest reading of "this model did not answer in time".
    */
   perAttemptMs?: number;
+  /**
+   * A ceiling on the WHOLE chain walk, as distinct from one model's turn at it.
+   *
+   * Per-model clocks fixed one bug and created another: with three models and two attempts each, a
+   * three-minute deadline means eighteen minutes before the chain gives up. Measured live — a task sat at
+   * DONE for a quarter of an hour while its one-sentence commit message walked the chain, with nothing
+   * hung and nothing to see. Both bounds are needed: per-attempt so one slow model cannot end the chain,
+   * total so the chain cannot outlast the thing it is for.
+   */
+  totalMs?: number;
   systemPrompt: string;
   tools: ToolRegistry;
   messages: Message[];

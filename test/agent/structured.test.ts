@@ -248,3 +248,47 @@ describe("a per-attempt deadline is not a cancellation", () => {
     await expect(p).rejects.toThrow(/cancelled/i);
   }, 10_000);
 });
+
+/**
+ * Per-model clocks fixed one bug and created another.
+ *
+ * With three models and two attempts each, a three-minute deadline means eighteen minutes before the chain
+ * gives up. Measured live: a task sat at DONE for a quarter of an hour while its one-sentence commit message
+ * walked the chain — nothing hung, no git process, nothing in the log to see. Both bounds are needed.
+ */
+describe("the whole chain has a ceiling too", () => {
+  const alwaysSlow = (): Provider => ({
+    async *chat(_req, signal) {
+      await new Promise<void>((r) => signal.addEventListener("abort", () => r(), { once: true }));
+      yield { type: "error", message: "fetch failed", retryable: true };
+    },
+  });
+
+  it("stops walking once the total budget is gone", async () => {
+    const started = Date.now();
+    await expect(runStructuredRole({
+      ...opts(new MockProvider([])), provider: alwaysSlow(),
+      model: "a", fallbacks: ["b", "c", "d"],
+      perAttemptMs: 40, totalMs: 120,
+    }, z.object({ a: z.string() }))).rejects.toThrow(/total budget/i);
+    // Four models × two attempts × 40ms would be 320ms; the total cuts it well short of that.
+    expect(Date.now() - started).toBeLessThan(300);
+  }, 10_000);
+
+  /** Without a total, the chain still walks every model — the per-attempt clock is the only bound. */
+  it("walks the whole chain when no total is given", async () => {
+    await expect(runStructuredRole({
+      ...opts(new MockProvider([])), provider: alwaysSlow(),
+      model: "a", fallbacks: ["b"], perAttemptMs: 20,
+    }, z.object({ a: z.string() }))).rejects.toThrow();
+  }, 10_000);
+
+  /** A chain that answers in time is untouched by either bound. */
+  it("does not interfere with a model that answers", async () => {
+    const out = await runStructuredRole({
+      ...opts(new MockProvider([submitTurn('{"a":"ok"}')])),
+      perAttemptMs: 5_000, totalMs: 10_000,
+    }, z.object({ a: z.string() }));
+    expect(out.a).toBe("ok");
+  });
+});

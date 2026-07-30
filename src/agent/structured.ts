@@ -97,8 +97,21 @@ export async function runStructuredRole<T>(
    * A per-model deadline is also the honest reading of "this model did not answer in time": it is a statement
    * about that model, so the next one deserves its own clock.
    */
-  const signalFor = (): AbortSignal =>
-    opts.perAttemptMs ? AbortSignal.any([opts.signal, AbortSignal.timeout(opts.perAttemptMs)]) : opts.signal;
+  /**
+   * The whole chain walk gets a ceiling of its own, on top of each model's clock.
+   *
+   * Per-model clocks fixed one bug and created another: three models, two attempts each and a three-minute
+   * deadline is eighteen minutes before the chain gives up. Measured live — a task sat at DONE for a quarter
+   * of an hour while its one-sentence commit message walked the chain, nothing hung, nothing to see.
+   */
+  const total = opts.totalMs ? AbortSignal.timeout(opts.totalMs) : undefined;
+  const outOfTime = (): boolean => total?.aborted === true;
+  const signalFor = (): AbortSignal => {
+    const parts: AbortSignal[] = [opts.signal];
+    if (total) parts.push(total);
+    if (opts.perAttemptMs) parts.push(AbortSignal.timeout(opts.perAttemptMs));
+    return parts.length === 1 ? opts.signal : AbortSignal.any(parts);
+  };
   let lastError: string | undefined; // most recent hard error → preserved so the final throw is informative
   for (let ci = 0; ci < chain.length; ci++) {
     const model = chain[ci];
@@ -158,6 +171,9 @@ export async function runStructuredRole<T>(
       });
     }
     if (opts.signal.aborted) throw new Error("cancelled");
+    // Out of total time: stop walking. Named separately from a per-model deadline because the fix differs —
+    // one says this model is slow, the other says the chain is longer than the job is worth.
+    if (outOfTime()) throw new Error("the model chain did not produce a result within its total budget");
     // This model would not produce a structured result. Report it: the transport was fine, so nothing else
     // benches it, and without this the chain slides past it on every single call for the rest of the session.
     opts.onStructuralFailure?.(model, "answered in prose instead of calling submit");
