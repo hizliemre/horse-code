@@ -99,7 +99,17 @@ export async function runEscalationCouncil(
   board.move(taskId, "REVIEW", senior);
 
   // 3. final review
-  const v = await runReviewer(deps, board.get(taskId)!, cwd);
+  /**
+   * The council's review is a review, and the timings must say so.
+   *
+   * Only the normal cycle's team review was wrapped in a span, so a task that reached the council — which is
+   * every task that has failed a few times, i.e. exactly the ones a run gets stuck on — spent its review time
+   * invisibly. A live run showed `code review 0m/0x` while tasks were passing review and merging, and the
+   * "where did the slot time go" report had nothing to say about the stage that was actually running.
+   */
+  const v = await telemetry().span("stage.code_review", {
+    "hc.stage": "code review", "hc.task.id": taskId, "hc.council": true,
+  }, () => runReviewer(deps, board.get(taskId)!, cwd));
   if (v.verdict === "pass") {
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:pass" });
   } else {

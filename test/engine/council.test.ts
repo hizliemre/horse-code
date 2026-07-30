@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runEscalationCouncil } from "../../src/engine/council.js";
 import { initTmpRepo } from "../worktree/helpers.js";
+import { Telemetry, setTelemetry, NO_TELEMETRY } from "../../src/obs/telemetry.js";
+import { MemorySink } from "../../src/obs/sink.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 import type { RoleConfig } from "../../src/config/config.js";
 import { Board } from "../../src/board/board.js";
@@ -143,5 +145,33 @@ describe("the council does not send an unchanged worktree to review", () => {
       expect(v.verdict).toBe("pass");
       expect(board.get("t1")!.stageHistory.some((h) => h.action === "council:implemented")).toBe(true);
     } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * Only the normal cycle's team review was wrapped in a span, so a task that reached the council — which is
+ * every task that has failed a few times, i.e. exactly the ones a run gets stuck on — spent its review time
+ * invisibly. A live run showed `code review 0m/0x` while tasks were passing review and merging.
+ */
+describe("the council's review is measured too", () => {
+  it("opens a code_review span, marked as the council's", async () => {
+    const repo = await initTmpRepo();
+    const sink = new MemorySink();
+    setTelemetry(new Telemetry(sink));
+    try {
+      const p = new MockProvider([
+        submit('{"rootCause":"r","plan":["p"]}'),
+        writeTurn(), doneTurn,
+        submit('{"verdict":"pass","notes":[]}'),
+      ]);
+      await runEscalationCouncil(deps(p), boardWithTask(), "t1", repo, "coder");
+      const span = sink.records.find((r) => r.kind !== "event" && r.name === "stage.code_review");
+      expect(span).toBeDefined();
+      expect(span?.attributes["hc.task.id"]).toBe("t1");
+      expect(span?.attributes["hc.council"]).toBe(true);
+    } finally {
+      setTelemetry(NO_TELEMETRY);
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
