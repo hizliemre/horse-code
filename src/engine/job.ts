@@ -41,7 +41,9 @@ function moveNote(card: Card, to: Column, actor?: string): string {
   // Landing is a separate event from finishing, and the one that means the work was delivered.
   if (to === "MERGED") return `🚢 ${title} — merged into the base branch`;
   // Said plainly: a card nobody is going to pick up should not read like one that is waiting for a slot.
-  if (to === "ABANDONED") return `🛑 ${title} — given up on for this run`;
+  if (to === "ABANDONED") return `🛑 ${title} — nothing left that could change it`;
+  // Parking is a pause with a reason, not a verdict — the reason is on the card and is what wakes it.
+  if (to === "PARKED") return `⏸ ${title} — parked; it will be retried when the ground moves`;
   return `↩︎ ${title} — sent back for rework`;
 }
 

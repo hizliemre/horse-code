@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMutex, mapWithLimit, runReady, runWaveEngine, runWaves } from "../../src/engine/wave-engine.js";
+import { createMutex, mapWithLimit, runReady, runWaveEngine, runWaves, MAX_WAKES } from "../../src/engine/wave-engine.js";
 import type { WaveEngineDeps } from "../../src/engine/wave-engine.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import type { AskHuman } from "../../src/engine/escalation.js";
@@ -289,7 +289,12 @@ describe("runReady", () => {
       const o = await runReady(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board);
       expect(o.failed).toEqual(["t1"]);
       expect(o.skipped.sort()).toEqual(["t2", "t3"]);
-      expect(board.get("t3")!.stageHistory.some((s) => s.action === "skipped")).toBe(true);
+      // A dependent is not a dead end while its blocker might still land: it is PARKED, by name, and only
+      // abandoned once nothing is left that could wake it.
+      const h = board.get("t3")!.stageHistory;
+      expect(h.some((e) => e.action === "parked")).toBe(true);
+      expect(h.some((e) => e.action === "abandoned")).toBe(true);
+      expect(board.get("t2")!.stageHistory.find((e) => e.action === "parked")?.note).toContain("waiting for t1");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
@@ -566,7 +571,7 @@ describe("delivery information", () => {
  * neither could the "25 tasks remain" line the coach read off it.
  */
 describe("a card the run gave up on leaves TODO", () => {
-  it("moves a skipped task to ABANDONED, not back to TODO", async () => {
+  it("parks a blocked task by name, and abandons it only when nothing can wake it", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
@@ -578,7 +583,9 @@ describe("a card the run gave up on leaves TODO", () => {
       const res = await runWaves(edeps(mgr, fakeAdapter(), { failTasks: ["the one that fails"], rounds: 1 }), session, board, { base: "main" });
       expect(res.status).not.toBe("completed");
       expect(board.get("t2")!.column).toBe("ABANDONED");
-      expect(board.get("t2")!.stageHistory.some((h) => h.action === "skipped")).toBe(true);
+      const h = board.get("t2")!.stageHistory;
+      expect(h.find((e) => e.action === "parked")?.note).toContain("waiting for t1");
+      expect(h.some((e) => e.action === "abandoned")).toBe(true);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
@@ -677,6 +684,86 @@ describe("a new run restarts the escalation ladder", () => {
       await runReady(edeps(mgr, fakeAdapter()), session, board);
       expect(board.get("t1")!.attempts).toBe(5);
       expect(board.get("t1")!.stageHistory.some((h) => h.action === "reset")).toBe(false);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * A task used to be abandoned the moment its ladder ran out, as if that were a verdict about the task.
+ *
+ * Measured over one day on one board: THIRTY tasks were abandoned at some point and TWENTY-NINE of them later
+ * passed review, unchanged, simply because something tried them again. A decision that is wrong twenty-nine
+ * times out of thirty is not a decision — it is a pause with the wrong name.
+ *
+ * So the reason is recorded, and the reason is what wakes it. Each asks its own question: a task waiting on
+ * t1 has no business waking because t9 merged, and a task whose merge conflicted has every business waking
+ * because ANY merge moves the base it conflicted with.
+ */
+describe("parking, and what wakes a parked task", () => {
+  it("wakes a dependent the moment its own blocker merges, not before", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      // t1 fails on its first pass, then the retry succeeds; t2 waits for t1 by name.
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b", deps: ["t1"] });
+      board.addCard({ id: "t3", title: "task-c" }); // unrelated, merges early
+      const o = await runReady(edeps(mgr, fakeAdapter()), session, board);
+      expect(o.merged.sort()).toEqual(["t1", "t2", "t3"]);
+      // t2 never ran while t1 was outstanding.
+      const t2 = board.get("t2")!.stageHistory.map((e) => e.action);
+      expect(t2.indexOf("→IN-PROGRESS")).toBeGreaterThan(-1);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** The whole point of the measurement: an exhausted task is retried, and retrying is what makes it pass. */
+  it("wakes an exhausted task when anything else merges, and it can then pass", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b" });
+      // "task-a" fails while the reviewer rejects it; nothing depends on it, so only a wake can save it.
+      const o = await runReady(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board);
+      const h = board.get("t1")!.stageHistory.map((e) => e.action);
+      expect(h.filter((a) => a === "parked").length).toBeGreaterThan(0);
+      expect(h.filter((a) => a === "woken").length).toBeGreaterThan(0);   // t2's merge woke it
+      expect(o.merged).toContain("t2");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** A bound on spend, not a verdict: waking already requires real progress elsewhere. */
+  it("stops waking a task after the cap, and says that is why", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      for (let i = 0; i < 6; i++) board.addCard({ id: `ok${i}`, title: `task-ok${i}` });
+      await runReady(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board);
+      const h = board.get("t1")!.stageHistory;
+      expect(h.filter((e) => e.action === "woken").length).toBeLessThanOrEqual(MAX_WAKES);
+      expect(h.find((e) => e.action === "abandoned")?.note).toBeTruthy();
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  }, 30_000);
+
+  /** A woken task starts at the cheap tier again — the ladder is per attempt-run, not per lifetime. */
+  it("resets the ladder when it wakes", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      board.addCard({ id: "t2", title: "task-b" });
+      await runReady(edeps(mgr, fakeAdapter(), { failTasks: ["task-a"] }), session, board);
+      const h = board.get("t1")!.stageHistory.map((e) => e.action);
+      expect(h.indexOf("reset")).toBeGreaterThan(h.indexOf("parked"));
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

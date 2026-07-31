@@ -14,10 +14,18 @@ import { z } from "zod";
  * because a dependency failed. The scheduler's own queue held two. A count that mixes work with wreckage
  * cannot be read.
  *
- * ABANDONED is not permanent: a fresh run picks up anything that is not MERGED, so a later attempt — with
- * more budget, a fixed dependency, or a repaired plan — starts them again.
+ * PARKED is the third lesson, and the sharpest. A task used to be ABANDONED the moment its ladder ran out,
+ * as if that were a verdict about the task. Measured over one day on one board: THIRTY tasks were abandoned
+ * at some point and TWENTY-NINE of them later passed review, unchanged, simply because something tried them
+ * again. A decision that is wrong twenty-nine times out of thirty is not a decision.
+ *
+ * So a task that cannot go on now is PARKED, with the REASON recorded, and each reason has its own waking
+ * condition: waiting on a dependency wakes when that dependency merges; exhausted or conflicted wakes when
+ * anything at all merges, because the base has moved and the ground of the last failure is gone.
+ *
+ * ABANDONED survives for the one case that is a verdict: nothing left that could ever wake it.
  */
-export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE" | "MERGED" | "ABANDONED";
+export type Column = "TODO" | "IN-PROGRESS" | "REVIEW" | "DONE" | "MERGED" | "PARKED" | "ABANDONED";
 
 /** How much of a card's history is kept. Enough to see the pattern of a struggling task, not unbounded. */
 export const MAX_STAGE_EVENTS = 200;
@@ -68,7 +76,7 @@ const stageEventSchema = z.object({
 const cardSchema = z.object({
   id: z.string(),
   title: z.string(),
-  column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED", "ABANDONED"]),
+  column: z.enum(["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED", "PARKED", "ABANDONED"]),
   worktree: z.string().optional(),
   deps: z.array(z.string()),
   acceptance: z.array(z.string()).default([]), // default: boards persisted before the gate existed still load

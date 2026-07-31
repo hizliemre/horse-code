@@ -50,6 +50,15 @@ export interface WaveOutcome {
 }
 
 /** Promise-chain mutex: each call runs after the previous one; returns its result/error as-is. */
+/**
+ * How many times one task may be woken in a single run.
+ *
+ * Not a verdict on the task — a bound on spend. Waking requires that something ELSE merged, so the supply of
+ * wakes is already limited by real progress; this only stops one pathological task from consuming a run in
+ * which everything else keeps landing.
+ */
+export const MAX_WAKES = 3;
+
 export function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(fn: () => Promise<T>): Promise<T> => {
@@ -98,7 +107,24 @@ export async function runReady(
   const merged = [...done];
   const failed: string[] = [];
   const skipped: string[] = [];
-  const blocked = new Set<string>();
+  /**
+   * Why each task cannot go on RIGHT NOW — and therefore what would let it.
+   *
+   * A task used to be abandoned the moment its ladder ran out, as if that were a verdict. Measured over one
+   * day on one board: THIRTY tasks were abandoned at some point and TWENTY-NINE later passed review,
+   * unchanged, simply because something tried them again. A decision that is wrong twenty-nine times out of
+   * thirty is not a decision — it is a pause with the wrong name.
+   *
+   * So the reason is recorded, and the reason is what wakes it:
+   *   waiting   — a dependency has not merged. Wakes when THAT task merges; never runs before then.
+   *   exhausted — it ran and used up its ladder. Wakes when anything merges: the base has moved and the
+   *               ground its last review stood on is gone.
+   *   conflict  — its review passed but the merge clashed. Same waking rule, and the strongest case for it:
+   *               the conflict IS the base having moved.
+   */
+  type ParkReason = "waiting" | "exhausted" | "conflict";
+  interface Parked { reason: ParkReason; on?: string; mergedAt: number; wakes: number }
+  const parked = new Map<string, Parked>();
   const pending = new Set(cards.filter((c) => !done.has(c.id)).map((c) => c.id));
   /**
    * A NEW run gives every unfinished task a fresh ladder.
@@ -134,24 +160,70 @@ export async function runReady(
   const depsOf = (id: string): string[] => board.get(id)?.deps ?? [];
   const filesOf = (id: string): string[] => (board.get(id)?.files ?? []).map(normalizePath).filter(Boolean);
 
-  /** Nothing downstream of a failure can run. Iterated: a chain of dependents is dropped in one pass. */
-  const dropUnreachable = (): void => {
+  /**
+   * Parks a task with the reason that will later wake it. Its ladder starts over when it wakes, so a task
+   * that comes back gets the cheap, direct tier again rather than resuming at the council.
+   */
+  const park = (id: string, reason: ParkReason, on?: string, startedAt?: number): void => {
+    /**
+     * The baseline is when the ATTEMPT began, not when it ended.
+     *
+     * A task runs for minutes; other tasks merge while it does. Anchoring to the moment of parking meant a
+     * merge that landed DURING the attempt did not count as new information, and the task slept through the
+     * very change that would have let it pass.
+     */
+    parked.set(id, { reason, on, mergedAt: startedAt ?? merged.length, wakes: wakeCount.get(id) ?? 0 });
+    pending.delete(id);
+    board.appendStage(id, {
+      role: "team-lead", action: "parked",
+      note: reason === "waiting" ? `waiting for ${on}` : reason === "conflict" ? "merge conflicted" : "ladder exhausted",
+    });
+    board.move(id, "PARKED", "team-lead");
+  };
+
+  /**
+   * Wakes whatever the world has just made runnable again.
+   *
+   * Each reason asks its own question, which is the point: a task waiting on T060 has no business waking
+   * because T044 merged, and a task whose merge conflicted has every business waking because ANY merge moves
+   * the base it conflicted with.
+   */
+  const wake = (): number => {
+    let woken = 0;
+    for (const [id, p] of [...parked]) {
+      if (p.wakes >= MAX_WAKES) continue;
+      const ready = p.reason === "waiting"
+        ? p.on !== undefined && done.has(p.on)
+        : merged.length > p.mergedAt;   // something landed since it was parked
+      if (!ready) continue;
+      parked.delete(id);
+      pending.add(id);
+      board.resetAttempts(id);
+      board.appendStage(id, { role: "team-lead", action: "woken", note: `${p.reason} → retrying (wake ${p.wakes + 1})` });
+      board.move(id, "TODO", "team-lead");
+      wakeCount.set(id, p.wakes + 1);
+      woken += 1;
+    }
+    return woken;
+  };
+  /** How many times each task has been woken, so a re-park remembers and the cap can bite. */
+  const wakeCount = new Map<string, number>();
+
+  /** A dependency that is parked is not a dead end — the dependent waits for it BY NAME. */
+  const parkUnreachable = (): void => {
     for (let changed = true; changed; ) {
       changed = false;
       for (const id of [...pending]) {
-        if (!depsOf(id).some((d) => blocked.has(d))) continue;
-        pending.delete(id);
-        skipped.push(id);
-        blocked.add(id);
-        board.appendStage(id, { role: "team-lead", action: "skipped", note: "dependency failed" });
-        board.move(id, "ABANDONED", "team-lead"); // nothing will make it runnable in THIS run
+        const blocker = depsOf(id).find((d) => parked.has(d));
+        if (blocker === undefined) continue;
+        park(id, "waiting", blocker);
         changed = true;
       }
     }
   };
 
-  while (pending.size > 0 || running.size > 0) {
-    dropUnreachable();
+  while (pending.size > 0 || running.size > 0 || parked.size > 0) {
+    parkUnreachable();
     const limit = ceiling();
     for (const id of [...pending]) {
       if (running.size >= limit) break;
@@ -168,6 +240,7 @@ export async function runReady(
         "hc.pending": pending.size,
       });
       for (const f of files) busy.add(f);
+      const mergedAtStart = merged.length; // the world as this attempt found it — see park()
       const slot = free.pop() ?? minted++;
       running.set(slot, (async () => {
         try {
@@ -197,7 +270,7 @@ export async function runReady(
           };
           const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict, baseRef: session.baseBranch }, session, board, id, slot);
           if (res.status === "merged") { merged.push(id); done.add(id); }
-          else { failed.push(id); blocked.add(id); }
+          else park(id, res.status === "conflict" ? "conflict" : "exhausted", undefined, mergedAtStart);
         } finally {
           for (const f of files) busy.delete(f);
           free.push(slot);
@@ -207,20 +280,34 @@ export async function runReady(
     }
     if (running.size === 0) {
       /**
-       * Nothing is running and nothing could start: what is left depends on something that will never
-       * arrive. `computeWaves` rejects cycles before this point, so in practice this is a dependency on a
-       * task that failed — but it is reported rather than looped on, because a scheduler that cannot
-       * schedule must say so instead of spinning.
+       * Nothing running, nothing startable. Before giving up, ask whether the world has changed since each
+       * parked task last tried — that is the only thing that could make a retry mean anything.
        */
-      for (const id of pending) {
-        skipped.push(id);
-        board.appendStage(id, { role: "team-lead", action: "skipped", note: "its dependencies never completed" });
+      if (wake() > 0) continue;
+      /**
+       * Nothing can wake: every parked task is either waiting on something that will never merge, or has
+       * already been tried since the last merge, or is out of wakes. THIS is the verdict `abandoned` was
+       * always claiming to be, and now it is earned rather than assumed.
+       */
+      for (const [id, p] of parked) {
+        (p.reason === "waiting" ? skipped : failed).push(id);
+        board.appendStage(id, {
+          role: "team-lead", action: "abandoned",
+          note: p.wakes >= MAX_WAKES ? `out of wakes after ${p.wakes}` : `${p.reason}: nothing left that could change it`,
+        });
         board.move(id, "ABANDONED", "team-lead");
       }
+      for (const id of pending) {
+        skipped.push(id);
+        board.appendStage(id, { role: "team-lead", action: "abandoned", note: "its dependencies never completed" });
+        board.move(id, "ABANDONED", "team-lead");
+      }
+      parked.clear();
       pending.clear();
       break;
     }
     running.delete(await Promise.race(running.values()));
+    wake(); // a merge just landed: whatever it unblocks goes back in the queue now, not at the end
   }
 
   return { merged, failed, skipped };
