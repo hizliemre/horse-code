@@ -194,6 +194,32 @@ export class WorktreeManager {
     return { taskSlug, worktree: wt, branch: br };
   }
 
+  /**
+   * Retires a task's worktree and branch so the next derive starts from the CURRENT base.
+   *
+   * Reusing a task's worktree between attempts stopped the "start from scratch every run" waste, but it also
+   * FROZE the branch's root. Measured on a real board: the export/import task's branch was rooted two and a
+   * half days back and the base had moved 68 commits past it, while the throwaway worktrees it replaced had
+   * been rooted 29-30 commits back. Its merge then had to reconcile a drift that wide across seven files, and
+   * the resolver ran out of turns every time — twice on a review that had already PASSED.
+   *
+   * Past a few of those, re-implementing on today's base is cheaper than reconciling the drift, and it is the
+   * only move that actually removes the cause.
+   *
+   * The old branch is RENAMED, not deleted. It holds work that passed review; throwing it away to save a
+   * branch name would destroy the only copy of it.
+   */
+  async restartTask(session: WorktreeSession, task: TaskWorktree): Promise<string> {
+    let retired = `${task.branch}-stale`;
+    for (let n = 2; (await this.git(["rev-parse", "--verify", "--quiet", retired], this.repoRoot)).code === 0; n++) {
+      retired = `${task.branch}-stale-${n}`;
+    }
+    // Force: the worktree holds the attempt's own commits and, after a failed merge, possibly a dirty tree.
+    await this.run(["worktree", "remove", "--force", task.worktree], this.repoRoot);
+    await this.run(["branch", "-m", task.branch, retired], this.repoRoot);
+    return retired;
+  }
+
   async mergeTask(session: WorktreeSession, task: TaskWorktree): Promise<MergeResult> {
     const r = await this.git(["merge", task.branch], session.baseWorktree);
     if (r.code === 0) return { status: "merged" };

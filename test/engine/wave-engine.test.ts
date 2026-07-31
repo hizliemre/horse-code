@@ -634,6 +634,84 @@ describe("a conflict resolution that throws says why", () => {
 });
 
 /**
+ * A merge conflict normally means the base moved, and retrying after another merge is right. Past a few
+ * failures it means something else: the branch's ROOT is too old for the conflict to be resolvable at all.
+ *
+ * Measured on a real board: two tasks passed review five times between them and never landed. Their branches
+ * were rooted 49 and 68 commits back, the drift spanned seven files, and the resolver ran out of turns every
+ * single time. Both were finally abandoned with their reviewed work stranded on a branch nobody would open.
+ * Merging harder cannot fix a distance problem — the work has to be rewritten from where base is now.
+ */
+describe("a merge that cannot be resolved rewrites the task instead of parking it", () => {
+  /** A manager whose merge always conflicts and whose resolver always throws. */
+  const alwaysConflicts = (mgr: WorktreeManager): WorktreeManager => {
+    const broken = Object.create(mgr) as WorktreeManager;
+    broken.mergeTask = async () => ({ status: "conflict", files: ["a.ts"] });
+    broken.unmergedFiles = async () => { throw new Error("git index is locked"); };
+    broken.abortMerge = async () => undefined;
+    return broken;
+  };
+
+  it("retires the stale branch and sends the task back through the pipeline", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      // Two resolutions already failed in earlier runs — this run's failure is the third.
+      for (const _ of [1, 2]) board.appendStage("t1", { role: "operational", action: "conflict:resolve-failed", note: "prior run" });
+
+      await runReady(edeps(alwaysConflicts(mgr), fakeAdapter()), session, board);
+
+      const h = board.get("t1")!.stageHistory;
+      const restarted = h.find((e) => e.action === "restarted");
+      expect(restarted).toBeDefined();
+      expect(restarted?.note).toContain("rewriting from the current base");
+      // The reviewed work is kept, not destroyed — the note names where it went.
+      expect(restarted?.note).toContain("-stale");
+      // …and the card went back to be built again rather than parking to wait for a merge that cannot come.
+      expect(h.filter((e) => e.action === "restarted").length).toBeGreaterThan(0);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("parks as before while the conflict is still young", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      board.appendStage("t1", { role: "operational", action: "conflict:resolve-failed", note: "prior run" });
+
+      await runReady(edeps(alwaysConflicts(mgr), fakeAdapter()), session, board);
+
+      const h = board.get("t1")!.stageHistory;
+      expect(h.find((e) => e.action === "restarted")).toBeUndefined();
+      expect(h.find((e) => e.action === "parked")).toBeDefined();
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("stops rewriting once a task has had its rewrites — a loop is not a verdict", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      for (const _ of [1, 2]) board.appendStage("t1", { role: "operational", action: "conflict:resolve-failed", note: "prior" });
+      for (const _ of [1, 2]) board.appendStage("t1", { role: "team-lead", action: "restarted", note: "prior" });
+
+      await runReady(edeps(alwaysConflicts(mgr), fakeAdapter()), session, board);
+
+      const h = board.get("t1")!.stageHistory;
+      expect(h.filter((e) => e.action === "restarted").length).toBe(2); // no third rewrite
+      expect(h.find((e) => e.action === "parked")).toBeDefined();
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+/**
  * `attempts` drives the tier — implementer, then senior, then council — and it was persisted, so a task that
  * had failed a lot came back BORN EXHAUSTED.
  *

@@ -59,6 +59,23 @@ export interface WaveOutcome {
  */
 export const MAX_WAKES = 3;
 
+/**
+ * How many failed conflict resolutions before the task is REWRITTEN instead of merged again.
+ *
+ * A merge conflict is normally a sign that the base moved, and retrying after another merge is the right
+ * answer. Past a few failures it stops being that and becomes a sign that the branch's ROOT is too old for
+ * the conflict to be resolvable at all: measured on a real board, two tasks passed review five times between
+ * them and never landed, because their branches were rooted 49 and 68 commits back and the resolver ran out
+ * of turns on a seven-file drift every single time. Merging harder cannot fix a distance problem.
+ */
+export const RESTART_AFTER_CONFLICTS = 3;
+
+/**
+ * …and how many rewrites one task may have. A rewrite is expensive — it discards work that passed review —
+ * so a task that cannot land even from today's base must stop and say so rather than loop.
+ */
+export const MAX_RESTARTS = 2;
+
 export function createMutex(): <T>(fn: () => Promise<T>) => Promise<T> {
   let tail: Promise<unknown> = Promise.resolve();
   return <T>(fn: () => Promise<T>): Promise<T> => {
@@ -125,6 +142,16 @@ export async function runReady(
   type ParkReason = "waiting" | "exhausted" | "conflict";
   interface Parked { reason: ParkReason; on?: string; mergedAt: number; wakes: number }
   const parked = new Map<string, Parked>();
+  /** Tasks whose merge has failed often enough to be rewritten, with the worktree to retire. */
+  const restartOn = new Map<string, TaskWorktree>();
+  /** Failed resolutions since this task was last rewritten — a rewrite starts the count over. */
+  const conflictRuns = (cardId: string): number => {
+    const h = board.get(cardId)?.stageHistory ?? [];
+    const since = h.map((e) => e.action).lastIndexOf("restarted");
+    return h.slice(since + 1).filter((e) => e.action === "conflict:resolve-failed").length;
+  };
+  const restartsSoFar = (cardId: string): number =>
+    (board.get(cardId)?.stageHistory ?? []).filter((e) => e.action === "restarted").length;
   const pending = new Set(cards.filter((c) => !done.has(c.id)).map((c) => c.id));
   /**
    * A NEW run gives every unfinished task a fresh ladder.
@@ -264,12 +291,44 @@ export async function runReady(
                 role: "operational", action: "conflict:resolve-failed",
                 note: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
               });
+              if (conflictRuns(id) >= RESTART_AFTER_CONFLICTS && restartsSoFar(id) < MAX_RESTARTS) {
+                restartOn.set(id, tw); // the merge is not the problem any more — see RESTART_AFTER_CONFLICTS
+              }
               try { await deps.manager.abortMerge(session); } catch { /* zaten temiz olabilir */ }
               return { status: "conflict", files: conflicted };
             }
           };
           const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict, baseRef: session.baseBranch }, session, board, id, slot);
           if (res.status === "merged") { merged.push(id); done.add(id); }
+          else if (res.status === "conflict" && restartOn.has(id)) {
+            /**
+             * Rewrite rather than park.
+             *
+             * Parking here would wait for another merge to move the base — but the base moving is exactly
+             * what put this branch out of reach, and waiting has already been tried. Retiring the worktree
+             * sends the task back through the pipeline from TODAY's base, where the same work merges cleanly.
+             */
+            const tw = restartOn.get(id)!;
+            restartOn.delete(id);
+            try {
+              const retired = await deps.manager.restartTask(session, tw);
+              board.appendStage(id, {
+                role: "team-lead", action: "restarted",
+                note: `merge unresolvable after ${RESTART_AFTER_CONFLICTS} attempts — rewriting from the ` +
+                  `current base (the reviewed work is kept on ${retired})`,
+              });
+              board.resetAttempts(id);
+              board.move(id, "TODO", "team-lead");
+              pending.add(id);
+            } catch (e) {
+              // Retiring failed (a locked worktree, a branch name in use). Parking still beats losing the card.
+              board.appendStage(id, {
+                role: "team-lead", action: "restart-failed",
+                note: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+              });
+              park(id, "conflict", undefined, mergedAtStart);
+            }
+          }
           else park(id, res.status === "conflict" ? "conflict" : "exhausted", undefined, mergedAtStart);
         } finally {
           for (const f of files) busy.delete(f);

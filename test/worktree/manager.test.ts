@@ -209,6 +209,57 @@ describe("WorktreeManager.deriveTask", () => {
  * commits and 7.6 KB of finished work. It also made the pipeline lie — the deadline warning tells the
  * implementer "whatever it wrote is committed and kept, continue from there", and across runs that was false.
  */
+/**
+ * Reuse fixed the "start from scratch every run" waste, but it also FROZE the branch's root.
+ *
+ * Measured on a real board: the reused export/import branch was rooted two and a half days back with the base
+ * 68 commits past it, while the throwaway worktrees it replaced had been rooted 29-30 commits back. The task
+ * passed review twice and never landed — its merge had to reconcile that drift across seven files, and the
+ * resolver ran out of turns every time. Retiring the branch is what puts the next attempt back on today's base.
+ */
+describe("restartTask re-roots a task on the current base", () => {
+  it("retires the old branch and derives the next attempt from where base is NOW", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const first = await mgr.deriveTask(session, "Wire the store");
+      const rootedAt = (await defaultGitRunner(["merge-base", first.branch, session.baseBranch], repo)).stdout.trim();
+
+      // The base moves on, as it does while a task spends attempts failing.
+      await writeFile(join(session.baseWorktree, "moved.txt"), "the world moved on", "utf8");
+      await defaultGitRunner(["add", "-A"], session.baseWorktree);
+      await defaultGitRunner(["commit", "-m", "base moves on"], session.baseWorktree);
+      const movedTo = (await defaultGitRunner(["rev-parse", "HEAD"], session.baseWorktree)).stdout.trim();
+      expect(movedTo).not.toBe(rootedAt);
+
+      const retired = await mgr.restartTask(session, first);
+      expect(retired).toBe("hc/job/t/wire-the-store-stale");
+      expect(await branchExists(repo, retired)).toBe(true);      // the reviewed work is KEPT, not deleted
+      expect(await branchExists(repo, first.branch)).toBe(false); // …and the name is free again
+      expect(existsSync(first.worktree)).toBe(false);
+
+      const second = await mgr.deriveTask(session, "Wire the store");
+      expect(second.branch).toBe(first.branch); // same name, new history
+      const newRoot = (await defaultGitRunner(["merge-base", second.branch, session.baseBranch], repo)).stdout.trim();
+      expect(newRoot).toBe(movedTo); // rooted on today's base — the drift that made the merge unresolvable is gone
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("keeps every retired attempt rather than overwriting the last one", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const a = await mgr.deriveTask(session, "Wire the store");
+      expect(await mgr.restartTask(session, a)).toBe("hc/job/t/wire-the-store-stale");
+      const b = await mgr.deriveTask(session, "Wire the store");
+      expect(await mgr.restartTask(session, b)).toBe("hc/job/t/wire-the-store-stale-2");
+      expect(await branchExists(repo, "hc/job/t/wire-the-store-stale")).toBe(true);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
 describe("deriveTask reuses a task's worktree", () => {
   it("returns the same worktree and branch the second time", async () => {
     const repo = await initTmpRepo();
