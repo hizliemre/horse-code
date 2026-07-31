@@ -18,7 +18,7 @@ import { snapshotBoard, type ProgressEvent } from "./progress.js";
 import { appendReviewNotes } from "./review-notes.js";
 import { memoryHints } from "./memory-inject.js";
 import { curateMemories } from "./memory-consolidate.js";
-import { saveBoard, loadBoard } from "../board/persist.js";
+import { saveBoard, loadBoard, flushBoard } from "../board/persist.js";
 import { existsSync } from "node:fs";
 import { rm, readFile } from "node:fs/promises";
 import type { Card, Column } from "../board/board.js";
@@ -368,6 +368,8 @@ export async function runJob(
      * WHICH nine were left, and the remaining work became unreachable. "Resume" then had nothing to resume
      * and would have started the whole job again from the beginning.
      */
+    // Every mutation above saved fire-and-forget; settle them before reading the board's fate off disk.
+    await flushBoard(boardPath);
     const unfinished = board.list().filter((c) => c.column !== "MERGED");
     if (!unfinished.length) {
       clearCheckpoint(session.root); // nothing left — the state is what makes a resume possible, not clutter

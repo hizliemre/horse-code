@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Board } from "../../src/board/board.js";
-import { saveBoard, loadBoard } from "../../src/board/persist.js";
+import { saveBoard, loadBoard, flushBoard } from "../../src/board/persist.js";
 
 let dir: string;
 beforeEach(async () => {
@@ -123,5 +123,92 @@ describe("a board written before MERGED existed", () => {
     ]));
     const b = await loadBoard(path);
     expect(["a", "b", "c", "d"].map((i) => b.get(i)!.column)).toEqual(["TODO", "REVIEW", "IN-PROGRESS", "MERGED"]);
+  });
+});
+
+/**
+ * The board is rewritten on EVERY mutation from a fire-and-forget handler, while the wave engine mutates it
+ * from several tasks at once. Nothing serialised those writes: two overlapping `writeFile` calls each
+ * truncated the file and wrote from their own offset, so the longer one's tail outlived the shorter one's end.
+ *
+ * Found in the wild: a 95-card board holding a complete valid document followed by 2056 bytes of the previous,
+ * longer version, beginning mid-sentence. It parsed as "Extra data" and would have taken the next run's
+ * resume with it — this file is the only record of which tasks are already merged.
+ */
+describe("concurrent saves cannot tear the board", () => {
+  const bigBoard = (cards: number, noteLen: number): Board => {
+    const b = new Board();
+    for (let i = 0; i < cards; i++) {
+      b.addCard({ id: `t${i}`, title: `task ${i}` });
+      b.addReviewNote(`t${i}`, "x".repeat(noteLen));
+    }
+    return b;
+  };
+
+  it("leaves a file that is exactly the JSON, with no tail of a longer previous write", async () => {
+    const path = join(dir, "board.json");
+    // A large board first, then a much smaller one — the shrink is what exposed the old bug.
+    await saveBoard(bigBoard(300, 4000), path);
+    const small = bigBoard(3, 10);
+    await Promise.all(Array.from({ length: 25 }, () => saveBoard(small, path)));
+
+    const raw = await readFile(path, "utf8");
+    expect(() => JSON.parse(raw) as unknown).not.toThrow();
+    // The precise signature of the corruption: valid JSON, then bytes past its end.
+    expect(raw.length).toBe(JSON.stringify(small.toJSON(), null, 2).length);
+    expect((await loadBoard(path)).list()).toHaveLength(3);
+  });
+
+  it("writes the newest state even when a burst is collapsed into one write", async () => {
+    const path = join(dir, "board.json");
+    const b = new Board();
+    b.addCard({ id: "t1", title: "a" });
+    const writes = [];
+    for (const col of ["REVIEW", "DONE", "MERGED"] as const) {
+      b.move("t1", col, "coder");
+      writes.push(saveBoard(b, path));
+    }
+    await Promise.all(writes);
+    expect((await loadBoard(path)).get("t1")!.column).toBe("MERGED");
+  });
+
+  it("survives a burst of near-identical snapshots — the shape that actually tore", async () => {
+    /**
+     * Two SUCCESSIVE board snapshots differ by very little; the corrupt board differed from its predecessor
+     * by 2056 bytes. Reproduced against the old unserialised write, that shape tore in 23 of 40 rounds, while
+     * writing a big document followed by a tiny one never tore at all — the near-equal sizes are the point.
+     */
+    const path = join(dir, "board.json");
+    const a = bigBoard(660, 4000);
+    const b = bigBoard(659, 4000);
+    for (let round = 0; round < 8; round++) {
+      await Promise.all([saveBoard(a, path), saveBoard(b, path), saveBoard(a, path), saveBoard(b, path)]);
+      const raw = await readFile(path, "utf8");
+      expect(() => JSON.parse(raw) as unknown).not.toThrow();
+      // Whichever snapshot won, the file is exactly one of them — never one with the other's tail attached.
+      expect([JSON.stringify(a.toJSON(), null, 2).length, JSON.stringify(b.toJSON(), null, 2).length])
+        .toContain(raw.length);
+    }
+  });
+
+  it("does not leave its temporary file behind", async () => {
+    const path = join(dir, "board.json");
+    await Promise.all(Array.from({ length: 10 }, () => saveBoard(bigBoard(20, 100), path)));
+    expect((await readdir(dir)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+describe("flushBoard", () => {
+  it("settles a fire-and-forget save so the file is readable the moment a run returns", async () => {
+    const path = join(dir, "board.json");
+    const b = new Board();
+    b.addCard({ id: "t1", title: "a" });
+    void saveBoard(b, path); // exactly how `board.onChange` saves
+    await flushBoard(path);
+    expect((await loadBoard(path)).get("t1")!.title).toBe("a");
+  });
+
+  it("is a no-op for a board nobody has written", async () => {
+    await expect(flushBoard(join(dir, "never.json"))).resolves.toBeUndefined();
   });
 });
