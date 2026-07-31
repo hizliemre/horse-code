@@ -4,7 +4,7 @@ import { withDeadline } from "../agent/deadline.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
-import { memoryHints } from "./memory-inject.js";
+import { memoryHints, reinforceTouched } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { adjudicateSkills } from "../skills/adjudicate.js";
 import { placedSkills } from "../prompts.js";
@@ -139,6 +139,8 @@ export async function runImplementer(
   // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
   // blind to them and kept re-learning the same things.
   const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role });
+  /** Every file this implementer wrote — the evidence for which injected memories it actually used. */
+  const touched: string[] = [];
   /**
    * Skills this particular task needs, matched from what it asks for.
    *
@@ -229,7 +231,10 @@ export async function runImplementer(
     // Stamped with the card id: the agent panel is keyed by it, and unattributed activity goes to the chat.
     onActivity: deps.onActivity ? (a) => deps.onActivity?.({ ...a, agent: task.id }) : undefined,
     onLiveActivity: deps.onLiveActivity,
-    onWrite: (path) => commitFile(deps, cwd, path).then(() => {}), // per-write conventional commit in the task worktree
+    onWrite: (path) => {
+      touched.push(path); // …and remembered, so the memories anchored to this file can be credited below
+      return commitFile(deps, cwd, path).then(() => {});
+    },
   };
   const mins = Math.round(budgetMs / 60_000);
   const baseMins = Math.round((deps.implementerTimeoutMs ?? IMPLEMENTER_TIMEOUT_MS) / 60_000);
@@ -263,5 +268,10 @@ export async function runImplementer(
   } catch (e) {
     if (deps.signal.aborted || !budget.aborted) throw e; // a real cancel, or a real error → unchanged
     throw new Error(overran);
+  } finally {
+    // In `finally` because a failed attempt still consumed the memory: an implementer that ran out of time
+    // in the right file was helped by the hint that sent it there, and crediting only the attempts that
+    // succeed would score memories on the model's luck rather than on their own usefulness.
+    reinforceTouched(deps, hints.ids, touched, role);
   }
 }

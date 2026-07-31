@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { memoryHints, reinforceUsed, emitBatchInjection, memoryNote, type MemoryEvent } from "../../src/engine/memory-inject.js";
+import { memoryHints, reinforceUsed, reinforceTouched, emitBatchInjection, memoryNote, type MemoryEvent } from "../../src/engine/memory-inject.js";
 import type { MemoryEntry } from "../../src/engine/memory-retrieval.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 
@@ -168,5 +168,48 @@ describe("memoryNote", () => {
   it("clips long memory text so one note cannot swallow the transcript", () => {
     const note = memoryNote({ kind: "injected", role: "coder", hits: [hit("a", "x".repeat(500))], stats });
     expect(note!.length).toBeLessThan(300);
+  });
+});
+
+describe("reinforceTouched (an implementer is judged by the files it went to, not by what it says)", () => {
+  const entries = [
+    mem({ id: "wire", text: "filter/sort already exists in src/app/core/models/repository.ts — wire it, do not reimplement it", anchors: ["src/app/core/models/repository.ts"] }),
+    mem({ id: "other", text: "billing lives elsewhere", anchors: ["src/billing.ts"] }),
+  ];
+
+  it("credits a memory whose anchor the implementer actually wrote to", () => {
+    const bumped: string[] = [];
+    reinforceTouched(deps(entries, (id) => bumped.push(id)), ["wire", "other"], ["src/app/core/models/repository.ts"], "coder");
+    expect(bumped).toEqual(["wire"]);
+  });
+
+  it("matches an anchor written as a repo path against an absolute one, and ignores case", () => {
+    const bumped: string[] = [];
+    reinforceTouched(deps(entries, (id) => bumped.push(id)), ["wire"], ["/Users/x/proj/SRC/app/core/models/Repository.ts"], "coder");
+    expect(bumped).toEqual(["wire"]);
+  });
+
+  it("credits nothing when the implementer went somewhere else entirely", () => {
+    const bumped: string[] = [];
+    const seen: MemoryEvent[] = [];
+    const d = { ...deps(entries, (id) => bumped.push(id)), onMemory: (e: MemoryEvent) => seen.push(e) } as unknown as TaskCycleDeps;
+    reinforceTouched(d, ["wire"], ["src/app/features/task-filters.component.ts"], "coder");
+    expect(bumped).toEqual([]);
+    expect(seen).toEqual([]);
+  });
+
+  it("is a no-op with no hints or no writes", () => {
+    const bumped: string[] = [];
+    const d = deps(entries, (id) => bumped.push(id));
+    reinforceTouched(d, [], ["src/app/core/models/repository.ts"], "coder");
+    reinforceTouched(d, ["wire"], [], "coder");
+    expect(bumped).toEqual([]);
+  });
+
+  it("reports the use so the run can show that memory did something", () => {
+    const seen: MemoryEvent[] = [];
+    const d = { ...deps(entries), onMemory: (e: MemoryEvent) => seen.push(e) } as unknown as TaskCycleDeps;
+    reinforceTouched(d, ["wire"], ["src/app/core/models/repository.ts"], "senior-coder");
+    expect(seen).toEqual([{ kind: "used", role: "senior-coder", texts: [entries[0]!.text] }]);
   });
 });

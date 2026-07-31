@@ -24,6 +24,20 @@ describe("MemoryStore", () => {
     expect(loaded.map((e) => e.text)).toEqual(["prefer pnpm in src/app.ts"]);
   });
 
+  it("counts an injection twice: once as raw exposure, once as a fair sample", async () => {
+    // `observedInjections` is the honest denominator — it starts only once every consumer reports usage, so
+    // a memory carried over from the blind era is not judged on injections nobody could credit.
+    const s = store();
+    const res = await s.add("prefer pnpm in src/app.ts");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    await s.recordInjection([res.entry.id]);
+    await s.recordInjection([res.entry.id]);
+    const [e] = await store().load();
+    expect(e!.injections).toBe(2);
+    expect(e!.observedInjections).toBe(2);
+  });
+
   it("rejects an empty memory", async () => {
     expect(await store().add("   ")).toEqual({ ok: false, error: "empty memory" });
   });

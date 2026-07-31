@@ -88,8 +88,15 @@ describe("hygiene — review candidates", () => {
   const old = NOW - REVIEW_AGE_MS - 1;
 
   it("flags an entry that keeps being injected and is never cited", () => {
-    const r = hygiene([mem({ id: "a", text: "noise", createdAt: old, injections: UNUSED_INJECTIONS, uses: 0 })], NOW);
+    const r = hygiene([mem({ id: "a", text: "noise", createdAt: old, observedInjections: UNUSED_INJECTIONS, uses: 0 })], NOW);
     expect(r.candidates).toEqual([{ id: "a", text: "noise", reason: "injected-never-used" }]);
+  });
+
+  it("does not flag one whose injections nobody could report usage for", () => {
+    // Removing a memory over a blind count deletes exactly the memories that were doing the most work: the
+    // ones aimed at the implementer, which was the consumer that could not report.
+    const r = hygiene([mem({ id: "a", text: "wire it, do not reimplement it", createdAt: old, injections: 13, uses: 0 })], NOW);
+    expect(r.candidates).toEqual([]);
   });
 
   it("does not flag it before it has had time to prove itself", () => {

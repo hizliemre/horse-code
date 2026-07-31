@@ -150,6 +150,9 @@ export class MemoryStore {
         const e = this.cache!.find((m) => m.id === id);
         if (!e) continue;
         e.injections = (e.injections ?? 0) + 1;
+        // Every consumer — coach, reviewers, council, judge and now the implementer — reports usage, so an
+        // injection recorded from here on is one a memory can be fairly judged on.
+        e.observedInjections = (e.observedInjections ?? 0) + 1;
         touched = true;
       }
       if (touched) await this.persist();

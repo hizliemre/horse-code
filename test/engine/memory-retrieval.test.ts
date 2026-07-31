@@ -288,16 +288,21 @@ describe("rankScore", () => {
 
 describe("unusedPenalty", () => {
   it("is zero until a memory has had several chances", () => {
-    expect(unusedPenalty(entry("a", "x", { injections: 2, uses: 0 }))).toBe(0);
+    expect(unusedPenalty(entry("a", "x", { observedInjections: 2, uses: 0 }))).toBe(0);
   });
   it("kicks in once it has been shown repeatedly and never cited", () => {
-    expect(unusedPenalty(entry("a", "x", { injections: 5, uses: 0 }))).toBeGreaterThan(0);
+    expect(unusedPenalty(entry("a", "x", { observedInjections: 5, uses: 0 }))).toBeGreaterThan(0);
   });
   it("never penalizes a memory that IS cited, however often it was shown", () => {
-    expect(unusedPenalty(entry("a", "x", { injections: 99, uses: 1 }))).toBe(0);
+    expect(unusedPenalty(entry("a", "x", { observedInjections: 99, uses: 1 }))).toBe(0);
   });
   it("is capped so it can never bury a memory outright", () => {
-    expect(unusedPenalty(entry("a", "x", { injections: 10_000, uses: 0 }))).toBeLessThanOrEqual(0.16);
+    expect(unusedPenalty(entry("a", "x", { observedInjections: 10_000, uses: 0 }))).toBeLessThanOrEqual(0.16);
+  });
+  it("does not penalize injections nobody could report usage for", () => {
+    // The pool this was measured on: injected over and over into implementer prompts that had no way to
+    // credit it back. Those injections are not evidence against the memory.
+    expect(unusedPenalty(entry("a", "x", { injections: 13, uses: 0 }))).toBe(0);
   });
 });
 

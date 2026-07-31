@@ -79,7 +79,9 @@ function reviewReason(e: MemoryEntry, now: number): ReviewReason | undefined {
   if (e.persistence === "permanent") return undefined;
   const age = now - e.createdAt;
   if (e.expiresAt !== undefined && e.expiresAt <= now) return "expired";
-  if ((e.injections ?? 0) >= UNUSED_INJECTIONS && (e.uses ?? 0) === 0 && age >= REVIEW_AGE_MS) return "injected-never-used";
+  // `observedInjections`, not `injections`: a memory must not be marked for removal over injections made
+  // while the consumer that would have used it had no way to say so.
+  if ((e.observedInjections ?? 0) >= UNUSED_INJECTIONS && (e.uses ?? 0) === 0 && age >= REVIEW_AGE_MS) return "injected-never-used";
   if (confidenceOf(e) < LOW_CONFIDENCE && age >= REVIEW_AGE_MS) return "low-confidence";
   if (e.stale && age >= STALE_AGE_MS) return "long-stale";
   return undefined;

@@ -12,6 +12,7 @@ import type { Card, Board } from "../../src/board/board.js";
 import type { ChatEvent, Provider } from "../../src/core/types.js";
 import type { ProgressEvent } from "../../src/engine/progress.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
+import type { MemoryEntry } from "../../src/engine/memory-retrieval.js";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-impl-")); });
@@ -57,6 +58,40 @@ describe("runImplementer", () => {
     const msg = p.requests[0].messages.map((m) => m.content).join("\n");
     expect(msg).toContain("RETURNING");
     expect(msg).toContain("fix the test");
+  });
+});
+
+/**
+ * The implementer was the one consumer of memory that never credited what it used.
+ *
+ * It was also the consumer the most valuable lessons are written FOR: a lesson saying "the filter/sort logic
+ * already exists in repository.ts — wire it, do not reimplement it" can only be acted on by whoever writes
+ * the code. Measured on a real board, that lesson was injected 13 times, credited 0 times, and the task it
+ * was written for was rejected with "the diff adds a second, unused filter/sort implementation". The ranking
+ * was quietly demoting it the whole time.
+ */
+describe("runImplementer credits the memories it used", () => {
+  const remembered = (bumped: string[], entries: MemoryEntry[]) => (p: Provider): TaskCycleDeps =>
+    ({ ...deps(p as MockProvider), provider: p, memory: () => entries, reinforceMemory: (id: string) => bumped.push(id) });
+
+  it("credits a memory anchored to a file it wrote", async () => {
+    const bumped: string[] = [];
+    const entries: MemoryEntry[] = [
+      { id: "wire", text: "out.txt holds the wiring — extend it, do not add a second one", anchors: ["out.txt"], tags: ["out"], createdAt: 0 },
+    ];
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(remembered(bumped, entries)(p), "coder", card({ title: "out.txt wiring" }), dir);
+    expect(bumped).toEqual(["wire"]);
+  });
+
+  it("credits nothing when it wrote nothing the memory was about", async () => {
+    const bumped: string[] = [];
+    const entries: MemoryEntry[] = [
+      { id: "elsewhere", text: "out.txt holds the wiring — extend it, do not add a second one", anchors: ["src/other.ts"], tags: ["out"], createdAt: 0 },
+    ];
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(remembered(bumped, entries)(p), "coder", card({ title: "out.txt wiring" }), dir);
+    expect(bumped).toEqual([]);
   });
 });
 

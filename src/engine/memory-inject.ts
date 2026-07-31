@@ -74,6 +74,37 @@ export function emitBatchInjection(deps: TaskCycleDeps, role: string, parts: Mem
   deps.onMemory?.({ kind: "injected", role, hits, stats });
 }
 
+/**
+ * Credits the memories an IMPLEMENTER used, by the files it touched.
+ *
+ * An implementer does not cite; it writes code. Judging it by whether its prose repeats a memory's words is
+ * judging the wrong artefact, and `reinforceUsed` — which does exactly that — was never called from the
+ * implementer at all. So the only usage anyone recorded came from the coach's chat replies.
+ *
+ * Measured on a real board: memories were injected 262 times and 14 uses were recorded, all from the coach.
+ * One lesson — "the filter/sort logic already exists in repository.ts; wire it, do not reimplement it" — was
+ * injected THIRTEEN times, recorded zero uses, and the task it was for failed with the reviewer writing "the
+ * diff adds a second, unused filter/sort implementation". The memory was right, present, and invisible.
+ *
+ * A file anchor is the honest signal here: a memory about `repository.ts` was used if the implementer went
+ * to `repository.ts`.
+ */
+export function reinforceTouched(deps: TaskCycleDeps, ids: string[], paths: string[], role: string): void {
+  if (!ids.length || !paths.length) return;
+  const norm = (p: string): string => p.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  const touched = new Set(paths.map(norm));
+  const all = deps.memory?.() ?? [];
+  const used = ids
+    .map((id) => all.find((m) => m.id === id))
+    .filter((e): e is MemoryEntry => !!e && e.anchors.some((a) => {
+      const an = norm(a);
+      return [...touched].some((t) => t === an || t.endsWith(`/${an}`) || an.endsWith(`/${t}`));
+    }));
+  if (!used.length) return;
+  if (deps.reinforceMemory) for (const e of used) deps.reinforceMemory(e.id);
+  deps.onMemory?.({ kind: "used", role, texts: used.map((e) => e.text) });
+}
+
 /** Credits the memories the model actually referenced in its output (feeds retrieval ranking). */
 export function reinforceUsed(deps: TaskCycleDeps, ids: string[], output: string, role = "coach"): void {
   if (!ids.length) return;

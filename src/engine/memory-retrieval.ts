@@ -78,6 +78,21 @@ export interface MemoryEntry {
   freshness?: number;
   /** Times this memory has been put into a prompt — the denominator of "injected but never used". */
   injections?: number;
+  /**
+   * …of which how many were injected into a prompt whose consumer could REPORT usage back.
+   *
+   * `injections` alone is not a denominator, because for most of this pool's life one consumer could not
+   * report: the implementer never credited a memory at all, so the hint that sent it to the right file was
+   * recorded as an injection with nothing to show for it. On a real board that read as 262 injections against
+   * 14 uses, and the single most useful lesson in the pool — "the filter/sort logic already exists, wire it,
+   * do not reimplement it" — sat at 13 injections and 0 uses while the task it was written for failed for
+   * exactly the reason it warned about.
+   *
+   * Counted from the moment every consumer reports, so the old blind injections neither penalise a memory nor
+   * mark it for removal. Absent on entries written before that: absent means "no honest sample yet", which is
+   * the right answer for them.
+   */
+  observedInjections?: number;
 }
 
 /** Is this memory addressed to `role`? An unscoped memory is addressed to everyone. */
@@ -191,7 +206,8 @@ const KIND_BOOST: Record<NonNullable<MemoryEntry["kind"]>, number> = { rule: 0.0
  * the evidence is that it is not useful here; without this it would keep displacing memories that ARE used.
  */
 export function unusedPenalty(e: MemoryEntry): number {
-  const injections = e.injections ?? 0;
+  // Only injections anyone could have credited count here — see `observedInjections`.
+  const injections = e.observedInjections ?? 0;
   if (injections < 3 || (e.uses ?? 0) > 0) return 0;
   return Math.min(0.16, 0.04 + injections * 0.01);
 }
