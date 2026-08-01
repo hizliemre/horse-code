@@ -1992,7 +1992,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         {showStatus ? (
           <Box flexDirection="column">
             {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} live={state.liveActivity} /></Box> : null}
-            {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
+            {/* Token counts appear only once something was actually billed. A local step — parsing the code
+                graph — spends nothing, and "↑0 ↓0 · 0 calls" beneath a note that already says "no tokens
+                spent" is a row of zeroes that reads as "nothing happened". */}
+            {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta && state.meta.calls > 0 ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
             {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} maxLines={pendingBodyMax} /> : null}
           </Box>
         ) : null}

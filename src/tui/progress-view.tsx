@@ -99,8 +99,12 @@ export function ProgressView(
   // How much of ↑ the backend served from its prefix cache. Without it a re-sent 40k conversation looked
   // exactly as expensive as a fresh one, so the headline overstated the real bill by an unknown amount.
   const cached = meta && meta.cachedTokens > 0 ? ` (${fmtTokens(meta.cachedTokens)} cached)` : "";
+  // Same rule while running: until a call has been billed there is nothing to report but the clock, and a
+  // row of zeroes next to a spinner is the picture of a run that has not started.
   const metrics = meta?.running && meta.startedAt !== undefined
-    ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ↑${fmtTokens(meta.promptTokens)}${cached} ↓${fmtTokens(meta.completionTokens)} · ${meta.calls} call${meta.calls === 1 ? "" : "s"})`
+    ? meta.calls > 0
+      ? ` (${fmtDuration(Date.now() - meta.startedAt)} · ↑${fmtTokens(meta.promptTokens)}${cached} ↓${fmtTokens(meta.completionTokens)} · ${meta.calls} call${meta.calls === 1 ? "" : "s"})`
+      : ` (${fmtDuration(Date.now() - meta.startedAt)})`
     : "";
   /**
    * The live write indicator sits ON this line, not under it.
