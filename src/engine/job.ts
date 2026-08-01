@@ -14,6 +14,7 @@ import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
 import { runRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
+import { describeInherited } from "../worktree/inherit.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
 import { appendReviewNotes } from "./review-notes.js";
 import { memoryHints } from "./memory-inject.js";
@@ -226,6 +227,9 @@ export async function runJob(
       } else if (session.resumed) {
         emit({ kind: "note", text: `⏩ Resuming earlier work at \`${session.baseWorktree}\` — completed phases are skipped.` });
       }
+      // What the branch alone would not have given it — see inheritFromRoot.
+      const carried = session.inherited ? describeInherited(session.inherited) : undefined;
+      if (carried) emit({ kind: "note", text: carried });
     }
     return session.baseWorktree;
   };

@@ -1,6 +1,7 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
+import { inheritFromRoot, type Inherited } from "./inherit.js";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
 import { readCheckpoint, checkpointKey, isContinuePrompt, checkpointMtime } from "../engine/checkpoint.js";
@@ -14,6 +15,8 @@ export interface WorktreeSession {
   baseWorktree: string;
   baseBranch: string;
   resumed?: boolean; // true when this session reuses a preserved worktree from an earlier interrupted run
+  /** What the project's working state contributed at open time — see inheritFromRoot. */
+  inherited?: Inherited;
 }
 export interface TaskWorktree {
   taskSlug: string;
@@ -102,7 +105,17 @@ export class WorktreeManager {
     const baseBranch = `hc/${jobSlug}/base`;
     await mkdir(join(root, "tasks"), { recursive: true });
     await this.run(["worktree", "add", "-b", baseBranch, baseWorktree, base], this.repoRoot);
-    return { jobSlug, root, baseWorktree, baseBranch };
+    /**
+     * The branch alone is not the project.
+     *
+     * A worktree cut from a branch has what was committed and nothing else — not the work in progress, and
+     * not the state horse-code itself depends on (the graph, the memory, the constitution, the installed
+     * skills), which on a real project was not in git at all. The run must not read those from the root
+     * instead: the root is a reference, and nothing written there reaches the pull request. So they come in
+     * here, once, and live inside the session from then on.
+     */
+    const inherited = await inheritFromRoot((args, cwd) => this.git(args, cwd), this.repoRoot, baseWorktree);
+    return { jobSlug, root, baseWorktree, baseBranch, inherited };
   }
 
   /** Absolute paths of the worktrees git currently tracks (from `git worktree list --porcelain`). */
