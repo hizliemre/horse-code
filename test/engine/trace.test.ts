@@ -405,3 +405,44 @@ describe("traceable — generated code is not a trace subject", () => {
       .toEqual(["real.ts"]);
   });
 });
+
+describe("planTraces — an adopted file is already covered", () => {
+  /**
+   * Adoption records that one of the PROJECT's documents already describes a file, so no per-file trace is
+   * written. The planner checked only for that per-file trace, so every adopted entry looked unbacked and was
+   * queued — on a real project, 414 of 424, at roughly half a million tokens to re-derive what was already
+   * written down.
+   */
+  it("does not re-trace a file a project document already covers", async () => {
+    await write("src/a.ts", "code");
+    await write("docs/architecture/47-orders.md", "describes src/a.ts");
+    const index = empty();
+    index.traces["src/a.ts"] = {
+      hash: hashContent("code"), file: "src/a.ts", writtenAt: 0, doc: "docs/architecture/47-orders.md",
+    };
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, index);
+    expect(plan.jobs).toEqual([]);
+    expect(plan.upToDate).toBe(1);
+  });
+
+  it("queues it again once the file has changed — the drift signal is the point", async () => {
+    await write("src/a.ts", "code v2");
+    await write("docs/architecture/47-orders.md", "describes src/a.ts");
+    const index = empty();
+    index.traces["src/a.ts"] = {
+      hash: hashContent("code"), file: "src/a.ts", writtenAt: 0, doc: "docs/architecture/47-orders.md",
+    };
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, index);
+    expect(plan.jobs.map((j) => j.file)).toEqual(["src/a.ts"]);
+  });
+
+  it("queues it again when the document it points at is gone", async () => {
+    await write("src/a.ts", "code");
+    const index = empty();
+    index.traces["src/a.ts"] = {
+      hash: hashContent("code"), file: "src/a.ts", writtenAt: 0, doc: "docs/architecture/deleted.md",
+    };
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, index);
+    expect(plan.jobs.map((j) => j.file)).toEqual(["src/a.ts"]);
+  });
+});

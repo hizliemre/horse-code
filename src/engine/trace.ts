@@ -264,7 +264,21 @@ export async function planTraces(
     }
     if (!content.trim()) continue;
     const hash = hashContent(content);
-    if (index.traces[file]?.hash === hash && existsSync(tracePath(cwd, file))) { upToDate++; continue; }
+    /**
+     * Already covered?
+     *
+     * The entry has to still be BACKED by something on disk — an index that outlived its files would keep a
+     * project permanently untraced. What backs it depends on the kind: a trace we wrote is the `.md` beside
+     * the source, while an ADOPTED entry points at one of the project's own documents, which is the only
+     * copy by design.
+     *
+     * Checking only for the `.md` meant every adopted entry failed and was queued for tracing — measured on
+     * a real project, 414 of 424 adopted files, which is precisely the re-derivation adoption exists to
+     * avoid. A changed hash still queues the file either way: that is the drift signal, and it is wanted.
+     */
+    const rec = index.traces[file];
+    const backing = rec?.doc ? join(cwd, rec.doc) : tracePath(cwd, file);
+    if (rec?.hash === hash && existsSync(backing)) { upToDate++; continue; }
     const rel = relatedOf(file);
     jobs.push({ file, hash, content, symbols: (symbolsOf.get(file) ?? []).slice(0, 40), ...rel });
   }
