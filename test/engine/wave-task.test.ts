@@ -35,7 +35,7 @@ function writeTurn(path: string, content: string): ChatEvent[] {
 }
 const doneTurn: ChatEvent[] = [{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }];
 
-interface WOpts { rounds?: number; askHuman?: AskHuman; serialize?: <T>(fn: () => Promise<T>) => Promise<T>; signal?: AbortSignal; resolveConflict?: WaveTaskDeps["resolveConflict"] }
+interface WOpts { rounds?: number; askHuman?: AskHuman; serialize?: <T>(fn: () => Promise<T>) => Promise<T>; signal?: AbortSignal; resolveConflict?: WaveTaskDeps["resolveConflict"]; tracer?: boolean; note?: (t: string) => void }
 function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {}): WaveTaskDeps {
   const roles: Record<string, RoleConfig> = {
     router: { models: ["m"], systemPrompt: "P-router" },
@@ -43,6 +43,7 @@ function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {
     "senior-coder": { models: ["m"], systemPrompt: "P-senior-coder" },
     architect: { models: ["m"], systemPrompt: "P-architect" },
     "code-reviewer": { models: ["m"], systemPrompt: "P-reviewer" },
+    ...(opts.tracer ? { tracer: { models: ["m"], systemPrompt: "P-tracer" } } : {}),
   };
   return {
     provider,
@@ -58,6 +59,7 @@ function wdeps(provider: MockProvider, manager: WaveTaskManager, opts: WOpts = {
     manager,
     serialize: opts.serialize,
     resolveConflict: opts.resolveConflict,
+    ...(opts.note ? { note: opts.note } : {}),
   };
 }
 function board1(): Board {
@@ -325,5 +327,56 @@ describe("only git can say a task landed", () => {
       await runWaveTask(wdeps(p, mgr), session, board, "t1");
       expect(board.get("t1")!.column).toBe("MERGED");
     } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+describe("runWaveTask — the merged code describes itself", () => {
+  /**
+   * The trace refresh runs against the SESSION BASE, not the task worktree.
+   *
+   * That is the whole point of where it sits: the base is what becomes the pull request, so a trace written
+   * anywhere else is a description that never ships with the code it describes.
+   */
+  it("re-describes the files the merge brought in, into the base worktree", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const notes: string[] = [];
+      const p = new MockProvider([
+        submit('{"role":"coder"}'),
+        writeTurn("src/orders.ts", "export const parseOrder = () => {};"), doneTurn,
+        ...codeReviewPass(),
+        // …and then the tracer is asked about exactly the file that landed.
+        [{ type: "text-delta", text: "**Purpose** — Parses an order." }, { type: "done", finishReason: "stop" }],
+      ]);
+      const res = await runWaveTask(wdeps(p, mgr, { tracer: true, note: (t) => notes.push(t) }), session, board1(), "t1");
+      expect(res.status).toBe("merged");
+
+      const trace = join(session.baseWorktree, ".horsecode", "traces", "src", "orders.ts.md");
+      expect(existsSync(trace)).toBe(true);
+      expect(await readFile(trace, "utf8")).toContain("Parses an order");
+      expect(notes.join("\n")).toMatch(/trace\(s\) refreshed/);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("merges fine with no tracer configured — documentation never fails a landed task", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const p = new MockProvider([
+        submit('{"role":"coder"}'),
+        writeTurn("src/orders.ts", "export const x = 1;"), doneTurn,
+        ...codeReviewPass(),
+      ]);
+      const res = await runWaveTask(wdeps(p, mgr), session, board1(), "t1");
+      expect(res.status).toBe("merged");
+      expect(existsSync(join(session.baseWorktree, ".horsecode", "traces"))).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
