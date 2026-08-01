@@ -11,6 +11,7 @@ import { readOnlyRegistry } from "./reviewer.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
+import { changedByMerge, refreshTraces, describeRefresh } from "./trace-refresh.js";
 
 export interface RevisionDeps extends TaskCycleDeps {
   manager: Pick<WorktreeManager, "commitMerge" | "push">;
@@ -165,9 +166,42 @@ export async function runRevision(
       }
     }
     board.appendStage("__revision__", { role: "senior-coder", action: "pr:revised" });
+    /**
+     * A revision round writes straight into the base worktree, so it never passes the merge that refreshes
+     * traces — and this is the LAST code to enter the pull request. Left alone, the files a reviewer just had
+     * rewritten would ship described as they were before the review.
+     */
+    const headBefore = (await gitOf(deps)(["rev-parse", "HEAD"], base)).stdout.trim();
     await deps.manager.commitMerge(session, `hc: revision ${round}`);
+    await refreshAfterRevision(deps, base, headBefore);
     await deps.manager.push(session);
   }
   // unreachable (rounds ≥ 1 → the last iteration always returns); for type safety:
   return { status: "accepted", rounds };
+}
+
+
+const gitOf = (deps: RevisionDeps): GitRunner => deps.git ?? defaultGitRunner;
+
+/**
+ * Re-describes what a revision round changed, in the base worktree that is about to be pushed.
+ *
+ * Best-effort, exactly as after a merge: the revision is already committed, and a tracer that cannot run is
+ * not a reason to fail a pull request. The read path marks whatever stays stale.
+ */
+async function refreshAfterRevision(deps: RevisionDeps, base: string, headBefore: string): Promise<void> {
+  try {
+    const files = await changedByMerge(gitOf(deps), base, headBefore);
+    if (!files.length) return;
+    const r = await refreshTraces({
+      cwd: base,
+      files,
+      provider: deps.provider,
+      models: deps.roleRegistry.chainFor("tracer", 0),
+      signal: deps.signal,
+      note: (t) => deps.note?.(t),
+    });
+    const line = describeRefresh(r);
+    if (line) deps.note?.(line);
+  } catch { /* never the reason a revised pull request is reported as failed */ }
 }
