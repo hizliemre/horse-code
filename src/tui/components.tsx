@@ -17,7 +17,7 @@ import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands
 import { readClipboardImage } from "./clipboard.js";
 import { GLYPHS as ICONS } from "./glyphs.js";
 import { helpSections } from "./help.js";
-import { wordLeft, wordRight, lineStart, lineEnd } from "./input-edit.js";
+import { applyKey } from "./input-edit.js";
 import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
 import { shouldCollapsePaste, pasteToken, expandPasteTokens } from "./paste.js";
 import type { AskChoice } from "../engine/review.js";
@@ -774,10 +774,7 @@ export function agentActivity(a: RunningAgent): string {
 // escapes terminals send for Shift+Enter (kitty CSI-u, xterm modifyOtherKeys).
 const NEWLINE_SEQS = new Set(["\n", "\x1b\r", "\x1b\n", "\x1b[13;2u", "\x1b[27;2;13~"]);
 
-const LEFT = new Set(["\x1b[D", "\x1bOD"]);
 const RIGHT = new Set(["\x1b[C", "\x1bOC"]);
-const HOME = new Set(["\x1b[H", "\x1b[1~", "\x1bOH"]);
-const END = new Set(["\x1b[F", "\x1b[4~", "\x1bOF"]);
 
 // Numpad in application-keypad mode sends SS3 sequences instead of characters (some terminals put the
 // numpad in this mode under the alt-screen). Map them back so digits, `.` and `/` can be typed at all.
@@ -862,20 +859,11 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
       }
       if (s === "\r") { onSubmitRef.current(v); return; }
       if (NEWLINE_SEQS.has(s)) { change(v.slice(0, c) + "\n" + v.slice(c), c + 1); return; }
-      if (s === "\x7f" || s === "\x08") { if (c > 0) change(v.slice(0, c - 1) + v.slice(c), c - 1); return; }
-      if (s === "\x1b[3~") { change(v.slice(0, c) + v.slice(c + 1), c); return; } // delete
-      if (LEFT.has(s)) { change(v, Math.max(0, c - 1)); return; }
-      if (RIGHT.has(s)) { if (paletteRef.current) return; change(v, Math.min(v.length, c + 1)); return; }
-      if (HOME.has(s)) { change(v, 0); return; }
-      if (END.has(s)) { change(v, v.length); return; }
-      // Readline editing (emacs bindings): line motion, word motion, kill-word / kill-line.
-      if (s === "\x01") { change(v, lineStart(v, c)); return; }                              // Ctrl+A → line start
-      if (s === "\x05") { change(v, lineEnd(v, c)); return; }                                // Ctrl+E → line end
-      if (s === "\x17") { const t = wordLeft(v, c); change(v.slice(0, t) + v.slice(c), t); return; } // Ctrl+W → delete word back
-      if (s === "\x15") { const ls = lineStart(v, c); change(v.slice(0, ls) + v.slice(c), ls); return; } // Ctrl+U → kill to line start
-      if (s === "\x0b") { const le = lineEnd(v, c); change(v.slice(0, c) + v.slice(le), c); return; }    // Ctrl+K → kill to line end
-      if (s === "\x1b[1;5D" || s === "\x1bb") { change(v, wordLeft(v, c)); return; }          // Ctrl+← / Alt+B → word left
-      if (s === "\x1b[1;5C" || s === "\x1bf") { change(v, wordRight(v, c)); return; }         // Ctrl+→ / Alt+F → word right
+      // The palette owns → while it is open (it moves the selection), so that guard comes before editing.
+      if (RIGHT.has(s) && paletteRef.current) return;
+      // Every motion and deletion key, from one table — see applyKey.
+      const ed = applyKey(s, v, c);
+      if (ed) { change(ed.value, ed.cursor); return; }
       if (s === "\x1bv" || s === "\x1bV") { onPasteImageRef.current?.(); return; } // Alt+V → paste clipboard image
       if (s === "?" && v.length === 0) { onHelpRef.current?.(); return; } // "?" on an empty input → help overlay
       if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit (app-keypad SS3)
