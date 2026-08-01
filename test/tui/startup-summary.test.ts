@@ -8,6 +8,7 @@ const facts = (over: Partial<StartupFacts> = {}): StartupFacts => ({
   constitution: true,
   graph: { built: true, nodes: 55081 },
   traces: 12,
+  traceRoot: ".horsecode/traces",
   ...over,
 });
 
@@ -27,6 +28,14 @@ describe("the startup summary", () => {
     expect(startupSummary(facts())).toContain("`.horsecode/traces`");
     expect(startupSummary(facts({ traces: 0 }))).toContain(".horsecode/traces");
     expect(startupSummary(facts({ traces: 0 }))).not.toMatch(/no traces\b/);
+  });
+
+  /** The location is configurable, so spelling it into the sentence would make the sentence lie. */
+  it("names the project's OWN trace root, not the default", () => {
+    const s = startupSummary(facts({ traceRoot: "docs/architecture", traces: 0 }));
+    expect(s).toContain("docs/architecture");
+    expect(s).not.toContain(".horsecode/traces");
+    expect(startupSummary(facts({ traceRoot: "docs/architecture", traces: 424 }))).toContain("424 file traces in `docs/architecture`");
   });
 
   it("counts the rules instead of reciting them", () => {
@@ -61,7 +70,7 @@ describe("the startup summary", () => {
   it("reads correctly for a brand-new project with nothing in it", () => {
     const s = startupSummary({
       rules: 0, memory: { total: 0, rules: 0, lessons: 0, facts: 0 }, skills: 0,
-      constitution: false, graph: { built: false, nodes: 0 }, traces: 0,
+      constitution: false, graph: { built: false, nodes: 0 }, traces: 0, traceRoot: ".horsecode/traces",
     });
     expect(s).toContain("Rules: 0 active");
     expect(s).toContain("Memory: 0 entries");

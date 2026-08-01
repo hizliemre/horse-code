@@ -36,6 +36,7 @@ import { phaseLabel } from "./labels.js";
 import { stripThinking } from "./format.js";
 import { classifyResume } from "../engine/resume-intent.js";
 import { startupSummary, type StartupFacts } from "./startup-summary.js";
+import { traceRootRel } from "../engine/trace.js";
 import { existsSync } from "node:fs";
 import { RoleFitness } from "../engine/role-fitness.js";
 import { restoreTerminal, restoreOnExit } from "./restore-terminal.js";
@@ -590,6 +591,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       constitution: existsSync(join(process.cwd(), ".specify", "memory", "constitution.md")),
       graph: { built: false, nodes: 0 },
       traces: 0,
+      traceRoot: traceRootRel(),
       ...startupExtra,
     };
   };
@@ -604,8 +606,32 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const { graphStatus } = await import("../engine/project-graph.js");
       const g = await graphStatus(process.cwd());
       startupExtra.graph = { built: g.built, nodes: g.nodes, stale: g.stale };
-      const { loadTraceIndex } = await import("../engine/trace.js");
-      startupExtra.traces = Object.keys((await loadTraceIndex(process.cwd())).traces).length;
+      const { loadTraceIndex, saveTraceIndex } = await import("../engine/trace.js");
+      let index = await loadTraceIndex(process.cwd());
+      /**
+       * Adopt whatever the project already documents, before counting.
+       *
+       * A repository that generates its own file-level documentation has already answered, for part of its
+       * code, the question a trace asks. Indexing that costs no model call and is idempotent, so it runs on
+       * the way in rather than waiting for someone to think of it — and the count the user reads is then the
+       * truth, not "no traces" beside a directory full of them.
+       */
+      const g0 = await import("../engine/project-graph.js").then((m) => m.loadGraphSync(process.cwd()));
+      if (g0) {
+        const files = new Set<string>();
+        for (const n of g0.nodes) if (n.source_file) files.add(n.source_file);
+        const { adoptDocs, indexAdoption, describeAdoption } = await import("../engine/trace-adopt.js");
+        const adoption = await adoptDocs(process.cwd(), files);
+        const { readFile } = await import("node:fs/promises");
+        const r = await indexAdoption(process.cwd(), index, adoption,
+          async (f) => readFile(join(process.cwd(), f), "utf8").catch(() => undefined));
+        if (r.added) {
+          await saveTraceIndex(process.cwd(), r.index);
+          index = r.index;
+          controller.note(describeAdoption(adoption, r.added));
+        }
+      }
+      startupExtra.traces = Object.keys(index.traces).length;
       paintSummary();
     } catch { /* a missing graph or index is itself the answer — the summary already says so */ }
   })();

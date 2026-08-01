@@ -17,6 +17,8 @@ export interface StartupFacts {
   /** Memory by kind. `total` is stated separately because entries of other kinds exist. */
   memory: { total: number; rules: number; lessons: number; facts: number };
   skills: number;
+  /** Where traces live in THIS project, repo-relative — configurable, so it must not be spelled out twice. */
+  traceRoot: string;
   constitution: boolean;
   graph: { built: boolean; nodes: number; stale?: boolean };
   traces: number;
@@ -59,8 +61,8 @@ export function startupSummary(f: StartupFacts): string {
      * repository. Naming the artefact and where it lives keeps the two apart.
      */
     `- Graph: ${graph} · ${f.traces
-      ? `${plural(f.traces, "file trace")} in \`.horsecode/traces\``
-      : "no per-file traces (`/graph trace` writes them under `.horsecode/traces`)"}`,
+      ? `${plural(f.traces, "file trace")} in \`${f.traceRoot}\``
+      : `no per-file traces (\`/graph trace\` writes them under \`${f.traceRoot}\`)`}`,
   ];
   // MCP is connected in the background, so the line appears only once there is something to say.
   if (f.mcp) {
