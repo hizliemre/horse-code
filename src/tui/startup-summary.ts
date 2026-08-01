@@ -50,7 +50,17 @@ export function startupSummary(f: StartupFacts): string {
     `- Rules: ${f.rules} active${f.rules ? " (`/memories` to read them)" : ""}`,
     `- Memory: ${plural(m.total, "entry", "entries")}${kinds ? ` — ${kinds}` : ""}`,
     `- Skills: ${plural(f.skills, "available", "available")}`,
-    `- Graph: ${graph} · ${f.traces ? plural(f.traces, "trace") : "no traces yet — `/graph trace`"}`,
+    /**
+     * "traces" is named precisely, because the word is taken.
+     *
+     * A real project keeps 58 architecture traces of its own under `docs/architecture/` and writes them by
+     * hand ("docs(architecture): trace 52 — …"). Saying "no traces yet" there is true of horse-code's own
+     * per-file traces and false of the project, which reads as the tool having missed what is plainly in the
+     * repository. Naming the artefact and where it lives keeps the two apart.
+     */
+    `- Graph: ${graph} · ${f.traces
+      ? `${plural(f.traces, "file trace")} in \`.horsecode/traces\``
+      : "no per-file traces (`/graph trace` writes them under `.horsecode/traces`)"}`,
   ];
   // MCP is connected in the background, so the line appears only once there is something to say.
   if (f.mcp) {

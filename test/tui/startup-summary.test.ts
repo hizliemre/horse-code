@@ -18,6 +18,17 @@ const facts = (over: Partial<StartupFacts> = {}): StartupFacts => ({
  * nothing the user can act on.
  */
 describe("the startup summary", () => {
+  /**
+   * The word is taken: a real project keeps 58 architecture traces of its own under `docs/architecture/`.
+   * "No traces yet" was true of horse-code's per-file traces and false of that project, and read as the tool
+   * having missed what is plainly in the repository.
+   */
+  it("names WHICH traces it means, and where they live", () => {
+    expect(startupSummary(facts())).toContain("`.horsecode/traces`");
+    expect(startupSummary(facts({ traces: 0 }))).toContain(".horsecode/traces");
+    expect(startupSummary(facts({ traces: 0 }))).not.toMatch(/no traces\b/);
+  });
+
   it("counts the rules instead of reciting them", () => {
     const s = startupSummary(facts());
     expect(s).toContain("Rules: 25 active");
@@ -33,7 +44,7 @@ describe("the startup summary", () => {
     const s = startupSummary(facts({ constitution: false, traces: 0, graph: { built: false, nodes: 0 } }));
     expect(s).toContain("not established yet");
     expect(s).toContain("not built");
-    expect(s).toContain("no traces yet");
+    expect(s).toContain("no per-file traces");
   });
 
   it("flags a graph that has fallen behind the code", () => {
