@@ -1,5 +1,5 @@
-import { rename, writeFile } from "node:fs/promises";
-import { renameSync, writeFileSync } from "node:fs";
+import { rename, rm, writeFile } from "node:fs/promises";
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 
 /**
  * Writing state that cannot be rebuilt.
@@ -16,18 +16,42 @@ import { renameSync, writeFileSync } from "node:fs";
  * that gets fixed in one of them. The board already had its own; this is that code, shared.
  */
 
-/** Same-filesystem temp name, so the rename is a metadata operation and never a copy across devices. */
-const tmpName = (path: string): string => `${path}.tmp`;
+/**
+ * A temp name unique to THIS write, beside the target.
+ *
+ * Same filesystem, so the rename stays a metadata operation and never a copy across devices — that was
+ * always the point. What the name also has to be is unique, and for a while it was not: every write used
+ * `<path>.tmp`, so two concurrent writers shared one scratch file. Measured with six writers, the shape this
+ * module exists to prevent came straight back — 20 of 40 rounds published a file that would not parse, plus
+ * 200 failed writes as each rename pulled the temp file out from under the next.
+ *
+ * Concurrency is not exotic here: the trace runner writes its index from six workers, and parallel tasks
+ * write the board.
+ */
+let seq = 0;
+const tmpName = (path: string): string => `${path}.${process.pid}.${seq++}.tmp`;
 
 export async function writeAtomic(path: string, data: string): Promise<void> {
   const tmp = tmpName(path);
-  await writeFile(tmp, data, "utf8");
-  await rename(tmp, path);
+  try {
+    await writeFile(tmp, data, "utf8");
+    await rename(tmp, path);
+  } catch (e) {
+    // Now that the name is unique, a failed write would otherwise leave scratch behind for good — and traces
+    // live in a COMMITTED directory, where a stray file shows up in everyone's `git status`.
+    await rm(tmp, { force: true }).catch(() => {});
+    throw e;
+  }
 }
 
 /** For the callers that must not await — a checkpoint written from a synchronous path. */
 export function writeAtomicSync(path: string, data: string): void {
   const tmp = tmpName(path);
-  writeFileSync(tmp, data, "utf8");
-  renameSync(tmp, path);
+  try {
+    writeFileSync(tmp, data, "utf8");
+    renameSync(tmp, path);
+  } catch (e) {
+    try { rmSync(tmp, { force: true }); } catch { /* the throw below is the real news */ }
+    throw e;
+  }
 }

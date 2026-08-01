@@ -46,3 +46,31 @@ describe("atomic writes", () => {
     expect(existsSync(`${file}.tmp`)).toBe(false);
   });
 });
+
+describe("writeAtomic under concurrency — the shape this module exists to prevent", () => {
+  /**
+   * Six writers is not a stress test, it is the trace runner: TRACE_CONCURRENCY workers all checkpointing the
+   * same index. With a shared `<path>.tmp` this failed 20 rounds out of 40, and threw 200 times besides as
+   * each rename pulled the scratch file out from under the next.
+   */
+  it("never publishes a file that will not parse, and never fails a write", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "atomic-race-"));
+    const path = join(dir, "index.json");
+    let torn = 0;
+    let errors = 0;
+    for (let round = 0; round < 40; round++) {
+      await Promise.all(Array.from({ length: 6 }, (_, i) =>
+        writeAtomic(path, JSON.stringify({ n: i, pad: "x".repeat(20_000 + i * 5_000) }))
+          .catch(() => { errors++; })));
+      try { JSON.parse(await readFile(path, "utf8")); } catch { torn++; }
+    }
+    expect({ torn, errors }).toEqual({ torn: 0, errors: 0 });
+  });
+
+  it("leaves no scratch behind — traces live in a committed directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "atomic-scratch-"));
+    const path = join(dir, "index.json");
+    await Promise.all(Array.from({ length: 6 }, (_, i) => writeAtomic(path, `{"n":${i}}`)));
+    expect((await readdir(dir)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+});
