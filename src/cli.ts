@@ -14,6 +14,7 @@ import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project
 import { briefStatus } from "./engine/project-brief.js";
 import { setTraceRoot } from "./engine/trace.js";
 import { planFor, runTraces, describePlan, buildBrief } from "./engine/trace-run.js";
+import { traceable } from "./engine/trace.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
@@ -389,15 +390,11 @@ export async function main(argv: string[]): Promise<void> {
       };
       const buildGraphText = async (): Promise<string> => (await buildProjectGraph(cwd)).message;
       /** Everything git tracks or would track — the pool the brief's documents are chosen from. */
-      const traceableDocs = async (): Promise<string[]> =>
+      const gitFiles = async (): Promise<string[]> =>
         (await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd)).stdout.split("\n").filter(Boolean);
-      // Which files are worth a trace: tracked or newly added source, never generated or vendored output.
-      const traceableFiles = async (): Promise<string[]> => {
-        const r = await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd);
-        return r.stdout.split("\n").filter(Boolean)
-          .filter((f) => /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala)$/.test(f))
-          .filter((f) => !/(^|\/)(dist|build|node_modules|vendor|\.horsecode|graphify-out)\//.test(f));
-      };
+      const traceableDocs = async (): Promise<string[]> => traceable(await gitFiles(), { code: false });
+      // Which files are worth a trace: tracked or newly added source, never generated, vendored or tooling.
+      const traceableFiles = async (): Promise<string[]> => traceable(await gitFiles());
       /**
        * The model that writes the traces.
        *
@@ -420,7 +417,7 @@ export async function main(argv: string[]): Promise<void> {
         const plan = await planFor(cwd, await traceableFiles());
         return { summary: describePlan(plan, tracerModel()), jobs: plan.jobs.length };
       };
-      const runTracesFn = async (): Promise<string> => {
+      const runTracesFn = async (onProgress?: (done: number, total: number, file: string) => void): Promise<string> => {
         const files = await traceableFiles();
         // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
         // the whole run again.
@@ -428,6 +425,7 @@ export async function main(argv: string[]): Promise<void> {
         const plan = await planFor(cwd, files);
         const res = await runTraces({
           cwd, provider, model: tracerModel(), plan, liveFiles: new Set(files),
+          ...(onProgress ? { onProgress } : {}),
         });
         const bits = [`${brief.message}\n\n**Traces written: ${res.written}**`];
         if (res.upToDate) bits.push(`${res.upToDate} already current`);

@@ -85,7 +85,7 @@ export interface RunTuiReplOpts {
   startupNote?: string; // one line shown once at start (e.g. where the telemetry log is)
   telemetryPath?: string; // this run's telemetry log → /monitor reads it
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
-  runTraces?: () => Promise<string>; // /graph trace, after consent
+  runTraces?: (onProgress?: (done: number, total: number, file: string) => void) => Promise<string>; // /graph trace, after consent
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
   memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }

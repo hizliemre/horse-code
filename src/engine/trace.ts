@@ -50,6 +50,33 @@ export function traceRootRel(): string {
 }
 export const TRACE_INDEX = "index.json";
 
+/** Extensions worth a trace — source code, not data or markup. */
+const TRACEABLE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala)$/;
+
+/**
+ * Paths that are not the project's own source, however much code they contain.
+ *
+ * The generated/vendored names were here from the start. The DOT-DIRECTORY rule was not, and its absence was
+ * expensive: measured on a real project, `git ls-files` offered 15,698 traceable files, of which 13,035 sat
+ * under `.claude/worktrees.orphaned-backup/` — abandoned copies of the same code. Tracing them would have
+ * spent five sixths of the run describing duplicates, and then filled the trace set with near-identical notes
+ * about files nobody would ever open.
+ *
+ * A leading-dot directory is tooling, cache or state by universal convention — `.git`, `.venv`, `.next`,
+ * `.claude`. None of it is what the project IS.
+ */
+const NOT_SOURCE = /(^|\/)(dist|build|out|node_modules|vendor|coverage|graphify-out|\.[^/]+)\//;
+
+/**
+ * The files a trace run should consider, from everything git reports.
+ *
+ * Shared by the tracer and the brief: a brief assembled from documents inside an abandoned worktree describes
+ * the wrong project just as surely as a trace does.
+ */
+export function traceable(files: string[], opts?: { code?: boolean }): string[] {
+  return files.filter((f) => !NOT_SOURCE.test(f) && (opts?.code === false || TRACEABLE_EXT.test(f)));
+}
+
 export interface TraceRecord {
   /** Hash of the file content the trace was written from — the trace is stale when this stops matching. */
   hash: string;
@@ -187,19 +214,29 @@ export async function planTraces(
       if (list) list.push(n.label); else symbolsOf.set(n.source_file, [n.label]);
     }
   }
-  const relatedOf = (file: string): { usedBy: string[]; uses: string[] } => {
-    const usedBy = new Set<string>();
-    const uses = new Set<string>();
-    if (!graph) return { usedBy: [], uses: [] };
+  /**
+   * File-to-file adjacency, built in ONE pass over the edges.
+   *
+   * This used to re-scan every edge for every file, which is quadratic and reads as instant on a small
+   * project. Measured on a real one — 55,081 nodes, 78,540 edges, 4,664 traceable files — that is 366 million
+   * iterations, and planning (which happens BEFORE the user is asked anything, and spends no tokens) took
+   * minutes with nothing on screen. One pass makes it a lookup.
+   */
+  const usedByOf = new Map<string, Set<string>>();
+  const usesOf = new Map<string, Set<string>>();
+  if (graph) {
     for (const e of graph.edges) {
       const sf = fileOfNode.get(e.source);
       const tf = fileOfNode.get(e.target);
       if (!sf || !tf || sf === tf) continue;
-      if (tf === file) usedBy.add(sf);
-      if (sf === file) uses.add(tf);
+      let a = usedByOf.get(tf); if (!a) { a = new Set(); usedByOf.set(tf, a); } a.add(sf);
+      let b = usesOf.get(sf); if (!b) { b = new Set(); usesOf.set(sf, b); } b.add(tf);
     }
-    return { usedBy: [...usedBy].slice(0, 12), uses: [...uses].slice(0, 12) };
-  };
+  }
+  const relatedOf = (file: string): { usedBy: string[]; uses: string[] } => ({
+    usedBy: [...(usedByOf.get(file) ?? [])].slice(0, 12),
+    uses: [...(usesOf.get(file) ?? [])].slice(0, 12),
+  });
 
   for (const file of files) {
     let content: string;

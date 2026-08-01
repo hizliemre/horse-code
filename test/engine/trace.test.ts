@@ -305,3 +305,37 @@ describe("the tracer is a real role, and a strong one", () => {
     expect(tracer?.models[0]).toBe("cc/claude-opus-5");
   });
 });
+
+describe("traceable — what a run should even consider", () => {
+  it("drops the abandoned worktree copies that made up five sixths of a real run", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    const files = [
+      "src/api/orders.ts",
+      ".claude/worktrees.orphaned-backup/apiserver-slo-alerts/.agents/skills/impeccable/scripts/context.mjs",
+      ".claude/skills/whatever/run.mjs",
+      ".git/hooks/pre-commit.py",
+      "node_modules/left-pad/index.js",
+      "dist/bundle.js",
+      "graphify-out/cache.js",
+      "tests/api/orders.test.ts",
+    ];
+    expect(traceable(files)).toEqual(["src/api/orders.ts", "tests/api/orders.test.ts"]);
+  });
+
+  it("keeps only source extensions — data and markup are not code to describe", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    expect(traceable(["src/a.ts", "src/b.json", "docs/c.md", "src/d.cs", "src/e.yaml"]))
+      .toEqual(["src/a.ts", "src/d.cs"]);
+  });
+
+  it("applies the same path rule to documents, so a brief is never assembled from an abandoned copy", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    expect(traceable(["README.md", ".claude/worktrees.orphaned-backup/x/README.md", "docs/architecture/00-INDEX.md"],
+      { code: false })).toEqual(["README.md", "docs/architecture/00-INDEX.md"]);
+  });
+
+  it("does not mistake a dotted FILE for a dotted directory", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    expect(traceable(["src/.eslintrc.js", "src/app.config.ts"])).toEqual(["src/.eslintrc.js", "src/app.config.ts"]);
+  });
+});

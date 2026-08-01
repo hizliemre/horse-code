@@ -1079,7 +1079,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   parallel?: () => number; // how many tasks may run at once
   setParallel?: (n: number) => void; // /parallel N — live, and persisted
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
-  runTraces?: () => Promise<string>; // /graph trace, after consent
+  runTraces?: (onProgress?: (done: number, total: number, file: string) => void) => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -1524,6 +1524,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       if (!planTraces || !runTraces) { controller.note("Tracing is not available."); return; }
       void (async () => {
         try {
+          // Planning reads every candidate file and consults the graph. It spends no tokens, but on a large
+          // project it is not instant — and a command that prints nothing while it works reads as broken.
+          controller.note("Planning the trace run (reading files, no tokens spent)…");
           const { summary, jobs } = await planTraces();
           if (!jobs) { controller.note(summary); return; }
           const answer = await controller.ask(`${summary}\n\nWrite the traces?`, {
@@ -1534,7 +1537,16 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           });
           if (!/^yes/i.test(answer.trim())) { controller.note("Tracing cancelled — nothing was sent."); return; }
           controller.note(`Tracing ${jobs} file(s)…`);
-          controller.note(await runTraces());
+          // One note per file would be thousands of lines; one note for the whole run leaves hours of silence.
+          // A tenth of the way, or a minute, whichever comes first.
+          const step = Math.max(1, Math.floor(jobs / 10));
+          let lastAt = Date.now();
+          controller.note(await runTraces((done, total, file) => {
+            const now = Date.now();
+            if (done % step !== 0 && now - lastAt < 60_000 && done !== total) return;
+            lastAt = now;
+            controller.note(`  …${done}/${total} traced (${file})`);
+          }));
         } catch (e) {
           controller.note(`Tracing failed: ${e instanceof Error ? e.message : String(e)}`);
         }
