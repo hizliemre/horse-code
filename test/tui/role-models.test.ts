@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily, versionlessId, newestPrimary } from "../../src/tui/role-models.js";
+import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily, versionlessId, newestPrimary, strongestPrimary, DURABLE_ROLES } from "../../src/tui/role-models.js";
 
 const ALL = [
   "cc/claude-opus-4-8",
@@ -361,5 +361,47 @@ describe("adjustRoleModels leads every chain with the newest release", () => {
       if (!/opus/.test(head)) continue;
       expect(head).toBe("cc/claude-opus-5");
     }
+  });
+});
+
+describe("strongestPrimary — a durable-output role gets the best model, not merely a qualifying one", () => {
+  // The catalogue as it actually was when the tuner got this wrong.
+  const POOL = ["cx/gpt-5.6-terra-medium", "cc/claude-opus-4-5-20251101", "antigravity/claude-opus-4-6-thinking",
+    "cc/claude-opus-5", "cc/claude-fable-5"];
+
+  it("fixes the measured case: `strong` spans 84 to 99, so obeying the instruction was not enough", () => {
+    // Both are `strong`. The tuner picked the 84.1 one and was, strictly, compliant.
+    expect(modelBand("cx/gpt-5.6-terra-medium")).toBe("strong");
+    expect(modelBand("cc/claude-opus-5")).toBe("strong");
+    expect(capabilityScore("cc/claude-opus-5")).toBeGreaterThan(capabilityScore("cx/gpt-5.6-terra-medium"));
+
+    const tuned = ["cx/gpt-5.6-terra-medium", "cc/claude-opus-4-5-20251101", "antigravity/claude-opus-4-6-thinking"];
+    expect(strongestPrimary(tuned, POOL)[0]).toBe("cc/claude-opus-5");
+  });
+
+  it("does not take the flagship — it belongs to the adjudicating roles", () => {
+    expect(modelBand("cc/claude-fable-5")).toBe("flagship");
+    expect(strongestPrimary(["cx/gpt-5.6-terra-medium"], POOL)).not.toContain("cc/claude-fable-5");
+  });
+
+  it("swaps rather than duplicates when the best model is already a fallback", () => {
+    const out = strongestPrimary(["cx/gpt-5.6-terra-medium", "cc/claude-opus-5"], POOL);
+    expect(out).toEqual(["cc/claude-opus-5", "cx/gpt-5.6-terra-medium"]);
+    expect(new Set(out).size).toBe(2);
+  });
+
+  it("keeps the rest of the chain, so a limited primary still falls back to what the tuner chose", () => {
+    const out = strongestPrimary(["cx/gpt-5.6-terra-medium", "cc/claude-opus-4-5-20251101"], POOL);
+    expect(out.slice(1)).toEqual(["cc/claude-opus-4-5-20251101"]);
+  });
+
+  it("is a no-op on an empty chain or when the primary already is the best", () => {
+    expect(strongestPrimary([], POOL)).toEqual([]);
+    expect(strongestPrimary(["cc/claude-opus-5", "cx/gpt-5.6-terra-medium"], POOL))
+      .toEqual(["cc/claude-opus-5", "cx/gpt-5.6-terra-medium"]);
+  });
+
+  it("applies to the tracer — its output is a committed file every later agent reads", () => {
+    expect(DURABLE_ROLES).toContain("tracer");
   });
 });

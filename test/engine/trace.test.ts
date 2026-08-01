@@ -278,13 +278,30 @@ describe("the tracer is a real role, and a strong one", () => {
   });
 
   /**
-   * The tuner reads these profiles to choose a model. A trace is read by every agent that later touches the
-   * file and is committed to the repo, so a cheap model here is a false economy — the profile has to say so
-   * or the tuner will put a [fast] model on it for looking like high-volume work.
+   * The tuner reads these profiles to choose a model, and this assertion used to check that the profile said
+   * "STRONG". It did, and the tuner obeyed it, and the result was still wrong: `strong` spans 84 to 99, so
+   * the tuner satisfied the instruction with the weakest member of the band while a far better model sat in
+   * the same band. Wording alone cannot express "the best of these" — so the profile now asks for the most
+   * capable model, and the guarantee is enforced in code and asserted as BEHAVIOUR rather than as prose.
    */
-  it("tells the tuner it needs a strong model, never a fast one", async () => {
+  it("asks the tuner for the most capable model, not merely a qualifying one", async () => {
     const { ROLE_PROFILES } = await import("../../src/tui/role-models.js");
-    expect(ROLE_PROFILES.tracer).toMatch(/STRONG/);
-    expect(ROLE_PROFILES.tracer).toMatch(/Never a \[fast\]/);
+    expect(ROLE_PROFILES.tracer).toMatch(/MOST capable/);
+    expect(ROLE_PROFILES.tracer).toMatch(/COMMITTED FILE/);
+  });
+
+  it("gets the best available model whatever the tuner decided", async () => {
+    const { tuneRoleModels } = await import("../../src/engine/role-tuner.js");
+    const catalog = ["cx/gpt-5.6-terra-medium", "cc/claude-opus-4-5-20251101", "cc/claude-opus-5", "cc/claude-fable-5"];
+    // A provider that answers with exactly the assignment the real tuner made — the weakest `strong` model.
+    const provider = {
+      chat: async function* () {
+        yield { type: "text-delta", text: '```json\n{"assignments":[{"role":"tracer","models":'
+          + '["cx/gpt-5.6-terra-medium","cc/claude-opus-4-5-20251101"]}]}\n```' };
+      },
+    } as unknown as Parameters<typeof tuneRoleModels>[0]["provider"];
+    const out = await tuneRoleModels({ provider, models: catalog, roles: ["tracer"] });
+    const tracer = out.chains.find((c) => c.role === "tracer");
+    expect(tracer?.models[0]).toBe("cc/claude-opus-5");
   });
 });

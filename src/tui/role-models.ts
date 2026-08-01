@@ -31,9 +31,11 @@ const CAPABLE_ROLES = new Set([...FLAGSHIP_ROLES, ...STRONG_ROLES, ...MID_ROLES]
 
 // Human-readable role profiles — the picker advice AND the brief the LLM tuner reasons over.
 export const ROLE_PROFILES: Record<string, string> = {
-  tracer: "Writes the per-file reference note every other agent reads before changing unfamiliar code — " +
-    "moderate volume, but a wrong note misleads every agent that reads it afterwards, so it needs a STRONG " +
-    "model. Never a [fast] one: a shallow or invented note is worse than no note at all.",
+  tracer: "Writes the per-file reference note every other agent reads before changing unfamiliar code — high " +
+    "volume, but its output is a COMMITTED FILE, not a turn in a conversation: a shallow note is believed by " +
+    "every agent that opens that file, forever, and nothing later corrects it. Give it the MOST capable " +
+    "non-[flagship] model in the catalogue, not merely one that qualifies as [strong]. Volume is not a reason " +
+    "to go cheaper here.",
   refiner: "Classifies intent and rewrites the prompt every turn — highest call volume, trivial task → a fast, cheap model.",
   router: "Picks coder-vs-designer for a task — tiny and frequent → fast, cheap.",
   "project-manager": "Turns a task list into board items — light and structured → fast, cheap.",
@@ -256,6 +258,40 @@ export function versionlessId(model: string): string {
  * the substitute you want when the newest one is rate-limited; collapsing the whole chain onto one release
  * would leave a role with nothing to fall back to on the very source that just failed it.
  */
+/**
+ * Roles whose output is written to disk, committed, and read by every later agent.
+ *
+ * A weak answer in a conversation is corrected in the next turn. A weak TRACE is a file in the repository
+ * that every agent touching that code reads first and believes — and it is the cheapest thing in the world
+ * to keep believing. Volume is the wrong axis for these: the cost is paid once, the consequence is permanent.
+ */
+export const DURABLE_ROLES: readonly string[] = ["tracer"];
+
+/**
+ * Puts the most capable non-flagship model on the primary slot.
+ *
+ * The band vocabulary cannot express this on its own. `strong` spans 84 to 99, so a tuner told a role "needs
+ * a STRONG model" can satisfy the instruction with the weakest member of the band — measured: it chose
+ * `gpt-5.6-terra-medium` (84.1) for the tracer while `claude-opus-5` (93.0) sat in the same band and the same
+ * catalogue. The instruction was obeyed and the outcome was wrong, which is a sign the rule belongs in code.
+ *
+ * Flagship is deliberately excluded: it is reserved for the low-volume adjudicating roles, and taking it here
+ * would starve them.
+ */
+export function strongestPrimary(chain: string[], pool: string[]): string[] {
+  const head = chain[0];
+  if (!head) return chain;
+  let best = head;
+  for (const m of pool) {
+    if (modelBand(m) === "flagship" || !isKnownModel(m)) continue;
+    if (capabilityScore(m) > capabilityScore(best)) best = m;
+  }
+  if (best === head) return chain;
+  const at = chain.indexOf(best);
+  if (at > 0) { const next = [...chain]; next[at] = head; next[0] = best; return next; }
+  return [best, ...chain.slice(1)];
+}
+
 export function newestPrimary(chain: string[], pool: string[]): string[] {
   const head = chain[0];
   if (!head) return chain;

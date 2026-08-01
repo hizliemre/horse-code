@@ -1,5 +1,5 @@
 import type { ChatRequest, Provider } from "../core/types.js";
-import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable, isKnownModel, newestPrimary } from "../tui/role-models.js";
+import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable, isKnownModel, newestPrimary, strongestPrimary, DURABLE_ROLES } from "../tui/role-models.js";
 
 export interface TunedRoles {
   reasoning: string;
@@ -127,7 +127,10 @@ function validateChains(
     // The tuner reasons about capability, not release numbers: it will happily name `claude-opus-4-6` while
     // `claude-opus-5` sits in the same catalog. Upgrading the primary is deterministic, so it does not depend
     // on the tuner noticing.
-    return { role, models: newestPrimary(chain, models) };
+    // A role whose output is committed and read by later agents gets the best model available, whatever the
+    // tuner made of "strong" — see DURABLE_ROLES.
+    const tuned = DURABLE_ROLES.includes(role) ? strongestPrimary(chain, models) : chain;
+    return { role, models: newestPrimary(tuned, models) };
   });
   // Per-chain diversity is not fleet diversity: rebalance whatever one model ended up carrying for everyone.
   return spreadLoad(built, models);
