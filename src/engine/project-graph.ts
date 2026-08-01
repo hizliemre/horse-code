@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 /**
  * The project's code graph: every file, class and function, and what calls, imports and contains what.
@@ -85,8 +85,53 @@ export async function loadGraph(cwd: string): Promise<ProjectGraph | undefined> 
 }
 
 /** Synchronous load — used by the tools, which are called often and must not re-read on every keystroke. */
+/**
+ * The directory the graph belongs to, searching UPWARD from wherever the caller happens to be.
+ *
+ * The graph describes the PROJECT, but it was looked up relative to the agent's own working directory — and
+ * every task agent works in a worktree under `.horsecode/worktrees/…`, which has no `graphify-out/`. So the
+ * agents the graph exists for were the ones that could never see it: measured on a real project, the root
+ * loads 55081 nodes and the task worktree loads nothing, and the tools answered "no code graph has been
+ * built for this project yet".
+ *
+ * Bounded so a caller outside any project walks a few directories, not the whole filesystem.
+ */
+export function graphRoot(cwd: string): string | undefined {
+  let dir = resolve(cwd);
+  for (let i = 0; i < 12; i++) {
+    if (existsSync(join(dir, GRAPH_DIR, GRAPH_FILE))) return dir;
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return undefined;
+}
+
+/**
+ * Parsed graphs, keyed by file and mtime.
+ *
+ * Reading the file on every call is what keeps the graph honest — a rebuild is visible immediately, which is
+ * the whole reason this does not talk to graphify's MCP server. But a real project's graph.json is 41 MB, and
+ * re-reading and re-parsing that for every single tool call is seconds of blocking work per question. Keying
+ * on mtime keeps the guarantee and pays the cost once: the moment the file changes, the entry is stale and
+ * the next read rebuilds it.
+ */
+const cache = new Map<string, { mtimeMs: number; size: number; graph: ProjectGraph | undefined }>();
+
 export function loadGraphSync(cwd: string): ProjectGraph | undefined {
-  try { return parseGraph(readFileSync(graphPath(cwd), "utf8")); } catch { return undefined; }
+  const root = graphRoot(cwd);
+  if (root === undefined) return undefined;
+  const path = graphPath(root);
+  try {
+    const st = statSync(path);
+    const hit = cache.get(path);
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.graph;
+    const graph = parseGraph(readFileSync(path, "utf8"));
+    cache.set(path, { mtimeMs: st.mtimeMs, size: st.size, graph });
+    return graph;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface GraphStatus {
