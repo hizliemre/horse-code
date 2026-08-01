@@ -71,6 +71,8 @@ export interface RunTuiReplOpts {
   listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
+  /** Re-reads `.horsecode/skills` — migration writes there mid-session and nothing else would notice. */
+  reloadProjectSkills?: () => Promise<void>;
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
   migrate?: () => Promise<string>; // /migrate
@@ -329,6 +331,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
        * user already made.
        */
       assignSkills: async (names) => {
+        // The copy just happened; without this the registry still holds the pre-migration set and the tuner
+        // is asked about nothing.
+        await opts.reloadProjectSkills?.();
         const all = opts.listSkills?.() ?? [];
         const fresh = all.filter((s) => names.includes(s.name));
         if (!fresh.length) return "";

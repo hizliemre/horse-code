@@ -1,5 +1,5 @@
-import { cp, mkdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { cp, lstat, mkdir, readFile, readlink, rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import type { Provider } from "../core/types.js";
 import type { MemoryStore } from "../session/memory.js";
 import { discover, summarize, hasAnything } from "./discover.js";
@@ -42,6 +42,8 @@ export interface MigrateResult {
   facts: number;
   skills: number;
   skipped: number;
+  /** Old skill locations deleted after their copy landed — see the removal step. */
+  removed: number;
   /** Groups the user declined, so the report is about what happened rather than what was offered. */
   declined: string[];
   /**
@@ -77,7 +79,7 @@ function sample(items: Candidate[]): string {
  * a silent omission.
  */
 export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
-  const result: MigrateResult = { rules: 0, facts: 0, skills: 0, skipped: 0, declined: [], failedBatches: 0 };
+  const result: MigrateResult = { rules: 0, facts: 0, skills: 0, skipped: 0, declined: [], failedBatches: 0, removed: 0 };
   const findings = await discover({ cwd: deps.cwd, home: deps.home });
 
   if (!hasAnything(findings)) {
@@ -242,6 +244,55 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
        * coin toss. The point of migrating a project's own skills is that the agents doing that project's
        * work carry them, so the assignment runs here rather than being left as homework.
        */
+      /**
+       * The originals, once the copy is in place.
+       *
+       * horse-code reads `.horsecode/skills`, so a skill left at its old path is not a second source — it is
+       * a stale twin. It will drift from the copy the moment either is edited, and nothing will say which one
+       * an agent read.
+       *
+       * Only the ones that were actually COPIED are offered for removal. A skill horse-code already ships was
+       * deliberately not copied, so deleting it would remove the only copy of this project's variant of it —
+       * that is the user's call to make by hand, not a side effect of migrating something else.
+       *
+       * A skill directory is often a SYMLINK into another skills root. Removing the link alone leaves the
+       * content — the actual duplicate — behind, so the link's target goes too. The target is resolved from
+       * the link rather than guessed.
+       */
+      if (copied.length) {
+        const removable: { name: string; paths: string[] }[] = [];
+        for (const s of skills) {
+          const name = s.label.split("/").pop()!;
+          if (!copied.includes(name)) continue;
+          const dir = dirname(s.path);
+          const paths = [dir];
+          try {
+            if ((await lstat(dir)).isSymbolicLink()) paths.push(resolve(dirname(dir), await readlink(dir)));
+          } catch { /* gone already, or unreadable — the removal below tolerates both */ }
+          removable.push({ name, paths });
+        }
+        const answer = await deps.ask(
+          `**${removable.length} skill(s)** are now in \`.horsecode/skills/\` AND still at their old path.\n\n` +
+          `Remove the originals? horse-code reads its own directory, so the old copies are twins that will ` +
+          `drift — but OTHER tools in this project read them too.\n\n` +
+          `_Removed from: ${[...new Set(removable.flatMap((r) => r.paths.map((p) => dirname(p).replace(deps.cwd, "."))))].join(", ")}_`,
+          { options: [
+            { label: "No — keep them", description: "Nothing is deleted; the two copies can diverge" },
+            { label: "Yes — remove the originals", description: `${removable.length} directory(ies) deleted from their old location` },
+          ] },
+        );
+        if (YES.test(answer.trim())) {
+          for (const r of removable) {
+            for (const path of r.paths) {
+              try { await rm(path, { recursive: true, force: true }); result.removed++; }
+              catch { /* one that cannot be removed must not stop the rest */ }
+            }
+          }
+          deps.note(`🧹 Removed ${result.removed} original skill location(s). ` +
+            `_Both skill trees are usually tracked by git — \`git checkout\` brings them back if this was wrong._`);
+        } else result.declined.push("removing the originals");
+      }
+
       if (copied.length && deps.assignSkills) {
         deps.note(`Working out which roles should carry ${copied.length} newly installed skill(s)…`);
         try {
@@ -285,7 +336,10 @@ export function describeResult(r: MigrateResult): string {
   const bits: string[] = [];
   if (r.rules) bits.push(`**${r.rules} rule(s)** — now in every agent's instructions`);
   if (r.facts) bits.push(`**${r.facts} fact(s)** — recalled when relevant`);
-  if (r.skills) bits.push(`**${r.skills} skill(s)** — copied to \`.horsecode/skills/\``);
+  if (r.skills) {
+    bits.push(`**${r.skills} skill(s)** — copied to \`.horsecode/skills/\`` +
+      (r.removed ? `, and ${r.removed} old location(s) removed` : ""));
+  }
   // A failure that reached here was already explained in a note; the summary must not contradict it.
   const failed = r.failedBatches
     ? `\n\n⚠️ **${r.failedBatches} batch(es) failed to read** — the instructions and remembered facts in them ` +

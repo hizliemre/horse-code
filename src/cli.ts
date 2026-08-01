@@ -324,6 +324,19 @@ export async function main(argv: string[]): Promise<void> {
         const desc = s ? `\n\n> ${s.description}` : "";
         return `Installed **${src.name}** from \`${src.repo}\`${src.path ? `/${src.path}` : ""} at \`${r.sha.slice(0, 8)}\`.${desc}\n\n_Discoverable by every agent. \`/roles adjust\` assigns it to the roles it fits; \`/skills update\` re-installs it from upstream._`;
       };
+      /**
+       * Re-reads the project's own skills directory.
+       *
+       * `.horsecode/skills` is loaded once, at startup. Migration copies into it mid-session, so without this
+       * the newly installed skills do not exist as far as the rest of the session is concerned — and the step
+       * that assigns them to roles was handed an empty list and reported "no role needed one of them",
+       * which reads as a decision rather than the miss it was. Measured on a real migration: 73 skills
+       * copied, and the assignment never made a single model call.
+       */
+      const reloadProjectSkills = async (): Promise<void> => {
+        const dir = join(cwd, ".horsecode", "skills");
+        if (existsSync(dir)) await skillRegistry.loadFromDir(dir);
+      };
       const updateSkills = async (): Promise<string> => {
         if (!config.skillSources.length) {
           return "No external skill sources configured. Add them under `skillSources` in your config.";
@@ -420,6 +433,7 @@ export async function main(argv: string[]): Promise<void> {
         listSkills,
         updateSkills,
         addSkill,
+        reloadProjectSkills,
         graphStatus: graphStatusText,
         buildGraph: buildGraphText,
         planTraces: planTracesFn,

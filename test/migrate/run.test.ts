@@ -29,7 +29,7 @@ const provider = { async *chat() { throw new Error("provider must not be used");
 const deps = (over: Partial<Parameters<typeof runMigration>[0]> = {}) => ({
   cwd, home, provider, models: ["m"],
   memStore: new MemoryStore({ home, cwd }),
-  ask: async () => "Yes — copy all",
+  ask: async () => "Yes — copy all", // every question, including the removal one
   note: () => {},
   ...over,
 });
@@ -87,10 +87,66 @@ describe("migrating a skill brings its whole tree", () => {
  * A run where every batch died on an exhausted quota imported nothing but skills and still signed off with
  * **Migration complete** — with the 219 remembered facts it had silently dropped nowhere in the summary.
  */
+/**
+ * horse-code reads `.horsecode/skills`, so a skill left at its old path is not a second source — it is a
+ * stale twin that will drift the moment either copy is edited, with nothing to say which one an agent read.
+ */
+describe("the originals are removed once their copy is in place", () => {
+  /** Answers yes to the copy, and whatever `remove` says to the removal question. */
+  const asker = (remove: string) => async (q: string) => (q.includes("Remove the originals") ? remove : "Yes — copy all");
+
+  it("deletes the old directory after copying it", async () => {
+    await put(cwd, ".claude/skills/impeccable/SKILL.md", "---\nname: impeccable\ndescription: d\n---\nbody");
+    await put(cwd, ".claude/skills/impeccable/reference/craft.md", "the craft flow");
+
+    const r = await runMigration(deps({ ask: asker("Yes — remove the originals") }));
+
+    expect(existsSync(join(cwd, ".horsecode", "skills", "impeccable", "reference", "craft.md"))).toBe(true);
+    expect(existsSync(join(cwd, ".claude", "skills", "impeccable"))).toBe(false);
+    expect(r.removed).toBeGreaterThan(0);
+  });
+
+  it("removes a symlink AND what it points at — the link alone leaves the duplicate behind", async () => {
+    const { symlink } = await import("node:fs/promises");
+    await put(cwd, ".agents/skills/brandkit/SKILL.md", "---\nname: brandkit\ndescription: d\n---\nbody");
+    await mkdir(join(cwd, ".claude", "skills"), { recursive: true });
+    await symlink(join(cwd, ".agents", "skills", "brandkit"), join(cwd, ".claude", "skills", "brandkit"));
+
+    await runMigration(deps({ ask: asker("Yes — remove the originals") }));
+
+    expect(existsSync(join(cwd, ".horsecode", "skills", "brandkit", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(cwd, ".claude", "skills", "brandkit"))).toBe(false);
+    expect(existsSync(join(cwd, ".agents", "skills", "brandkit"))).toBe(false); // the real content, not just the link
+  });
+
+  it("keeps them when the user says no", async () => {
+    await put(cwd, ".claude/skills/impeccable/SKILL.md", "---\nname: impeccable\ndescription: d\n---\nbody");
+    const r = await runMigration(deps({ ask: asker("No — keep them") }));
+    expect(existsSync(join(cwd, ".claude", "skills", "impeccable"))).toBe(true);
+    expect(r.removed).toBe(0);
+    expect(r.declined).toContain("removing the originals");
+  });
+
+  /**
+   * A skill horse-code already ships was deliberately NOT copied — deleting it would remove the only copy of
+   * this project's variant of it, which is the user's call to make by hand.
+   */
+  it("never deletes a skill it did not copy", async () => {
+    await put(cwd, ".claude/skills/impeccable/SKILL.md", "---\nname: impeccable\ndescription: d\n---\nours");
+    await put(cwd, ".claude/skills/brandkit/SKILL.md", "---\nname: brandkit\ndescription: d\n---\nbody");
+
+    const r = await runMigration(deps({ existingSkills: () => ["impeccable"], ask: asker("Yes — remove the originals") }));
+
+    expect(r.skills).toBe(1);
+    expect(existsSync(join(cwd, ".claude", "skills", "brandkit"))).toBe(false);   // copied → removed
+    expect(existsSync(join(cwd, ".claude", "skills", "impeccable"))).toBe(true);  // not copied → untouched
+  });
+});
+
 describe("the summary does not claim more than happened", () => {
   it("says so when batches failed, and still lists what did land", async () => {
     const { describeResult } = await import("../../src/migrate/run.js");
-    const out = describeResult({ rules: 0, facts: 0, skills: 73, skipped: 0, declined: [], failedBatches: 24 });
+    const out = describeResult({ rules: 0, facts: 0, skills: 73, skipped: 0, declined: [], failedBatches: 24, removed: 0 });
     expect(out).toContain("finished with failures");
     expect(out).toContain("24 batch(es) failed to read");
     expect(out).toContain("73 skill(s)");
@@ -99,7 +155,7 @@ describe("the summary does not claim more than happened", () => {
 
   it("still reads as complete when nothing failed", async () => {
     const { describeResult } = await import("../../src/migrate/run.js");
-    const out = describeResult({ rules: 3, facts: 9, skills: 1, skipped: 2, declined: [], failedBatches: 0 });
+    const out = describeResult({ rules: 3, facts: 9, skills: 1, skipped: 2, declined: [], failedBatches: 0, removed: 0 });
     expect(out).toContain("Migration complete");
     expect(out).not.toContain("failed to read");
   });
