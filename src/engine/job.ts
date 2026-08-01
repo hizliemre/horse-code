@@ -60,7 +60,9 @@ export interface JobDeps extends ReviewDeps {
 export type JobResult =
   | { kind: "chat"; response: string; refinedPrompt?: string; nextSteps?: string[]; rules?: string[]; remembered?: string[]; lessons?: string[] }
   | { kind: "rejected"; stage: "spec" | "plan"; refinedPrompt?: string }
-  | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession; refinedPrompt?: string };
+  | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession; refinedPrompt?: string }
+  /** Governance work: written in place, no worktree, no branch, nothing to merge. */
+  | { kind: "governed"; path: string; written: boolean; refinedPrompt?: string };
 
 function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
   const resolved = deps.roleRegistry.resolve("project-manager");
@@ -273,6 +275,15 @@ export async function runJob(
       // coach-waiting status while the coach actually works — no re-emit here.
       // No worktree was opened for a chat turn — nothing to close.
       return { kind: "chat", response: up.response, refinedPrompt: up.refinedPrompt, nextSteps: up.nextSteps, rules: up.rules, remembered: up.remembered, lessons: up.lessons };
+    }
+    /**
+     * Governance work is finished when the document exists — there was never a worktree to close.
+     *
+     * Returned before the `!session` guard below, which exists to catch an approved pipeline that somehow
+     * skipped opening one. Here a missing session is the correct outcome, not a bug.
+     */
+    if (up.kind === "governed") {
+      return { kind: "governed", path: up.path, written: up.written, refinedPrompt: up.refinedPrompt };
     }
     if (up.kind === "rejected") {
       emit({ kind: "phase", phase: "rejected", detail: up.stage });

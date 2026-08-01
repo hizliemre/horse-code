@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { runRefiner, routeIntent } from "../../src/engine/refiner.js";
+import { runRefiner, routeIntent, RefinerSchema } from "../../src/engine/refiner.js";
 import type { TaskCycleDeps } from "../../src/engine/task-types.js";
 import type { RoleConfig } from "../../src/config/config.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -57,5 +57,24 @@ describe("runRefiner", () => {
     ac.abort();
     const p = new MockProvider([submit('{"refinedPrompt":"x","intent":"chat"}')]);
     await expect(runRefiner(deps(p, new SkillRegistry(), ac.signal), "x")).rejects.toThrow();
+  });
+});
+
+describe("routeIntent — what a request costs is not a judgement call", () => {
+  it("routes governance work away from the pipeline entirely", () => {
+    expect(routeIntent("govern")).toBe("govern");
+    expect(routeIntent("chat")).toBe("chat");
+    expect(routeIntent("feature")).toBe("pipeline");
+    expect(routeIntent("bugfix")).toBe("pipeline");
+  });
+
+  /**
+   * The refiner is told to judge by what the request PRODUCES. A request that mentions the constitution but
+   * changes source code is still feature work, and one that mentions no code but rewrites the project's own
+   * rules is not.
+   */
+  it("accepts govern as a classification the model may return", () => {
+    expect(RefinerSchema.safeParse({ refinedPrompt: "Write the project constitution from CLAUDE.md", intent: "govern" }).success).toBe(true);
+    expect(RefinerSchema.safeParse({ refinedPrompt: "x", intent: "governance" }).success).toBe(false);
   });
 });

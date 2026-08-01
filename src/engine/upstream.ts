@@ -20,7 +20,8 @@ export { buildAskUserTool } from "./writer-registry.js";
 export type UpstreamResult =
   | { intent: Intent; refinedPrompt: string; kind: "chat"; response: string; nextSteps: string[]; rules: string[]; remembered: string[]; lessons: string[] }
   | { intent: Intent; refinedPrompt: string; kind: "approved"; specPath: string; planPath: string; tasksPath: string }
-  | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" };
+  | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" }
+  | { intent: Intent; refinedPrompt: string; kind: "governed"; path: string; written: boolean };
 
 /**
  * Upstream pipeline: refiner → route; chat→coach response; feature/bugfix→spec-kit phases
@@ -68,6 +69,33 @@ export async function runUpstream(
     const rm = extractListBlock(ru.text, "remember"); // durable facts to persist to memory
     const ls = extractListBlock(rm.text, "lesson"); // lessons learned from a correction/failure
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "chat", response: ls.text, nextSteps: ns.items, rules: ru.items, remembered: rm.items, lessons: ls.items };
+  }
+
+  /**
+   * Governance work runs where the user is standing.
+   *
+   * A constitution is the project's own statement of its principles, and it is finished the moment it is
+   * written — there is nothing to review against a spec, nothing to break, nothing to merge. Routing it
+   * through the pipeline bought a branch, a worktree cut from it, a spec, a plan, a task board and a wave
+   * engine, all to produce one document that then sat in a branch instead of in the project.
+   *
+   * Deliberately NOT committed: the file lands in the working tree the user is looking at, and what to do
+   * with it from there is theirs to decide. A tool that commits to someone's branch unasked is a tool that
+   * has to be undone.
+   */
+  if (!resume && routeIntent(r.intent) === "govern") {
+    emitPhase("constitution");
+    const templates = await deps.specKit();
+    // The project the user is standing in — the same place the coach reads from on a chat turn.
+    const cwd = process.cwd();
+    const p: PhaseDeps = { deps, templates, workdir: cwd, askUser };
+    await runConstitution(p);
+    const path = constitutionPath(cwd);
+    const written = existsSync(path);
+    if (!written) {
+      emit({ kind: "note", text: `⚠️ The constitution phase never wrote \`${relative(cwd, path)}\` — nothing was changed.` });
+    }
+    return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "governed", path, written };
   }
 
   // Feature/bugfix → open the worktree now; name it from the refiner's short English title (not the raw

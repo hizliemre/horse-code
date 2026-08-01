@@ -26,7 +26,7 @@ const ctx = (): ToolContext => ({ cwd: ".", signal: new AbortController().signal
 // Content-based provider scripting the spec-kit pipeline: it keys off the systemPrompt (refiner / coach /
 // council perspective / judge) and, for the spec-kit phases, off the spec-kit command text ("COMMAND:<phase>"
 // injected by fakeSpecKit). Captures every request for assertions.
-export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean; councilRec?: "approve" | "revise"; councilVotes?: string[]; teamFindings?: string } = {}): Provider & { requests: ChatRequest[] } {
+export function upstreamProvider(opts: { intent?: string; judge?: string[]; analystAsk?: string; skipWrite?: boolean; skipConstitution?: boolean; councilRec?: "approve" | "revise"; councilVotes?: string[]; teamFindings?: string } = {}): Provider & { requests: ChatRequest[] } {
   const requests: ChatRequest[] = [];
   let judgeCall = 0;
   let councilCall = 0;
@@ -61,7 +61,10 @@ export function upstreamProvider(opts: { intent?: string; judge?: string[]; anal
       if (sys.includes("P-coach")) { yield* stop("coach response"); return; }
       // The brainstormer is driven by its role prompt, not a spec-kit command.
       if (sys.includes("brainstormer")) { yield* writeOnce("# decided approach"); return; }
-      if (sys.includes("COMMAND:constitution")) { yield* writeOnce("# constitution"); return; }
+      if (sys.includes("COMMAND:constitution")) {
+        if (opts.skipConstitution) { yield* stop("I described it instead of writing it"); return; }
+        yield* writeOnce("# constitution"); return;
+      }
       if (sys.includes("COMMAND:specify")) {
         if (opts.skipWrite) { yield* stop("I didn't write it"); return; } // specify that doesn't produce a file (guard test)
         if (opts.analystAsk && toolMsgs.length === 0) { yield* call("ask_user", JSON.stringify({ question: opts.analystAsk })); return; }
@@ -146,6 +149,39 @@ describe("runUpstream", () => {
     if (res.kind === "chat") expect(res.response).toBe("coach response");
     expect(res.intent).toBe("chat");
     expect(opened).toBe(0); // a chat turn must never open the worktree
+  });
+
+  /**
+   * Establishing a constitution is neither a conversation nor a change to the software. Classified as a
+   * feature it bought the whole pipeline — a branch, a worktree cut from it, a spec, a plan, a task board —
+   * to produce one document, which then sat in a branch instead of in the project.
+   */
+  it("govern intent → writes in place, opening no worktree", async () => {
+    const p = upstreamProvider({ intent: "govern" });
+    let opened = 0;
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const res = await runUpstream(udeps(p), () => { opened++; return Promise.resolve(dir); }, "write the project constitution", async () => "x", 3);
+      expect(res.kind).toBe("governed");
+      expect(opened).toBe(0); // the whole point
+      if (res.kind === "governed") {
+        expect(res.written).toBe(true);
+        expect(res.path).toContain("constitution.md");
+        expect(existsSync(res.path)).toBe(true);
+      }
+    } finally { process.chdir(cwd); }
+  });
+
+  it("govern reports honestly when the phase wrote nothing", async () => {
+    const p = upstreamProvider({ intent: "govern", skipConstitution: true });
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "write the constitution", async () => "x", 3);
+      expect(res.kind).toBe("governed");
+      if (res.kind === "governed") expect(res.written).toBe(false);
+    } finally { process.chdir(cwd); }
   });
 
   it("chat intent never invokes the spec-kit loader (regression guard: a fetch failure must not brick chat)", async () => {

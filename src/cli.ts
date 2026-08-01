@@ -107,6 +107,19 @@ export function renderResult(res: JobResult): string {
    */
   if (res.kind === "chat") return stripThinking(res.response);
   if (res.kind === "rejected") return `Not approved (stopped at the ${res.stage} stage).`;
+  /**
+   * Governance work reports the file and stops there.
+   *
+   * No branch, no PR, no delivery to describe — it was written into the project the user is standing in.
+   * Saying so explicitly matters: the pipeline's habit is to leave work on a branch, and a user who expects
+   * that would go looking for one.
+   */
+  if (res.kind === "governed") {
+    return res.written
+      ? `**Constitution written** — \`${res.path}\`\n\n_Written directly in your working tree: no branch, `
+        + `no worktree, nothing to merge. Review it and commit it when you are happy with it._`
+      : `The constitution phase finished without writing \`${res.path}\` — nothing was changed.`;
+  }
   const outcome =
     res.wave.status === "completed"
       ? (res.wave.pr ? `PR: ${res.wave.pr.url}` : "all tasks completed")
