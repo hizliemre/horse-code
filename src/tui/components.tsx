@@ -393,11 +393,19 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
         const mark = multiSelect ? (checked.has(i) ? "[x] " : "[ ] ") : (isSel ? `${RADIO_ON} ` : `${RADIO_OFF} `);
         return (
           <Box key={i} flexDirection="column">
+            {/*
+              * One <Text> per line, like every other line in this box.
+              *
+              * The label used to be a <Text> nested inside a <Text>, and it is the ONLY nested one here —
+              * the description, the note and the hint are all flat. It is also the only line that went
+              * missing, repeatedly, in a real terminal while rendering correctly in-process: the frame Ink
+              * composes contains it, so what fails is the update that carries it to the screen. Nesting is
+              * the one structural difference between the line that vanishes and the lines that do not, and
+              * it buys nothing here — the whole line shares one style.
+              */}
             {wrapPlain(c.label, listW - 4).map((line, k) => (
-              <Text key={k}>
-                <Text color={isSel ? "cyan" : undefined} inverse={isSel}>
-                  {k === 0 ? `${isSel ? `${CURSOR} ` : "  "}${mark}${line}` : `      ${line}`}
-                </Text>
+              <Text key={k} color={isSel ? "cyan" : undefined} bold={isSel}>
+                {k === 0 ? `${isSel ? `${CURSOR} ` : "  "}${mark}${line}` : `      ${line}`}
               </Text>
             ))}
             {c.description

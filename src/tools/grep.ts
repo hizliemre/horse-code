@@ -21,9 +21,29 @@ export const grepTool: Tool = {
       };
     }
     const a = parsed.data;
+    /**
+     * `flags` means REGEX flags, and a model reaching for grep reaches for grep's command line.
+     *
+     * Seen in a real run: `flags: "-m 3"` — grep's max-count — handed straight to `new RegExp`, which threw
+     * "Invalid flags supplied to RegExp constructor" and cost the turn. Salvaging letters out of it would be
+     * worse than failing: "-m 3" contains `m`, a real JS flag, so the call would have silently run in
+     * multiline mode and returned a different answer than either party intended.
+     *
+     * So the value is taken only when it is ENTIRELY regex flags, and anything else is refused with the
+     * distinction spelled out, because the model has to correct the call to get anywhere.
+     */
+    const flags = a.flags?.trim() ?? "";
+    if (flags && !/^[dgimsuvy]+$/.test(flags)) {
+      return {
+        content: `grep: "${flags}" is not a regex flag. This tool takes JavaScript regex flags (i, m, s, g), `
+          + `not grep's command-line options — for a case-insensitive search pass flags "i", and to limit the `
+          + `number of results narrow the pattern instead.`,
+        isError: true,
+      };
+    }
     let re: RegExp;
     try {
-      re = new RegExp(a.pattern, a.flags ?? "");
+      re = new RegExp(a.pattern, flags);
     } catch (e) {
       return {
         content: `grep: invalid regex: ${e instanceof Error ? e.message : String(e)}`,

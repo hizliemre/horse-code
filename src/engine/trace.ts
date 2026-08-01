@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
+import { stateRoot } from "./session-scope.js";
 import type { ProjectGraph } from "./project-graph.js";
 
 /**
@@ -37,8 +38,15 @@ export interface TraceIndex {
   traces: Record<string, TraceRecord>;
 }
 
+/**
+ * Where this caller's traces live: the session's, not the caller's own directory.
+ *
+ * A task worktree has no traces and must not reach past its session to the project root — the root is a
+ * reference, and nothing a run reads from or writes to outside itself reaches the pull request. Same rule as
+ * the graph; traces were simply missed when that was fixed.
+ */
 export function traceDir(cwd: string): string {
-  return join(cwd, TRACE_DIR);
+  return join(stateRoot(cwd), TRACE_DIR);
 }
 
 /** Path of one file's trace. Mirrors the source tree so a trace is findable from the path alone. */
