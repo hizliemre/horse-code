@@ -137,11 +137,33 @@ export function monitorLines(r: MonitorReport, watches: WatchStatus[] = []): str
  * Renders a pending question/permission/review prompt: a colored icon + label header, then the body
  * rendered as markdown (bold/lists/code) — the body often contains a markdown-formatted numbered list.
  */
-export function PendingQuestion({ text, cols }: { text: string; cols: number }): React.ReactElement {
+/**
+ * Keeps a question readable when it cannot fit: head and tail, with the middle named rather than dropped.
+ *
+ * A question is asked WITH its options, and the options are the part the user has to act on. When the two
+ * together overflow the terminal, something has to give, and it must not be the answer list — a real 20-row
+ * terminal was measured rendering a twelve-rule import question with BOTH option labels missing and the
+ * question's own first characters gone ("2 standing rule(s)" for twelve). The user pressed Enter on a choice
+ * they could not see and got "No".
+ *
+ * The first lines carry what is being asked and the last carries the actual question ("Import them?"), so the
+ * middle — the enumeration — is what yields, and it says how much it took.
+ */
+export function elideLines<T>(lines: T[], max: number, marker: (n: number) => T): T[] {
+  if (max <= 0 || lines.length <= max) return lines;
+  if (max === 1) return [marker(lines.length - 1)];
+  const tail = Math.min(1, max - 2);           // keep the closing question when there is room for it
+  const head = max - 1 - tail;                 // …the rest is the opening, minus the marker's own row
+  return [...lines.slice(0, head), marker(lines.length - head - tail), ...lines.slice(lines.length - tail)];
+}
+
+export function PendingQuestion({ text, cols, maxLines }: { text: string; cols: number; maxLines?: number }): React.ReactElement {
   const { kind, body } = parsePending(text);
   const s = PENDING_STYLE[kind];
   const width = pendingWidth(cols);
-  const lines = flattenMarkdown(body, pendingBodyWidth(cols));
+  const all = flattenMarkdown(body, pendingBodyWidth(cols));
+  const lines = maxLines === undefined ? all
+    : elideLines(all, maxLines, (n) => [{ text: `… ${n} more line(s) — scroll up after answering`, dim: true }]);
   return (
     // Indented as a whole: the header sat flush at the left margin while the transcript around it is
     // indented, so the question read as a separate thing bolted on rather than part of the conversation.
@@ -1781,8 +1803,27 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     // Status lines sit directly above the input (no box, no gap). Height is deterministic → no Ink overflow.
     // NB: no kanban board here — task progress is surfaced as chat ACTION notes (📋 X → In progress) instead.
     // Pending prompt: 1 header line + the markdown-flattened body lines (same width as PendingQuestion → same count).
+    const choiceOptionsForFit = state.pending?.options ?? [];
+    /**
+     * How many rows the question's BODY may have.
+     *
+     * Everything else in the bottom region is fixed — the answer list above all, since a question whose
+     * options are off-screen cannot be answered. Measured on a 20-row terminal: the body of a twelve-rule
+     * question pushed both option labels out of the frame, and the user answered blind. So the body is given
+     * whatever is left and elides the rest, rather than taking the space the options need.
+     */
+    const pendingBodyMax = state.pending
+      ? Math.max(1, size.rows
+        - 1 /* question header */ - 1 /* scroll hint */
+        - (choiceOptionsForFit.length ? choiceHeight(choiceOptionsForFit, size.cols) : 2 + inputH)
+        - (state.meta ? 2 : 0) - (state.queued > 0 ? 1 : 0)
+        - 1 /* one row of transcript, so the question is not the whole screen */)
+      : 0;
     const pendingLines = state.pending
-      ? 1 + flattenMarkdown(parsePending(state.pending.question).body, pendingBodyWidth(size.cols)).length
+      ? 1 + Math.min(
+        flattenMarkdown(parsePending(state.pending.question).body, pendingBodyWidth(size.cols)).length,
+        pendingBodyMax,
+      )
       : 0;
     // The write indicator rides ON the progress line, so it costs no row of its own — and nothing is ever
     // drawn beneath the running indicator.
@@ -1865,7 +1906,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           <Box flexDirection="column">
             {progressLine ? <Box paddingLeft={2}><ProgressView phase={state.phase} detail={state.detail} refinerModel={refinerModel?.()} meta={state.meta} cols={size.cols} live={state.liveActivity} /></Box> : null}
             {doneLine ? <Box paddingLeft={2}><Text dimColor>{`${donePhrase(state.phase)} for ${fmtDuration(state.meta?.durationMs ?? 0)}${state.meta ? ` · ↑${fmtTokens(state.meta.promptTokens)} ↓${fmtTokens(state.meta.completionTokens)} · ${state.meta.calls} call${state.meta.calls === 1 ? "" : "s"}` : ""}`}</Text></Box> : null}
-            {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} /> : null}
+            {state.pending ? <PendingQuestion text={state.pending.question} cols={size.cols} maxLines={pendingBodyMax} /> : null}
           </Box>
         ) : null}
         {slashOpen ? <SlashPalette commands={slashCmds} selected={slashIdx} cols={size.cols} /> : null}
