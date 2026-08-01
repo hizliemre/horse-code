@@ -237,7 +237,8 @@ export async function extractAll(opts: {
   models: string[];
   findings: Finding[];
   signal?: AbortSignal;
-  onProgress?: (done: number, total: number) => void;
+  /** Called as each batch lands, with the source it covered — enough to render a live progress line. */
+  onProgress?: (done: number, total: number, source: string) => void;
   concurrency?: number;
 }): Promise<Extraction> {
   const jobs = batches(opts.findings);
@@ -255,7 +256,7 @@ export async function extractAll(opts: {
       } catch (e) {
         failed.push({ source: job.source, error: e instanceof Error ? e.message : String(e) });
       }
-      opts.onProgress?.(++done, jobs.length);
+      opts.onProgress?.(++done, jobs.length, job.source);
     }
   };
   await Promise.all(Array.from({ length: Math.min(opts.concurrency ?? 5, queue.length) }, worker));

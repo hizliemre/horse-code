@@ -20,6 +20,15 @@ import type { Candidate } from "./extract.js";
 
 export type Ask = (question: string, opts?: { options?: { label: string; description?: string }[] }) => Promise<string>;
 export type Note = (text: string) => void;
+/**
+ * A line that is REWRITTEN in place as a phase proceeds, one per `phase` key.
+ *
+ * Migration's long stretches were silent: "Reading 223 file(s)…" was printed once and the next word arrived
+ * only when every batch had finished — minutes later, with nothing in between to say whether it was working,
+ * stuck, or how far along it was. A note per batch would be 24 lines of noise; one line that counts up is
+ * the same information without the scroll.
+ */
+export type Progress = (phase: string, text: string) => void;
 
 export interface MigrateDeps {
   cwd: string;
@@ -30,6 +39,11 @@ export interface MigrateDeps {
   memStore: MemoryStore;
   ask: Ask;
   note: Note;
+  /** Live progress line per phase — see Progress. */
+  progress?: Progress;
+  /** Enter/leave the status line's running state (shimmer, elapsed timer, token spend). */
+  busy?: (phase: string, model?: string) => void;
+  idle?: () => void;
   /** Skill names horse-code already has, so a migration never shadows one of ours with a stale copy. */
   existingSkills?: () => string[];
   /** Assigns newly installed skills to the roles that should carry them; returns what it did. */
@@ -93,11 +107,14 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
   if (prose.length) {
     deps.note(`Reading ${prose.length} file(s) to work out which instructions still apply here. ` +
       `_This is the part that costs tokens; nothing is imported until you say so._`);
+    deps.busy?.("reading instructions", deps.models[0]);
     const extraction = await extractAll({
       provider: deps.provider, models: deps.models, findings: prose,
       ...(deps.signal ? { signal: deps.signal } : {}),
-      onProgress: (done, total) => { if (done === total) deps.note(`Read ${total}/${total}.`); },
+      onProgress: (done, total, source) => deps.progress?.("read",
+        `📖 Reading **${done}/${total}** — _${source}_`),
     });
+    deps.idle?.();
     /**
      * WHY they could not be read, not just which.
      *
@@ -127,10 +144,12 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
     const facts = [...raw.facts];
     if (rules.length > MAX_RULES) {
       deps.note(`${rules.length} rule candidates — consolidating, since every rule is inlined into every prompt forever.`);
+      deps.busy?.("consolidating rules", deps.models[0]);
       const c = await consolidateRules({
         provider: deps.provider, models: deps.models, candidates: rules,
         ...(deps.signal ? { signal: deps.signal } : {}),
       });
+      deps.idle?.();
       if (c.rules.length < rules.length) {
         deps.note(`Consolidated **${rules.length} → ${c.rules.length}** rules` +
           `${c.demoted.length ? `, kept ${c.demoted.length} as fact(s)` : ""}` +
@@ -213,8 +232,10 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
     );
     if (YES.test(answer.trim())) {
       const copied: string[] = [];
-      for (const s of skills) {
+      // 73 skill trees is not instant, and a silent minute reads as a hang.
+      for (const [i, s] of skills.entries()) {
         const name = s.label.split("/").pop()!;
+        deps.progress?.("copy", `📦 Copying **${i + 1}/${skills.length}** — \`${name}\``);
         /**
          * The whole skill DIRECTORY, not just its SKILL.md.
          *
@@ -282,7 +303,8 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
           ] },
         );
         if (YES.test(answer.trim())) {
-          for (const r of removable) {
+          for (const [i, r] of removable.entries()) {
+            deps.progress?.("remove", `🧹 Removing **${i + 1}/${removable.length}** — \`${r.name}\``);
             for (const path of r.paths) {
               try { await rm(path, { recursive: true, force: true }); result.removed++; }
               catch { /* one that cannot be removed must not stop the rest */ }
@@ -295,10 +317,13 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
 
       if (copied.length && deps.assignSkills) {
         deps.note(`Working out which roles should carry ${copied.length} newly installed skill(s)…`);
+        deps.busy?.("assigning skills", deps.models[0]);
         try {
           const assigned = await deps.assignSkills(copied);
+          deps.idle?.();
           deps.note(assigned || "No role needed one of them permanently — every agent can still fetch them on demand.");
         } catch (e) {
+          deps.idle?.();
           deps.note(`Skill assignment did not run (${e instanceof Error ? e.message : String(e)}) — ` +
             `run \`/roles adjust\` to do it.`);
         }

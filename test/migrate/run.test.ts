@@ -160,3 +160,74 @@ describe("the summary does not claim more than happened", () => {
     expect(out).not.toContain("failed to read");
   });
 });
+
+/**
+ * Migration's long stretches were silent: "Reading 223 file(s)…" was printed once and the next word arrived
+ * only when every batch had finished — minutes later, with nothing in between to say whether it was working,
+ * stuck, or how far along it was.
+ */
+describe("the user can see what is happening", () => {
+  const withFeedback = async (over: Partial<Parameters<typeof runMigration>[0]> = {}) => {
+    const lines: { phase: string; text: string }[] = [];
+    const phases: string[] = [];
+    await runMigration(deps({
+      progress: (phase, text) => lines.push({ phase, text }),
+      busy: (phase) => phases.push(`busy:${phase}`),
+      idle: () => phases.push("idle"),
+      ...over,
+    }));
+    return { lines, phases };
+  };
+
+  it("reports every batch as it lands — the stretch that used to be silent for minutes", async () => {
+    const ITEMS = '```json\n{"items":[{"text":"Always write in English","disposition":"rule","reason":"r"}]}\n```';
+    const answering = { async *chat() { yield { type: "text-delta" as const, text: ITEMS }; } } as unknown as Provider;
+    // Two rule files → two batches, so the line must count 1/2 then 2/2 rather than appear once at the end.
+    await put(cwd, "CLAUDE.md", "# rules\nalways write in english");
+    await put(cwd, "DESIGN.md", "# tokens\nnever use a raw hex value");
+
+    const { lines, phases } = await withFeedback({ provider: answering, ask: async () => "No" });
+
+    const read = lines.filter((l) => l.phase === "read");
+    expect(read).toHaveLength(2);
+    expect(read[0]!.text).toContain("1/2");
+    expect(read[1]!.text).toContain("2/2");
+    expect(read[0]!.text).toContain("CLAUDE.md"); // says WHICH file, not just a number
+    expect(phases.slice(0, 2)).toEqual(["busy:reading instructions", "idle"]);
+  });
+
+  it("counts the skills up as they are copied, on one rewritable line", async () => {
+    for (const n of ["a", "b", "c"]) {
+      await put(cwd, `.claude/skills/${n}/SKILL.md`, `---\nname: ${n}\ndescription: d\n---\nbody`);
+    }
+    const { lines } = await withFeedback({ ask: async (q: string) => (q.includes("Remove the originals") ? "No" : "Yes") });
+    const copy = lines.filter((l) => l.phase === "copy");
+    expect(copy).toHaveLength(3);
+    expect(copy[0]!.text).toContain("1/3");
+    expect(copy[2]!.text).toContain("3/3");
+  });
+
+  it("counts the removals too", async () => {
+    await put(cwd, ".claude/skills/a/SKILL.md", "---\nname: a\ndescription: d\n---\nbody");
+    const { lines } = await withFeedback({ ask: async () => "Yes" });
+    expect(lines.filter((l) => l.phase === "remove")).toHaveLength(1);
+  });
+
+  it("enters and leaves the running state around the model call that assigns skills", async () => {
+    await put(cwd, ".claude/skills/a/SKILL.md", "---\nname: a\ndescription: d\n---\nbody");
+    const { phases } = await withFeedback({
+      ask: async (q: string) => (q.includes("Remove the originals") ? "No" : "Yes"),
+      assignSkills: async () => "assigned",
+    });
+    expect(phases).toEqual(["busy:assigning skills", "idle"]);
+  });
+
+  it("leaves the running state even when the assignment throws", async () => {
+    await put(cwd, ".claude/skills/a/SKILL.md", "---\nname: a\ndescription: d\n---\nbody");
+    const { phases } = await withFeedback({
+      ask: async (q: string) => (q.includes("Remove the originals") ? "No" : "Yes"),
+      assignSkills: async () => { throw new Error("quota"); },
+    });
+    expect(phases).toEqual(["busy:assigning skills", "idle"]); // never left shimmering forever
+  });
+});

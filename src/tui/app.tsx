@@ -308,6 +308,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    */
   const migrate = async (): Promise<string> => {
     if (!opts.memStore) return "Migration needs the memory store, which is not available in this session.";
+    // Per-phase live lines, kept for the length of this migration so each phase rewrites its own.
+    const progressLines = new Map<string, (text: string) => void>();
     const { runMigration, describeResult } = await import("../migrate/run.js");
     const r = await runMigration({
       cwd: process.cwd(), home: homedir(), provider: deps.provider,
@@ -323,6 +325,19 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       memStore: opts.memStore,
       ask: (q, o) => controller.ask(q, o),
       note: (t) => controller.note(t),
+      /**
+       * One rewritable line per phase.
+       *
+       * `liveNote` is created lazily and then rewritten, so a phase that never reports leaves no empty bubble
+       * and a phase that reports 24 times leaves ONE line that counts up rather than 24 to scroll past.
+       */
+      progress: (phase, text) => {
+        let write = progressLines.get(phase);
+        if (!write) { write = controller.liveNote(); progressLines.set(phase, write); }
+        write(text);
+      },
+      busy: (phase, model) => controller.startBusy(phase, model ?? ""),
+      idle: () => controller.endBusy(),
       existingSkills: () => (opts.listSkills?.() ?? []).map((s) => s.name),
       /**
        * Newly migrated skills go to the roles that should carry them, using the same tuner `/roles adjust`
