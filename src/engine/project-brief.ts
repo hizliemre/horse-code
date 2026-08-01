@@ -22,6 +22,16 @@ export const BRIEF_META = "PROJECT.json";
 /** Documents that describe the product rather than implement it, best first. */
 const DOC_PATTERNS: RegExp[] = [
   /^readme(\.md)?$/i,
+  /**
+   * A project's own index, before anything else under `docs/`.
+   *
+   * Selection was pattern order then file order, so `docs/` was read alphabetically: on a real repository
+   * that meant the brief would have been built from BACKUP_STRATEGY, DEPLOYMENT_GUIDE and an e-invoicing
+   * appendix, while `docs/architecture/00-INDEX.md` — the document that actually says what the system is —
+   * never reached the budget. An index is the one document written to be read first.
+   */
+  /(^|\/)(00-)?index\.md$/i,
+  /(^|\/)(architecture|overview)\.md$/i,
   /^(docs?|specs?)\/.*\.mde?$/i,
   /^\.specify\/memory\/constitution\.md$/i,
   /^specs\/[^/]+\/(spec|brainstorm|plan)\.md$/i,

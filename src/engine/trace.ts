@@ -58,6 +58,14 @@ export interface TraceRecord {
   writtenAt: number;
   /** The model that wrote it, so a bad batch can be traced back. */
   model?: string;
+  /**
+   * A project document that already describes this file, repo-relative.
+   *
+   * Set instead of writing a trace of our own, when the repository has generated documentation covering the
+   * file. The document is the only copy — editing it updates the trace by construction — so nothing here
+   * drifts from it.
+   */
+  doc?: string;
 }
 
 export interface TraceIndex {
@@ -104,7 +112,21 @@ export async function readTrace(cwd: string, file: string): Promise<string | und
 }
 
 /** Synchronous read for the tool path, which is called often and must not await on every lookup. */
+/** The index, read synchronously — small, and the sync trace reader needs it to follow an adopted doc. */
+function indexSync(cwd: string): TraceIndex {
+  try {
+    const raw = JSON.parse(readFileSync(join(traceDir(cwd), TRACE_INDEX), "utf8")) as TraceIndex;
+    if (raw?.version === 1 && typeof raw.traces === "object" && raw.traces !== null) return raw;
+  } catch { /* no index yet */ }
+  return { version: 1, traces: {} };
+}
+
 export function readTraceSync(cwd: string, file: string): string | undefined {
+  // An adopted file is described by one of the project's own documents; serve that rather than nothing.
+  const rec = indexSync(cwd).traces[file];
+  if (rec?.doc) {
+    try { return readFileSync(join(stateRoot(cwd), rec.doc), "utf8"); } catch { /* moved or deleted → fall through */ }
+  }
   // The path becomes a filesystem lookup, so it must not be able to leave the trace directory.
   if (!file || file.includes("..") || file.startsWith("/")) return undefined;
   try { return readFileSync(tracePath(cwd, file), "utf8"); } catch { return undefined; }
