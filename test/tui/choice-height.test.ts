@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { choiceHeight, wrapPlain, pendingBodyWidth, dropToFit, MIN_VIEWPORT_ROWS } from "../../src/tui/components.js";
+import { choiceHeight, wrapPlain, pendingBodyWidth, dropToFit, MIN_VIEWPORT_ROWS, NOTE_ROWS, noteLines } from "../../src/tui/components.js";
 import { flattenMarkdown } from "../../src/tui/lines.js";
 
 /**
@@ -10,7 +10,8 @@ import { flattenMarkdown } from "../../src/tui/lines.js";
  * then grew a description row per option, a notes row, and a preview panel — and none were added here.
  */
 describe("choiceHeight matches what ChoiceInput draws", () => {
-  const FIXED = 2 /* border */ + 1 /* notes */ + 1 /* hint */;
+  // The note area is a fixed block, not one line — see NOTE_ROWS.
+  const FIXED = 2 /* border */ + NOTE_ROWS /* notes */ + 1 /* hint */;
 
   it("counts one row per plain option", () => {
     expect(choiceHeight(["a", "b", "c"])).toBe(3 + FIXED);
@@ -220,5 +221,39 @@ describe("dropToFit", () => {
     const keep = dropToFit(30, 10, [{ name: "monitor", height: 0 }, { name: "agents", height: 11 }]);
     expect(keep.has("agents")).toBe(true); // 10 + 11 + 4 = 25 ≤ 30
     expect(keep.has("monitor")).toBe(true); // zero-height: nothing to gain by dropping it
+  });
+});
+
+/**
+ * The note was one `truncate-end` line, so a note longer than the terminal was cut with an ellipsis and the
+ * caret went with it — the user could not see what they were typing.
+ */
+describe("noteLines", () => {
+  it("offers the hint slot when nothing is typed, and still fills the block", () => {
+    const lines = noteLines("", false, 60);
+    expect(lines[0]).toBeNull();
+    expect(lines).toHaveLength(NOTE_ROWS);
+  });
+
+  it("shows the caret on the last line however long the note grows", () => {
+    const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+    const lines = noteLines(long, true, 40);
+    expect(lines).toHaveLength(NOTE_ROWS);
+    expect(lines.at(-1)).toContain("▌");
+  });
+
+  it("keeps the note's TAIL — the part being written", () => {
+    const lines = noteLines("alpha beta gamma delta epsilon zeta eta theta iota kappa", true, 24);
+    expect(lines.join(" ")).toContain("kappa");
+  });
+
+  it("never returns more rows than the block reserves", () => {
+    for (const w of [20, 40, 80, 200]) {
+      expect(noteLines("x".repeat(500), true, w)).toHaveLength(NOTE_ROWS);
+    }
+  });
+
+  it("shows a short note as-is, without a caret when not editing", () => {
+    expect(noteLines("short", false, 60)[0]).toBe("short");
   });
 });

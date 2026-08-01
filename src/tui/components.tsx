@@ -189,6 +189,32 @@ export function PendingQuestion({ text, cols, maxLines }: { text: string; cols: 
  * Shared by the render and the height calculation, which is the point: an option that wraps to three lines
  * has to be reserved three rows, and the only way those two stay in step is for them to be the same code.
  */
+/**
+ * Rows the note area always occupies.
+ *
+ * It used to be a single `truncate-end` line, so a note longer than the terminal was cut with an ellipsis and
+ * the caret went with it — the user could not see what they were typing, which is the one thing a text field
+ * has to do. Wrapping alone would make the box grow as you type, and the box's height is reserved in advance
+ * by `choiceHeight`; a render taller than its reservation is what pushes other rows off the screen.
+ *
+ * So the area is FIXED and shows the TAIL: the newest lines, where the caret is.
+ */
+export const NOTE_ROWS = 3;
+
+/**
+ * The note area's lines: the LAST {@link NOTE_ROWS} of the wrapped note, padded to that height.
+ *
+ * `null` means "nothing typed yet" — the caller renders the hint for it. The caret rides the final line so it
+ * is on screen no matter how long the note grows.
+ */
+export function noteLines(note: string, noting: boolean, width: number): (string | null)[] {
+  const w = Math.max(8, width - "Notes: ".length);
+  if (!noting && !note) return [null, ...Array<string>(NOTE_ROWS - 1).fill("")];
+  const wrapped = wrapPlain(noting ? `${note}▌` : note, w);
+  const tail = wrapped.slice(Math.max(0, wrapped.length - NOTE_ROWS));
+  return [...tail, ...Array<string>(NOTE_ROWS - tail.length).fill("")];
+}
+
 export function wrapPlain(text: string, width: number): string[] {
   const w = Math.max(8, width);
   const out: string[] = [];
@@ -240,7 +266,7 @@ export function choiceHeight(options: (string | AskChoice)[], cols = 80): number
     // Stacked: the list, then a margin, then the bordered preview underneath it.
     : listRows + (hasPreview ? previewRows + 3 : 0);
 
-  return 2 /* border */ + body + 1 /* notes */ + 1 /* hint */;
+  return 2 /* border */ + body + NOTE_ROWS /* notes — fixed, see NOTE_ROWS */ + 1 /* hint */;
 }
 
 /**
@@ -377,14 +403,14 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
           ) : null}
         </>
       )}
-      <Text wrap="truncate-end">
-        <Text dimColor>{"Notes: "}</Text>
-        {noting
-          ? <Text color="cyan">{`${note}▌`}</Text>
-          : note
-            ? <Text>{note}</Text>
-            : <Text dimColor italic>press n to add notes</Text>}
-      </Text>
+      {noteLines(note, noting, w - 2).map((line, i) => (
+        <Text key={`n${i}`} wrap="truncate-end">
+          {i === 0 ? <Text dimColor>{"Notes: "}</Text> : <Text>{"       "}</Text>}
+          {line === null
+            ? <Text dimColor italic>press n to add notes</Text>
+            : <Text color={noting ? "cyan" : undefined}>{line}</Text>}
+        </Text>
+      ))}
       <Text dimColor wrap="truncate-end">{noting ? "Enter to confirm the note · Esc to discard it" : hint}</Text>
     </Box>
   );
