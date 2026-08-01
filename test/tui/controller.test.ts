@@ -828,3 +828,21 @@ describe("suggested next steps live in the transcript", () => {
     expect(c.getState().transcript).toHaveLength(0);
   });
 });
+
+describe("busyDetail — the shimmer has to keep saying something new", () => {
+  it("updates the detail without disturbing the timer or the token counts", () => {
+    const c = new TuiController();
+    c.startBusy("tracing", "cc/claude-opus-5");
+    const before = c.getState().meta;
+    c.busyDetail("143/2030 · OrderService.cs");
+    expect(c.getState().detail).toBe("143/2030 · OrderService.cs");
+    expect(c.getState().meta).toEqual(before);
+    expect(c.getState().mode).toBe("running");
+  });
+
+  it("is ignored when nothing is running — a stale detail under an idle prompt reads as a live job", () => {
+    const c = new TuiController();
+    c.busyDetail("143/2030");
+    expect(c.getState().detail).toBeUndefined();
+  });
+});

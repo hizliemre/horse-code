@@ -1,4 +1,5 @@
 import React from "react";
+import type { Provider } from "../core/types.js";
 import { render } from "ink";
 import type { LineReader } from "../terminal.js";
 import { makeAskUser } from "../terminal.js";
@@ -85,7 +86,7 @@ export interface RunTuiReplOpts {
   startupNote?: string; // one line shown once at start (e.g. where the telemetry log is)
   telemetryPath?: string; // this run's telemetry log → /monitor reads it
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
-  runTraces?: (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void) => Promise<string>; // /graph trace, after consent
+  runTraces?: (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void, provider?: Provider) => Promise<string>; // /graph trace, after consent
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
   memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }
@@ -778,7 +779,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} continueFromClaude={continueFromClaude} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces ? (onProgress) => opts.runTraces!(onProgress, deps.provider) : undefined} migrate={migrate} continueFromClaude={continueFromClaude} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}

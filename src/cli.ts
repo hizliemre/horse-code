@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
@@ -417,14 +418,22 @@ export async function main(argv: string[]): Promise<void> {
         const plan = await planFor(cwd, await traceableFiles());
         return { summary: describePlan(plan, tracerModel()), jobs: plan.jobs.length };
       };
-      const runTracesFn = async (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void): Promise<string> => {
+      /**
+       * `metered` comes from the TUI, which wraps the provider so every call lands in the status line.
+       * Without it a two-hour run shows `↑0 ↓0 · 0 calls` while spending millions of tokens — a number that
+       * is worse than no number, because it reads as "nothing is happening".
+       */
+      const runTracesFn = async (
+        onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void,
+        metered?: Provider,
+      ): Promise<string> => {
         const files = await traceableFiles();
         // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
         // the whole run again.
-        const brief = await buildBrief({ cwd, provider, model: tracerModel(), files: await traceableDocs() });
+        const brief = await buildBrief({ cwd, provider: metered ?? provider, model: tracerModel(), files: await traceableDocs() });
         const plan = await planFor(cwd, files);
         const res = await runTraces({
-          cwd, provider, model: tracerModel(), plan, liveFiles: new Set(files),
+          cwd, provider: metered ?? provider, model: tracerModel(), plan, liveFiles: new Set(files),
           ...(onProgress ? { onProgress } : {}),
         });
         const bits = [`${brief.message}\n\n**Traces written: ${res.written}**`];

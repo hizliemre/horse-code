@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo, memo } from "react";
+import type { Provider } from "../core/types.js";
 import { Box, Text, useStdout, useStdin, Static } from "ink";
 import type { BoardCardView } from "../engine/progress.js";
 import type { Column } from "../board/board.js";
@@ -1079,7 +1080,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   parallel?: () => number; // how many tasks may run at once
   setParallel?: (n: number) => void; // /parallel N — live, and persisted
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
-  runTraces?: (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void) => Promise<string>; // /graph trace, after consent
+  runTraces?: (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void, provider?: Provider) => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -1527,7 +1528,10 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           // Planning reads every candidate file and consults the graph. It spends no tokens, but on a large
           // project it is not instant — and a command that prints nothing while it works reads as broken.
           controller.note("Planning the trace run (reading files, no tokens spent)…");
-          const { summary, jobs } = await planTraces();
+          controller.startBusy("planning");
+          let summary: string;
+          let jobs: number;
+          try { ({ summary, jobs } = await planTraces()); } finally { controller.endBusy(); }
           if (!jobs) { controller.note(summary); return; }
           const answer = await controller.ask(`${summary}\n\nWrite the traces?`, {
             options: [
@@ -1544,12 +1548,20 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
            * that does not move for an hour — indistinguishable from a run that has died. A person watching
            * this wants what they would see for any other write: which file, where it went, how much.
            */
-          controller.note(await runTraces((ev) => {
-            const at = `${String(ev.done).padStart(String(ev.total).length)}/${ev.total}`;
-            controller.note(ev.error
-              ? `  ✗ ${at} \`${ev.file}\` — ${ev.error}`
-              : `  ✎ ${at} \`${ev.wroteTo}\` (${ev.words} words)`);
-          }));
+          // The run has no turn behind it, so nothing was setting the running indicator: a two-hour job with a
+          // still screen and an idle prompt, which is exactly what a finished — or dead — run looks like.
+          controller.startBusy("tracing");
+          let result: string;
+          try {
+            result = await runTraces((ev) => {
+              const at = `${String(ev.done).padStart(String(ev.total).length)}/${ev.total}`;
+              controller.busyDetail(`${ev.done}/${ev.total} · ${ev.file.slice(ev.file.lastIndexOf("/") + 1)}`);
+              controller.note(ev.error
+                ? `  ✗ ${at} \`${ev.file}\` — ${ev.error}`
+                : `  ✎ ${at} \`${ev.wroteTo}\` (${ev.words} words)`);
+            });
+          } finally { controller.endBusy(); }
+          controller.note(result);
         } catch (e) {
           controller.note(`Tracing failed: ${e instanceof Error ? e.message : String(e)}`);
         }

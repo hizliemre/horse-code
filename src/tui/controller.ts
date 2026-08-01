@@ -486,6 +486,18 @@ export class TuiController {
   }
 
   /** Leave the busy state → freezes the metrics into a done line ("…for Xs · ↑ ↓ · N calls"). */
+  /**
+   * Updates what the running indicator says, without disturbing the timer or the token counts.
+   *
+   * A phase set once and left alone is a shimmer that animates for two hours over the same three words. For
+   * work that is thousands of independent items, the detail IS the signal that it is still moving.
+   */
+  busyDetail(detail: string): void {
+    if (this.state.mode !== "running") return;
+    this.state = { ...this.state, detail };
+    this.notify();
+  }
+
   endBusy(): void {
     const m = this.state.meta;
     const meta: TurnMeta | undefined = m
