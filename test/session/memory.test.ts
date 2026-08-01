@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryStore } from "../../src/session/memory.js";
@@ -191,5 +191,47 @@ describe("persistence classes + audience at write time", () => {
       expect(r.ok && r.entry.learnedBy).toBe("code-reviewer");
       expect(r.ok && r.entry.audience).toEqual(["code-reviewer", "coder"]);
     } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * The id used to be the millisecond clock alone, which is unique only while writes are seconds apart. A
+ * migration importing 1878 facts in one loop put several into the same millisecond: measured on the real
+ * file, 1471 entries carried 1344 distinct ids — 101 ids shared by up to five entries each.
+ *
+ * Every consumer resolves an id with `find`, which returns the FIRST match, so a use is credited to the
+ * wrong memory, an injection is counted against the wrong row, and `/forget` deletes something the user was
+ * not looking at.
+ */
+describe("memory ids are unique", () => {
+  it("does not repeat an id when many entries are written in the same millisecond", async () => {
+    const s = new MemoryStore({ home, cwd: join(home, "proj"), now: () => 1000 }); // a clock that never moves
+    for (let i = 0; i < 25; i++) await s.add(`fact number ${i}`);
+    const ids = (await s.load()).map((e) => e.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("repairs a file that was already written with colliding ids", async () => {
+    const dir = join(home, "proj-dup", ".horsecode");
+    await mkdir(dir, { recursive: true });
+    const row = (text: string) =>
+      JSON.stringify({ id: "m1", text, anchors: [], tags: [], createdAt: 1, kind: "fact" });
+    await writeFile(join(dir, "memory.jsonl"), [row("a"), row("b"), row("c")].join("\n") + "\n", "utf8");
+
+    const loaded = await new MemoryStore({ home, cwd: join(home, "proj-dup") }).load();
+    expect(loaded.map((e) => e.id)).toEqual(["m1", "m1-2", "m1-3"]);
+    expect(loaded.map((e) => e.text)).toEqual(["a", "b", "c"]); // the rows themselves are untouched
+
+    // …and the repair is on disk, so the next process does not have to redo it.
+    const again = await new MemoryStore({ home, cwd: join(home, "proj-dup") }).load();
+    expect(again.map((e) => e.id)).toEqual(["m1", "m1-2", "m1-3"]);
+  });
+
+  it("leaves a healthy file alone", async () => {
+    const s = new MemoryStore({ home, cwd: join(home, "proj-ok") });
+    await s.add("one thing");
+    const before = await readFile(join(home, "proj-ok", ".horsecode", "memory.jsonl"), "utf8");
+    await new MemoryStore({ home, cwd: join(home, "proj-ok") }).load();
+    expect(await readFile(join(home, "proj-ok", ".horsecode", "memory.jsonl"), "utf8")).toBe(before);
   });
 });

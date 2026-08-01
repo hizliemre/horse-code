@@ -88,7 +88,32 @@ export class MemoryStore {
       /* no memory file yet */
     }
     this.cache = out;
+    if (this.dedupeIds(out)) await this.persist(); // an already-written file is repaired once, on the way in
     return out;
+  }
+
+  /**
+   * Gives a fresh id to every entry that shares one, keeping the first.
+   *
+   * Files written before ids were minted uniquely already carry collisions — the real one measured 1471
+   * entries under 1344 ids — and nothing downstream can tell those rows apart: every consumer resolves an id
+   * with `find`, which returns the first match. Repairing on load fixes them without asking the user to
+   * notice a problem they cannot see.
+   *
+   * Returns whether anything changed, so a healthy file is never rewritten.
+   */
+  private dedupeIds(entries: MemoryEntry[]): boolean {
+    const seen = new Set<string>();
+    let changed = false;
+    for (const e of entries) {
+      if (!seen.has(e.id)) { seen.add(e.id); continue; }
+      let id = `${e.id}-2`;
+      for (let n = 3; seen.has(id); n++) id = `${e.id}-${n}`;
+      e.id = id;
+      seen.add(id);
+      changed = true;
+    }
+    return changed;
   }
 
   /** Synchronous snapshot of the loaded entries (for the retrieval injector). */
@@ -165,6 +190,25 @@ export class MemoryStore {
     return (this.cache ?? []).filter((e) => e.stale);
   }
 
+  /**
+   * A NEW id, unique against everything already held.
+   *
+   * The id used to be the millisecond clock alone, which is unique only while writes are seconds apart. A
+   * migration importing 1878 facts in one loop put several into the same millisecond: measured on the real
+   * file, 1471 entries carried 1344 distinct ids — 101 ids shared by up to five entries each.
+   *
+   * That is not cosmetic. Every consumer resolves an id with `find`, which returns the FIRST match: a use
+   * credited to one memory lands on another, an injection is counted against the wrong entry, and `/forget`
+   * deletes a memory the user was not looking at. The whole usage record silently describes the wrong rows.
+   */
+  private mintId(): string {
+    const stamp = this.now();
+    const taken = new Set((this.cache ?? []).map((e) => e.id));
+    let id = `m${stamp}`;
+    for (let n = 2; taken.has(id); n++) id = `m${stamp}-${n}`;
+    return id;
+  }
+
   private async persist(): Promise<void> {
     const dir = dirname(this.file);
     await mkdir(dir, { recursive: true });
@@ -200,7 +244,7 @@ export class MemoryStore {
       // says it is short-lived scaffolding, which then carries a hard TTL.
       const persistence = opts.persistence ?? (kind === "rule" ? "permanent" : "long");
       const entry: MemoryEntry = {
-        id: `m${this.now()}`, text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now(), uses: 0, kind,
+        id: this.mintId(), text: t, anchors, tags: deriveTags(t, anchors), createdAt: this.now(), uses: 0, kind,
         persistence,
         ...(persistence === "short" ? { expiresAt: this.now() + SHORT_TTL_MS } : {}),
         ...(opts.audience?.length ? { audience: opts.audience } : {}),
