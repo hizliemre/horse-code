@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discover, summarize, hasAnything, claudeProjectSlug, MAX_FINDING_BYTES } from "../../src/migrate/discover.js";
@@ -145,5 +145,55 @@ describe("summarize", () => {
       await put(home, join(".claude", "projects", claudeProjectSlug(cwd), "memory", `m${i}.md`), "x");
     }
     expect(summarize(await find())).toMatch(/\+5 more/);
+  });
+});
+
+/**
+ * A skill directory is often a SYMLINK into another skills root, and `Dirent.isDirectory()` reflects lstat —
+ * it is FALSE for a link to a directory. Measured on a real project: 13 of its 76 skills were symlinks, and
+ * every one was silently skipped, including the design skills the migration was being run for.
+ */
+describe("discover finds every skill, however it is laid out", () => {
+  const skill = async (root: string, name: string, extra?: string): Promise<void> => {
+    await put(cwd, `${root}/${name}/SKILL.md`, `---\nname: ${name}\ndescription: d\n---\nbody`);
+    if (extra) await put(cwd, `${root}/${name}/${extra}`, "reference body");
+  };
+
+  it("follows a symlinked skill directory", async () => {
+    await skill(".agents/skills", "brandkit");
+    await mkdir(join(cwd, ".claude", "skills"), { recursive: true });
+    await symlink(join(cwd, ".agents", "skills", "brandkit"), join(cwd, ".claude", "skills", "brandkit"));
+    const labels = (await discover({ cwd, home })).filter((f) => f.kind === "skill").map((f) => f.label);
+    expect(labels).toContain(".claude/skills/brandkit");
+  });
+
+  it("scans .agents/skills as well as .claude/skills", async () => {
+    await skill(".agents/skills", "impeccable", "reference/craft.md");
+    const found = (await discover({ cwd, home })).filter((f) => f.kind === "skill");
+    expect(found.map((f) => f.label)).toEqual([".agents/skills/impeccable"]);
+  });
+
+  it("offers a skill present in BOTH roots only once", async () => {
+    await skill(".claude/skills", "impeccable");
+    await skill(".agents/skills", "impeccable");
+    const found = (await discover({ cwd, home })).filter((f) => f.kind === "skill");
+    expect(found).toHaveLength(1);
+    expect(found[0]!.label).toBe(".claude/skills/impeccable"); // first root wins
+  });
+
+  it("does not count a directory without a SKILL.md — nor let it mask a real one in the next root", async () => {
+    await put(cwd, ".claude/skills/learned/notes.md", "not a skill");
+    await skill(".agents/skills", "learned");
+    const found = (await discover({ cwd, home })).filter((f) => f.kind === "skill");
+    expect(found.map((f) => f.label)).toEqual([".agents/skills/learned"]);
+  });
+});
+
+describe("discover reads the project's own design rules", () => {
+  it("picks up DESIGN.md as instruction material", async () => {
+    await put(cwd, "DESIGN.md", "# tokens\nnever use a raw hex value");
+    const rules = (await discover({ cwd, home })).filter((f) => f.kind === "rules");
+    expect(rules.map((f) => f.label)).toContain("DESIGN.md");
+    expect(rules.find((f) => f.label === "DESIGN.md")!.text).toContain("raw hex");
   });
 });

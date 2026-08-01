@@ -44,6 +44,14 @@ const RULE_FILES: { file: string; tool: string }[] = [
   { file: "CONVENTIONS.md", tool: "Aider" },
   { file: ".rules", tool: "Zed" },
   { file: ".github/copilot-instructions.md", tool: "GitHub Copilot" },
+  /**
+   * Not a tool's file — the project's own design system, which several skills read as their source of truth.
+   *
+   * It is here because it is instruction material by any test that matters: a real project's DESIGN.md held
+   * 17 KB of binding conventions (tokens, type scale, spacing, what never to do), and leaving it behind meant
+   * every agent rebuilt its taste from scratch while the answer sat in the repo root.
+   */
+  { file: "DESIGN.md", tool: "project convention" },
 ];
 
 /** Directories of rule fragments — a newer convention than one big file. */
@@ -122,13 +130,34 @@ export async function discover(opts: DiscoverOptions): Promise<Finding[]> {
     await push("memory", "Claude Code", join(memDir, name), `memory/${name}`);
   }
 
-  // Skills already written for this project transfer as they are — same format, same idea.
-  const skillsDir = join(cwd, ".claude", "skills");
-  try {
-    for (const e of await readdir(skillsDir, { withFileTypes: true })) {
-      if (e.isDirectory()) await push("skill", "Claude Code", join(skillsDir, e.name, "SKILL.md"), `.claude/skills/${e.name}`);
+  /**
+   * Skills already written for this project transfer as they are — same format, same idea.
+   *
+   * Two roots, because both conventions are in use: `.claude/skills` and the tool-agnostic `.agents/skills`.
+   * A skill present in both is taken once (the first root wins) — the same skill offered twice is a worse
+   * question than a missing one.
+   *
+   * A skill directory may be a SYMLINK, and this is where the old scan lost work: `Dirent.isDirectory()`
+   * reflects lstat, so it is FALSE for a link to a directory. Measured on a real project: 13 of its 76
+   * skills were symlinks into `.agents/skills`, and every one of them was silently skipped — including the
+   * design skills the migration was being run for. Directory-ness is tested by following the link.
+   */
+  const seenSkills = new Set<string>();
+  for (const [rel, tool] of [[".claude/skills", "Claude Code"], [".agents/skills", "agent skills"]] as const) {
+    const skillsDir = join(cwd, rel);
+    let entries;
+    try { entries = await readdir(skillsDir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (seenSkills.has(e.name)) continue;
+      if (!e.isDirectory()) {
+        if (!e.isSymbolicLink()) continue;
+        try { if (!(await stat(join(skillsDir, e.name))).isDirectory()) continue; } catch { continue; }
+      }
+      const before = out.length;
+      await push("skill", tool, join(skillsDir, e.name, "SKILL.md"), `${rel}/${e.name}`);
+      if (out.length > before) seenSkills.add(e.name); // only count it when a SKILL.md was actually there
     }
-  } catch { /* no skills directory */ }
+  }
 
   // MCP servers are configuration, not prose: they transfer exactly, and losing them silently breaks tools
   // the project depends on.

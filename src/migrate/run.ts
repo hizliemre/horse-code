@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { cp, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Provider } from "../core/types.js";
 import type { MemoryStore } from "../session/memory.js";
@@ -193,10 +193,24 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
       const copied: string[] = [];
       for (const s of skills) {
         const name = s.label.split("/").pop()!;
-        const dest = join(deps.cwd, ".horsecode", "skills", name, "SKILL.md");
+        /**
+         * The whole skill DIRECTORY, not just its SKILL.md.
+         *
+         * Good skills are dispatchers: a short SKILL.md that routes to sibling documents ("read
+         * reference/craft.md", "run scripts/context.mjs"). horse-code supports exactly that — the registry
+         * keeps each skill's directory and reads its references on demand. Copying the entry point alone
+         * produced a skill whose every instruction pointed at a file that was not there.
+         *
+         * Measured on a real project: 29 of its 76 skills carry more than one file, and the largest of them
+         * is 196 KB — a whole tree costs almost nothing next to the instruction it makes usable.
+         *
+         * `dereference` because a skill directory is often a symlink into another skills root; copying the
+         * link itself would land a dangling pointer in the new project.
+         */
+        const dest = join(deps.cwd, ".horsecode", "skills", name);
         try {
           await mkdir(dirname(dest), { recursive: true });
-          await copyFile(s.path, dest);
+          await cp(dirname(s.path), dest, { recursive: true, dereference: true });
           copied.push(name);
           result.skills++;
         } catch { /* one unreadable skill must not stop the rest */ }
