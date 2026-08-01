@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
 import { OmniRouteProvider } from "./providers/omniroute.js";
 import { listOmniRouteModels } from "./providers/models.js";
+import { stripThinking } from "./tui/format.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { registerBuiltinSkills } from "./skills/builtin.js";
 import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl } from "./skills/external.js";
@@ -94,7 +95,14 @@ export function describeDelivery(d: Delivery): string {
 }
 
 export function renderResult(res: JobResult): string {
-  if (res.kind === "chat") return res.response;
+  /**
+   * A model that emits its own `<think>` tags must not leak them into the answer.
+   *
+   * The live stream already strips them, but a chat turn's FINAL text went straight to the transcript: a
+   * real reply arrived beginning `</think>Kurulum durumu kontrolü:` — a closing tag with no opening one,
+   * because the run began before anything was watching — and the tag was rendered as if it were content.
+   */
+  if (res.kind === "chat") return stripThinking(res.response);
   if (res.kind === "rejected") return `Not approved (stopped at the ${res.stage} stage).`;
   const outcome =
     res.wave.status === "completed"

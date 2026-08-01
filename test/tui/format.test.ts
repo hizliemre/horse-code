@@ -81,3 +81,20 @@ describe("stripThinking", () => {
     expect(stripThinking(md)).toBe(md);
   });
 });
+
+/**
+ * A chat turn's FINAL text went straight to the transcript unstripped: a real reply arrived beginning
+ * `</think>Kurulum durumu kontrolü:` — a closing tag with no opening one — and it rendered as content.
+ */
+describe("renderResult strips a model's own thinking tags", () => {
+  it("drops a lone closing tag and everything before it", async () => {
+    const { renderResult } = await import("../../src/cli.js");
+    expect(renderResult({ kind: "chat", response: "</think>Kurulum durumu kontrolü:", refinedPrompt: "x" } as never))
+      .toBe("Kurulum durumu kontrolü:");
+  });
+
+  it("leaves an ordinary answer alone", async () => {
+    const { renderResult } = await import("../../src/cli.js");
+    expect(renderResult({ kind: "chat", response: "Plain answer.", refinedPrompt: "x" } as never)).toBe("Plain answer.");
+  });
+});

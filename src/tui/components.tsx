@@ -1864,7 +1864,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       : 0; // border(2) + title(1)
     const paletteH = slashOpen ? paletteHeight(slashCmds.length) : 0; // border(2) + windowed command rows + hint(1)
     const atH = atOpen ? Math.max(1, atMatches.length) + 3 : 0; // border(2) + file rows (min 1 for "no match") + hint(1)
-    const nextH = state.nextSteps.length > 0 ? state.nextSteps.length + 1 : 0; // header(1) + one line per suggestion
+    const nextH = 0; // suggestions live in the transcript now — see setNextSteps
     /**
      * Nothing optional may push the input box off the screen.
      *
@@ -1993,12 +1993,6 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         </Box>
         )}
         {state.attachments > 0 ? <Text color="#ff9a2e">{`  ${ICONS.attach} ${state.attachments} image${state.attachments === 1 ? "" : "s"} staged — Enter to send`}</Text> : null}
-        {state.nextSteps.length > 0 && keep.has("next") ? (
-          <Box flexDirection="column">
-            <Text color="#ff9a2e" wrap="truncate-end">{"  Suggested next steps — /next N:"}</Text>
-            {state.nextSteps.map((s, i) => <Text key={i} dimColor wrap="truncate-end">{`    ${i + 1}. ${s}`}</Text>)}
-          </Box>
-        ) : null}
         {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel?.() || model} /> : null}
         {state.runningAgents.length > 0 && keep.has("agents") ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
         {showMonitor && keep.has("monitor") ? <RunMonitor

@@ -495,10 +495,27 @@ export class TuiController {
     this.notify();
   }
 
-  /** Store the coach's suggested follow-ups (rendered under the input; run with /next N). */
+  /**
+   * Store the coach's suggested follow-ups AND put them in the conversation.
+   *
+   * They used to be drawn in a fixed strip BELOW the input, where they sat outside the transcript: they had
+   * no place in the history, they were dropped whenever the frame ran short of rows, and they pushed the
+   * input further from the last thing said. They are part of the assistant's answer — "here is what we could
+   * do next" — so they belong in the chat, scrolling with everything else.
+   *
+   * The list is still kept in state, because `/next N` resolves against it.
+   */
   setNextSteps(steps: string[]): void {
+    const changed = steps.length > 0
+      && (steps.length !== this.state.nextSteps.length || steps.some((s, i) => s !== this.state.nextSteps[i]));
     this.state = { ...this.state, nextSteps: steps };
-    this.notify();
+    // Only a NEW set is announced: re-setting the same suggestions must not repeat them down the transcript.
+    if (changed) {
+      this.note(`**Suggested next steps** — \`/next N\` to run one:\n`
+        + steps.map((s, i) => `${i + 1}. ${s}`).join("\n"));
+    } else {
+      this.notify();
+    }
   }
 
   endRun(report: string, refinedPrompt?: string): void {

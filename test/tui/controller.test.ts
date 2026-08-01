@@ -798,3 +798,33 @@ describe("selecting an agent to inspect", () => {
     expect(c.getState().agentCursor).toBeUndefined();
   });
 });
+
+/**
+ * Suggestions used to be drawn in a fixed strip BELOW the input: outside the transcript, dropped whenever
+ * the frame ran short of rows, and pushing the input away from the last thing said. They are part of the
+ * answer, so they belong in the conversation.
+ */
+describe("suggested next steps live in the transcript", () => {
+  it("appends them as a note, and keeps them for /next", () => {
+    const c = new TuiController();
+    c.setNextSteps(["Pick a bug to work on", "Verify a remembered note"]);
+    const last = c.getState().transcript.at(-1)!;
+    expect("text" in last && last.text).toContain("Suggested next steps");
+    expect("text" in last && last.text).toContain("1. Pick a bug to work on");
+    expect(c.getState().nextSteps).toHaveLength(2); // /next N still resolves against them
+  });
+
+  it("does not repeat the same set down the transcript", () => {
+    const c = new TuiController();
+    c.setNextSteps(["one"]);
+    const n = c.getState().transcript.length;
+    c.setNextSteps(["one"]);
+    expect(c.getState().transcript).toHaveLength(n);
+  });
+
+  it("says nothing when the suggestions are cleared", () => {
+    const c = new TuiController();
+    c.setNextSteps([]);
+    expect(c.getState().transcript).toHaveLength(0);
+  });
+});
