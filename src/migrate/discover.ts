@@ -45,12 +45,16 @@ const RULE_FILES: { file: string; tool: string }[] = [
   { file: ".rules", tool: "Zed" },
   { file: ".github/copilot-instructions.md", tool: "GitHub Copilot" },
   /**
-   * Not a tool's file — the project's own design system, which several skills read as their source of truth.
+   * Not a tool's files — the project's own product and design context, which several skills read as their
+   * source of truth. They come as a PAIR: the skill that consumes them prints "the project's PRODUCT.md (and
+   * DESIGN.md when present)", so taking one without the other imports half a brief.
    *
-   * It is here because it is instruction material by any test that matters: a real project's DESIGN.md held
-   * 17 KB of binding conventions (tokens, type scale, spacing, what never to do), and leaving it behind meant
-   * every agent rebuilt its taste from scratch while the answer sat in the repo root.
+   * They are here because they are instruction material by any test that matters: a real project's DESIGN.md
+   * held 17 KB of binding conventions (tokens, type scale, spacing, what never to do) and its PRODUCT.md the
+   * register those conventions serve. Leaving them behind meant every agent rebuilt its taste from scratch
+   * while the answer sat in the repo root.
    */
+  { file: "PRODUCT.md", tool: "project convention" },
   { file: "DESIGN.md", tool: "project convention" },
 ];
 

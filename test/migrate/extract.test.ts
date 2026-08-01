@@ -70,7 +70,7 @@ describe("batches", () => {
 });
 
 describe("classify", () => {
-  const run = (text: string) => classify({ provider: canned(text), model: "m", body: "b", source: "CLAUDE.md" });
+  const run = (text: string) => classify({ provider: canned(text), models: ["m"], body: "b", source: "CLAUDE.md" });
 
   it("reads the three dispositions", async () => {
     const got = await run('```json\n{"items":[' +
@@ -103,7 +103,7 @@ describe("classify", () => {
   });
 
   it("propagates a provider error", async () => {
-    await expect(classify({ provider: failing(), model: "m", body: "b", source: "s" })).rejects.toThrow(/boom/);
+    await expect(classify({ provider: failing(), models: ["m"], body: "b", source: "s" })).rejects.toThrow(/boom/);
   });
 
   it("tells the model to prefer skip when unsure", async () => {
@@ -114,7 +114,7 @@ describe("classify", () => {
         yield { type: "text-delta" as const, text: '```json\n{"items":[]}\n```' };
       },
     } as unknown as Provider;
-    await classify({ provider: spy, model: "m", body: "b", source: "s" });
+    await classify({ provider: spy, models: ["m"], body: "b", source: "s" });
     expect(seen).toMatch(/Prefer skip when unsure/);
     expect(seen).toMatch(/A wrong rule is applied to every task forever/);
     expect(seen).toMatch(/REWRITE each kept item so it stands alone/);
@@ -131,7 +131,7 @@ describe("extractAll", () => {
       },
     } as unknown as Provider;
     const got = await extractAll({
-      provider, model: "m",
+      provider, models: ["m"],
       findings: [finding("rules", "good.md", "fine"), finding("rules", "bad.md", "POISON")],
     });
     expect(got.candidates).toHaveLength(1);
@@ -141,7 +141,7 @@ describe("extractAll", () => {
   it("reports progress per batch", async () => {
     const seen: number[] = [];
     await extractAll({
-      provider: canned('```json\n{"items":[]}\n```'), model: "m",
+      provider: canned('```json\n{"items":[]}\n```'), models: ["m"],
       findings: [finding("rules", "a.md", "x"), finding("rules", "b.md", "y")],
       onProgress: (done) => seen.push(done),
     });
@@ -149,7 +149,7 @@ describe("extractAll", () => {
   });
 
   it("nothing to extract is not an error", async () => {
-    expect(await extractAll({ provider: canned("x"), model: "m", findings: [] }))
+    expect(await extractAll({ provider: canned("x"), models: ["m"], findings: [] }))
       .toEqual({ candidates: [], failed: [] });
   });
 });
@@ -185,21 +185,21 @@ describe("consolidateRules", () => {
   it("does nothing when the list is already small enough", async () => {
     let called = false;
     const spy = { chat: async function* () { called = true; yield { type: "text-delta" as const, text: "x" }; } } as unknown as Provider;
-    const got = await consolidateRules({ provider: spy, model: "m", candidates: cands(5), max: 25 });
+    const got = await consolidateRules({ provider: spy, models: ["m"], candidates: cands(5), max: 25 });
     expect(called).toBe(false);
     expect(got.rules).toHaveLength(5);
   });
 
   it("reduces a large list to the cap", async () => {
     const provider = canned('```json\n{"rules":["merged A","merged B"],"demoted":["rule 3"]}\n```');
-    const got = await consolidateRules({ provider, model: "m", candidates: cands(40), max: 25 });
+    const got = await consolidateRules({ provider, models: ["m"], candidates: cands(40), max: 25 });
     expect(got.rules.map((r) => r.text)).toEqual(["merged A", "merged B"]);
   });
 
   /** Demoting is not discarding: process detail is real knowledge, it just belongs where it is recalled. */
   it("keeps demoted candidates as facts rather than dropping them", async () => {
     const provider = canned('```json\n{"rules":["merged"],"demoted":["rule 3","rule 7"]}\n```');
-    const got = await consolidateRules({ provider, model: "m", candidates: cands(40), max: 25 });
+    const got = await consolidateRules({ provider, models: ["m"], candidates: cands(40), max: 25 });
     expect(got.demoted.map((d) => d.text)).toEqual(["rule 3", "rule 7"]);
     expect(got.demoted.every((d) => d.disposition === "fact")).toBe(true);
   });
@@ -207,19 +207,19 @@ describe("consolidateRules", () => {
   it("never exceeds the cap even when more come back", async () => {
     const many = Array.from({ length: 60 }, (_, i) => `r${i}`);
     const provider = canned(`\`\`\`json\n${JSON.stringify({ rules: many, demoted: [] })}\n\`\`\``);
-    const got = await consolidateRules({ provider, model: "m", candidates: cands(80), max: 25 });
+    const got = await consolidateRules({ provider, models: ["m"], candidates: cands(80), max: 25 });
     expect(got.rules).toHaveLength(25);
   });
 
   /** A large number is information; a silent truncation is not. */
   it("returns the candidates unchanged when the call fails", async () => {
-    const got = await consolidateRules({ provider: failing(), model: "m", candidates: cands(40), max: 25 });
+    const got = await consolidateRules({ provider: failing(), models: ["m"], candidates: cands(40), max: 25 });
     expect(got.rules).toHaveLength(40);
     expect(got.demoted).toEqual([]);
   });
 
   it("returns them unchanged when nothing usable comes back", async () => {
-    const got = await consolidateRules({ provider: canned('```json\n{"rules":[]}\n```'), model: "m", candidates: cands(40) });
+    const got = await consolidateRules({ provider: canned('```json\n{"rules":[]}\n```'), models: ["m"], candidates: cands(40) });
     expect(got.rules).toHaveLength(40);
   });
 
@@ -231,7 +231,7 @@ describe("consolidateRules", () => {
         yield { type: "text-delta" as const, text: '```json\n{"rules":["a"],"demoted":[]}\n```' };
       },
     } as unknown as Provider;
-    await consolidateRules({ provider: spy, model: "m", candidates: cands(40) });
+    await consolidateRules({ provider: spy, models: ["m"], candidates: cands(40) });
     expect(seen).toMatch(/MERGE candidates that say the same thing/);
     expect(seen).toMatch(/kept as facts rather than discarded/);
     expect(seen).toMatch(/Do NOT invent a rule/);
@@ -251,7 +251,7 @@ describe("the rule bar", () => {
         yield { type: "text-delta" as const, text: '```json\n{"items":[]}\n```' };
       },
     } as unknown as Provider;
-    await classify({ provider: spy, model: "m", body: "b", source: "s" });
+    await classify({ provider: spy, models: ["m"], body: "b", source: "s" });
     expect(seen).toMatch(/would this still need saying on a task that has nothing to do with/);
     expect(seen).toMatch(/Process detail does NOT/);
     expect(seen).toMatch(/a long list of them is itself a defect/);
@@ -274,7 +274,7 @@ describe("orchestration is eliminated, not remembered", () => {
         yield { type: "text-delta" as const, text: '```json\n{"items":[]}\n```' };
       },
     } as unknown as Provider;
-    await classify({ provider: spy, model: "m", body: "b", source: "s" });
+    await classify({ provider: spy, models: ["m"], body: "b", source: "s" });
     expect(seen).toMatch(/ORCHESTRATION/);
     expect(seen).toMatch(/Phase 0 … Phase 7/);
     expect(seen).toMatch(/SUPERSEDED — not merely irrelevant/);
@@ -288,7 +288,7 @@ describe("orchestration is eliminated, not remembered", () => {
       text: `item ${i}`, disposition: "rule" as const, reason: "r", source: "CLAUDE.md",
     }));
     const provider = canned('```json\n{"rules":["kept"],"demoted":["item 1"],"dropped":["item 2","item 3"]}\n```');
-    const got = await consolidateRules({ provider, model: "m", candidates: cands, max: 25 });
+    const got = await consolidateRules({ provider, models: ["m"], candidates: cands, max: 25 });
     expect(got.demoted.map((d) => d.text)).toEqual(["item 1"]);
     expect(got.dropped.map((d) => d.text)).toEqual(["item 2", "item 3"]);
     expect(got.dropped.every((d) => d.disposition === "skip")).toBe(true);
@@ -300,7 +300,7 @@ describe("orchestration is eliminated, not remembered", () => {
       text: `item ${i}`, disposition: "rule" as const, reason: "r", source: "s",
     }));
     const provider = canned('```json\n{"rules":["kept"],"demoted":["item 5"],"dropped":["item 5"]}\n```');
-    const got = await consolidateRules({ provider, model: "m", candidates: cands, max: 25 });
+    const got = await consolidateRules({ provider, models: ["m"], candidates: cands, max: 25 });
     expect(got.demoted).toEqual([]);
     expect(got.dropped.map((d) => d.text)).toEqual(["item 5"]);
   });
@@ -313,9 +313,74 @@ describe("orchestration is eliminated, not remembered", () => {
         yield { type: "text-delta" as const, text: '```json\n{"rules":["a"],"demoted":[],"dropped":[]}\n```' };
       },
     } as unknown as Provider;
-    await consolidateRules({ provider: spy, model: "m", candidates: Array.from({ length: 40 }, (_, i) => ({
+    await consolidateRules({ provider: spy, models: ["m"], candidates: Array.from({ length: 40 }, (_, i) => ({
       text: `i${i}`, disposition: "rule" as const, reason: "r", source: "s" })) });
     expect(seen).toMatch(/DROP anything describing HOW WORK IS SEQUENCED/);
     expect(seen).toMatch(/leaves agents holding two workflows/);
+  });
+});
+
+/**
+ * Migration was the one path in horse-code that took a single model id and called it directly, skipping the
+ * fallback machinery every role gets. Run against a real project it cost the entire import: the assigned
+ * model answered `All antigravity accounts have exhausted their quota (reset after 3h 52m)`, all 24 batches
+ * hit the same dead model, and 219 remembered facts plus a 52 KB instruction document were dropped.
+ */
+describe("the model chain", () => {
+  const ITEMS = '```json\n{"items":[{"text":"Always write in English","disposition":"rule","reason":"r"}]}\n```';
+
+  /** Fails for the named models, answers for anything else, and records every model it was called with. */
+  const chainProvider = (broken: string[], calls: string[]): Provider => ({
+    chat: async function* (req: { model: string }) {
+      calls.push(req.model);
+      if (broken.includes(req.model)) { yield { type: "error" as const, message: `quota exhausted for ${req.model}` }; return; }
+      yield { type: "text-delta" as const, text: ITEMS };
+    },
+  } as unknown as Provider);
+
+  it("slides past an exhausted model to the next in the chain", async () => {
+    const calls: string[] = [];
+    const got = await classify({
+      provider: chainProvider(["dead"], calls), models: ["dead", "alive"], body: "b", source: "CLAUDE.md",
+    });
+    expect(calls).toEqual(["dead", "alive"]);
+    expect(got.map((c) => c.disposition)).toEqual(["rule"]);
+  });
+
+  it("does not pay the failing call again on every later batch", async () => {
+    const calls: string[] = [];
+    const findings = Array.from({ length: 5 }, (_, i) => finding("rules", `r${i}.md`, "some instruction"));
+    const r = await extractAll({
+      provider: chainProvider(["dead"], calls), models: ["dead", "alive"], findings, concurrency: 1,
+    });
+    expect(r.failed).toEqual([]);
+    expect(calls.filter((m) => m === "dead")).toHaveLength(1); // once, not once per batch
+    expect(calls.filter((m) => m === "alive")).toHaveLength(5);
+  });
+
+  it("reports the real reason when the whole chain is spent", async () => {
+    const calls: string[] = [];
+    const r = await extractAll({
+      provider: chainProvider(["a", "b"], calls), models: ["a", "b"],
+      findings: [finding("rules", "CLAUDE.md", "some instruction")],
+    });
+    expect(r.candidates).toEqual([]);
+    expect(r.failed).toHaveLength(1);
+    expect(r.failed[0]!.error).toContain("quota exhausted");
+  });
+
+  it("does not bench a model for writing unreadable output — that is the batch, not the model", async () => {
+    const calls: string[] = [];
+    const provider = {
+      chat: async function* (req: { model: string }) {
+        calls.push(req.model);
+        yield { type: "text-delta" as const, text: calls.length === 1 ? "no json here" : ITEMS };
+      },
+    } as unknown as Provider;
+    const findings = [finding("rules", "a.md", "x"), finding("rules", "b.md", "y")];
+    const r = await extractAll({ provider, models: ["only"], findings, concurrency: 1 });
+    expect(r.failed).toHaveLength(1);                 // the first batch could not be parsed…
+    expect(r.candidates).toHaveLength(1);             // …and the second still ran on the same model
+    expect(calls).toEqual(["only", "only"]);
   });
 });

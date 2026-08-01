@@ -196,4 +196,13 @@ describe("discover reads the project's own design rules", () => {
     expect(rules.map((f) => f.label)).toContain("DESIGN.md");
     expect(rules.find((f) => f.label === "DESIGN.md")!.text).toContain("raw hex");
   });
+
+  // They are a pair: the skill that reads them prints "the project's PRODUCT.md (and DESIGN.md when present)",
+  // so taking one without the other imports half a brief.
+  it("takes PRODUCT.md alongside it", async () => {
+    await put(cwd, "PRODUCT.md", "register: product");
+    await put(cwd, "DESIGN.md", "# tokens");
+    const labels = (await discover({ cwd, home })).filter((f) => f.kind === "rules").map((f) => f.label);
+    expect(labels).toEqual(expect.arrayContaining(["PRODUCT.md", "DESIGN.md"]));
+  });
 });

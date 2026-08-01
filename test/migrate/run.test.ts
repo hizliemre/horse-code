@@ -27,7 +27,7 @@ const put = async (base: string, file: string, body: string): Promise<void> => {
 const provider = { async *chat() { throw new Error("provider must not be used"); } } as unknown as Provider;
 
 const deps = (over: Partial<Parameters<typeof runMigration>[0]> = {}) => ({
-  cwd, home, provider, model: "m",
+  cwd, home, provider, models: ["m"],
   memStore: new MemoryStore({ home, cwd }),
   ask: async () => "Yes — copy all",
   note: () => {},
@@ -80,5 +80,27 @@ describe("migrating a skill brings its whole tree", () => {
     const r = await runMigration(deps({ existingSkills: () => ["impeccable"] }));
     expect(r.skills).toBe(0);
     expect(existsSync(join(cwd, ".horsecode", "skills", "impeccable"))).toBe(false);
+  });
+});
+
+/**
+ * A run where every batch died on an exhausted quota imported nothing but skills and still signed off with
+ * **Migration complete** — with the 219 remembered facts it had silently dropped nowhere in the summary.
+ */
+describe("the summary does not claim more than happened", () => {
+  it("says so when batches failed, and still lists what did land", async () => {
+    const { describeResult } = await import("../../src/migrate/run.js");
+    const out = describeResult({ rules: 0, facts: 0, skills: 73, skipped: 0, declined: [], failedBatches: 24 });
+    expect(out).toContain("finished with failures");
+    expect(out).toContain("24 batch(es) failed to read");
+    expect(out).toContain("73 skill(s)");
+    expect(out).not.toContain("Migration complete");
+  });
+
+  it("still reads as complete when nothing failed", async () => {
+    const { describeResult } = await import("../../src/migrate/run.js");
+    const out = describeResult({ rules: 3, facts: 9, skills: 1, skipped: 2, declined: [], failedBatches: 0 });
+    expect(out).toContain("Migration complete");
+    expect(out).not.toContain("failed to read");
   });
 });

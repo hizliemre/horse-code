@@ -25,7 +25,8 @@ export interface MigrateDeps {
   cwd: string;
   home: string;
   provider: Provider;
-  model: string;
+  /** The model CHAIN, not one model: migration is the one path that used to skip fallbacks entirely. */
+  models: string[];
   memStore: MemoryStore;
   ask: Ask;
   note: Note;
@@ -43,6 +44,14 @@ export interface MigrateResult {
   skipped: number;
   /** Groups the user declined, so the report is about what happened rather than what was offered. */
   declined: string[];
+  /**
+   * Batches whose classification failed outright.
+   *
+   * Reported because "complete" was a lie without it: a run where every batch died on an exhausted quota
+   * imported nothing but skills and still signed off with **Migration complete**, with the 219 remembered
+   * facts it had silently dropped nowhere in the summary.
+   */
+  failedBatches: number;
 }
 
 const YES = /^(yes|import|copy|evet)/i;
@@ -68,7 +77,7 @@ function sample(items: Candidate[]): string {
  * a silent omission.
  */
 export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
-  const result: MigrateResult = { rules: 0, facts: 0, skills: 0, skipped: 0, declined: [] };
+  const result: MigrateResult = { rules: 0, facts: 0, skills: 0, skipped: 0, declined: [], failedBatches: 0 };
   const findings = await discover({ cwd: deps.cwd, home: deps.home });
 
   if (!hasAnything(findings)) {
@@ -83,13 +92,24 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
     deps.note(`Reading ${prose.length} file(s) to work out which instructions still apply here. ` +
       `_This is the part that costs tokens; nothing is imported until you say so._`);
     const extraction = await extractAll({
-      provider: deps.provider, model: deps.model, findings: prose,
+      provider: deps.provider, models: deps.models, findings: prose,
       ...(deps.signal ? { signal: deps.signal } : {}),
       onProgress: (done, total) => { if (done === total) deps.note(`Read ${total}/${total}.`); },
     });
+    /**
+     * WHY they could not be read, not just which.
+     *
+     * The old note listed file names only. When every batch failed against a quota-exhausted model, it read
+     * "24 could not be read: CLAUDE.md, CLAUDE.md, CLAUDE.md" — three identical names and no cause, for a
+     * failure whose actual message ("all accounts have exhausted their quota, reset after 3h 52m") told the
+     * user exactly what to do and when to retry.
+     */
+    result.failedBatches = extraction.failed.length;
     if (extraction.failed.length) {
-      deps.note(`⚠️ ${extraction.failed.length} could not be read: ` +
-        extraction.failed.slice(0, 3).map((f) => `\`${f.source}\``).join(", "));
+      const reasons = [...new Set(extraction.failed.map((f) => f.error))].slice(0, 3);
+      deps.note(`⚠️ **${extraction.failed.length} batch(es) could not be read** — ` +
+        reasons.map((r) => `\`${r.slice(0, 160)}\``).join("; ") +
+        `\n\n_Nothing from those files was imported. Re-run \`/migrate\` once the cause above is cleared._`);
     }
     const raw = groupForReview(extraction);
     result.skipped = raw.skipped.length;
@@ -106,7 +126,7 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
     if (rules.length > MAX_RULES) {
       deps.note(`${rules.length} rule candidates — consolidating, since every rule is inlined into every prompt forever.`);
       const c = await consolidateRules({
-        provider: deps.provider, model: deps.model, candidates: rules,
+        provider: deps.provider, models: deps.models, candidates: rules,
         ...(deps.signal ? { signal: deps.signal } : {}),
       });
       if (c.rules.length < rules.length) {
@@ -266,8 +286,16 @@ export function describeResult(r: MigrateResult): string {
   if (r.rules) bits.push(`**${r.rules} rule(s)** — now in every agent's instructions`);
   if (r.facts) bits.push(`**${r.facts} fact(s)** — recalled when relevant`);
   if (r.skills) bits.push(`**${r.skills} skill(s)** — copied to \`.horsecode/skills/\``);
-  if (!bits.length) return `Nothing was imported.${r.declined.length ? ` You declined: ${r.declined.join(", ")}.` : ""}`;
+  // A failure that reached here was already explained in a note; the summary must not contradict it.
+  const failed = r.failedBatches
+    ? `\n\n⚠️ **${r.failedBatches} batch(es) failed to read** — the instructions and remembered facts in them ` +
+      `were NOT imported. Re-run \`/migrate\` once that is cleared.`
+    : "";
+  if (!bits.length) {
+    return `Nothing was imported.${r.declined.length ? ` You declined: ${r.declined.join(", ")}.` : ""}${failed}`;
+  }
   const declined = r.declined.length ? `\n\n_Declined: ${r.declined.join(", ")} — re-run \`/migrate\` to revisit._` : "";
   const left = r.skipped ? `\n\n${r.skipped} instruction(s) were left behind as tool-specific.` : "";
-  return `**Migration complete.**\n${bits.map((b) => `- ${b}`).join("\n")}${left}${declined}`;
+  const head = r.failedBatches ? "**Migration finished with failures.**" : "**Migration complete.**";
+  return `${head}\n${bits.map((b) => `- ${b}`).join("\n")}${left}${declined}${failed}`;
 }

@@ -114,6 +114,36 @@ async function ask(provider: Provider, model: string, prompt: string, signal?: A
   return out;
 }
 
+/**
+ * Walks a model CHAIN, and remembers what is dead for the rest of the migration.
+ *
+ * Migration used to take a single model id and call it directly — the one path in horse-code that skipped
+ * the fallback machinery every other role gets. Run against a real project it cost the whole import: the
+ * assigned model answered `All antigravity accounts have exhausted their quota (reset after 3h 52m)`, and
+ * all 24 batches hit the same dead model in turn. 219 remembered facts and a 52 KB instruction document were
+ * dropped, and the run still reported "Migration complete".
+ *
+ * `dead` is shared across batches for the second half of that: without it, a chain still pays the failing
+ * call once per batch before sliding, which is 24 wasted calls on a model already known to be spent.
+ *
+ * A TRANSPORT failure benches the model; a model that answers but writes unreadable output does not — that
+ * is a property of the batch, not of the model, and benching on it would burn a healthy chain on one bad
+ * document.
+ */
+async function askChain(
+  provider: Provider, models: string[], dead: Set<string>, prompt: string, signal?: AbortSignal,
+): Promise<string> {
+  const usable = models.filter((m) => m && !dead.has(m));
+  const chain = usable.length ? usable : models.filter(Boolean); // all spent → try anyway rather than not at all
+  if (!chain.length) throw new Error("no model is configured for the migration");
+  let last: unknown;
+  for (const m of chain) {
+    try { return await ask(provider, m, prompt, signal); }
+    catch (e) { last = e; dead.add(m); }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
+}
+
 const DISPOSITIONS = new Set<Disposition>(["rule", "fact", "skip"]);
 
 /**
@@ -124,12 +154,14 @@ const DISPOSITIONS = new Set<Disposition>(["rule", "fact", "skip"]);
  */
 export async function classify(opts: {
   provider: Provider;
-  model: string;
+  models: string[];
+  dead?: Set<string>;
   body: string;
   source: string;
   signal?: AbortSignal;
 }): Promise<Candidate[]> {
-  const items = parseItems(await ask(opts.provider, opts.model, CLASSIFY(opts.body), opts.signal));
+  const text = await askChain(opts.provider, opts.models, opts.dead ?? new Set(), CLASSIFY(opts.body), opts.signal);
+  const items = parseItems(text);
   if (!items) throw new Error("the classification could not be read");
   return items
     .filter((i) => i.text.trim())
@@ -202,13 +234,14 @@ export function batches(findings: Finding[], size = BATCH): { body: string; sour
  */
 export async function extractAll(opts: {
   provider: Provider;
-  model: string;
+  models: string[];
   findings: Finding[];
   signal?: AbortSignal;
   onProgress?: (done: number, total: number) => void;
   concurrency?: number;
 }): Promise<Extraction> {
   const jobs = batches(opts.findings);
+  const dead = new Set<string>(); // a model spent on batch 1 is not tried again on the other twenty-three
   const candidates: Candidate[] = [];
   const failed: { source: string; error: string }[] = [];
   let done = 0;
@@ -218,7 +251,7 @@ export async function extractAll(opts: {
       const job = queue.shift();
       if (!job || opts.signal?.aborted) return;
       try {
-        candidates.push(...await classify({ ...opts, body: job.body, source: job.source }));
+        candidates.push(...await classify({ ...opts, dead, body: job.body, source: job.source }));
       } catch (e) {
         failed.push({ source: job.source, error: e instanceof Error ? e.message : String(e) });
       }
@@ -299,7 +332,7 @@ const CONSOLIDATE = (items: string[], max: number): string =>
  */
 export async function consolidateRules(opts: {
   provider: Provider;
-  model: string;
+  models: string[];
   candidates: Candidate[];
   max?: number;
   signal?: AbortSignal;
@@ -309,7 +342,7 @@ export async function consolidateRules(opts: {
 
   const texts = opts.candidates.map((c) => c.text);
   try {
-    const out = await ask(opts.provider, opts.model, CONSOLIDATE(texts, max), opts.signal);
+    const out = await askChain(opts.provider, opts.models, new Set(), CONSOLIDATE(texts, max), opts.signal);
     const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(out);
     const parsed = JSON.parse(fence ? fence[1] : out.slice(out.indexOf("{"))) as
       { rules?: unknown; demoted?: unknown; dropped?: unknown };

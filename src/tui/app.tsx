@@ -309,9 +309,15 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     const { runMigration, describeResult } = await import("../migrate/run.js");
     const r = await runMigration({
       cwd: process.cwd(), home: homedir(), provider: deps.provider,
-      // The tuner keeps `architect` on a strong model, and this is a judgement task: a rule imported wrongly
-      // is applied to every task from then on.
-      model: deps0.roleRegistry.peekModel("architect") || opts.model || "",
+      /**
+       * The architect's whole CHAIN, not just its head.
+       *
+       * The tuner keeps `architect` on a strong model, and this is a judgement task: a rule imported wrongly
+       * is applied to every task from then on. But passing one id made migration the only path in horse-code
+       * without fallbacks — and a run against a real project lost its entire import to a single exhausted
+       * quota while two healthy fallbacks sat unused in the same chain.
+       */
+      models: [...deps0.roleRegistry.chain("architect"), opts.model].filter((m): m is string => !!m),
       memStore: opts.memStore,
       ask: (q, o) => controller.ask(q, o),
       note: (t) => controller.note(t),
