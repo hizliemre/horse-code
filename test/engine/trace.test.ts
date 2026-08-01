@@ -270,11 +270,41 @@ describe("runTraces", () => {
 });
 
 describe("ensureGitignore — the repo/local split, written for the user", () => {
-  it("creates a .gitignore when there is none", async () => {
+  it("creates a .gitignore when there is none — and negates nothing, because nothing is excluded", async () => {
     expect(await ensureGitignore(cwd)).toBe(true);
     const gi = await readFile(join(cwd, ".gitignore"), "utf8");
-    expect(gi).toContain("!.horsecode/traces/");
     expect(gi).toContain("graphify-out/manifest.json");
+    // A `!path` line for something no rule excludes is noise a reader has to decode. It used to be written
+    // unconditionally.
+    expect(gi).not.toContain("!.horsecode/traces/");
+  });
+
+  /**
+   * The traces and the graph are project knowledge, and a repository that blocks them makes every clone
+   * re-buy understanding it already paid for. Measured on a real project, `graphify-out/` was ignored
+   * WHOLESALE — so the graph was never shared, and horse-code said nothing about it.
+   */
+  it("re-includes the graph when the project ignores its whole directory", async () => {
+    await writeFile(join(cwd, ".gitignore"), "graphify-out/\n", "utf8");
+    expect(await ensureGitignore(cwd)).toBe(true);
+    const gi = await readFile(join(cwd, ".gitignore"), "utf8");
+    expect(gi).toContain("graphify-out/*");            // opened, so a negation can reach inside
+    expect(gi).toContain("!graphify-out/graph.json");  // …and the graph itself is kept
+    expect(gi).not.toMatch(/^graphify-out\/$/m);
+  });
+
+  it("re-includes traces the project's own rules would have excluded", async () => {
+    await writeFile(join(cwd, ".gitignore"), ".horsecode/\n", "utf8");
+    await ensureGitignore(cwd);
+    const gi = await readFile(join(cwd, ".gitignore"), "utf8");
+    expect(gi).toContain("!.horsecode/traces/");
+  });
+
+  it("says nothing about a directory the project already excludes deliberately", async () => {
+    // graphify-out/ open and its derived files already named → nothing missing, nothing to add.
+    await writeFile(join(cwd, ".gitignore"),
+      "graphify-out/manifest.json\ngraphify-out/graph.html\ngraphify-out/.graphify_root\n", "utf8");
+    expect(await ensureGitignore(cwd)).toBe(false);
   });
 
   /**

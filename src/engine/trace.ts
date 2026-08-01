@@ -369,29 +369,77 @@ export const GITIGNORE_MARKER = "# horse-code project knowledge";
  * Built on demand, not at import: `setTraceRoot` runs after this module loads, and a block frozen at import
  * time would name the default root while traces went somewhere else — a rule that silently protects nothing.
  */
-const gitignoreBlock = (): string => `${GITIGNORE_MARKER}
-# Shared — it describes the code, so every clone starts understanding the project instead of rebuilding it.
-!${traceRootRel().replace(/\\/g, "/")}/
-# Machine-local or derived: an AST cache keyed by local mtimes, and a viewer regenerated on every build.
-graphify-out/manifest.json
-graphify-out/graph.html
-graphify-out/.graphify_root
-`;
 /**
- * Ensures the repo's .gitignore carries those rules. Returns true when it wrote them.
+ * Project knowledge belongs in the repository; only derived artefacts stay out.
  *
- * Appends only, and only once — an existing .gitignore is never rewritten or reordered. If the marker is
- * already present the file is left completely alone, so a user who edited the rules keeps their edits.
+ * The traces and the code graph are what let a fresh clone understand the project without rebuilding that
+ * understanding — the graph costs minutes of parsing, the traces cost millions of tokens. Both are therefore
+ * COMMITTED, and this file's job is to make sure nothing quietly excludes them.
+ *
+ * Measured on a real project: its `.gitignore` blocked `graphify-out/` wholesale, under a rationale calling
+ * the directory local-only. That decision predates the graph being shared knowledge, and it silently kept
+ * every clone paying to rebuild it.
  */
+const SHARED_DERIVED = "graphify-out/graph.json";
+
+/** Regenerated on every build, or keyed to one machine's paths — these genuinely do not belong in git. */
+const LOCAL_ONLY = ["graphify-out/manifest.json", "graphify-out/graph.html", "graphify-out/.graphify_root"];
+
+/**
+ * Git will not descend into an excluded DIRECTORY, so `dir/` cannot be negated for anything inside it.
+ * Rewriting the blanket rule to `dir/*` keeps the same exclusion while making a negation possible.
+ */
+function openDirectory(text: string, dir: string): string {
+  return text.split("\n").map((l) => (l.trim() === `${dir}/` ? l.replace(`${dir}/`, `${dir}/*`) : l)).join("\n");
+}
+
+interface Plan { text: string; rules: string[] }
+
+/** What this repository is missing, and the edits needed to make the missing rules possible. */
+function planGitignore(current: string): Plan {
+  let text = current;
+  const rules: string[] = [];
+  const lines = (): string[] => text.split("\n").map((l) => l.trim());
+  const has = (rule: string): boolean => lines().includes(rule);
+
+  /**
+   * Ensures `path` can be committed, opening whatever directory rule stands in its way.
+   *
+   * `isDir` decides the trailing slash: `!dir/` is the idiom that re-includes a directory, and writing it
+   * without one would also match a FILE of that name — a rule that says more than it means.
+   */
+  const keep = (path: string, isDir: boolean, why: string): void => {
+    const dir = path.split("/")[0]!;
+    const target = isDir ? `${path}/` : path;
+    const blocked = lines().some((l) => l === `${dir}/` || l === `${dir}/*` || l === dir || l === path);
+    if (!blocked || has(`!${target}`)) return;
+    text = openDirectory(text, dir);
+    rules.push(why, `!${target}`);
+  };
+
+  keep(traceRootRel().replace(/\\/g, "/"), true,
+    "# Shared — the traces describe the code, so every clone starts understanding the project instead of re-buying it.");
+  keep(SHARED_DERIVED, false,
+    "# Shared — the code graph is minutes of parsing that no clone should have to repeat.");
+
+  const local = LOCAL_ONLY.filter((r) => !has(r) && !has("graphify-out/") && !has("graphify-out/*"));
+  if (local.length) {
+    rules.push("# Machine-local or derived: an AST cache keyed by local mtimes, and a viewer regenerated on every build.");
+    rules.push(...local);
+  }
+  return { text, rules };
+}
+
 export async function ensureGitignore(cwd: string): Promise<boolean> {
   const path = join(cwd, ".gitignore");
   let current = "";
   try { current = await readFile(path, "utf8"); } catch { /* no .gitignore yet → create one */ }
   if (current.includes(GITIGNORE_MARKER)) return false;
-  // `.horsecode/*` (not `.horsecode/`) is what makes the traces re-includable: git will not descend into an
-  // excluded DIRECTORY, so a blanket `.horsecode/` cannot be negated for a subdirectory.
-  const fixed = current.replace(/^\.horsecode\/\s*$/m, ".horsecode/*");
-  const body = `${fixed.trimEnd()}${fixed.trim() ? "\n\n" : ""}${gitignoreBlock()}`;
+
+  const plan = planGitignore(current);
+  if (!plan.rules.length && plan.text === current) return false; // already says everything needed
+  const block = plan.rules.length ? `${GITIGNORE_MARKER}\n${plan.rules.join("\n")}\n` : "";
+  const body = `${plan.text.trimEnd()}${plan.text.trim() && block ? "\n\n" : ""}${block}`;
   await writeFile(path, body, "utf8");
   return true;
 }
