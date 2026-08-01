@@ -1,7 +1,8 @@
 import { readFile, stat } from "node:fs/promises";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
+import { stateRoot } from "./session-scope.js";
 
 /**
  * The project's code graph: every file, class and function, and what calls, imports and contains what.
@@ -86,25 +87,15 @@ export async function loadGraph(cwd: string): Promise<ProjectGraph | undefined> 
 
 /** Synchronous load — used by the tools, which are called often and must not re-read on every keystroke. */
 /**
- * The directory the graph belongs to, searching UPWARD from wherever the caller happens to be.
+ * The directory whose graph this caller should read.
  *
- * The graph describes the PROJECT, but it was looked up relative to the agent's own working directory — and
- * every task agent works in a worktree under `.horsecode/worktrees/…`, which has no `graphify-out/`. So the
- * agents the graph exists for were the ones that could never see it: measured on a real project, the root
- * loads 55081 nodes and the task worktree loads nothing, and the tools answered "no code graph has been
- * built for this project yet".
- *
- * Bounded so a caller outside any project walks a few directories, not the whole filesystem.
+ * A task worktree has no graph of its own, and it must NOT reach past its session to the project root: the
+ * root is a reference, and anything a run reads from outside itself is state the pull request will not carry.
+ * So the lookup resolves to the session base — the one place a run owns — and stops there.
  */
 export function graphRoot(cwd: string): string | undefined {
-  let dir = resolve(cwd);
-  for (let i = 0; i < 12; i++) {
-    if (existsSync(join(dir, GRAPH_DIR, GRAPH_FILE))) return dir;
-    const up = dirname(dir);
-    if (up === dir) break;
-    dir = up;
-  }
-  return undefined;
+  const root = stateRoot(cwd);
+  return existsSync(join(root, GRAPH_DIR, GRAPH_FILE)) ? root : undefined;
 }
 
 /**
