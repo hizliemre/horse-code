@@ -12,6 +12,7 @@ import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl 
 import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
 import { briefStatus } from "./engine/project-brief.js";
+import { setTraceRoot } from "./engine/trace.js";
 import { planFor, runTraces, describePlan, buildBrief } from "./engine/trace-run.js";
 import { WorktreeManager } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
@@ -237,6 +238,8 @@ export async function main(argv: string[]): Promise<void> {
   const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
   // ONE memory store for every entry point (REPL, one-shot TUI, headless). Rules live in memory, and rules must
   // reach every agent — so the store is created here, at the composition root, and handed to buildJobDeps.
+  // Traces go where this project keeps its generated file-documentation, when it says so — see setTraceRoot.
+  setTraceRoot(config.traceDir);
   const memStore = new MemoryStore({ home, cwd });
   await memStore.load();
   await memStore.pruneExpired(); // short-lived scaffolding past its TTL never reaches a prompt

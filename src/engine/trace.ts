@@ -21,6 +21,33 @@ import type { ProjectGraph } from "./project-graph.js";
 
 /** Where traces live. Committed deliberately: a trace describes the code, so every clone should start with it. */
 export const TRACE_DIR = join(".horsecode", "traces");
+
+/**
+ * Where traces go in THIS project, when its own documentation already has a home.
+ *
+ * A project that generates and maintains file-level documentation keeps it somewhere deliberate — one repo
+ * has 58 subsystem traces under `docs/architecture/`, written by a generator and kept in step with the code.
+ * Writing horse-code's traces into a second root would split the same kind of knowledge across two places,
+ * and traces in two places are traces nobody keeps in step: a reader has to know which kind they want before
+ * they can look.
+ *
+ * So it is configurable and the default is unchanged. Per-file traces mirror the source tree UNDER whichever
+ * root is chosen, so they nest into subdirectories and never collide with documents already sitting flat at
+ * its top.
+ */
+let traceRoot = TRACE_DIR;
+
+/** Points traces at a project-chosen directory (repo-relative). An empty value keeps the default. */
+export function setTraceRoot(rel: string | undefined): void {
+  // Only a leading "./" and trailing slashes: stripping leading DOTS would turn `.horsecode/traces` into
+  // `horsecode/traces` and quietly write outside every dot-directory a project might choose.
+  if (rel && rel.trim()) traceRoot = rel.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+/** The active root, repo-relative — for the gitignore rules and for anything that reports where traces live. */
+export function traceRootRel(): string {
+  return traceRoot;
+}
 export const TRACE_INDEX = "index.json";
 
 export interface TraceRecord {
@@ -46,7 +73,7 @@ export interface TraceIndex {
  * the graph; traces were simply missed when that was fixed.
  */
 export function traceDir(cwd: string): string {
-  return join(stateRoot(cwd), TRACE_DIR);
+  return join(stateRoot(cwd), traceRoot);
 }
 
 /** Path of one file's trace. Mirrors the source tree so a trace is findable from the path alone. */
@@ -227,15 +254,18 @@ export async function pruneTraces(cwd: string, liveFiles: Set<string>, index: Tr
  * ignored wholesale, nor that gitignore has no trailing comments.
  */
 export const GITIGNORE_MARKER = "# horse-code project knowledge";
-const GITIGNORE_BLOCK = `${GITIGNORE_MARKER}
+/**
+ * Built on demand, not at import: `setTraceRoot` runs after this module loads, and a block frozen at import
+ * time would name the default root while traces went somewhere else — a rule that silently protects nothing.
+ */
+const gitignoreBlock = (): string => `${GITIGNORE_MARKER}
 # Shared — it describes the code, so every clone starts understanding the project instead of rebuilding it.
-!${TRACE_DIR.replace(/\\/g, "/")}/
+!${traceRootRel().replace(/\\/g, "/")}/
 # Machine-local or derived: an AST cache keyed by local mtimes, and a viewer regenerated on every build.
 graphify-out/manifest.json
 graphify-out/graph.html
 graphify-out/.graphify_root
 `;
-
 /**
  * Ensures the repo's .gitignore carries those rules. Returns true when it wrote them.
  *
@@ -250,7 +280,7 @@ export async function ensureGitignore(cwd: string): Promise<boolean> {
   // `.horsecode/*` (not `.horsecode/`) is what makes the traces re-includable: git will not descend into an
   // excluded DIRECTORY, so a blanket `.horsecode/` cannot be negated for a subdirectory.
   const fixed = current.replace(/^\.horsecode\/\s*$/m, ".horsecode/*");
-  const body = `${fixed.trimEnd()}${fixed.trim() ? "\n\n" : ""}${GITIGNORE_BLOCK}`;
+  const body = `${fixed.trimEnd()}${fixed.trim() ? "\n\n" : ""}${gitignoreBlock()}`;
   await writeFile(path, body, "utf8");
   return true;
 }

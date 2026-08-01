@@ -50,6 +50,13 @@ export interface ResolvedConfig {
    *  subscriptions, e.g. ["antigravity","claude","codex","opencode-go"] — excludes combos + unofficial sources. */
   modelSources: string[];
   /**
+   * Where `/graph trace` writes, repo-relative. Empty = `.horsecode/traces`.
+   *
+   * A project whose generated file-documentation already has a home points this at it, so the two kinds do
+   * not end up in separate roots that nobody keeps in step.
+   */
+  traceDir?: string;
+  /**
    * How many implementation tasks may run at once.
    *
    * The right number is a property of YOUR subscriptions, not of the tool: it is bounded by how many parallel
@@ -87,6 +94,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   specKit: { version: "v0.13.2" },
   mcp: {},
   modelSources: [],
+  traceDir: "",
   skillSources: [],
   maxParallel: 8,
   telemetry: true,
@@ -123,6 +131,7 @@ const fileSchema = z
     council: z.object({ members: z.array(reviewerSchema) }).optional(),
     specKit: z.object({ version: z.string() }).optional(),
     modelSources: z.array(z.string()).optional(),
+    traceDir: z.string().optional(), // where /graph trace writes; empty = .horsecode/traces
     // Bounded: below 1 nothing runs; above 32 the git merge lock, not the models, becomes the limit.
     maxParallel: z.number().int().min(1).max(32).optional(),
     telemetry: z.boolean().optional(),
