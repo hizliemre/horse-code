@@ -208,6 +208,16 @@ export async function runJob(
   // (raw-prompt slug) only if the refiner produced no title.
   const ensureWorktree = async (nameHint?: string): Promise<string> => {
     if (!session) {
+      /**
+       * Opening the session is WORK, and it was narrated as something else.
+       *
+       * The status line shows the last phase that was announced. Between the refiner finishing and the first
+       * spec-kit phase there is no announcement at all — while a resumable worktree is searched for, a new
+       * one is cut, and the project's working state is copied in. For that whole stretch the line kept
+       * saying "refining…", naming the refiner's model and its one call, long after the refiner was done.
+       * A status that describes finished work reads as a hang.
+       */
+      emit({ kind: "phase", phase: "worktree" });
       // Resume: reuse a preserved worktree from an earlier interrupted run of the same prompt (so the user
       // continues from where they left off — even after restarting hcode); otherwise open a fresh session.
       session = (await deps.manager.findResumable(opts.resumeKey ?? opts.prompt))

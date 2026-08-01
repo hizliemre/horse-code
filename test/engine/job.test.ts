@@ -270,7 +270,9 @@ describe("runJob", () => {
       const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, onEvent: (e) => events.push(e) });
       expect(res.kind).toBe("done");
       const phases = events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase);
-      expect(phases).toEqual(["upstream", "constitution", "brainstorm", "specify", "clarify", "plan", "tasks", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
+      // "worktree" sits between the refiner and the first spec-kit phase: opening the session is work, and
+      // narrating it as "refining…" made a finished step look like a hang.
+      expect(phases).toEqual(["upstream", "worktree", "constitution", "brainstorm", "specify", "clarify", "plan", "tasks", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
       expect(events.some((e) => e.kind === "board")).toBe(true);
     } finally {
       await rm(repo, { recursive: true, force: true });
@@ -392,5 +394,20 @@ describe("a failing revision pass does not swallow the delivery", () => {
       expect(res.kind).toBe("done");
       if (res.kind === "done") expect(res.report).toBeTruthy();
     } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * The status line shows the last phase announced. Between the refiner finishing and the first spec-kit phase
+ * nothing was announced — while a resumable worktree is searched for, a new one is cut, and the project's
+ * working state is copied in. For that whole stretch the line kept saying "refining…", naming the refiner's
+ * model and its single call long after the refiner was done. A status describing finished work reads as a
+ * hang, and that is exactly how it was reported.
+ */
+describe("opening the session is narrated", () => {
+  it("announces the workspace phase before the spec-kit phases", async () => {
+    const { PHASE_LABELS } = await import("../../src/tui/labels.js");
+    expect(PHASE_LABELS.worktree).toBeDefined();
+    expect(PHASE_LABELS.worktree).not.toBe(PHASE_LABELS.upstream);
   });
 });

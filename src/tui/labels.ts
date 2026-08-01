@@ -1,6 +1,7 @@
 // Internal phase name → human-friendly (English) label. UI is English-only (i18n-ready).
 export const PHASE_LABELS: Record<string, string> = {
   upstream: "refining…",
+  worktree: "Preparing the workspace…",
   chat: "zottiring…",
   constitution: "Setting principles…",
   brainstorm: "Brainstorming the approach…",
