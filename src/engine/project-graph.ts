@@ -252,17 +252,58 @@ function which(cmd: string): Promise<string | undefined> {
   });
 }
 
-function run(cmd: string, args: string[], cwd?: string, timeoutMs = 300_000): Promise<{ code: number; out: string }> {
+/**
+ * How long the build may go SILENT before it is treated as hung.
+ *
+ * Idle, not total. A total ceiling is a guess about repository size, and the guess was five minutes: on a
+ * real project the extractor was working through 19,297 files, printing progress the whole way, and was
+ * SIGKILLed at 98% — then reported to the user as "Graph build failed" followed by three progress lines,
+ * which is the least informative thing the failure could possibly have said.
+ *
+ * A process that is still printing progress is not hung, however long it takes. One that says nothing for
+ * five minutes is, whatever the repository's size.
+ */
+export const BUILD_IDLE_TIMEOUT_MS = 300_000;
+
+function run(
+  cmd: string, args: string[], cwd?: string, idleMs = BUILD_IDLE_TIMEOUT_MS,
+): Promise<{ code: number; out: string; timedOut?: boolean }> {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { ...(cwd ? { cwd } : {}), stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
-    const take = (d: Buffer): void => { if (out.length < 200_000) out += d.toString(); };
+    let timedOut = false;
+    let timer: NodeJS.Timeout;
+    const arm = (): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, idleMs);
+    };
+    const take = (d: Buffer): void => {
+      arm(); // any output is proof of life
+      // Keep the HEAD of the stream as well as the tail: a Python traceback is printed once, at the point of
+      // failure, and is then buried under thousands of progress lines.
+      if (out.length < 200_000) out += d.toString();
+    };
+    arm();
     child.stdout.on("data", take);
     child.stderr.on("data", take);
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
     child.on("error", (e) => { clearTimeout(timer); resolve({ code: 1, out: e.message }); });
-    child.on("close", (c) => { clearTimeout(timer); resolve({ code: c ?? 1, out }); });
+    child.on("close", (c) => { clearTimeout(timer); resolve({ code: c ?? 1, out, timedOut }); });
   });
+}
+
+/**
+ * The part of a failed build's output worth showing.
+ *
+ * Progress lines are the overwhelming majority of what a build prints and they say nothing about why it
+ * stopped. Lines that look like a diagnosis are pulled out first; the tail is only the fallback.
+ */
+export function failureReason(out: string): string {
+  const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
+  const diagnostic = lines.filter((l) =>
+    /(Traceback|Error|error:|Exception|No such file|Permission denied|MemoryError|Killed)/.test(l)
+    && !/AST extraction:/.test(l));
+  const pick = diagnostic.length ? diagnostic.slice(-3) : lines.slice(-3);
+  return pick.join(" ").slice(0, 300);
 }
 
 export interface BuildResult {
@@ -324,7 +365,14 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
   }
   const script = "from graphify.watch import _rebuild_code\nfrom pathlib import Path\nimport sys\nsys.exit(0 if _rebuild_code(Path('.')) else 1)\n";
   const r = await run(py, ["-c", script], cwd);
-  if (r.code !== 0) return { ok: false, message: `Graph build failed: ${r.out.trim().split("\n").slice(-3).join(" ").slice(0, 300)}` };
+  if (r.timedOut) {
+    return {
+      ok: false,
+      message: `Graph build stopped: it produced no output for ${Math.round(BUILD_IDLE_TIMEOUT_MS / 60_000)} minutes `
+        + `and was killed. Last it said: ${failureReason(r.out)}`,
+    };
+  }
+  if (r.code !== 0) return { ok: false, message: `Graph build failed: ${failureReason(r.out)}` };
 
   // Best-effort: a graph that still carries tooling nodes is worse than one that does not, but it is not a
   // reason to report the build as failed.

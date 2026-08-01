@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { graphRoot, loadGraphSync, graphStatus, pruneTooling, GRAPH_DIR, GRAPH_FILE } from "../../src/engine/project-graph.js";
+import { graphRoot, loadGraphSync, graphStatus, pruneTooling, failureReason, GRAPH_DIR, GRAPH_FILE } from "../../src/engine/project-graph.js";
 import { sessionBase, stateRoot, isSessionBase } from "../../src/engine/session-scope.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 
@@ -172,5 +172,41 @@ describe("pruneTooling — the graph is the project, not what is installed in it
     };
     expect(pruneTooling(doc).removed).toBe(1);
     expect(pruneTooling(doc).removed).toBe(0);
+  });
+});
+
+describe("failureReason — a failed build has to say why", () => {
+  /**
+   * The report was the last three lines of output. On a real project those were progress lines, so a build
+   * that had been SIGKILLed at 98% told the user: "Graph build failed: AST extraction: 19297/19297 files
+   * (100%)". Complete, and useless — the same shape of mistake as printing every rule at launch.
+   */
+  it("prefers a diagnosis over the tail of the progress log", () => {
+    const out = [
+      "  AST extraction: 100/19297 files (1%)",
+      "Traceback (most recent call last):",
+      "  File \"graphify/watch.py\", line 42, in _rebuild_code",
+      "MemoryError",
+      "  AST extraction: 19200/19297 files (99%)",
+      "  AST extraction: 19297/19297 files (100%)",
+    ].join("\n");
+    const r = failureReason(out);
+    expect(r).toContain("MemoryError");
+    expect(r).not.toContain("19297/19297");
+  });
+
+  it("falls back to the tail when nothing looks like a diagnosis", () => {
+    expect(failureReason("  AST extraction: 1/2 files\n  AST extraction: 2/2 files"))
+      .toContain("2/2");
+  });
+
+  it("never treats a progress line as the diagnosis, however it is worded", () => {
+    const out = [
+      "  AST extraction: 5/5 files (100%) [10 workers] Error budget nominal",
+      "PermissionError: [Errno 13] cannot read src/secret.ts",
+    ].join("\n");
+    const r = failureReason(out);
+    expect(r).toContain("PermissionError");
+    expect(r).not.toContain("AST extraction");
   });
 });
