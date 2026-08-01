@@ -85,7 +85,7 @@ const failing = (): Provider => ({
 
 const run = (provider: Provider, project = WITH_TESTS) =>
   tuneRoleSkills({
-    provider, tuner: "t", project, roles: ROLES, roleProfiles: {},
+    provider, tuner: ["t"], project, roles: ROLES, roleProfiles: {},
     skills: AVAILABLE.map((name) => ({ name, description: `desc of ${name}` })),
   });
 
@@ -120,8 +120,65 @@ describe("tuneRoleSkills", () => {
 
   it("says so when nothing is installed", async () => {
     const r = await tuneRoleSkills({
-      provider: canned("x"), tuner: "t", project: WITH_TESTS, roles: ROLES, roleProfiles: {}, skills: [],
+      provider: canned("x"), tuner: ["t"], project: WITH_TESTS, roles: ROLES, roleProfiles: {}, skills: [],
     });
     expect(r.reasoning).toMatch(/No skills installed/);
+  });
+});
+
+/**
+ * A single model id made this the second place in horse-code where one exhausted subscription was the whole
+ * story. Measured on a real migration: the assigned model answered `All antigravity accounts have exhausted
+ * their quota`, and every freshly installed skill stayed unassigned with two healthy fallbacks unused.
+ */
+describe("the tuner's model chain", () => {
+  const BLOCK = 'Reasoning.\n```json\n{"assignments":[{"role":"coder","skills":["test-driven-development"]}]}\n```';
+
+  const chainProvider = (broken: string[], calls: string[]): Provider => ({
+    chat: async function* (req: { model: string }) {
+      calls.push(req.model);
+      if (broken.includes(req.model)) { yield { type: "error" as const, message: `quota exhausted for ${req.model}` }; return; }
+      yield { type: "text-delta" as const, text: BLOCK };
+    },
+  } as unknown as Provider);
+
+  const withChain = (provider: Provider, chain: string[]) =>
+    tuneRoleSkills({
+      provider, tuner: chain, project: WITH_TESTS, roles: ROLES, roleProfiles: {},
+      skills: AVAILABLE.map((name) => ({ name, description: `desc of ${name}` })),
+    });
+
+  it("slides to the next model when the first is exhausted", async () => {
+    const calls: string[] = [];
+    const r = await withChain(chainProvider(["dead"], calls), ["dead", "alive"]);
+    expect(calls).toEqual(["dead", "alive"]);
+    expect(r.assignments.coder).toEqual(["test-driven-development"]);
+  });
+
+  it("names how many models were tried when the whole chain is spent", async () => {
+    const calls: string[] = [];
+    const r = await withChain(chainProvider(["a", "b"], calls), ["a", "b"]);
+    expect(r.assignments).toEqual({});
+    expect(r.reasoning).toContain("all 2 model(s)");
+    expect(r.reasoning).toContain("quota exhausted");
+  });
+
+  /** "No skill fits this project" is the right answer far more often than not — retrying it would invent work. */
+  it("does not retry a model that answered with no assignments", async () => {
+    const calls: string[] = [];
+    const provider = {
+      chat: async function* (req: { model: string }) {
+        calls.push(req.model);
+        yield { type: "text-delta" as const, text: 'Nothing fits.\n```json\n{"assignments":[]}\n```' };
+      },
+    } as unknown as Provider;
+    const r = await withChain(provider, ["a", "b"]);
+    expect(calls).toEqual(["a"]); // answered, so no slide — the answer was "nothing"
+    expect(Object.values(r.assignments).flat()).toEqual([]);
+  });
+
+  it("says so rather than throwing when no model is configured", async () => {
+    const r = await withChain(canned(BLOCK), []);
+    expect(r.reasoning).toContain("No model is configured");
   });
 });

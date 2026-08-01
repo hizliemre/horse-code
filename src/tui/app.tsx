@@ -5,7 +5,7 @@ import { makeAskUser } from "../terminal.js";
 import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
 import { tuneRoleModels } from "../engine/role-tuner.js";
-import { mostCapable, adjustRoleModels, ROLE_PROFILES } from "./role-models.js";
+import { mostCapable, adjustRoleModels, capabilityScore, ROLE_PROFILES } from "./role-models.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { firewallProvider } from "../providers/firewall.js";
@@ -338,7 +338,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         const fresh = all.filter((s) => names.includes(s.name));
         if (!fresh.length) return "";
         const project = await scanRepo(process.cwd());
-        const tuner = deps0.roleRegistry.peekModel("architect") || opts.model || "";
+        // The architect's whole chain — the same reason the classifier gets one: a single exhausted
+        // subscription must not decide whether any skill is assigned at all.
+        const tuner = [...deps0.roleRegistry.chain("architect"), opts.model].filter((m): m is string => !!m);
         const { assignments, withheld } = await tuneRoleSkills({
           provider: deps.provider, tuner, project, roles: tunableRoles(), roleProfiles: ROLE_PROFILES,
           skills: fresh.map((s) => ({ name: s.name, description: s.description })),
@@ -388,13 +390,13 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    * far better than a failed adjust. The repository is scanned first so the assignment rests on facts rather
    * than on the tuner's impression of what the project is.
    */
-  const adjustSkills = async (roleNames: string[], tuner: string): Promise<void> => {
+  const adjustSkills = async (roleNames: string[], tuner: string[]): Promise<void> => {
     const skills = opts.listSkills?.() ?? [];
     if (!skills.length) return;
     const project = await scanRepo(process.cwd());
     controller.note(`🔎 **Project scan** — skills are assigned from this, not from a guess:\n${project.summary.split("\n").map((l) => `- ${l}`).join("\n")}`);
     const append = controller.streamNote("");
-    controller.startBusy("assigning skills", tuner);
+    controller.startBusy("assigning skills", tuner[0] ?? "");
     try {
       const { assignments, withheld, reasoning } = await tuneRoleSkills({
         provider: deps.provider, tuner, skills, roles: roleNames, roleProfiles: ROLE_PROFILES, project,
@@ -445,7 +447,11 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const saved = await saveRoleChains(homedir(), chains);
       const rows = chains.map(({ role, models: ch }) => `- \`${role}\` → ${ch[0] ?? "—"}${ch.slice(1).map((m) => `  ↳ ${m}`).join("")}`);
       controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_${saved ? `Saved to your config — future sessions start with these. ` : ""}\`/roles setmodel\` to fine-tune any chain._`);
-      await adjustSkills(roleNames, tuner);
+      // Two runners-up behind the tuner: assigning skills is one call, and losing it to a rate limit means
+      // every freshly installed skill stays unassigned with nothing to show for the attempt.
+      const tunerChain = [tuner, ...models.filter((m) => m !== tuner)
+        .sort((a, b) => capabilityScore(b) - capabilityScore(a)).slice(0, 2)];
+      await adjustSkills(roleNames, tunerChain);
       return;
     } catch (e) {
       controller.endBusy();

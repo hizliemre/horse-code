@@ -96,7 +96,15 @@ export function applyPreconditions(
  */
 export async function tuneRoleSkills(opts: {
   provider: Provider;
-  tuner: string;
+  /**
+   * The tuner's model CHAIN, tried in order.
+   *
+   * A single id made this the second place in horse-code where one exhausted subscription was the whole
+   * story. Measured on a real migration: the assigned model answered `All antigravity accounts have
+   * exhausted their quota (reset after 3h 52m)` and every call in that run died on it, with two healthy
+   * fallbacks sitting unused in the same role's chain.
+   */
+  tuner: string[];
   skills: SkillInfo[];
   roles: string[];
   roleProfiles: Record<string, string>;
@@ -104,7 +112,8 @@ export async function tuneRoleSkills(opts: {
   signal?: AbortSignal;
   onReason?: (delta: string) => void;
 }): Promise<TunedSkills> {
-  const { provider, tuner, skills, roles, project } = opts;
+  const { provider, skills, roles, project } = opts;
+  const chain = opts.tuner.filter(Boolean);
   const assignable = roles.filter((r) => !NEVER.test(r));
   if (!skills.length || !assignable.length) {
     return { assignments: {}, reasoning: "No skills installed.", withheld: [] };
@@ -134,9 +143,14 @@ export async function tuneRoleSkills(opts: {
     `leaving unassigned and why. THEN, on a new line, output ONLY a fenced \`\`\`json block: ` +
     `{"assignments":[{"role":"<role>","skills":["<skill>", …]}, …]} listing ONLY the roles that get at least one.`;
 
-  try {
+  /**
+   * One attempt on one model. Throws on a TRANSPORT failure so the caller can slide down the chain; an
+   * answer that simply assigns nothing is NOT a failure — "no skill fits this project" is the right result
+   * far more often than not, and retrying it on another model would manufacture assignments.
+   */
+  const attempt = async (model: string): Promise<TunedSkills> => {
     const req: ChatRequest = {
-      model: tuner,
+      model,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: "Assign the skills. Reason briefly, then give the JSON." },
@@ -163,12 +177,23 @@ export async function tuneRoleSkills(opts: {
       parseAssignments(full), assignable, skills.map((s) => s.name), project,
     );
     return { assignments, reasoning: stripThink(cut >= 0 ? full.slice(0, cut) : full).trim() || "(no rationale given)", withheld };
-  } catch (e) {
-    // Leaving the existing assignment alone is the safe failure: it is what the user already had.
-    return {
-      assignments: {},
-      reasoning: `Skill assignment failed (${e instanceof Error ? e.message : String(e)}) — skills left as they were.`,
-      withheld: [],
-    };
+  };
+
+  if (!chain.length) {
+    return { assignments: {}, reasoning: "No model is configured to assign skills.", withheld: [] };
   }
+  let last: unknown;
+  for (const model of chain) {
+    // The reasoning of a failed attempt has already streamed by the time it throws — the next model's
+    // reasoning follows it rather than replacing it. Two rationales in the log beats a silent slide.
+    try { return await attempt(model); }
+    catch (e) { last = e; }
+  }
+  // Leaving the existing assignment alone is the safe failure: it is what the user already had.
+  return {
+    assignments: {},
+    reasoning: `Skill assignment failed on all ${chain.length} model(s) ` +
+      `(${last instanceof Error ? last.message : String(last)}) — skills left as they were.`,
+    withheld: [],
+  };
 }
