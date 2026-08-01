@@ -35,6 +35,8 @@ import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
 import { stripThinking } from "./format.js";
 import { classifyResume } from "../engine/resume-intent.js";
+import { startupSummary, type StartupFacts } from "./startup-summary.js";
+import { existsSync } from "node:fs";
 import { RoleFitness } from "../engine/role-fitness.js";
 import { restoreTerminal, restoreOnExit } from "./restore-terminal.js";
 
@@ -566,8 +568,47 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   }
   // Surface any rules carried over from previous sessions on launch, so the user knows what's in effect
   // even when they don't (re)state them this session.
-  const carried = rulesFromMemory();
-  if (carried.length) controller.note(`📌 **Active rules** (${carried.length}): ${carried.join(" · ")}`);
+  /**
+   * One summary instead of the whole rulebook.
+   *
+   * This used to print every standing rule in full — twenty-five of them on a real project, a wall of prose
+   * before the user had typed anything, unreadable precisely because it was complete. The rules are already
+   * inlined into every agent's prompt; reprinting them at the user costs a screen and says nothing they can
+   * act on. What is worth saying is whether the pieces are THERE.
+   *
+   * A live note, because MCP connects in the background: the line is rewritten when the servers answer
+   * rather than arriving as a second, disconnected message.
+   */
+  const summaryLine = controller.liveNote();
+  const summaryFacts = (): StartupFacts => {
+    const all = memStore.all();
+    const kindOf = (k: string): number => all.filter((e) => (e.kind ?? "fact") === k).length;
+    return {
+      rules: rulesFromMemory().length,
+      memory: { total: all.length, rules: kindOf("rule"), lessons: kindOf("lesson"), facts: kindOf("fact") },
+      skills: opts.listSkills?.().length ?? 0,
+      constitution: existsSync(join(process.cwd(), ".specify", "memory", "constitution.md")),
+      graph: { built: false, nodes: 0 },
+      traces: 0,
+      ...startupExtra,
+    };
+  };
+  const startupExtra: Partial<StartupFacts> = {};
+  const paintSummary = (): void => summaryLine(startupSummary(summaryFacts()));
+  paintSummary();
+  // The graph and the trace index are read from disk; both are cheap and neither blocks the prompt.
+  void (async () => {
+    try {
+      // The engine's own status, not `opts.graphStatus` — that one renders a sentence for `/graph`, and a
+      // summary needs the numbers behind it.
+      const { graphStatus } = await import("../engine/project-graph.js");
+      const g = await graphStatus(process.cwd());
+      startupExtra.graph = { built: g.built, nodes: g.nodes, stale: g.stale };
+      const { loadTraceIndex } = await import("../engine/trace.js");
+      startupExtra.traces = Object.keys((await loadTraceIndex(process.cwd())).traces).length;
+      paintSummary();
+    } catch { /* a missing graph or index is itself the answer — the summary already says so */ }
+  })();
   // One maintenance pass per session: near-duplicates that arrived from different angles are merged, and
   // entries that stopped earning their place are flagged (never deleted — the file is the only copy).
   void memStore.runHygiene().then((r) => {
@@ -589,7 +630,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     void connectAllMcp(opts.mcp).then((b) => {
       mcpHolder.bundle = b;
       const ok = b.status.filter((s) => s.ok);
-      if (ok.length) controller.note(`MCP connected: ${ok.map((s) => `${s.name} (${s.toolCount} tools)`).join(", ")}`);
+      startupExtra.mcp = ok.map((s) => ({ name: s.name, tools: s.toolCount }));
+      paintSummary(); // the summary gains its MCP line rather than a second, disconnected note
       if (opts.startupNote) controller.note(opts.startupNote);
       for (const f of b.status.filter((s) => !s.ok)) controller.note(`MCP ${f.name} failed: ${f.error}`);
     }, (e) => controller.note(`MCP connect error: ${e instanceof Error ? e.message : String(e)}`));
