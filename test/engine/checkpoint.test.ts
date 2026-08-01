@@ -69,3 +69,27 @@ describe("checkpoint carries the deferred notes", () => {
     expect(readCheckpoint(dir)?.carryOver).toEqual(["[spec][medium] spec-scope: trim the v1 surface"]);
   });
 });
+
+/**
+ * Resuming is matched on the ORIGINAL request or a bare "continue". A follow-up that corrects course — "I
+ * answered that wrongly, we need to fix it" — matches neither, so the pipeline silently started over from
+ * the constitution while the preserved work sat next to it. The REPL now asks; these are the inputs that
+ * decide whether it needs to.
+ */
+describe("isContinuePrompt decides when resuming is unambiguous", () => {
+  it("recognises a bare continue, in either language", () => {
+    for (const t of ["devam", "devam edelim", "continue", "resume", "kaldığımız yerden devam"]) {
+      expect(isContinuePrompt(t)).toBe(true);
+    }
+  });
+
+  /** The message that caused the loss: a correction, not a continuation — so the REPL has to ask. */
+  it("does NOT treat a course-correction as a continuation", () => {
+    expect(isContinuePrompt("todoya ekleme. yanlış cevap verdim. sorunu düzeltmemiz gerekiyor")).toBe(false);
+  });
+
+  it("does not mistake a long request that happens to contain the word", () => {
+    const long = "continue building the wizard but first refactor the slider component and its tests thoroughly";
+    expect(isContinuePrompt(long)).toBe(false);
+  });
+});

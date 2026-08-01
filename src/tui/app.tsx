@@ -34,6 +34,7 @@ import type { MemoryEntry } from "../engine/memory-retrieval.js";
 import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
 import { stripThinking } from "./format.js";
+import { isContinuePrompt } from "../engine/checkpoint.js";
 import { RoleFitness } from "../engine/role-fitness.js";
 import { restoreTerminal, restoreOnExit } from "./restore-terminal.js";
 
@@ -698,6 +699,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,
   );
+  /** The prompt of a run that was cancelled or failed with its work preserved — see askAboutInterrupted. */
+  let interrupted: string | undefined;
   try {
     for (;;) {
       const task = await taskPromise;
@@ -706,6 +709,36 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const history = controller.getState().transcript.slice(0, -1)
         .filter((m): m is { role: "user" | "assistant"; text: string } => !("kind" in m))
         .map((m) => ({ role: m.role, content: m.text }));
+      /**
+       * A run was interrupted, and this prompt is not that prompt.
+       *
+       * Resuming is matched on the ORIGINAL request (or a bare "continue"), so a follow-up that corrects
+       * course — "I answered that wrongly, we need to fix it" — matches nothing and silently starts the whole
+       * pipeline over from the constitution. Reported after exactly that: a wrong answer during brainstorming,
+       * Ctrl+C, a correction typed in, and a fresh project underway before anything said so.
+       *
+       * Asking is cheap and only happens after an interruption; starting a project over is neither.
+       */
+      if (interrupted !== undefined && task !== interrupted && !isContinuePrompt(task)) {
+        const prior = interrupted;
+        interrupted = undefined;
+        const answer = await controller.ask(
+          `The last run was interrupted and its work is preserved.\n\n> _${prior.slice(0, 160)}_\n\n` +
+          `Does this message continue it, or start something new?`,
+          { options: [
+            { label: "Continue that work", description: "Resumes from the preserved worktree; finished phases are skipped" },
+            { label: "Start something new", description: "Opens a fresh session — the pipeline runs from the beginning" },
+          ] },
+        );
+        // Resuming keys on the original request, so that is what the job is given; the correction is said
+        // again when the interrupted phase re-asks its question.
+        if (/^continue/i.test(answer.trim())) {
+          controller.note(`⏩ Resuming — the interrupted step will ask again, answer it with what you just said.`);
+          taskPromise = Promise.resolve(prior);
+          continue;
+        }
+      }
+      interrupted = undefined;
       const images = controller.takeAttachments(); // images pasted (Alt+V) before this submit
       controller.beginRun();
       // Fresh abort controller per job → Ctrl+C aborts THIS job's signal; the next job gets a clean one.
@@ -751,6 +784,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         const msg = jobAbort.signal.aborted ? "cancelled" : `error: ${e instanceof Error ? e.message : String(e)}`;
         jobAbort.abort(); // stop any in-flight parallel work (e.g. sibling councilors) so it can't keep spending after "done"
         controller.endRun(msg);
+        // The prompt that was interrupted, so the NEXT one can be checked against it — see askAboutInterrupted.
+        interrupted = task;
       }
       // Persist the conversation after every turn → the session can be resumed later (best-effort).
       void store.save(controller.messages()).catch(() => { /* persistence is non-fatal */ });
