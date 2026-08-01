@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { choiceHeight, wrapPlain, pendingBodyWidth, dropToFit, MIN_VIEWPORT_ROWS, NOTE_ROWS, noteLines } from "../../src/tui/components.js";
+import { choiceHeight, wrapPlain, pendingBodyWidth, dropToFit, MIN_VIEWPORT_ROWS, NOTE_ROWS, noteLines, RADIO_ON, RADIO_OFF, CURSOR } from "../../src/tui/components.js";
 import { flattenMarkdown } from "../../src/tui/lines.js";
 
 /**
@@ -255,5 +255,33 @@ describe("noteLines", () => {
 
   it("shows a short note as-is, without a caret when not editing", () => {
     expect(noteLines("short", false, 60)[0]).toBe("short");
+  });
+});
+
+/**
+ * The markers were `◉`, `○` and `›` — all three East Asian AMBIGUOUS width. A terminal that draws ambiguous
+ * glyphs two columns wide disagrees with the single column `string-width` counts, and the row carrying them
+ * is laid out to the wrong width. Reported from a real terminal: the marker line of every option came out
+ * blank, so the user pressed Enter on a choice they could not see.
+ *
+ * The multi-select markers were `[x]`/`[ ]` all along and never broke — that is the evidence these follow.
+ */
+describe("selection markers are unambiguous width", () => {
+  const AMBIGUOUS = /[\u2000-\u23FF\u25A0-\u27BF\u2E80-\uA4CF\uFE10-\uFE6F\uFF00-\uFF60]/;
+
+  it("uses no glyph a terminal may draw double-width", () => {
+    for (const g of [RADIO_ON, RADIO_OFF, CURSOR]) {
+      expect(g).not.toMatch(AMBIGUOUS);
+      expect(g).toMatch(/^[\x20-\x7E]+$/); // printable ASCII only
+    }
+  });
+
+  it("keeps the radio and the checkbox the same width, so rows line up", () => {
+    expect(RADIO_ON.length).toBe(RADIO_OFF.length);
+    expect(RADIO_ON.length).toBe("[x] ".trimEnd().length);
+  });
+
+  it("still distinguishes the selected option from the rest", () => {
+    expect(RADIO_ON).not.toBe(RADIO_OFF);
   });
 });

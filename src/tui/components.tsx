@@ -202,6 +202,24 @@ export function PendingQuestion({ text, cols, maxLines }: { text: string; cols: 
 export const NOTE_ROWS = 3;
 
 /**
+ * The selection markers, in plain ASCII.
+ *
+ * They were `◉`, `○` and `›` — all three East Asian AMBIGUOUS width. A terminal configured to draw ambiguous
+ * glyphs two columns wide (a common pairing with certain fonts and locales) disagrees with the one column
+ * `string-width` counts, and the row that carries them is laid out to the wrong width. Reported repeatedly
+ * from a real terminal: the marker line of every option came out blank, so the user could not see which
+ * option was selected and pressed Enter on a choice they could not read.
+ *
+ * The multi-select markers were `[x]`/`[ ]` all along and never broke — that is the evidence. These match
+ * them, so a radio group and a checkbox group now read as the same widget in the same alphabet.
+ *
+ * Deliberately NOT switchable by icon style: a marker you cannot see is not decoration, it is the control.
+ */
+export const RADIO_ON = "(*)";
+export const RADIO_OFF = "( )";
+export const CURSOR = ">";
+
+/**
  * The note area's lines: the LAST {@link NOTE_ROWS} of the wrapped note, padded to that height.
  *
  * `null` means "nothing typed yet" — the caller renders the hint for it. The caret rides the final line so it
@@ -363,13 +381,13 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
     <Box flexDirection="column" width={listW}>
       {choices.map((c, i) => {
         const isSel = i === cursor;
-        const mark = multiSelect ? (checked.has(i) ? "[x] " : "[ ] ") : (isSel ? "◉ " : "○ ");
+        const mark = multiSelect ? (checked.has(i) ? "[x] " : "[ ] ") : (isSel ? `${RADIO_ON} ` : `${RADIO_OFF} `);
         return (
           <Box key={i} flexDirection="column">
             {wrapPlain(c.label, listW - 4).map((line, k) => (
               <Text key={k}>
                 <Text color={isSel ? "cyan" : undefined} inverse={isSel}>
-                  {k === 0 ? `${isSel ? "› " : "  "}${mark}${line}` : `      ${line}`}
+                  {k === 0 ? `${isSel ? `${CURSOR} ` : "  "}${mark}${line}` : `      ${line}`}
                 </Text>
               </Text>
             ))}
