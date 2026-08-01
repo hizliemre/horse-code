@@ -846,3 +846,19 @@ describe("busyDetail — the shimmer has to keep saying something new", () => {
     expect(c.getState().detail).toBeUndefined();
   });
 });
+
+describe("echoCommand — the session record says what was ASKED, not only what happened", () => {
+  it("puts the command in the transcript as the user's own line", () => {
+    const c = new TuiController();
+    c.echoCommand("/graph build");
+    const t = c.getState().transcript;
+    expect(t[t.length - 1]).toEqual({ role: "user", text: "/graph build" });
+  });
+
+  it("ignores an empty command rather than opening a blank line", () => {
+    const c = new TuiController();
+    const before = c.getState().transcript.length;
+    c.echoCommand("   ");
+    expect(c.getState().transcript.length).toBe(before);
+  });
+});

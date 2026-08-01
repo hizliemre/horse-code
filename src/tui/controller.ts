@@ -682,6 +682,20 @@ export class TuiController {
     };
   }
 
+  /**
+   * Records the command the user actually ran.
+   *
+   * A typed prompt appears in the transcript; a slash command did not, so scrolling back showed a note
+   * — "Building the project code graph…" — with nothing above it saying what produced it. The record of
+   * a session should say what was asked as well as what happened.
+   */
+  echoCommand(text: string): void {
+    const t = text.trim();
+    if (!t) return;
+    this.state = { ...this.state, transcript: this.cap([...this.state.transcript, { role: "user", text: t }]) };
+    this.notify();
+  }
+
   /** Append an assistant-style note to the transcript (used by /help). */
   note(text: string): void {
     this.state = { ...this.state, transcript: this.cap([...this.state.transcript, { role: "assistant", text }]) };

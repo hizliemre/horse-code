@@ -19,6 +19,7 @@ export const PHASE_LABELS: Record<string, string> = {
   "revision-done": "Revision done",
   report: "Writing report…",
   tuning: "Assigning role models…",
+  graph: "Reading the code…",
   planning: "Planning the trace run…",
   tracing: "Tracing files…",
   done: "Done ✓",

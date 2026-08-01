@@ -1516,7 +1516,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (!graphStatus || !buildGraph) { controller.note("The project graph is not available."); return; }
     if (arg.trim().toLowerCase() === "build") {
       controller.note("Building the project code graph (AST parsing — no tokens spent)…");
-      buildGraph().then((r) => controller.note(r), (e) => controller.note(`Graph build failed: ${e instanceof Error ? e.message : String(e)}`));
+      // No turn behind it, so nothing was setting the running indicator: on a large repository the parse
+      // takes minutes, and a still screen with a live prompt is what a FINISHED run looks like.
+      controller.startBusy("graph");
+      buildGraph().then(
+        (r) => { controller.endBusy(); controller.note(r); },
+        (e) => { controller.endBusy(); controller.note(`Graph build failed: ${e instanceof Error ? e.message : String(e)}`); },
+      );
       return;
     }
     // Tracing is the one part of project understanding that spends tokens, so it is never started without
@@ -1568,7 +1574,11 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       })();
       return;
     }
-    graphStatus().then((r) => controller.note(r), (e) => controller.note(`Graph status failed: ${e instanceof Error ? e.message : String(e)}`));
+    controller.startBusy("graph");
+    graphStatus().then(
+      (r) => { controller.endBusy(); controller.note(r); },
+      (e) => { controller.endBusy(); controller.note(`Graph status failed: ${e instanceof Error ? e.message : String(e)}`); },
+    );
   };
   // /skills [add <url> | update] → list what is loaded; add installs one from a repo; update re-installs them.
   const doSkills = (arg: string): void => {
@@ -1622,6 +1632,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   };
   const runSlash = (c: SlashCommand): void => {
     setScroll(0); setDraft(""); setDraftCursor(0); setSlashSel(0);
+    controller.echoCommand(c.name);
     if (c.name === "/model") controller.openPicker();
     else if (c.name === "/roles") controller.note(rolesReport());
     else if (c.name === "/sessions") doSessions();
@@ -2027,28 +2038,28 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // A fully-typed known command (palette closed) → run it.
               const known = COMMANDS.find((c) => c.name === cmd);
               if (known) { runSlash(known); return; }
-              if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
-              if (cmd === "/roles adjust") { setScroll(0); setDraft(""); setDraftCursor(0); doRolesAdjust(); return; }
+              if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
+              if (cmd === "/roles adjust") { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doRolesAdjust(); return; }
               // /resume N (argument form) → resume the N-th session.
-              if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); doResume(trimmed.slice("/resume".length).trim()); return; }
+              if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doResume(trimmed.slice("/resume".length).trim()); return; }
               // /next N (argument form) → run the N-th suggested follow-up.
-              if (cmd.startsWith("/next ")) { setScroll(0); setDraft(""); setDraftCursor(0); doNext(trimmed.slice("/next".length).trim()); return; }
+              if (cmd.startsWith("/next ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doNext(trimmed.slice("/next".length).trim()); return; }
               // /pin <text> | /pin rm N (argument form).
-              if (cmd.startsWith("/pin ")) { setScroll(0); setDraft(""); setDraftCursor(0); doPin(trimmed.slice("/pin".length).trim()); return; }
+              if (cmd.startsWith("/pin ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doPin(trimmed.slice("/pin".length).trim()); return; }
               // /remember <text> · /forget N (argument forms).
-              if (cmd.startsWith("/remember ")) { setScroll(0); setDraft(""); setDraftCursor(0); doRemember(trimmed.slice("/remember".length).trim()); return; }
-              if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); doForget(trimmed.slice("/forget".length).trim()); return; }
+              if (cmd.startsWith("/remember ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doRemember(trimmed.slice("/remember".length).trim()); return; }
+              if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doForget(trimmed.slice("/forget".length).trim()); return; }
               // /sources refresh (argument form).
-              if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSources(trimmed.slice("/sources".length).trim()); return; }
-              if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); doSkills(trimmed.slice("/skills".length).trim()); return; }
-              if (cmd.startsWith("/watch ")) { setScroll(0); setDraft(""); setDraftCursor(0); doWatch(trimmed.slice("/watch".length).trim()); return; }
-              if (cmd.startsWith("/monitor ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMonitor(trimmed.slice("/monitor".length).trim()); return; }
-              if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); doParallel(trimmed.slice("/parallel".length).trim()); return; }
-              if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMcp(trimmed.slice("/mcp".length).trim()); return; }
-              if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); doGraph(trimmed.slice("/graph".length).trim()); return; }
-              if (cmd.startsWith("/continue-from-claude ")) { setScroll(0); setDraft(""); setDraftCursor(0); doContinueFromClaude(trimmed.slice("/continue-from-claude".length).trim()); return; }
+              if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doSources(trimmed.slice("/sources".length).trim()); return; }
+              if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doSkills(trimmed.slice("/skills".length).trim()); return; }
+              if (cmd.startsWith("/watch ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doWatch(trimmed.slice("/watch".length).trim()); return; }
+              if (cmd.startsWith("/monitor ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doMonitor(trimmed.slice("/monitor".length).trim()); return; }
+              if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doParallel(trimmed.slice("/parallel".length).trim()); return; }
+              if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doMcp(trimmed.slice("/mcp".length).trim()); return; }
+              if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doGraph(trimmed.slice("/graph".length).trim()); return; }
+              if (cmd.startsWith("/continue-from-claude ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doContinueFromClaude(trimmed.slice("/continue-from-claude".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
-              if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMode(trimmed.slice("/mode".length).trim()); return; }
+              if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
               if (trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);
