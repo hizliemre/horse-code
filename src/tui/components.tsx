@@ -973,7 +973,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, continueFromClaude, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -1001,6 +1001,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
   migrate?: () => Promise<string>; // /migrate
+  continueFromClaude?: (arg: string) => Promise<void>; // /continue-from-claude <worktree name>
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   answerByTheWay?: (question: string) => void; // a question asked while work is running
   telemetryPath?: string; // this run's telemetry log → /monitor reads it
@@ -1433,6 +1434,11 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (!migrate) { controller.note("Migration is not available."); return; }
     migrate().then((r) => controller.note(r), (e) => controller.note(`Migration failed: ${e instanceof Error ? e.message : String(e)}`));
   };
+  // /continue-from-claude <name> → take over a Claude Code worktree's branch as the base for what comes next.
+  const doContinueFromClaude = (arg: string): void => {
+    if (!continueFromClaude) { controller.note("Continuing from another tool's worktree is not available."); return; }
+    void continueFromClaude(arg);
+  };
   // /graph [build] → the project's code graph: what exists, whether it is fresh, and rebuilding it.
   const doGraph = (arg: string): void => {
     if (!graphStatus || !buildGraph) { controller.note("The project graph is not available."); return; }
@@ -1533,6 +1539,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/skills") doSkills("");
     else if (c.name === "/graph") doGraph("");
     else if (c.name === "/migrate") doMigrate();
+    else if (c.name === "/continue-from-claude") doContinueFromClaude("");
     else if (c.name === "/mode") doMode("");
     else if (c.name === "/parallel") doParallel("");
     else if (c.name === "/monitor") doMonitor("");
@@ -1922,6 +1929,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); doParallel(trimmed.slice("/parallel".length).trim()); return; }
               if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMcp(trimmed.slice("/mcp".length).trim()); return; }
               if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); doGraph(trimmed.slice("/graph".length).trim()); return; }
+              if (cmd.startsWith("/continue-from-claude ")) { setScroll(0); setDraft(""); setDraftCursor(0); doContinueFromClaude(trimmed.slice("/continue-from-claude".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
               if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.

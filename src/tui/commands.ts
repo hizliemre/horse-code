@@ -21,6 +21,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/mcp", desc: "Connected MCP servers (/mcp add <url|command> installs one and verifies it)" },
   { name: "/sources", desc: "Show your connected model sources (/sources refresh re-detects)" },
   { name: "/migrate", desc: "Bring a project from Claude Code / Codex / Cursor into horse-code (rules, memory, skills)" },
+  { name: "/continue-from-claude", desc: "Continue work started in a Claude Code worktree (/continue-from-claude <name>) — its branch becomes the base" },
   { name: "/graph", desc: "Project code graph (/graph build · /graph trace) — what calls what, blast radius, per-file intent" },
   { name: "/skills", desc: "Show loaded skills (/skills add <github-url> installs one, /skills update re-installs them)" },
   { name: "/mode", desc: "Permission mode (/mode ask|acceptEdits|auto)" },

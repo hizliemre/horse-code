@@ -306,6 +306,42 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    * Driven from here because it needs the things only the REPL has: a provider, the shared memory store, and
    * a way to ask the user a question and wait for the answer.
    */
+  /**
+   * The branch every new session is cut from.
+   *
+   * A ref rather than the fixed `jobBase.fromBranch`, because `/continue-from-claude` changes it: adopting
+   * another tool's worktree means the NEXT request branches from that work instead of from the default.
+   */
+  const baseRef = { current: opts.jobBase.fromBranch };
+
+  /**
+   * `/continue-from-claude <name>` — take over work started in a Claude Code worktree.
+   *
+   * Adoption is reading, not moving: the branch is reported and made the base for what comes next. Nothing
+   * is copied and the other tool's worktree is left where it is — it is a registered git worktree of this
+   * same repository, and removing it would be a destructive answer to a question nobody asked.
+   */
+  const continueFromClaude = async (arg: string): Promise<void> => {
+    const { adoptClaudeWorktree, describeAdoption, AdoptError, listClaudeWorktrees } =
+      await import("../migrate/worktree.js");
+    const { defaultGitRunner } = await import("../worktree/git.js");
+    const git = defaultGitRunner;
+    try {
+      const w = await adoptClaudeWorktree(git, process.cwd(), arg, baseRef.current);
+      baseRef.current = w.branch;
+      controller.note(describeAdoption(w));
+    } catch (e) {
+      if (e instanceof AdoptError) {
+        const names = e.available.length ? await Promise.resolve(e.available) : await listClaudeWorktrees(git, process.cwd());
+        controller.note(`${e.message}${names.length
+          ? `\n\n**Available:**\n${names.map((n) => `- \`${n}\``).join("\n")}`
+          : `\n\n_This project has no worktrees under \`.claude/worktrees\`._`}`);
+        return;
+      }
+      controller.note(`Could not continue from that worktree: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const migrate = async (): Promise<string> => {
     if (!opts.memStore) return "Migration needs the memory store, which is not available in this session.";
     // Per-phase live lines, kept for the length of this migration so each phase rewrites its own.
@@ -643,7 +679,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces} migrate={migrate} continueFromClaude={continueFromClaude} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
@@ -669,6 +705,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       try {
         const res = await runJob(deps, {
           ...opts.jobBase,
+          fromBranch: baseRef.current, // …which `/continue-from-claude` may have repointed at adopted work
           prompt: task,
           jobName: toSlug(task) || "hcode-job",
           askUser: makeAskUser(read),
