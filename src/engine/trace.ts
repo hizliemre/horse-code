@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { stateRoot } from "./session-scope.js";
+import { writeAtomic } from "../session/atomic.js";
 import type { ProjectGraph } from "./project-graph.js";
 
 /**
@@ -68,13 +69,27 @@ const TRACEABLE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|
 const NOT_SOURCE = /(^|\/)(dist|build|out|node_modules|vendor|coverage|graphify-out|\.[^/]+)\//;
 
 /**
+ * Files a tool wrote, not a person.
+ *
+ * Generated code is the worst possible trace subject: it is long, it is uniform, and its content is a
+ * restatement of a schema or a proto file that the trace cannot see. Measured on a real project, 107 EF Core
+ * artefacts — every `*.Designer.cs` and the model snapshot — were trace candidates, and the large ones were
+ * skipped only for being large, which is the right outcome reached for the wrong reason.
+ *
+ * Only unambiguous markers are listed. A directory named `Migrations` is a guess; a file named
+ * `20260429000547_Init.Designer.cs` is not.
+ */
+const GENERATED = /(\.Designer\.cs|ModelSnapshot\.cs|\.(g|generated)\.(cs|ts|js)|\.d\.ts|_pb2(_grpc)?\.py|\.pb\.go)$/;
+
+/**
  * The files a trace run should consider, from everything git reports.
  *
  * Shared by the tracer and the brief: a brief assembled from documents inside an abandoned worktree describes
  * the wrong project just as surely as a trace does.
  */
 export function traceable(files: string[], opts?: { code?: boolean }): string[] {
-  return files.filter((f) => !NOT_SOURCE.test(f) && (opts?.code === false || TRACEABLE_EXT.test(f)));
+  return files.filter((f) => !NOT_SOURCE.test(f) && !GENERATED.test(f)
+    && (opts?.code === false || TRACEABLE_EXT.test(f)));
 }
 
 export interface TraceRecord {
@@ -130,7 +145,9 @@ export async function loadTraceIndex(cwd: string): Promise<TraceIndex> {
 
 export async function saveTraceIndex(cwd: string, index: TraceIndex): Promise<void> {
   await mkdir(traceDir(cwd), { recursive: true });
-  await writeFile(join(traceDir(cwd), TRACE_INDEX), `${JSON.stringify(index, null, 2)}\n`, "utf8");
+  // Atomic: this file is the ONLY record that a trace was written. A torn write during a multi-hour run
+  // costs every token that run has spent — the same failure already paid for with board.json and memory.jsonl.
+  await writeAtomic(join(traceDir(cwd), TRACE_INDEX), `${JSON.stringify(index, null, 2)}\n`);
 }
 
 /** Reads one trace, or undefined when the file has none. */

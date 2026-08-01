@@ -1,6 +1,6 @@
 import type { ChatRequest, Provider } from "../core/types.js";
 import {
-  planTraces, tracePrompt, saveTrace, pruneTraces, loadTraceIndex, saveTraceIndex, ensureGitignore,
+  planTraces, tracePrompt, saveTrace, pruneTraces, loadTraceIndex, saveTraceIndex, ensureGitignore, traceRootRel,
 } from "./trace.js";
 import type { TraceJob, TracePlan } from "./trace.js";
 import { loadGraph } from "./project-graph.js";
@@ -19,6 +19,14 @@ export interface TraceRunResult {
   wroteGitignore?: boolean;
 }
 
+/**
+ * How often the index is written mid-run.
+ *
+ * Small enough that an interrupted run loses seconds of work, large enough that the write is not the thing
+ * the run is doing. Every trace already exists on disk by then; this only records that it does.
+ */
+const INDEX_CHECKPOINT = 25;
+
 /** Renders the estimate a user is asked to approve. Deliberately blunt about what it will cost. */
 export function describePlan(plan: TracePlan, model: string): string {
   if (!plan.jobs.length) {
@@ -28,8 +36,17 @@ export function describePlan(plan: TracePlan, model: string): string {
   }
   const kIn = Math.round(plan.estimatedInputTokens / 1000);
   const kOut = Math.round(plan.estimatedOutputTokens / 1000);
+  /**
+   * The skipped list, COUNTED rather than printed.
+   *
+   * It used to name every file. On a real project that was 110 EF Core migration paths filling the entire
+   * screen above the question the user was being asked — the same failure as the launch banner that printed
+   * every rule: complete, and therefore unread. A count and a few examples say the same thing and leave the
+   * question visible.
+   */
   const skipped = plan.skipped.length
-    ? `\n\nSkipped as too large to trace economically: ${plan.skipped.map((s) => `\`${s.file}\``).join(", ")}`
+    ? `\n\n${plan.skipped.length} file(s) skipped as too large to trace economically`
+      + ` (e.g. ${plan.skipped.slice(0, 3).map((s) => `\`${s.file}\``).join(", ")}${plan.skipped.length > 3 ? ", …" : ""}).`
     : "";
   const cached = plan.upToDate ? `\n${plan.upToDate} file(s) already have a current trace and will be left alone.` : "";
   return `**Tracing ${plan.jobs.length} file(s)** with \`${model}\`.\n\n` +
@@ -72,7 +89,15 @@ export async function runTraces(opts: {
   plan: TracePlan;
   liveFiles: Set<string>;
   signal?: AbortSignal;
-  onProgress?: (done: number, total: number, file: string) => void;
+  /**
+   * Reports EVERY file as it finishes, with what happened to it.
+   *
+   * It used to report a bare count, which the caller then throttled to one line per few hundred files: for a
+   * 2,447-file run that is a screen that barely moves for hours, and no way to tell a working run from a
+   * stuck one. What a person watching wants is the same thing a file-writing tool shows them — which file,
+   * where it went, how much was written.
+   */
+  onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void;
 }): Promise<TraceRunResult> {
   const { cwd, plan } = opts;
   const signal = opts.signal ?? new AbortController().signal;
@@ -87,15 +112,29 @@ export async function runTraces(opts: {
     for (;;) {
       const job = queue.shift();
       if (!job || signal.aborted) return;
+      let wroteTo: string | undefined;
+      let words: number | undefined;
+      let error: string | undefined;
       try {
         const body = await traceOne(opts.provider, opts.model, job, signal, brief);
-        index.traces[job.file] = await saveTrace(cwd, job, body, opts.model);
+        const rec = await saveTrace(cwd, job, body, opts.model);
+        index.traces[job.file] = rec;
+        wroteTo = `${traceRootRel()}/${job.file}.md`;
+        words = body.split(/\s+/).filter(Boolean).length;
         written++;
+        // Checkpointed, not deferred to the end: this index is the only record that the tokens already spent
+        // bought anything, and a run this long WILL be interrupted.
+        if (written % INDEX_CHECKPOINT === 0) await saveTraceIndex(cwd, index);
       } catch (e) {
         if (signal.aborted) return;
-        failed.push({ file: job.file, error: e instanceof Error ? e.message : String(e) });
+        error = e instanceof Error ? e.message : String(e);
+        failed.push({ file: job.file, error });
       }
-      opts.onProgress?.(++done, plan.jobs.length, job.file);
+      opts.onProgress?.({
+        done: ++done, total: plan.jobs.length, file: job.file,
+        ...(wroteTo !== undefined && { wroteTo }), ...(words !== undefined && { words }),
+        ...(error !== undefined && { error }),
+      });
     }
   };
   await Promise.all(Array.from({ length: Math.min(TRACE_CONCURRENCY, queue.length) }, worker));

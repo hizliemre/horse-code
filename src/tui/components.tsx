@@ -1079,7 +1079,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   parallel?: () => number; // how many tasks may run at once
   setParallel?: (n: number) => void; // /parallel N — live, and persisted
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
-  runTraces?: (onProgress?: (done: number, total: number, file: string) => void) => Promise<string>; // /graph trace, after consent
+  runTraces?: (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void) => Promise<string>; // /graph trace, after consent
   permMode?: () => "ask" | "acceptEdits" | "auto"; // /mode: current permission mode
   setPermMode?: (m: "ask" | "acceptEdits" | "auto") => void; // /mode: change it live
   cancelJob?: () => void; // abort the running job (Steer send-mode)
@@ -1537,15 +1537,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
           });
           if (!/^yes/i.test(answer.trim())) { controller.note("Tracing cancelled — nothing was sent."); return; }
           controller.note(`Tracing ${jobs} file(s)…`);
-          // One note per file would be thousands of lines; one note for the whole run leaves hours of silence.
-          // A tenth of the way, or a minute, whichever comes first.
-          const step = Math.max(1, Math.floor(jobs / 10));
-          let lastAt = Date.now();
-          controller.note(await runTraces((done, total, file) => {
-            const now = Date.now();
-            if (done % step !== 0 && now - lastAt < 60_000 && done !== total) return;
-            lastAt = now;
-            controller.note(`  …${done}/${total} traced (${file})`);
+          /**
+           * One line per file, the way a file-writing tool reports itself.
+           *
+           * The first version printed a count every few hundred files, which on a 2,447-file run is a screen
+           * that does not move for an hour — indistinguishable from a run that has died. A person watching
+           * this wants what they would see for any other write: which file, where it went, how much.
+           */
+          controller.note(await runTraces((ev) => {
+            const at = `${String(ev.done).padStart(String(ev.total).length)}/${ev.total}`;
+            controller.note(ev.error
+              ? `  ✗ ${at} \`${ev.file}\` — ${ev.error}`
+              : `  ✎ ${at} \`${ev.wroteTo}\` (${ev.words} words)`);
           }));
         } catch (e) {
           controller.note(`Tracing failed: ${e instanceof Error ? e.message : String(e)}`);

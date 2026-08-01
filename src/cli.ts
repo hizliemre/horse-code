@@ -417,7 +417,7 @@ export async function main(argv: string[]): Promise<void> {
         const plan = await planFor(cwd, await traceableFiles());
         return { summary: describePlan(plan, tracerModel()), jobs: plan.jobs.length };
       };
-      const runTracesFn = async (onProgress?: (done: number, total: number, file: string) => void): Promise<string> => {
+      const runTracesFn = async (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void): Promise<string> => {
         const files = await traceableFiles();
         // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
         // the whole run again.

@@ -221,9 +221,51 @@ describe("runTraces", () => {
     const seen: string[] = [];
     await runTraces({
       cwd, provider: canned("x"), model: "m", plan, liveFiles: new Set(["src/a.ts", "src/b.ts"]),
-      onProgress: (_d, _t, f) => seen.push(f),
+      onProgress: (ev) => seen.push(ev.file),
     });
     expect(seen.sort()).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it("says where each trace went and how much was written — the report a file write gives", async () => {
+    await write("src/a.ts", "code");
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
+    const events: { file: string; wroteTo?: string; words?: number; error?: string }[] = [];
+    await runTraces({
+      cwd, provider: canned("one two three"), model: "m", plan, liveFiles: new Set(["src/a.ts"]),
+      onProgress: (ev) => events.push(ev),
+    });
+    expect(events[0]?.wroteTo).toBe(".horsecode/traces/src/a.ts.md");
+    expect(events[0]?.words).toBe(3);
+    expect(events[0]?.error).toBeUndefined();
+  });
+
+  it("reports the reason on a failure instead of going quiet", async () => {
+    await write("src/a.ts", "code");
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
+    const events: { error?: string }[] = [];
+    await runTraces({
+      cwd, provider: canned("   "), model: "m", plan, liveFiles: new Set(["src/a.ts"]),
+      onProgress: (ev) => events.push(ev),
+    });
+    expect(events[0]?.error).toMatch(/empty/);
+  });
+
+  /**
+   * The index is the only record that a written trace exists. A run of thousands of files takes hours and
+   * WILL be interrupted; saving only at the end means an interruption throws away every token it spent.
+   */
+  it("keeps what it has written when the run is interrupted partway", async () => {
+    const files: string[] = [];
+    for (let i = 0; i < 30; i++) { files.push(`src/f${i}.ts`); await write(`src/f${i}.ts`, `code${i}`); }
+    const plan = await planTraces(cwd, files, GRAPH, empty());
+    const ac = new AbortController();
+    await runTraces({
+      cwd, provider: canned("x"), model: "m", plan, liveFiles: new Set(files), signal: ac.signal,
+      // Killed mid-run, exactly as a Ctrl+C would: the final save never happens.
+      onProgress: (ev) => { if (ev.done === 27) ac.abort(); },
+    });
+    const kept = await loadTraceIndex(cwd);
+    expect(Object.keys(kept.traces).length).toBeGreaterThanOrEqual(25);
   });
 });
 
@@ -337,5 +379,29 @@ describe("traceable — what a run should even consider", () => {
   it("does not mistake a dotted FILE for a dotted directory", async () => {
     const { traceable } = await import("../../src/engine/trace.js");
     expect(traceable(["src/.eslintrc.js", "src/app.config.ts"])).toEqual(["src/.eslintrc.js", "src/app.config.ts"]);
+  });
+});
+
+describe("traceable — generated code is not a trace subject", () => {
+  it("drops the EF Core artefacts that were only being skipped for being large", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    const files = [
+      "src/infra.persistence.postgre/Migrations/20260429000547_Init.Designer.cs",
+      "src/infra.persistence.postgre/Migrations/BeempaDbContextModelSnapshot.cs",
+      "src/api/OrderService.cs",
+    ];
+    expect(traceable(files)).toEqual(["src/api/OrderService.cs"]);
+  });
+
+  it("keeps the migration itself — a person named it and its Up/Down is the schema history", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    expect(traceable(["src/infra.persistence.postgre/Migrations/20260429000547_Init.cs"]))
+      .toEqual(["src/infra.persistence.postgre/Migrations/20260429000547_Init.cs"]);
+  });
+
+  it("covers the other unambiguous markers", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    expect(traceable(["a.g.cs", "b.generated.ts", "types.d.ts", "svc_pb2.py", "svc_pb2_grpc.py", "svc.pb.go", "real.ts"]))
+      .toEqual(["real.ts"]);
   });
 });
