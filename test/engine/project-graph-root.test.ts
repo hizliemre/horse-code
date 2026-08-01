@@ -160,6 +160,26 @@ describe("pruneTooling — the graph is the project, not what is installed in it
     expect(doc.directed).toBe(true); // everything else the serializer wrote is left alone
   });
 
+  /**
+   * A trace is horse-code's account OF the code. Indexing it as code makes the graph describe its own
+   * description — on a real project, 2,030 documents feeding roughly twenty thousand nodes that no question
+   * about the software is asking about. The project's own documents are a different thing entirely: written
+   * by the team, and part of what the project IS.
+   */
+  it("drops our own per-file traces and keeps the project's own documents", () => {
+    const doc: Record<string, unknown> = {
+      nodes: [
+        { id: "1", source_file: "src/api/orders.cs" },
+        { id: "2", source_file: "docs/architecture/src/api/orders.cs.md" }, // ours
+        { id: "3", source_file: "docs/architecture/47-orders.md" },         // theirs
+      ],
+      links: [],
+    };
+    const r = pruneTooling(doc, new Set(["docs/architecture/src/api/orders.cs.md"]));
+    expect(r).toEqual({ removed: 1, kept: 2 });
+    expect((doc.nodes as { id: string }[]).map((n) => n.id)).toEqual(["1", "3"]);
+  });
+
   it("keeps nodes that name no file — they are not claims about a path", () => {
     const doc: Record<string, unknown> = { nodes: [{ id: "1" }, { id: "2", source_file: "src/a.ts" }], links: [] };
     expect(pruneTooling(doc).removed).toBe(0);

@@ -507,3 +507,22 @@ describe("readTraceSync — a trace whose file has moved on says so", () => {
     expect(readTraceSync(cwd, "src/gone.ts")).not.toMatch(/has changed/);
   });
 });
+
+describe("documents are never trace subjects", () => {
+  /**
+   * A trace explains a source file. A document already explains itself, and writing a second account of it
+   * would put two descriptions of the same thing in the repository, drifting apart from the moment the
+   * second one is written. Adoption is the opposite direction and is fine: a document that describes CODE
+   * is recorded as covering that code, and stays the only copy.
+   */
+  it("never plans a trace for markdown, however it is reached", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    expect(traceable(["README.md", "docs/architecture/47-orders.md", "src/a.ts"]))
+      .toEqual(["src/a.ts"]);
+  });
+
+  it("never plans a trace for a trace", async () => {
+    const { traceable } = await import("../../src/engine/trace.js");
+    expect(traceable(["docs/architecture/src/api/orders.cs.md"])).toEqual([]);
+  });
+});

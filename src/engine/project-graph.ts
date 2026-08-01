@@ -329,15 +329,24 @@ export interface BuildResult {
  * document were a source file, they inflate every count the user is shown, and now that the graph is
  * committed they are 14% of an artefact every clone downloads.
  *
+ * The per-file traces go too, and for a sharper reason: they are horse-code's own account OF the code, so
+ * indexing them as code makes the graph describe its own description. On a real project that was 2,030
+ * documents feeding roughly twenty thousand nodes, none of which any question about the software is asking
+ * about. The project's OWN documents stay — those are written by the team and are part of what it is.
+ *
  * Done after the build rather than by configuring graphify: the rule is ours, it has to survive whatever
  * version of the tool is installed, and it is idempotent — the next incremental build re-adds them and the
  * next prune takes them out again.
  */
-export function pruneTooling(doc: Record<string, unknown>): { removed: number; kept: number } {
+export function pruneTooling(
+  doc: Record<string, unknown>,
+  /** Exact paths to drop as well — the per-file traces, named from the index that recorded writing them. */
+  alsoDrop: ReadonlySet<string> = new Set(),
+): { removed: number; kept: number } {
   const nodes = Array.isArray(doc.nodes) ? doc.nodes as { id?: unknown; source_file?: unknown }[] : [];
   const keep = nodes.filter((n) => {
     const f = typeof n.source_file === "string" ? n.source_file : "";
-    return !f || !NOT_INDEXED.test(f);
+    return !f || (!NOT_INDEXED.test(f) && !alsoDrop.has(f));
   });
   const removed = nodes.length - keep.length;
   if (!removed) return { removed: 0, kept: nodes.length };
@@ -353,6 +362,26 @@ export function pruneTooling(doc: Record<string, unknown>): { removed: number; k
       .filter((e) => ids.has(String(e.source)) && ids.has(String(e.target)));
   }
   return { removed, kept: keep.length };
+}
+
+/**
+ * Where our own per-file traces live, from the index that recorded writing them.
+ *
+ * The index rather than a path pattern, because the two kinds of markdown in the trace directory have to be
+ * told apart exactly: an entry with a `doc` is one of the PROJECT's documents, adopted, and it belongs in the
+ * graph; an entry without one is a file horse-code wrote, and it does not.
+ */
+async function writtenTracePaths(cwd: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const { loadTraceIndex, traceRootRel } = await import("./trace.js");
+    const index = await loadTraceIndex(cwd);
+    const root = traceRootRel().replace(/\\/g, "/");
+    for (const [file, rec] of Object.entries(index.traces)) {
+      if (!rec.doc) out.add(`${root}/${file}.md`);
+    }
+  } catch { /* no index yet → nothing of ours to leave out */ }
+  return out;
 }
 
 export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
@@ -380,7 +409,7 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
   try {
     const path = graphPath(cwd);
     const doc = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-    const res = pruneTooling(doc);
+    const res = pruneTooling(doc, await writtenTracePaths(cwd));
     if (res.removed) { await writeAtomic(path, JSON.stringify(doc)); pruned = res.removed; }
   } catch { /* leave the graph as graphify wrote it */ }
 
