@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { writeAtomic } from "../session/atomic.js";
 import { dirname } from "node:path";
 import { Board } from "./board.js";
 
@@ -19,19 +20,6 @@ import { Board } from "./board.js";
  */
 interface Writer { chain: Promise<void>; queued: boolean; next?: Board }
 const writers = new Map<string, Writer>();
-
-/**
- * Writes through a temporary file and renames it into place.
- *
- * `rename` is atomic within a filesystem, so a process killed mid-write leaves the PREVIOUS good board rather
- * than a half-written one. Serialisation alone would not give that: this run's process was killed while the
- * board was being rewritten.
- */
-async function writeAtomic(path: string, data: string): Promise<void> {
-  const tmp = `${path}.tmp`;
-  await writeFile(tmp, data, "utf8");
-  await rename(tmp, path);
-}
 
 /**
  * Deliberately NOT `async`: everything up to the first await must run synchronously, so a `flushBoard` called

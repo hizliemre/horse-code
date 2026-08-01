@@ -1,6 +1,7 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
+import { writeAtomic } from "./atomic.js";
 
 export const MAX_PINS = 20;
 export const MAX_PIN_CHARS = 500;
@@ -43,7 +44,7 @@ export class PinStore {
 
   private async save(): Promise<void> {
     await mkdir(dirname(this.file), { recursive: true });
-    await writeFile(this.file, JSON.stringify({ pins: this.cache ?? [] }), "utf8");
+    await writeAtomic(this.file, JSON.stringify({ pins: this.cache ?? [] })); // the user typed these; a crash must not eat them
   }
 
   /** Add a pin (trimmed + length-capped). Returns the new pin, or an error string if rejected. */

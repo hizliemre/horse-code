@@ -1,6 +1,7 @@
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { writeAtomic } from "./atomic.js";
 
 /** One conversation message persisted for resume (tool-activity items are not persisted). */
 export interface SessionMessage {
@@ -64,7 +65,7 @@ export class SessionStore {
       count: messages.length,
       messages,
     };
-    await writeFile(this.file(this.activeId), JSON.stringify(data), "utf8");
+    await writeAtomic(this.file(this.activeId), JSON.stringify(data)); // a transcript truncated to nothing cannot be resumed
   }
 
   /** All sessions for this project, newest first. Corrupt files are skipped. */

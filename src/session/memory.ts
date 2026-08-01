@@ -2,6 +2,7 @@ import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
+import { writeAtomic } from "./atomic.js";
 import { readFileSync, statSync } from "node:fs";
 import { deriveAnchors, deriveTags, supersedes, hashAnchors, verifyAnchors, isExpired, SHORT_TTL_MS, type AnchorFs, type MemoryEntry } from "../engine/memory-retrieval.js";
 import { hygiene, type HygieneReport } from "../engine/memory-hygiene.js";
@@ -243,7 +244,8 @@ export class MemoryStore {
     if (!existsSync(gi)) {
       await writeFile(gi, "# horse-code: local/secret state stays out of git; memory.jsonl is shared\nconfig.json\nsources.json\nworktrees/\n", "utf8");
     }
-    await writeFile(this.file, (this.cache ?? []).map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+    // Atomic: a crash mid-write must not leave an empty memory. See writeAtomic — this file was lost that way.
+    await writeAtomic(this.file, (this.cache ?? []).map((e) => JSON.stringify(e)).join("\n") + "\n");
   }
 
   /**

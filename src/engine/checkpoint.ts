@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { writeAtomicSync } from "../session/atomic.js";
 
 /** The spec-kit upstream phases a run may have completed, in order. */
 export type UpstreamPhase = "constitution" | "brainstorm" | "spec" | "clarify" | "plan" | "tasks";
@@ -62,7 +63,8 @@ export function readCheckpoint(worktreeRoot: string): Checkpoint | null {
 
 export function writeCheckpoint(worktreeRoot: string, cp: Checkpoint): void {
   try {
-    writeFileSync(checkpointPath(worktreeRoot), JSON.stringify(cp, null, 2), "utf8");
+    // Atomic: a half-written checkpoint makes a resume rerun phases that already cost real money.
+    writeAtomicSync(checkpointPath(worktreeRoot), JSON.stringify(cp, null, 2));
   } catch { /* best-effort: a failed checkpoint write must never crash the pipeline */ }
 }
 
