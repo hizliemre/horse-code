@@ -43,12 +43,25 @@ describe("the trace root follows the project", () => {
    * The gitignore rule is built on demand: a block frozen at import time would name the default root while
    * traces went somewhere else — a rule that silently protects nothing.
    */
-  it("keeps the configured root out of the ignore rules", async () => {
+  it("names the CONFIGURED root when a rule would exclude it, never the default", async () => {
     setTraceRoot("docs/architecture");
-    await writeFile(join(root, ".gitignore"), "node_modules/\n", "utf8");
+    await writeFile(join(root, ".gitignore"), "node_modules/\ndocs/\n", "utf8");
     await ensureGitignore(root);
     const gi = await readFile(join(root, ".gitignore"), "utf8");
     expect(gi).toContain("!docs/architecture/");
     expect(gi).not.toContain("!.horsecode/traces/");
+  });
+
+  /**
+   * …and stays silent when nothing excludes it.
+   *
+   * A `!path` line for something no rule blocks protects nothing and costs a reader the effort of working
+   * out why it is there. This used to be written for every project regardless.
+   */
+  it("writes no negation when the configured root is not excluded at all", async () => {
+    setTraceRoot("docs/architecture");
+    await writeFile(join(root, ".gitignore"), "node_modules/\n", "utf8");
+    await ensureGitignore(root);
+    expect(await readFile(join(root, ".gitignore"), "utf8")).not.toContain("!docs/architecture");
   });
 });
