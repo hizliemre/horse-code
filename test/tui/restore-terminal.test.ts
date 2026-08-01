@@ -89,3 +89,74 @@ describe("restoreOnExit", () => {
     expect(t.isRaw()).toBe(true); // untouched
   });
 });
+
+/**
+ * The signal path used to bypass the app's own quit policy: one SIGINT restored the terminal and re-raised,
+ * so the process died at once. In raw mode Ctrl+C is `\x03` data and never gets here — but a run spends much
+ * of its time inside subprocesses that hold the foreground terminal, and a Ctrl+C then sends a real SIGINT to
+ * the whole process group. Reported as "it closed itself and went back to the shell", mid-run.
+ */
+describe("an interrupt is negotiable; a termination is not", () => {
+  const fakeProc = () => {
+    const listeners = new Map<string, (() => void)[]>();
+    const killed: string[] = [];
+    return {
+      killed,
+      raise: (sig: string): void => {
+        const fns = listeners.get(sig) ?? [];
+        listeners.set(sig, []); // `once` semantics
+        for (const f of fns) f();
+      },
+      proc: {
+        pid: 1,
+        once: (sig: string, fn: () => void) => { listeners.set(sig, [...(listeners.get(sig) ?? []), fn]); },
+        removeListener: (sig: string, fn: () => void) => {
+          listeners.set(sig, (listeners.get(sig) ?? []).filter((f) => f !== fn));
+        },
+        kill: (_pid: number, sig: string) => { killed.push(sig); },
+      } as unknown as NodeJS.Process,
+    };
+  };
+  const handles = () => ({ stdin: { isTTY: true, setRawMode: () => {} }, write: () => {} });
+
+  it("lets the app keep the process when it handles the interrupt", () => {
+    const f = fakeProc();
+    restoreOnExit(handles(), f.proc, () => true);
+    f.raise("SIGINT");
+    expect(f.killed).toEqual([]); // still alive — the job was cancelled, not the app
+  });
+
+  it("re-arms, so a second interrupt is handled too", () => {
+    const f = fakeProc();
+    let seen = 0;
+    restoreOnExit(handles(), f.proc, () => { seen++; return true; });
+    f.raise("SIGINT");
+    f.raise("SIGINT");
+    expect(seen).toBe(2);
+    expect(f.killed).toEqual([]);
+  });
+
+  it("exits when the app declines to handle it — the escape hatch still works", () => {
+    const f = fakeProc();
+    restoreOnExit(handles(), f.proc, () => false);
+    f.raise("SIGINT");
+    expect(f.killed).toEqual(["SIGINT"]);
+  });
+
+  /** The system is telling us to go, and we go. */
+  it("never negotiates SIGTERM or SIGHUP", () => {
+    for (const sig of ["SIGTERM", "SIGHUP"]) {
+      const f = fakeProc();
+      restoreOnExit(handles(), f.proc, () => true);
+      f.raise(sig);
+      expect(f.killed).toEqual([sig]);
+    }
+  });
+
+  it("exits on an interrupt when no policy is given at all", () => {
+    const f = fakeProc();
+    restoreOnExit(handles(), f.proc);
+    f.raise("SIGINT");
+    expect(f.killed).toEqual(["SIGINT"]);
+  });
+});

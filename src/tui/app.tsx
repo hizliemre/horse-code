@@ -651,7 +651,28 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    * past the TUI would leave the terminal raw. Registered here rather than at each `process.exit` call site
    * so a new exit path cannot forget it.
    */
-  const unhook = restoreOnExit({ stdin: process.stdin, write: (x) => origWrite(x) });
+  /**
+   * An interrupt that arrives as a SIGNAL gets the app's own quit policy, not an immediate death.
+   *
+   * In raw mode Ctrl+C is `\x03` DATA and `onCtrlC` below applies the two-step rule. But a run spends much of
+   * its time inside subprocesses that hold the foreground terminal, and a Ctrl+C then produces a real SIGINT
+   * to the whole process group — which used to kill horse-code outright, mid-run, tidily restoring the
+   * terminal on the way out. Reported as "it closed itself and went back to the shell".
+   *
+   * Returning true keeps the process alive: the first interrupt cancels the running job, exactly as the
+   * keystroke does. A second one within the double-tap window is the escape hatch and does exit.
+   */
+  let lastSignalInt = 0;
+  const unhook = restoreOnExit({ stdin: process.stdin, write: (x) => origWrite(x) }, process, () => {
+    const now = Date.now();
+    const doubled = now - lastSignalInt < 400;
+    lastSignalInt = now;
+    if (doubled) return false; // let it through → restore + exit
+    if (controller.getState().mode === "input") return false; // nothing running: quitting is what was meant
+    jobAbort?.abort();
+    controller.note("⛔ Interrupted — the running job was cancelled. Press Ctrl+C again to quit.");
+    return true;
+  });
   // alt-screen + kitty keyboard protocol (flag 1: disambiguate) → Shift+Enter arrives as a separate
   // sequence (\x1b[13;2u) (plain Enter is still \r, arrows are still legacy → Ink scroll isn't broken).
   // Terminals that don't support it ignore \x1b[>1u (harmless; those terminals need Alt+Enter or

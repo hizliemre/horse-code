@@ -48,25 +48,49 @@ export function restoreTerminal(h: TerminalHandles): void {
  * default handler for them does NOT run `exit` handlers — a Ctrl+C that reaches the process, or a `kill`,
  * would otherwise leave the terminal raw. Returns a function that removes them again.
  */
-export function restoreOnExit(h: TerminalHandles, proc: NodeJS.Process = process): () => void {
+export function restoreOnExit(
+  h: TerminalHandles,
+  proc: NodeJS.Process = process,
+  /**
+   * What to do about an interrupt.
+   *
+   * Returning true means the app handled it and must NOT be killed. This exists because the app has its own
+   * quit policy — a first Ctrl+C arms, a second quits — and the signal path was bypassing it: one SIGINT
+   * restored the terminal and re-raised, so the process died immediately.
+   *
+   * In raw mode Ctrl+C arrives as `\x03` DATA and never reaches here. But horse-code spends much of a run
+   * inside subprocesses (git, the project's own build and tests) that hold the foreground terminal, and a
+   * Ctrl+C then produces a real SIGINT to the whole process group. The app would vanish mid-run, cleanly
+   * restoring the terminal on its way out — which is exactly how it was reported: "it closed itself and went
+   * back to the shell".
+   *
+   * SIGTERM and SIGHUP are not negotiable: the system is telling us to go, and we go.
+   */
+  onInterrupt?: () => boolean,
+): () => void {
   const onExit = (): void => restoreTerminal(h);
-  const onSignal = (sig: NodeJS.Signals) => (): void => {
-    restoreTerminal(h);
-    // Re-raise with the default handler so the exit code and the parent's view of it stay honest.
-    proc.removeListener(sig, onSignal(sig));
-    proc.kill(proc.pid, sig);
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const install = (sig: NodeJS.Signals, negotiable: boolean): void => {
+    const fn = (): void => {
+      if (negotiable && onInterrupt?.()) {
+        // Handled by the app: leave the handler in place for the next one.
+        proc.once(sig, handlers.get(sig)!);
+        return;
+      }
+      restoreTerminal(h);
+      // Re-raise with the default handler so the exit code and the parent's view of it stay honest. The
+      // listener is already gone — `once` removed it — so this reaches the default handler, not us again.
+      proc.kill(proc.pid, sig);
+    };
+    handlers.set(sig, fn);
+    proc.once(sig, fn);
   };
-  const sigint = onSignal("SIGINT");
-  const sigterm = onSignal("SIGTERM");
-  const sighup = onSignal("SIGHUP");
+  install("SIGINT", true);
+  install("SIGTERM", false);
+  install("SIGHUP", false);
   proc.once("exit", onExit);
-  proc.once("SIGINT", sigint);
-  proc.once("SIGTERM", sigterm);
-  proc.once("SIGHUP", sighup);
   return () => {
     proc.removeListener("exit", onExit);
-    proc.removeListener("SIGINT", sigint);
-    proc.removeListener("SIGTERM", sigterm);
-    proc.removeListener("SIGHUP", sighup);
+    for (const [sig, fn] of handlers) proc.removeListener(sig, fn);
   };
 }
