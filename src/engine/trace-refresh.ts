@@ -1,5 +1,7 @@
 import type { Provider } from "../core/types.js";
-import { traceable } from "./trace.js";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { traceable, loadTraceIndex, saveTraceIndex, pruneTraces } from "./trace.js";
 import { planFor, runTraces } from "./trace-run.js";
 import { buildProjectGraph } from "./project-graph.js";
 import type { GitRunner } from "../worktree/git.js";
@@ -25,6 +27,8 @@ const IRRELEVANT = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/;
 export interface RefreshResult {
   traced: number;
   failed: number;
+  /** Traces removed because the task deleted the file they described. */
+  removed: number;
   /** Files that were changed but needed no new trace — unchanged content, or not a trace subject. */
   skipped: number;
   graph?: string;
@@ -61,9 +65,30 @@ export async function refreshTraces(opts: {
   signal?: AbortSignal;
   note?: (text: string) => void;
 }): Promise<RefreshResult> {
-  const out: RefreshResult = { traced: 0, failed: 0, skipped: 0 };
-  const targets = traceable(opts.files);
-  out.skipped = opts.files.length - targets.length;
+  const out: RefreshResult = { traced: 0, failed: 0, removed: 0, skipped: 0 };
+  const candidates = traceable(opts.files);
+  out.skipped = opts.files.length - candidates.length;
+
+  /**
+   * A file the task DELETED still has a trace, and nothing else will ever remove it.
+   *
+   * Whole-repository runs prune by handing the runner every file that should still exist. A partial run
+   * cannot do that — its list is one task's worth of changes, and the pruner would read every other trace as
+   * orphaned — so deletions are handled here, by name, from the same diff that named the additions. Without
+   * this, `graph_trace` keeps answering for files that are gone: the read path deliberately does not call
+   * THAT stale, because a missing file is a deletion to be tidied, not a description to distrust.
+   */
+  const gone = candidates.filter((f) => !existsSync(join(opts.cwd, f)));
+  if (gone.length) {
+    try {
+      const index = await loadTraceIndex(opts.cwd);
+      const kept = new Set(Object.keys(index.traces).filter((f) => !gone.includes(f)));
+      out.removed = (await pruneTraces(opts.cwd, kept, index)).length;
+      if (out.removed) await saveTraceIndex(opts.cwd, index);
+    } catch { /* a trace left behind is untidy; failing the task over it is worse */ }
+  }
+
+  const targets = candidates.filter((f) => !gone.includes(f));
   if (!targets.length) return out;
 
   const model = opts.models.find(Boolean);
@@ -100,8 +125,9 @@ export async function refreshTraces(opts: {
 
 /** One line for the run log, or nothing when there was nothing to say. */
 export function describeRefresh(r: RefreshResult): string | undefined {
-  if (!r.traced && !r.failed) return undefined;
+  if (!r.traced && !r.failed && !r.removed) return undefined;
   const bits = [`📝 ${r.traced} trace(s) refreshed`];
+  if (r.removed) bits.push(`${r.removed} removed for deleted file(s)`);
   if (r.failed) bits.push(`${r.failed} failed`);
   return `${bits.join(" · ")} — the changed files now describe themselves.`;
 }

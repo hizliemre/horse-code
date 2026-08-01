@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile, readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedByMerge, refreshTraces, describeRefresh } from "../../src/engine/trace-refresh.js";
@@ -95,7 +96,7 @@ describe("refreshTraces — only what changed, and never at the cost of what did
   it("returns quietly with no tracer configured, rather than failing a merged task", async () => {
     await write("src/a.ts", "code");
     const r = await refreshTraces({ cwd, files: ["src/a.ts"], provider: canned("x"), models: [] });
-    expect(r).toEqual({ traced: 0, failed: 0, skipped: 0 });
+    expect(r).toEqual({ traced: 0, failed: 0, removed: 0, skipped: 0 });
   });
 
   it("swallows a provider that throws — the work is already merged", async () => {
@@ -107,11 +108,44 @@ describe("refreshTraces — only what changed, and never at the cost of what did
   });
 });
 
+describe("refreshTraces — a deleted file's trace goes with it", () => {
+  it("removes the trace of a file the task deleted, and leaves every other one", async () => {
+    await write("src/kept.ts", "still here");
+    await saveTrace(cwd, { file: "src/kept.ts", hash: hashContent("still here"), content: "still here", symbols: [], usedBy: [], uses: [] }, "Kept.", "m");
+    await saveTrace(cwd, { file: "src/gone.ts", hash: "h", content: "x", symbols: [], usedBy: [], uses: [] }, "Describes a file that no longer exists.", "m");
+    await saveTraceIndex(cwd, { version: 1, traces: {
+      "src/kept.ts": { hash: hashContent("still here"), file: "src/kept.ts", writtenAt: 1 },
+      "src/gone.ts": { hash: "h", file: "src/gone.ts", writtenAt: 1 },
+    } });
+
+    // The merge diff names the deleted file exactly as it names the added ones.
+    const r = await refreshTraces({ cwd, files: ["src/gone.ts"], provider: canned("x"), models: ["m"] });
+    expect(r.removed).toBe(1);
+    expect(r.traced).toBe(0);
+
+    const after = await loadTraceIndex(cwd);
+    expect(Object.keys(after.traces)).toEqual(["src/kept.ts"]);
+    expect(existsSync(tracePath(cwd, "src/gone.ts"))).toBe(false);
+    expect(existsSync(tracePath(cwd, "src/kept.ts"))).toBe(true);
+  });
+
+  it("handles a rename — the old trace goes, the new file gets one", async () => {
+    await write("src/new-name.ts", "moved code");
+    await saveTrace(cwd, { file: "src/old-name.ts", hash: "h", content: "x", symbols: [], usedBy: [], uses: [] }, "Old.", "m");
+    await saveTraceIndex(cwd, { version: 1, traces: { "src/old-name.ts": { hash: "h", file: "src/old-name.ts", writtenAt: 1 } } });
+
+    const r = await refreshTraces({ cwd, files: ["src/old-name.ts", "src/new-name.ts"], provider: canned("Moved here."), models: ["m"] });
+    expect({ removed: r.removed, traced: r.traced }).toEqual({ removed: 1, traced: 1 });
+    const after = await loadTraceIndex(cwd);
+    expect(Object.keys(after.traces)).toEqual(["src/new-name.ts"]);
+  });
+});
+
 describe("describeRefresh", () => {
   it("says nothing when nothing happened", () => {
-    expect(describeRefresh({ traced: 0, failed: 0, skipped: 4 })).toBeUndefined();
+    expect(describeRefresh({ traced: 0, failed: 0, removed: 0, skipped: 4 })).toBeUndefined();
   });
   it("reports failures alongside successes", () => {
-    expect(describeRefresh({ traced: 3, failed: 1, skipped: 0 })).toMatch(/3 trace\(s\) refreshed · 1 failed/);
+    expect(describeRefresh({ traced: 3, failed: 1, removed: 0, skipped: 0 })).toMatch(/3 trace\(s\) refreshed · 1 failed/);
   });
 });
