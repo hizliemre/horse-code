@@ -316,3 +316,28 @@ describe("deriveTask reuses a task's worktree", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * A correction after an interruption — "that answer was wrong, do X instead" — is a DIFFERENT request against
+ * the SAME work. Matching a worktree by the prompt alone cannot express that, so `runJob` takes the key
+ * separately: `prompt` is what the pipeline builds from, `resumeKey` is what it reopens.
+ */
+describe("findResumable is keyed on the request that OPENED the worktree", () => {
+  it("reopens by the original request even when the new one differs", async () => {
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "job");
+    const { writeCheckpoint } = await import("../../src/engine/checkpoint.js");
+    writeCheckpoint(s.root, {
+      rawPrompt: "Build the wizard's basics step", refinedPrompt: "x", title: "Wizard",
+      language: "English", featureSlug: "001-wizard", done: ["spec"],
+    });
+
+    // The corrected request finds nothing on its own…
+    expect(await wm.findResumable("fix it differently instead")).toBeNull();
+    // …but the original key reopens the very same worktree.
+    const found = await wm.findResumable("Build the wizard's basics step");
+    expect(found?.baseWorktree).toBe(s.baseWorktree);
+    expect(found?.resumed).toBe(true);
+  });
+});

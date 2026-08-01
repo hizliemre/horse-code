@@ -34,7 +34,7 @@ import type { MemoryEntry } from "../engine/memory-retrieval.js";
 import { TerminalTitle } from "./terminal-title.js";
 import { phaseLabel } from "./labels.js";
 import { stripThinking } from "./format.js";
-import { isContinuePrompt } from "../engine/checkpoint.js";
+import { classifyResume } from "../engine/resume-intent.js";
 import { RoleFitness } from "../engine/role-fitness.js";
 import { restoreTerminal, restoreOnExit } from "./restore-terminal.js";
 
@@ -703,7 +703,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   let interrupted: string | undefined;
   try {
     for (;;) {
-      const task = await taskPromise;
+      const submitted = await taskPromise;
       // Conversation history: the transcript's last item is this prompt → exclude it (previous turns go to
       // the coach). Inline tool-activity items carry no message → filter them out of the history.
       const history = controller.getState().transcript.slice(0, -1)
@@ -712,30 +712,43 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       /**
        * A run was interrupted, and this prompt is not that prompt.
        *
-       * Resuming is matched on the ORIGINAL request (or a bare "continue"), so a follow-up that corrects
-       * course — "I answered that wrongly, we need to fix it" — matches nothing and silently starts the whole
-       * pipeline over from the constitution. Reported after exactly that: a wrong answer during brainstorming,
-       * Ctrl+C, a correction typed in, and a fresh project underway before anything said so.
-       *
-       * Asking is cheap and only happens after an interruption; starting a project over is neither.
+       * Three things it could mean, and only a reader that understands the sentence can tell them apart:
+       * carry on, correct the direction, or start something else. Reported from a real session: a wrong
+       * answer during brainstorming, Ctrl+C, then "don't add it to the todo, I answered wrongly, we need to
+       * fix the problem" — neither a continuation nor a new project, and the pipeline restarted from the
+       * constitution with 190k tokens already spent.
        */
-      if (interrupted !== undefined && task !== interrupted && !isContinuePrompt(task)) {
+      let resumeKey: string | undefined;
+      let task = submitted;
+      if (interrupted !== undefined && submitted !== interrupted) {
         const prior = interrupted;
         interrupted = undefined;
-        const answer = await controller.ask(
-          `The last run was interrupted and its work is preserved.\n\n> _${prior.slice(0, 160)}_\n\n` +
-          `Does this message continue it, or start something new?`,
-          { options: [
-            { label: "Continue that work", description: "Resumes from the preserved worktree; finished phases are skipped" },
-            { label: "Start something new", description: "Opens a fresh session — the pipeline runs from the beginning" },
-          ] },
-        );
-        // Resuming keys on the original request, so that is what the job is given; the correction is said
-        // again when the interrupted phase re-asks its question.
-        if (/^continue/i.test(answer.trim())) {
-          controller.note(`⏩ Resuming — the interrupted step will ask again, answer it with what you just said.`);
-          taskPromise = Promise.resolve(prior);
-          continue;
+        const intent = await classifyResume({
+          provider: deps.provider,
+          models: [...deps0.roleRegistry.chain("router"), opts.model].filter((m): m is string => !!m),
+          interrupted: prior,
+          message: submitted,
+        });
+        if (intent) {
+          if (intent.mode !== "new") {
+            resumeKey = prior;
+            task = intent.request;
+            controller.note(`⏩ **${intent.mode === "revise" ? "Continuing with a corrected request" : "Resuming"}**`
+              + `${intent.why ? ` — ${intent.why}` : ""}`
+              + (intent.mode === "revise" ? `\n\n> _${task.slice(0, 200)}_` : ""));
+          }
+        } else {
+          // The model could not say. Guessing is worse than asking: "new" restarts a project and "resume"
+          // buries a genuinely new request inside old work.
+          const answer = await controller.ask(
+            `The last run was interrupted and its work is preserved.\n\n> _${prior.slice(0, 160)}_\n\n`
+            + `Does this message continue that work, or start something new?`,
+            { options: [
+              { label: "Continue that work", description: "Keeps the preserved worktree and branch" },
+              { label: "Start something new", description: "Opens a fresh session" },
+            ] },
+          );
+          if (/^continue/i.test(answer.trim())) resumeKey = prior;
         }
       }
       interrupted = undefined;
@@ -749,6 +762,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
           ...opts.jobBase,
           fromBranch: baseRef.current, // …which `/continue-from-claude` may have repointed at adopted work
           prompt: task,
+          ...(resumeKey !== undefined ? { resumeKey } : {}),
           jobName: toSlug(task) || "hcode-job",
           askUser: makeAskUser(read),
           onEvent: controller.onEvent,
@@ -785,7 +799,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         jobAbort.abort(); // stop any in-flight parallel work (e.g. sibling councilors) so it can't keep spending after "done"
         controller.endRun(msg);
         // The prompt that was interrupted, so the NEXT one can be checked against it — see askAboutInterrupted.
-        interrupted = task;
+        // The request this run was actually built from — a later correction is matched against THIS.
+        interrupted = resumeKey ?? task;
       }
       // Persist the conversation after every turn → the session can be resumed later (best-effort).
       void store.save(controller.messages()).catch(() => { /* persistence is non-fatal */ });

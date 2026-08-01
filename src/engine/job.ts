@@ -184,7 +184,18 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
  */
 export async function runJob(
   deps: JobDeps,
-  opts: { prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string; revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void; history?: Message[]; images?: string[] },
+  opts: {
+    prompt: string; fromBranch: string; jobName: string; askUser: AskUser; maxRounds: number; prTitle?: string;
+    revisionRounds?: number; onEvent?: (ev: ProgressEvent) => void; history?: Message[]; images?: string[];
+    /**
+     * The request whose preserved worktree this run should adopt, when it is not the prompt itself.
+     *
+     * A correction after an interruption — "that answer was wrong, do X instead" — is a DIFFERENT request
+     * against the SAME work. Matching a worktree by the prompt alone cannot express that, so the key is
+     * passed separately: `prompt` is what the pipeline builds from, `resumeKey` is what it reopens.
+     */
+    resumeKey?: string;
+  },
 ): Promise<JobResult> {
   // don't let onEvent errors crash the engine: the observer is called synchronously (deep inside board mutations).
   const onEvent = opts.onEvent;
@@ -198,9 +209,23 @@ export async function runJob(
     if (!session) {
       // Resume: reuse a preserved worktree from an earlier interrupted run of the same prompt (so the user
       // continues from where they left off — even after restarting hcode); otherwise open a fresh session.
-      session = (await deps.manager.findResumable(opts.prompt))
+      session = (await deps.manager.findResumable(opts.resumeKey ?? opts.prompt))
         ?? await deps.manager.openSession(opts.fromBranch, nameHint || opts.jobName);
-      if (session.resumed) emit({ kind: "note", text: `⏩ Resuming earlier work at \`${session.baseWorktree}\` — completed phases are skipped.` });
+      /**
+       * A REVISED request keeps the worktree but not the finished phases.
+       *
+       * The spec and plan already on disk were derived from the request that was interrupted; carrying them
+       * into a corrected one would build the thing the user just said was wrong, while telling them phases
+       * were "skipped". The files stay — they are committed, and the branch is the point of resuming — but
+       * the pipeline re-derives from what was actually asked for.
+       */
+      const revised = opts.resumeKey !== undefined && opts.resumeKey !== opts.prompt;
+      if (session.resumed && revised) {
+        clearCheckpoint(session.root);
+        emit({ kind: "note", text: `⏩ Keeping the work at \`${session.baseWorktree}\` — the request changed, so the plan is re-derived.` });
+      } else if (session.resumed) {
+        emit({ kind: "note", text: `⏩ Resuming earlier work at \`${session.baseWorktree}\` — completed phases are skipped.` });
+      }
     }
     return session.baseWorktree;
   };
