@@ -87,7 +87,15 @@ export async function runTraces(opts: {
   provider: Provider;
   model: string;
   plan: TracePlan;
-  liveFiles: Set<string>;
+  /**
+   * Every file that should still HAVE a trace — traces for anything else are deleted.
+   *
+   * Optional, and pruning happens only when it is given, because the destructive reading of "not in this
+   * set" is the accidental one. A partial run — refreshing the handful of files a task changed — knows
+   * nothing about the rest of the repository, and passing its own list here would delete every other trace
+   * in the project. Omit it and nothing is pruned.
+   */
+  liveFiles?: Set<string>;
   signal?: AbortSignal;
   /**
    * Reports EVERY file as it finishes, with what happened to it.
@@ -139,7 +147,7 @@ export async function runTraces(opts: {
   };
   await Promise.all(Array.from({ length: Math.min(TRACE_CONCURRENCY, queue.length) }, worker));
 
-  const pruned = await pruneTraces(cwd, opts.liveFiles, index);
+  const pruned = opts.liveFiles ? await pruneTraces(cwd, opts.liveFiles, index) : [];
   await saveTraceIndex(cwd, index);
   // Written now rather than up front: only a run that actually produced something needs the rules.
   const wroteGitignore = written > 0 && await ensureGitignore(cwd);

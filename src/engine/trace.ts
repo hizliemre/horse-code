@@ -165,15 +165,36 @@ function indexSync(cwd: string): TraceIndex {
   return { version: 1, traces: {} };
 }
 
+/**
+ * Has the file moved on since its trace was written?
+ *
+ * The hash has been stored since the first version, with a comment saying the trace is stale when it stops
+ * matching — and nothing on the read path ever looked. So after any task edited a file, `graph_trace` went on
+ * serving the description of the code as it USED to be, with no mark on it. That is worse than having no
+ * trace: an agent reads a confident account of code that no longer exists and trusts it, because a trace is
+ * the one source in the project that claims to say why.
+ */
+function traceIsStale(cwd: string, file: string, rec: TraceRecord | undefined): boolean {
+  if (!rec?.hash) return false;
+  try { return hashContent(readFileSync(join(stateRoot(cwd), file), "utf8")) !== rec.hash; }
+  catch { return false; } // deleted or unreadable — pruning's job, not a staleness claim
+}
+
+const STALE_BANNER =
+  "> ⚠️ **This file has changed since this note was written.** Treat everything below as the previous "
+  + "version: the purpose is probably still right, the specifics may not be. Read the file itself before "
+  + "relying on any detail here.\n\n";
+
 export function readTraceSync(cwd: string, file: string): string | undefined {
-  // An adopted file is described by one of the project's own documents; serve that rather than nothing.
   const rec = indexSync(cwd).traces[file];
+  const mark = (body: string): string => (traceIsStale(cwd, file, rec) ? STALE_BANNER + body : body);
+  // An adopted file is described by one of the project's own documents; serve that rather than nothing.
   if (rec?.doc) {
-    try { return readFileSync(join(stateRoot(cwd), rec.doc), "utf8"); } catch { /* moved or deleted → fall through */ }
+    try { return mark(readFileSync(join(stateRoot(cwd), rec.doc), "utf8")); } catch { /* moved or deleted → fall through */ }
   }
   // The path becomes a filesystem lookup, so it must not be able to leave the trace directory.
   if (!file || file.includes("..") || file.startsWith("/")) return undefined;
-  try { return readFileSync(tracePath(cwd, file), "utf8"); } catch { return undefined; }
+  try { return mark(readFileSync(tracePath(cwd, file), "utf8")); } catch { return undefined; }
 }
 
 export interface TraceJob {

@@ -3,12 +3,16 @@ import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult } from
 import { runTaskWithEscalation, type EscalationDeps } from "./escalation.js";
 import { squashTask } from "./operational.js";
 import { telemetry } from "../obs/telemetry.js";
+import { changedByMerge, refreshTraces, describeRefresh } from "./trace-refresh.js";
+import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 
 /** E4a only uses these three methods (a narrow interface for stub/mock injection). */
 export type WaveTaskManager = Pick<WorktreeManager, "deriveTask" | "commitTask" | "mergeTask">;
 
 export interface WaveTaskDeps extends EscalationDeps {
   manager: WaveTaskManager;
+  /** Injectable so tests drive the merge diff that decides which files get re-described. */
+  git?: GitRunner;
   /** Mutex serializing the git-mutating steps (derive, merge); provides E4c in a parallel wave.
    *  Default: identity. */
   serialize?: <T>(fn: () => Promise<T>) => Promise<T>;
@@ -42,6 +46,7 @@ export async function runWaveTask(
   const card = board.get(taskId);
   if (!card) throw new Error(`runWaveTask: unknown task: ${taskId}`);
 
+  const git = deps.git ?? defaultGitRunner;
   const ser = deps.serialize ?? (<T>(f: () => Promise<T>) => f());
   const derive = () => ser(() => deps.manager.deriveTask(session, card.title));
   const tw = await (deps.timings ? deps.timings.time("git", derive) : derive());
@@ -81,6 +86,9 @@ export async function runWaveTask(
     return { status: "task-failed", task: tw };
   }
 
+  // What the base looked like before this task landed, so the merge's own diff names the files to re-describe.
+  const baseBefore = (await git(["rev-parse", "HEAD"], session.baseWorktree)).stdout.trim();
+
   // pass → commit the worktree changes to the task branch, then merge into base
   const land = async (): Promise<MergeResult> => {
     await deps.manager.commitTask(tw, `hc: ${card.title}`);
@@ -98,8 +106,43 @@ export async function runWaveTask(
     // Only git can say this. The review said the code was GOOD; this says it is in the base branch.
     board.move(taskId, "MERGED", "team-lead");
     board.appendStage(taskId, { role: "team-lead", action: "merged" });
+    /**
+     * The project's account of itself, brought level with the code that just landed.
+     *
+     * Here rather than at the end of the run: the next task in this wave reads `graph_trace` before touching
+     * unfamiliar code, and what it must not read is the description of a file as it was before its
+     * neighbour rewrote it. Merged work is the right trigger — reviewed, landed, and final.
+     */
+    await refreshAfterMerge(deps, session, git, baseBefore);
     return { status: "merged", task: tw };
   }
   board.appendStage(taskId, { role: "team-lead", action: "merge-conflict", note: mr.files.join(", ") });
   return { status: "conflict", files: mr.files, task: tw };
+}
+
+
+/**
+ * Re-describes the files a merge brought in, in the worktree that owns the state.
+ *
+ * Best-effort by construction: the work is already merged, so nothing here may fail the task. A tracer that
+ * is unavailable, rate-limited or simply absent from the registry leaves the traces as they were — stale,
+ * and MARKED stale on read, which is the state the project was in before any of this existed.
+ */
+async function refreshAfterMerge(
+  deps: WaveTaskDeps, session: WorktreeSession, git: GitRunner, baseBefore: string,
+): Promise<void> {
+  try {
+    const files = await changedByMerge(git, session.baseWorktree, baseBefore);
+    if (!files.length) return;
+    const r = await refreshTraces({
+      cwd: session.baseWorktree,
+      files,
+      provider: deps.provider,
+      models: deps.roleRegistry.chainFor("tracer", 0),
+      signal: deps.signal,
+      note: (t) => deps.note?.(t),
+    });
+    const line = describeRefresh(r);
+    if (line) deps.note?.(line);
+  } catch { /* documentation must never be the reason a merged task is reported as failed */ }
 }

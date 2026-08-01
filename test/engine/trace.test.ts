@@ -446,3 +446,34 @@ describe("planTraces — an adopted file is already covered", () => {
     expect(plan.jobs.map((j) => j.file)).toEqual(["src/a.ts"]);
   });
 });
+
+describe("readTraceSync — a trace whose file has moved on says so", () => {
+  it("marks a stale trace instead of serving it as current", async () => {
+    await write("src/a.ts", "original");
+    await saveTrace(cwd, { file: "src/a.ts", hash: hashContent("original"), content: "original", symbols: [], usedBy: [], uses: [] }, "It parses orders.", "m");
+    await saveTraceIndex(cwd, { version: 1, traces: { "src/a.ts": { hash: hashContent("original"), file: "src/a.ts", writtenAt: 1 } } });
+    expect(readTraceSync(cwd, "src/a.ts")).not.toMatch(/has changed/);
+
+    await write("src/a.ts", "rewritten by a task");
+    const body = readTraceSync(cwd, "src/a.ts");
+    expect(body).toMatch(/⚠️ \*\*This file has changed/);
+    expect(body).toMatch(/It parses orders\./); // the note itself is still served — it is stale, not worthless
+  });
+
+  it("marks a stale ADOPTED entry too — a project document goes out of date the same way", async () => {
+    await write("src/a.ts", "original");
+    await write("docs/architecture/47-orders.md", "Orders live in src/a.ts.");
+    await saveTraceIndex(cwd, {
+      version: 1, traces: { "src/a.ts": { hash: hashContent("original"), file: "src/a.ts", writtenAt: 1, doc: "docs/architecture/47-orders.md" } },
+    });
+    expect(readTraceSync(cwd, "src/a.ts")).not.toMatch(/has changed/);
+    await write("src/a.ts", "rewritten");
+    expect(readTraceSync(cwd, "src/a.ts")).toMatch(/⚠️ \*\*This file has changed/);
+  });
+
+  it("does not claim staleness for a file it cannot read — that is pruning's job", async () => {
+    await saveTrace(cwd, { file: "src/gone.ts", hash: "h", content: "x", symbols: [], usedBy: [], uses: [] }, "note", "m");
+    await saveTraceIndex(cwd, { version: 1, traces: { "src/gone.ts": { hash: "h", file: "src/gone.ts", writtenAt: 1 } } });
+    expect(readTraceSync(cwd, "src/gone.ts")).not.toMatch(/has changed/);
+  });
+});
