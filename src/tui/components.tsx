@@ -48,9 +48,18 @@ export function pendingWidth(cols: number): number {
   // -4: the two-column indent of the block itself, plus the terminal's own margin.
   return Math.max(20, cols - 4);
 }
-/** Body wrap width: the box width minus the 2-space hanging indent under the header. */
+/**
+ * Body wrap width — the width the body is actually DRAWN in.
+ *
+ * It used to subtract one indent when there are two: the block's own `paddingLeft` and the body's hanging
+ * indent under the header. Wrapping to two columns more than the box then made Ink re-wrap every line that
+ * fell between the two widths, and each re-wrap is a row nobody counted. The block renders taller than the
+ * layout reserved, the frame overflows the terminal, and the terminal scrolls the TOP away — which is why a
+ * question kept losing its first bullet, the first character of its bold header ("25 standing rule(s)"
+ * arriving as "5 standing rule(s)"), and finally its option labels.
+ */
 export function pendingBodyWidth(cols: number): number {
-  return Math.max(16, pendingWidth(cols) - 2);
+  return Math.max(16, pendingWidth(cols) - 4);
 }
 
 /**
