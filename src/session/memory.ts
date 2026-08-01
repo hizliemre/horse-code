@@ -88,8 +88,34 @@ export class MemoryStore {
       /* no memory file yet */
     }
     this.cache = out;
-    if (this.dedupeIds(out)) await this.persist(); // an already-written file is repaired once, on the way in
+    // An already-written file is repaired once, on the way in. Both repairs are pure re-derivations, so a
+    // healthy file is left byte-for-byte alone.
+    const repaired = this.dedupeIds(out);
+    const retagged = this.retag(out);
+    if (repaired || retagged) await this.persist();
     return out;
+  }
+
+  /**
+   * Re-derives tags for entries written under an older rule.
+   *
+   * Tags are stored, so fixing how they are derived does nothing for memories already on disk — and the rule
+   * that was fixed had been dropping the meaningful words: a fact about `DomainException` kept `types`,
+   * `must` and `including` while losing `domain` and `exception`, which is what a query would have matched.
+   * On the real pool that entry scored ZERO for the question it was written to answer.
+   *
+   * `deriveTags` is pure, so recomputing is safe and idempotent: an entry already tagged correctly produces
+   * exactly what it has. Returns whether anything changed.
+   */
+  private retag(entries: MemoryEntry[]): boolean {
+    let changed = false;
+    for (const e of entries) {
+      const fresh = deriveTags(e.text, e.anchors ?? []);
+      if (fresh.length === e.tags?.length && fresh.every((t, i) => e.tags[i] === t)) continue;
+      e.tags = fresh;
+      changed = true;
+    }
+    return changed;
   }
 
   /**

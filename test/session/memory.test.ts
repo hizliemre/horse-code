@@ -235,3 +235,37 @@ describe("memory ids are unique", () => {
     expect(await readFile(join(home, "proj-ok", ".horsecode", "memory.jsonl"), "utf8")).toBe(before);
   });
 });
+
+/**
+ * Tags are STORED, so fixing how they are derived does nothing for memories already on disk — and the rule
+ * that was fixed had been dropping the meaningful words.
+ */
+describe("stored tags are re-derived on load", () => {
+  it("repairs an entry tagged under the old rule", async () => {
+    const dir = join(home, "proj-tags", ".horsecode");
+    await mkdir(dir, { recursive: true });
+    const stale = {
+      id: "m1", createdAt: 1, kind: "fact",
+      text: "All domain exception types must derive from `DomainException`.",
+      anchors: ["domainexception"],
+      tags: ["types", "must", "derive"], // what the old rule produced: `domain` and `exception` stripped
+    };
+    await writeFile(join(dir, "memory.jsonl"), JSON.stringify(stale) + "\n", "utf8");
+
+    const [e] = await new MemoryStore({ home, cwd: join(home, "proj-tags") }).load();
+
+    expect(e!.tags).toEqual(expect.arrayContaining(["domain", "exception"]));
+    // …and it is on disk, so the next process starts from the repaired file.
+    const again = await new MemoryStore({ home, cwd: join(home, "proj-tags") }).load();
+    expect(again[0]!.tags).toEqual(e!.tags);
+  });
+
+  it("leaves a correctly-tagged file byte-for-byte alone", async () => {
+    const s = new MemoryStore({ home, cwd: join(home, "proj-fresh") });
+    await s.add("The adapter lives in src/app/store.ts");
+    const path = join(home, "proj-fresh", ".horsecode", "memory.jsonl");
+    const before = await readFile(path, "utf8");
+    await new MemoryStore({ home, cwd: join(home, "proj-fresh") }).load();
+    expect(await readFile(path, "utf8")).toBe(before);
+  });
+});

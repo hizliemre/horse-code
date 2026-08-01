@@ -25,11 +25,32 @@ export function deriveAnchors(text: string): string[] {
 
 /** Informative tag terms: content words minus stopwords and anything already captured as an anchor. */
 export function deriveTags(text: string, anchors: string[]): string[] {
+  /**
+   * An anchor's own SEGMENTS, not every substring of it.
+   *
+   * The rule used to be `anchors.some((a) => a.includes(w))`, meant to stop `src/app.ts` from also producing
+   * the tag `app`. On prose carrying a backticked identifier it did the opposite and removed exactly the
+   * words that carry the meaning: a memory reading "All domain exception types must derive from
+   * `DomainException`" anchored `domainexception`, so BOTH `domain` and `exception` were dropped and the
+   * entry was tagged `[types, including, must, derive, existing, examples, include]` — grammar only.
+   *
+   * Measured against the real pool that produced: for the query "Add a new domain exception type for cargo
+   * validation" that memory scored ZERO while 101 unrelated entries scored 0.6 on one incidental tag, and
+   * five of those took the slots. The anchor could not save it either — a query says "domain exception"
+   * with a space, and the anchor is one word.
+   *
+   * Segments keep the original intent (path parts, extensions) without swallowing whole words.
+   */
+  const anchorParts = new Set<string>();
+  for (const a of anchors) {
+    anchorParts.add(a);
+    for (const part of a.split(/[/._\-]/)) if (part) anchorParts.add(part);
+  }
   const tags = new Set<string>();
   for (const m of text.toLowerCase().matchAll(WORD_RE)) {
     const w = m[0];
     if (STOPWORDS.has(w)) continue;
-    if (anchors.some((a) => a.includes(w))) continue; // skip path/identifier fragments already in an anchor
+    if (anchorParts.has(w)) continue; // a path segment or the anchor itself — already matched exactly
     tags.add(w);
   }
   return [...tags];
@@ -224,10 +245,29 @@ export function rankScore(relevance: number, e: MemoryEntry): number {
 }
 
 /** Lexical relevance of a memory to a query (0 = irrelevant). Anchor hit dominates; tags corroborate. */
+/**
+ * Does this anchor appear in the query as its own token, rather than inside a longer word?
+ *
+ * `q.includes(a)` was raw substring containment, and short anchors then matched everywhere: measured on a
+ * real pool, the anchor `id` scored 0.96 against "…for cargo val**id**ation" and `or` scored 0.96 against
+ * "…type f**or** cargo". Two of the four top-band hits for that query were won that way, outranking the one
+ * memory actually written to answer it. That pool holds thirty anchors of four characters or fewer —
+ * `s`, `-`, `lg`, `403` — every one of them a wildcard under substring matching.
+ */
+function anchorInQuery(q: string, anchor: string): boolean {
+  if (!anchor) return false;
+  const alnum = (c: string | undefined): boolean => c !== undefined && /[a-z0-9]/.test(c);
+  for (let i = q.indexOf(anchor); i >= 0; i = q.indexOf(anchor, i + 1)) {
+    // Only the ends matter: an anchor may contain punctuation of its own (`src/app.ts`).
+    if (!alnum(q[i - 1]) && !alnum(q[i + anchor.length])) return true;
+  }
+  return false;
+}
+
 export function scoreMemory(query: string, entry: MemoryEntry): number {
   const q = query.toLowerCase();
   const qWords = new Set(Array.from(q.matchAll(WORD_RE), (m) => m[0]));
-  if (entry.anchors.some((a) => q.includes(a))) return 0.96; // exact anchor appears in the query
+  if (entry.anchors.some((a) => anchorInQuery(q, a))) return 0.96; // exact anchor appears in the query
   const tagHits = entry.tags.filter((t) => qWords.has(t)).length;
   if (tagHits >= 2) return 0.88;
   if (tagHits === 1) return 0.6;
@@ -302,6 +342,32 @@ export interface Selection {
 /** At most this many hints may share a primary anchor — five notes on one file must not crowd out everything. */
 const MAX_PER_ANCHOR = 2;
 
+/**
+ * How much a matched tag actually tells us, given how common it is in this pool.
+ *
+ * `scoreMemory` has four values — 0.96, 0.88, 0.6, 0 — so a single tag hit puts an entry EXACTLY on the
+ * threshold. That was fine at seven memories. At 1460 it is not: measured on a real pool, one query put 101
+ * entries on 0.6 together, and which five of them won a slot came down to `uses` then `createdAt` — neither
+ * of which is relevance. A term matching seven percent of everything is not a signal; a term matching two
+ * entries is.
+ *
+ * Used as the TIE-BREAK rather than as a filter, deliberately. A cutoff tuned for a big pool starves a small
+ * one — in a seven-entry project every tag looks "common" — while ordering by information content changes
+ * nothing when all the candidates are equally rare, which is exactly the small-pool case.
+ */
+export function tagInformation(matched: string[], df: Map<string, number>, total: number): number {
+  if (!matched.length || total <= 0) return 0;
+  let sum = 0;
+  for (const t of matched) sum += Math.log(total / Math.max(df.get(t) ?? 1, 1));
+  return sum;
+}
+
+/** Which of the query's words this entry is tagged with — the terms its score was actually earned on. */
+function matchedTags(query: string, entry: MemoryEntry): string[] {
+  const qWords = new Set(Array.from(query.toLowerCase().matchAll(WORD_RE), (m) => m[0]));
+  return entry.tags.filter((t) => qWords.has(t));
+}
+
 /** Selects the most relevant memories for a query, capped by the pressure-gated budget, with diagnostics. */
 export function selectMemoriesDetailed(
   entries: MemoryEntry[],
@@ -327,10 +393,17 @@ export function selectMemoriesDetailed(
     eligible.push(e);
   }
 
+  // Document frequency over the ELIGIBLE pool: how many memories carry each tag, so a ubiquitous term can be
+  // told from a discriminating one.
+  const df = new Map<string, number>();
+  for (const e of eligible) for (const t of new Set(e.tags)) df.set(t, (df.get(t) ?? 0) + 1);
+
   const scored = eligible.map((e) => ({ entry: e, relevance: scoreMemory(query, e) }));
   const direct: SelectedMemory[] = [];
+  const info = new Map<string, number>(); // per entry id → information content of the tags it matched on
   for (const s of scored) {
     if (s.relevance < threshold) { stats.belowThreshold++; continue; }
+    info.set(s.entry.id, tagInformation(matchedTags(query, s.entry), df, eligible.length));
     direct.push({ ...s, score: rankScore(s.relevance, s.entry), via: "query" });
   }
 
@@ -346,8 +419,13 @@ export function selectMemoriesDetailed(
     }
   }
 
+  // Within a score band, the entry whose matched terms are RARER goes first — see tagInformation. `uses` and
+  // recency stay behind it as the last resorts they always were.
   const byScore = (a: SelectedMemory, b: SelectedMemory): number =>
-    b.score - a.score || (b.entry.uses ?? 0) - (a.entry.uses ?? 0) || b.entry.createdAt - a.entry.createdAt;
+    b.score - a.score
+    || (info.get(b.entry.id) ?? 0) - (info.get(a.entry.id) ?? 0)
+    || (b.entry.uses ?? 0) - (a.entry.uses ?? 0)
+    || b.entry.createdAt - a.entry.createdAt;
 
   const hits: SelectedMemory[] = [];
   const perAnchor = new Map<string, number>();

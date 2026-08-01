@@ -404,3 +404,71 @@ describe("selectMemoriesDetailed — diagnostics", () => {
     expect(r.stats.budget).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Three defects that only showed up once a pool got big, all measured on a real 1460-entry project memory
+ * for the query "Add a new domain exception type for cargo validation".
+ */
+describe("selection at scale", () => {
+  const entry = (text: string, over: Partial<MemoryEntry> = {}): MemoryEntry => {
+    const anchors = deriveAnchors(text);
+    return { id: text.slice(0, 12), text, anchors, tags: deriveTags(text, anchors), createdAt: 1, ...over };
+  };
+
+  /**
+   * The tag rule dropped any word appearing INSIDE an anchor, so a fact about `DomainException` lost both
+   * `domain` and `exception` and kept `types`, `must`, `including`. It scored ZERO for the question it was
+   * written to answer.
+   */
+  it("keeps words that a backticked identifier merely contains", () => {
+    const e = entry("All domain exception types must derive from `DomainException`.");
+    expect(e.tags).toEqual(expect.arrayContaining(["domain", "exception"]));
+    expect(scoreMemory("Add a new domain exception type for cargo validation", e)).toBeGreaterThanOrEqual(0.88);
+  });
+
+  /** …while the rule's original purpose still holds: a path's own segments are not also tags. */
+  it("still drops the segments of a path anchor", () => {
+    const e = entry("The adapter lives in src/app/store.ts and nothing else touches it.");
+    expect(e.tags).not.toContain("app");
+    expect(e.tags).not.toContain("store");
+    expect(e.anchors).toContain("src/app/store.ts");
+  });
+
+  /**
+   * Anchor matching was raw substring containment, so `id` scored 0.96 against "val**id**ation" and `or`
+   * against "f**or**". Two of the four top-band hits for that query were won that way.
+   */
+  it("does not let a short anchor match inside a longer word", () => {
+    const idEntry = entry("The cargo list sorts by createdAt and uses `Id` as a tiebreak.");
+    const orEntry = entry("Alloy conditionals coalesce optional values with `or`.");
+    const q = "Add a new domain exception type for cargo validation";
+    expect(idEntry.anchors).toContain("id");
+    expect(orEntry.anchors).toContain("or");
+    expect(scoreMemory(q, idEntry)).toBeLessThan(0.96); // "validation" is not the anchor `id`
+    expect(scoreMemory(q, orEntry)).toBeLessThan(0.96); // nor is "for" the anchor `or`
+  });
+
+  it("still matches an anchor that really is in the query", () => {
+    const e = entry("The adapter lives in src/app/store.ts.");
+    expect(scoreMemory("refactor src/app/store.ts persistence", e)).toBe(0.96);
+    expect(scoreMemory("rename `Id` to identifier", entry("Rows are keyed by `Id`."))).toBe(0.96);
+  });
+
+  /**
+   * A single tag hit lands EXACTLY on the threshold, so at 1460 entries one query put 101 of them on 0.6
+   * together and the tie-break — `uses`, then recency — decided which five were injected.
+   */
+  it("prefers the rarer term when two memories tie on score", () => {
+    const common = Array.from({ length: 20 }, (_, i) => entry(`Note ${i} about deployment matters.`));
+    const rare = entry("Kubernetes ingress needs an explicit deployment annotation.");
+    const hits = selectMemories([...common, rare], "deployment ingress question", { load: 0 });
+    expect(hits[0]!.text).toBe(rare.text); // "ingress" appears once; "deployment" appears twenty-one times
+  });
+
+  it("orders identically when every candidate is equally rare — the small-pool case is untouched", () => {
+    const a = entry("Alpha uses the cargo adapter.");
+    const b = entry("Beta uses the cargo adapter.");
+    const hits = selectMemories([a, b], "cargo question", { load: 0 });
+    expect(hits.map((h) => h.text).sort()).toEqual([a.text, b.text].sort());
+  });
+});
