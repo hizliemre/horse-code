@@ -392,7 +392,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         // The architect's whole chain — the same reason the classifier gets one: a single exhausted
         // subscription must not decide whether any skill is assigned at all.
         const tuner = [...deps0.roleRegistry.chain("architect"), opts.model].filter((m): m is string => !!m);
-        const { assignments, withheld } = await tuneRoleSkills({
+        const { assignments, withheld, reasoning } = await tuneRoleSkills({
           provider: deps.provider, tuner, project, roles: tunableRoles(), roleProfiles: ROLE_PROFILES,
           skills: fresh.map((s) => ({ name: s.name, description: s.description })),
         });
@@ -409,9 +409,18 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         const held = withheld.length
           ? `\n\nWithheld: ${withheld.map((w) => `${w.skill} (${w.because})`).join("; ")}`
           : "";
+        /**
+         * The tuner's REASON, both ways.
+         *
+         * It was discarded, and the empty case then read "No role needs one permanently" — the same sentence
+         * whether the model had deliberately assigned nothing (which the prompt explicitly asks it to explain)
+         * or the whole chain had failed, since a failure is also reported through `reasoning`. Measured on a
+         * real migration: 73 skills installed, nothing assigned, and no way to tell which of the two it was.
+         */
+        const why = reasoning.trim() ? `\n\n_${reasoning.trim()}_` : "";
         return rows.length
-          ? `**Skills assigned:**\n${rows.join("\n")}${held}\n\n_Restart to pick them up in already-built prompts._`
-          : `No role needs one permanently${held}`;
+          ? `**Skills assigned:**\n${rows.join("\n")}${held}${why}\n\n_Restart to pick them up in already-built prompts._`
+          : `No role carries one permanently — every agent can still fetch them on demand.${held}${why}`;
       },
     });
     return describeResult(r);

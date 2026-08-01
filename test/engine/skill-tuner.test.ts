@@ -182,3 +182,33 @@ describe("the tuner's model chain", () => {
     expect(r.reasoning).toContain("No model is configured");
   });
 });
+
+/**
+ * The caller has to be able to tell "the model deliberately assigned nothing" from "the call failed" — the
+ * migration path reported both as the same sentence, on a run where 73 skills were installed and none was
+ * assigned.
+ */
+describe("an empty result always says which kind of empty it is", () => {
+  const NOTHING = 'Every one of these is domain-specific and better fetched on demand.\n```json\n{"assignments":[]}\n```';
+
+  it("carries the model's rationale when it chose to assign nothing", async () => {
+    const provider = { async *chat() { yield { type: "text-delta" as const, text: NOTHING }; } } as unknown as Provider;
+    const r = await tuneRoleSkills({
+      provider, tuner: ["m"], project: WITH_TESTS, roles: ROLES, roleProfiles: {},
+      skills: AVAILABLE.map((name) => ({ name, description: `desc of ${name}` })),
+    });
+    expect(Object.values(r.assignments).flat()).toEqual([]);
+    expect(r.reasoning).toContain("fetched on demand");
+    expect(r.reasoning).not.toContain("failed");
+  });
+
+  it("says it failed when it failed", async () => {
+    const r = await tuneRoleSkills({
+      provider: failing(), tuner: ["m"], project: WITH_TESTS, roles: ROLES, roleProfiles: {},
+      skills: AVAILABLE.map((name) => ({ name, description: `desc of ${name}` })),
+    });
+    expect(Object.values(r.assignments).flat()).toEqual([]);
+    expect(r.reasoning).toContain("failed");
+    expect(r.reasoning).toContain("catalogue unavailable");
+  });
+});
