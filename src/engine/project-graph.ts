@@ -1,4 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
+import { writeAtomic } from "../session/atomic.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
@@ -140,6 +141,15 @@ export interface GraphStatus {
 /** Files whose change invalidates the graph. Matches what graphify's AST extractors actually read. */
 const CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala)$/;
 
+/**
+ * Tooling and vendored trees, for the "a file the graph has never seen" half of the check.
+ *
+ * The graph's own list covers everything it already knows; this only has to stop a NEW file in someone
+ * else's directory — a skill's script, a dependency, a build artefact — from being read as the project
+ * having changed.
+ */
+const NOT_INDEXED = /(^|\/)(dist|build|out|node_modules|vendor|coverage|graphify-out|\.[^/]+)\//;
+
 /** Cap the staleness scan: a monorepo must not make "is the graph fresh?" expensive. */
 export const MAX_STALE_CHECK = 5000;
 
@@ -170,8 +180,29 @@ export async function graphStatus(cwd: string): Promise<GraphStatus> {
   const builtAt = st?.mtimeMs;
   const staleBecause: string[] = [];
   if (builtAt !== undefined) {
-    const files = (await gitFiles(cwd)).filter((f) => CODE_EXT.test(f)).slice(0, MAX_STALE_CHECK);
-    for (const f of files) {
+    /**
+     * The graph's own file list decides staleness — not every code-looking file in the repository.
+     *
+     * Scanning by extension produced a false alarm that is worse than no alarm: on a real project the graph
+     * was reported stale because of scripts under `.claude/skills/`, which graphify never indexed and whose
+     * mtimes had moved when the skills were installed. The user was told to spend a rebuild on files the
+     * graph does not contain and would not contain afterwards either.
+     *
+     * A file the graph KNOWS, changed since the build, is exactly the claim being made — and it needs no
+     * guessing about which directories count as source.
+     */
+    const known = new Set<string>();
+    for (const n of g?.nodes ?? []) if (n.source_file) known.add(n.source_file);
+    // A brand-new file the graph has never seen is the other real cause, and the one that matters most when
+    // an agent adds code. It only counts when it looks like something graphify would extract.
+    const listed = await gitFiles(cwd);
+    // NOT_INDEXED applies to BOTH halves. The graph happens to contain `.horsecode/skills/**` — horse-code's
+    // own installed state, indexed because graphify walks what it is pointed at — and a change there is never
+    // a reason to tell someone their CODE graph has gone out of date. Measured: the whole staleness claim on
+    // a real project was three skill documents.
+    const candidates = listed.filter((f) => !NOT_INDEXED.test(f) && (known.has(f) || CODE_EXT.test(f)))
+      .slice(0, MAX_STALE_CHECK);
+    for (const f of candidates) {
       if (staleBecause.length >= 3) break;
       try {
         const s = await stat(join(cwd, f));
@@ -248,6 +279,41 @@ export interface BuildResult {
  * extraction: no LLM, no API key, no network, and a SHA256 cache means a rebuild only re-parses what changed.
  * That is what makes keeping the graph fresh affordable enough to do automatically.
  */
+/**
+ * Strips the tooling nodes graphify picks up on its way past.
+ *
+ * graphify walks what it is pointed at, and what it is pointed at contains horse-code's own installed state.
+ * Measured on a real project: 7,915 of 55,081 nodes — 14% — came from `.horsecode/skills`, `.claude/` and
+ * `.agents/`. They are not the project. They surface in `graph_find` and `graph_overview` as if a skill
+ * document were a source file, they inflate every count the user is shown, and now that the graph is
+ * committed they are 14% of an artefact every clone downloads.
+ *
+ * Done after the build rather than by configuring graphify: the rule is ours, it has to survive whatever
+ * version of the tool is installed, and it is idempotent — the next incremental build re-adds them and the
+ * next prune takes them out again.
+ */
+export function pruneTooling(doc: Record<string, unknown>): { removed: number; kept: number } {
+  const nodes = Array.isArray(doc.nodes) ? doc.nodes as { id?: unknown; source_file?: unknown }[] : [];
+  const keep = nodes.filter((n) => {
+    const f = typeof n.source_file === "string" ? n.source_file : "";
+    return !f || !NOT_INDEXED.test(f);
+  });
+  const removed = nodes.length - keep.length;
+  if (!removed) return { removed: 0, kept: nodes.length };
+
+  const ids = new Set(keep.map((n) => String(n.id)));
+  doc.nodes = keep;
+  // An edge to a node that is gone is a dangling reference — worse than the node itself, because every
+  // traversal has to guard against it.
+  for (const key of ["links", "edges"]) {
+    const list = doc[key];
+    if (!Array.isArray(list)) continue;
+    doc[key] = (list as { source?: unknown; target?: unknown }[])
+      .filter((e) => ids.has(String(e.source)) && ids.has(String(e.target)));
+  }
+  return { removed, kept: keep.length };
+}
+
 export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
   const py = await graphifyPython();
   if (!py) {
@@ -259,10 +325,22 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
   const script = "from graphify.watch import _rebuild_code\nfrom pathlib import Path\nimport sys\nsys.exit(0 if _rebuild_code(Path('.')) else 1)\n";
   const r = await run(py, ["-c", script], cwd);
   if (r.code !== 0) return { ok: false, message: `Graph build failed: ${r.out.trim().split("\n").slice(-3).join(" ").slice(0, 300)}` };
+
+  // Best-effort: a graph that still carries tooling nodes is worse than one that does not, but it is not a
+  // reason to report the build as failed.
+  let pruned = 0;
+  try {
+    const path = graphPath(cwd);
+    const doc = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    const res = pruneTooling(doc);
+    if (res.removed) { await writeAtomic(path, JSON.stringify(doc)); pruned = res.removed; }
+  } catch { /* leave the graph as graphify wrote it */ }
+
   const g = await loadGraph(cwd);
   return {
     ok: true,
-    message: `Graph built: ${g?.nodes.length ?? 0} nodes, ${g?.edges.length ?? 0} edges.`,
+    message: `Graph built: ${g?.nodes.length ?? 0} nodes, ${g?.edges.length ?? 0} edges.`
+      + (pruned ? ` (${pruned.toLocaleString("en-US")} tooling node(s) left out — skills and agent state are not the project.)` : ""),
     nodes: g?.nodes.length ?? 0,
     edges: g?.edges.length ?? 0,
   };

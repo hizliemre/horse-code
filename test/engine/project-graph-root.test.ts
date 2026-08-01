@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { graphRoot, loadGraphSync, GRAPH_DIR, GRAPH_FILE } from "../../src/engine/project-graph.js";
+import { graphRoot, loadGraphSync, graphStatus, pruneTooling, GRAPH_DIR, GRAPH_FILE } from "../../src/engine/project-graph.js";
 import { sessionBase, stateRoot, isSessionBase } from "../../src/engine/session-scope.js";
+import { initTmpRepo } from "../worktree/helpers.js";
 
 let root: string;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "hc-graph-")); });
@@ -83,5 +84,93 @@ describe("the parsed graph is cached until the file changes", () => {
     await new Promise((r) => setTimeout(r, 12));
     await writeGraph(root, 9);
     expect(loadGraphSync(root)?.nodes).toHaveLength(9);
+  });
+});
+
+describe("graphStatus — staleness is a claim about the PROJECT's code", () => {
+  /** A real repository: `git ls-files` is what feeds the check, so a bare temp dir proves nothing. */
+  const repo = async (): Promise<string> => {
+    const r = await initTmpRepo();
+    await mkdir(join(r, GRAPH_DIR), { recursive: true });
+    await mkdir(join(r, "src"), { recursive: true });
+    await mkdir(join(r, ".horsecode", "skills", "x"), { recursive: true });
+    await writeFile(join(r, "src", "a.ts"), "export const a = 1;", "utf8");
+    await writeFile(join(r, ".horsecode", "skills", "x", "SKILL.md"), "skill", "utf8");
+    await writeFile(join(r, GRAPH_DIR, GRAPH_FILE), JSON.stringify({
+      nodes: [{ id: "1", label: "a", source_file: "src/a.ts" },
+              { id: "2", label: "skill", source_file: ".horsecode/skills/x/SKILL.md" }],
+      links: [],
+    }), "utf8");
+    return r;
+  };
+
+  /**
+   * The check used to scan every code-looking file git reported. On a real project that made the graph
+   * "stale" because of scripts under `.claude/skills/` — which graphify never indexed — and then, once the
+   * graph's own file list was used, because of `.horsecode/skills/**.md`, which it HAD indexed, only because
+   * graphify walks whatever it is pointed at. Both told the user to spend a rebuild that would change nothing.
+   */
+  it("is not made stale by tooling directories, indexed or not", async () => {
+    const r = await repo();
+    try {
+      await new Promise((res) => setTimeout(res, 20));
+      await writeFile(join(r, ".horsecode", "skills", "x", "SKILL.md"), "changed", "utf8");
+      const st = await graphStatus(r);
+      expect(st.built).toBe(true);
+      expect(st.staleBecause).toEqual([]);
+      expect(st.stale).toBe(false);
+    } finally { await rm(r, { recursive: true, force: true }); }
+  });
+
+  it("still reports stale when the project's own code changes", async () => {
+    const r = await repo();
+    try {
+      await new Promise((res) => setTimeout(res, 20));
+      await writeFile(join(r, "src", "a.ts"), "export const a = 2;", "utf8");
+      const st = await graphStatus(r);
+      expect(st.staleBecause).toContain("src/a.ts");
+      expect(st.stale).toBe(true);
+    } finally { await rm(r, { recursive: true, force: true }); }
+  });
+});
+
+describe("pruneTooling — the graph is the project, not what is installed in it", () => {
+  /**
+   * graphify walks what it is pointed at, and that includes horse-code's own state. Measured on a real
+   * project: 7,915 of 55,081 nodes came from `.horsecode/skills`, `.claude/` and `.agents/` — 14% of a graph
+   * that is now committed, surfacing skill documents in `graph_find` as though they were source files.
+   */
+  it("drops tooling nodes and keeps the project's own", () => {
+    const doc: Record<string, unknown> = {
+      nodes: [
+        { id: "1", source_file: "src/api/orders.ts" },
+        { id: "2", source_file: ".horsecode/skills/x/SKILL.md" },
+        { id: "3", source_file: ".claude/agents/y.md" },
+        { id: "4", source_file: ".agents/z.md" },
+        { id: "5", source_file: "node_modules/left-pad/index.js" },
+      ],
+      links: [{ source: "1", target: "2" }, { source: "1", target: "1" }],
+      directed: true,
+    };
+    const r = pruneTooling(doc);
+    expect(r).toEqual({ removed: 4, kept: 1 });
+    expect((doc.nodes as { id: string }[]).map((n) => n.id)).toEqual(["1"]);
+    // An edge into a node that is gone is worse than the node: every traversal then has to guard against it.
+    expect(doc.links).toEqual([{ source: "1", target: "1" }]);
+    expect(doc.directed).toBe(true); // everything else the serializer wrote is left alone
+  });
+
+  it("keeps nodes that name no file — they are not claims about a path", () => {
+    const doc: Record<string, unknown> = { nodes: [{ id: "1" }, { id: "2", source_file: "src/a.ts" }], links: [] };
+    expect(pruneTooling(doc).removed).toBe(0);
+  });
+
+  it("is idempotent — the next incremental build re-adds them and this takes them out again", () => {
+    const doc: Record<string, unknown> = {
+      nodes: [{ id: "1", source_file: "src/a.ts" }, { id: "2", source_file: ".horsecode/skills/s.md" }],
+      links: [],
+    };
+    expect(pruneTooling(doc).removed).toBe(1);
+    expect(pruneTooling(doc).removed).toBe(0);
   });
 });
