@@ -41,6 +41,38 @@ const NEVER = [join(".horsecode", "worktrees")];
 const excluded = (rel: string): boolean =>
   NEVER.some((n) => rel === n || rel.startsWith(n + sep) || rel.startsWith(n + "/"));
 
+/**
+ * A directory that is its own checkout is not this project's working state.
+ *
+ * The named assets above were bounded deliberately — the comment there warns that a blanket copy would drag
+ * in gigabytes — and then the UNTRACKED copy was left unbounded, which is the same mistake by the other door.
+ * Measured on a real project: `git ls-files --others` reported 26,160 files under `.claude/`, almost all of
+ * them inside `worktrees.orphaned-backup/` — abandoned checkouts of the same repository, 29 GB of them. Every
+ * session opened copied 22 GB of that before doing any work.
+ *
+ * A nested `.git` is the signal, and it is exact: whatever lives under it belongs to another checkout, and
+ * nothing there is the uncommitted work this function exists to carry across.
+ */
+function nestedCheckout(repoRoot: string, rel: string, cache: Map<string, boolean>): boolean {
+  const parts = rel.split(/[\\/]/).slice(0, -1); // the file's ancestors, nearest last
+  let acc = "";
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    let hit = cache.get(acc);
+    if (hit === undefined) { hit = existsSync(join(repoRoot, acc, ".git")); cache.set(acc, hit); }
+    if (hit) return true;
+  }
+  return false;
+}
+
+/**
+ * A backstop for whatever the `.git` rule does not catch.
+ *
+ * Bounded by COUNT rather than bytes: the cost that hurt was per-file — 26,160 copies before the session
+ * could start — and a count is something the note can state plainly for the user to act on.
+ */
+export const MAX_UNTRACKED = 5_000;
+
 export interface Inherited {
   /** Uncommitted edits to tracked files that were carried across. */
   modified: string[];
@@ -50,6 +82,8 @@ export interface Inherited {
   assets: string[];
   /** Tracked files deleted in the project but still in the branch — the deletion is carried too. */
   deleted: string[];
+  /** Untracked files deliberately left behind: another checkout's, or past the count bound. */
+  skipped: number;
 }
 
 async function copyPath(from: string, to: string): Promise<void> {
@@ -64,7 +98,7 @@ async function copyPath(from: string, to: string): Promise<void> {
  * refusing to start — is worse than starting with slightly less context.
  */
 export async function inheritFromRoot(git: Git, repoRoot: string, baseWorktree: string): Promise<Inherited> {
-  const out: Inherited = { modified: [], untracked: [], assets: [], deleted: [] };
+  const out: Inherited = { modified: [], untracked: [], assets: [], deleted: [], skipped: 0 };
   if (repoRoot === baseWorktree) return out;
 
   // Uncommitted edits to tracked files, and tracked files the user has deleted. `HEAD` rather than the base
@@ -85,8 +119,10 @@ export async function inheritFromRoot(git: Git, repoRoot: string, baseWorktree: 
   // Files that exist in the project but not in git — new work that has not been added yet.
   const others = await git(["ls-files", "--others", "--exclude-standard"], repoRoot);
   if (others.code === 0) {
+    const nested = new Map<string, boolean>();
     for (const rel of others.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
-      if (excluded(rel)) continue;
+      if (excluded(rel) || nestedCheckout(repoRoot, rel, nested)) { out.skipped++; continue; }
+      if (out.untracked.length >= MAX_UNTRACKED) { out.skipped++; continue; }
       try { await copyPath(join(repoRoot, rel), join(baseWorktree, rel)); out.untracked.push(rel); }
       catch { /* same */ }
     }
@@ -111,6 +147,8 @@ export function describeInherited(i: Inherited): string | undefined {
   const n = i.modified.length + i.deleted.length;
   if (n) parts.push(`${n} uncommitted change(s)`);
   if (i.untracked.length) parts.push(`${i.untracked.length} untracked file(s)`);
+  // Stated, not silent: a session that quietly left work behind looks identical to one that had none.
+  if (i.skipped) parts.push(`${i.skipped} left behind (another checkout, or past the ${MAX_UNTRACKED} bound)`);
   if (i.assets.length) parts.push(i.assets.map((a) => `\`${a}\``).join(", "));
   return parts.length ? `📥 Carried into this session: ${parts.join(" · ")}.` : undefined;
 }

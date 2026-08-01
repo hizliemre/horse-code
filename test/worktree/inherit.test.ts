@@ -84,6 +84,32 @@ describe("a new session inherits the project's working state", () => {
   it("is a no-op when asked to inherit into the root itself", async () => {
     repo = await initTmpRepo();
     const r = await inheritFromRoot(defaultGitRunner, repo, repo);
-    expect(r).toEqual({ modified: [], untracked: [], assets: [], deleted: [] });
+    expect(r).toEqual({ modified: [], untracked: [], assets: [], deleted: [], skipped: 0 });
+  });
+});
+
+describe("inheritFromRoot — another checkout is not this project's work in progress", () => {
+  /**
+   * The measured failure: `git ls-files --others` reported 26,160 files under `.claude/`, nearly all inside
+   * `worktrees.orphaned-backup/` — abandoned checkouts of the same repository, 29 GB. Every session copied
+   * 22 GB of it before doing any work, and the session worktree ended up holding 321,367 files.
+   */
+  it("does not copy files that live inside a nested checkout", async () => {
+    repo = await initTmpRepo();
+    await put(repo, ".claude/worktrees.orphaned-backup/old-job/.git", "gitdir: /elsewhere");
+    await put(repo, ".claude/worktrees.orphaned-backup/old-job/huge.ts", "another checkout's file");
+    await put(repo, "real-wip.ts", "actual work in progress");
+
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openSession("main", "job");
+
+    expect(existsSync(join(s.baseWorktree, "real-wip.ts"))).toBe(true);
+    expect(existsSync(join(s.baseWorktree, ".claude", "worktrees.orphaned-backup"))).toBe(false);
+    expect(s.inherited?.skipped).toBeGreaterThan(0);
+  });
+
+  it("says what it left behind — a silent omission looks exactly like having nothing to carry", () => {
+    expect(describeInherited({ modified: [], untracked: ["a.ts"], assets: [], deleted: [], skipped: 26_159 }))
+      .toMatch(/26159 left behind/);
   });
 });
