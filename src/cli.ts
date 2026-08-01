@@ -255,7 +255,27 @@ export async function main(argv: string[]): Promise<void> {
       // (cached per omniroute). Empty = show all (until discovery fills it in).
       const manualSources = config.modelSources.length > 0;
       const sourcesRef = { current: manualSources ? config.modelSources : (loadSourceCache(home, config.baseUrl) ?? []) };
-      const listModels = () => listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: sourcesRef.current });
+      /**
+       * The catalog, PLUS whatever the user has already configured.
+       *
+       * `/api/v1/models` is not a complete account of what the gateway can route. Measured against a live
+       * omniroute: `cc/claude-opus-5` answers a real request and reports itself as `claude-opus-5`, yet the
+       * catalog's 236 entries do not contain it — while an unroutable id (`cc/claude-mythos-5`) is refused
+       * with a 404, so the gateway does validate. A model absent from the list is therefore not evidence
+       * that it does not exist.
+       *
+       * That mattered because role assignment validates the tuner's picks against this list and DROPS
+       * anything missing: a model the user had deliberately put in their config was silently deleted by the
+       * next `/roles adjust`. A configured id is the user's own evidence that a model works, so it belongs in
+       * the pool; if it is in fact dead, the health probe quarantines it like any other.
+       */
+      const configuredModels = (): string[] =>
+        [...new Set(Object.values(config.roles).flatMap((r) => r.models ?? []))].filter((m) => m && m !== "default");
+      const listModels = async (): Promise<string[]> => {
+        const catalog = await listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: sourcesRef.current });
+        const known = new Set(catalog);
+        return [...catalog, ...configuredModels().filter((m) => !known.has(m))];
+      };
       const refreshSources = async (): Promise<string[]> => {
         const catalog = await fetchCatalog({ baseUrl: config.baseUrl, apiKey: config.apiKey });
         const found = await discoverSources({ catalog, probe: makeProbe({ baseUrl: config.baseUrl, apiKey: config.apiKey }) });

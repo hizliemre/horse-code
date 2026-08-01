@@ -1,5 +1,5 @@
 import type { ChatRequest, Provider } from "../core/types.js";
-import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable, isKnownModel } from "../tui/role-models.js";
+import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable, isKnownModel, newestPrimary } from "../tui/role-models.js";
 
 export interface TunedRoles {
   reasoning: string;
@@ -124,7 +124,10 @@ function validateChains(
     for (const m of byRole.get(role) ?? []) { if (chain.length >= 3) break; add(m); } // the LLM's picks (validated)
     for (const m of heuMap.get(role) ?? []) { if (chain.length >= 3) break; add(m); } // pad from the heuristic
     for (const m of models) { if (chain.length >= 3) break; add(m); } // last resort: any model
-    return { role, models: chain };
+    // The tuner reasons about capability, not release numbers: it will happily name `claude-opus-4-6` while
+    // `claude-opus-5` sits in the same catalog. Upgrading the primary is deterministic, so it does not depend
+    // on the tuner noticing.
+    return { role, models: newestPrimary(chain, models) };
   });
   // Per-chain diversity is not fleet diversity: rebalance whatever one model ended up carrying for everyone.
   return spreadLoad(built, models);

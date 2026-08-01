@@ -223,6 +223,55 @@ function latestFirst(models: string[]): string[] {
   return [...models.filter(isLatest), ...models.filter((m) => !isLatest(m))];
 }
 
+/**
+ * A model's identity WITHOUT its version — the key under which two releases are the same thing.
+ *
+ * Deliberately not `modelFamily`, which strips the namespace and the variant suffix: it reports
+ * `no-think/cc/claude-opus-4-6` and `antigravity/claude-opus-4-6-thinking` as the same `claude-opus`.
+ * Upgrading across that key would silently move a role to a different subscription, or turn a no-think model
+ * into a thinking one — neither of which is "the newer version of what was chosen".
+ *
+ * So the namespace (`cc/`, `no-think/cc/`, `antigravity/`) and the variant suffix (`-thinking`, `-high`) are
+ * kept, and only the version segments and date stamps are removed.
+ */
+export function versionlessId(model: string): string {
+  const cut = model.lastIndexOf("/");
+  const prefix = cut >= 0 ? model.slice(0, cut + 1) : "";
+  const name = model.slice(cut + 1).toLowerCase()
+    .replace(/-\d{6,8}\b/g, "")                        // date stamp: opus-4-5-20251101
+    .replace(/[-.]v?\d+(?:[-.]\d+)*(?=[-.]|$)/g, "")   // version segments: -4-8, -5, -4.6
+    .replace(/[-.]{2,}/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return prefix + name;
+}
+
+/**
+ * Puts the newest release on the PRIMARY slot of a chain.
+ *
+ * `latestFirst` only biases the pool the heuristic draws from, and the LLM tuner is free to name any valid id
+ * — so a role could still come back on `cc/claude-opus-4-6` while `cc/claude-opus-5` sat in the same catalog.
+ * This makes it a guarantee rather than a tendency.
+ *
+ * Only the primary is upgraded. The fallbacks are SUBSTITUTES, and the previous version of a model is exactly
+ * the substitute you want when the newest one is rate-limited; collapsing the whole chain onto one release
+ * would leave a role with nothing to fall back to on the very source that just failed it.
+ */
+export function newestPrimary(chain: string[], pool: string[]): string[] {
+  const head = chain[0];
+  if (!head) return chain;
+  const key = versionlessId(head);
+  let best = head;
+  for (const m of pool) {
+    if (versionlessId(m) !== key) continue;
+    if (capabilityScore(m) > capabilityScore(best)) best = m;
+  }
+  if (best === head) return chain;
+  // If the newer release is already further down this chain, SWAP rather than duplicate it.
+  const at = chain.indexOf(best);
+  if (at > 0) { const next = [...chain]; next[at] = head; next[0] = best; return next; }
+  return [best, ...chain.slice(1)];
+}
+
 /** Keeps the highest-capability instance of each base model (so cc/opus-4-8 and claude/opus-4-8 don't both count). */
 function dedupBest(models: string[]): string[] {
   const best = new Map<string, string>();
@@ -391,6 +440,8 @@ export function adjustRoleModels(
     const pool = FAST_ROLES.includes(role) ? [...fastPool, ...capForFb] : [...capForFb, ...fastPool];
     // The FALLBACKS are filtered too. A model that cannot implement is no better as the coder's second
     // choice than as its first — it just fails one attempt later.
-    return { role, models: [head, ...pickFallbacks(head, forRole(role, pool), FALLBACK_COUNT)] };
+    // …and the primary is the newest release of whatever was chosen — `latestFirst` biases the pool, but a
+    // round-robin over an interleaved list can still land on an older sibling. See newestPrimary.
+    return { role, models: newestPrimary([head, ...pickFallbacks(head, forRole(role, pool), FALLBACK_COUNT)], models) };
   });
 }

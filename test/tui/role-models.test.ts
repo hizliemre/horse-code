@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily } from "../../src/tui/role-models.js";
+import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily, versionlessId, newestPrimary } from "../../src/tui/role-models.js";
 
 const ALL = [
   "cc/claude-opus-4-8",
@@ -297,5 +297,69 @@ describe("non-text endpoints are not assignable models", () => {
     const catalog = ["antigravity/gemini-3-pro-image-preview", "antigravity/gemini-3.1-pro-high", "cc/claude-opus-4-8"];
     const used = new Set(adjustRoleModels(["coach", "judge"], catalog).flatMap((r) => r.models));
     expect([...used].some((m) => /image/.test(m))).toBe(false);
+  });
+});
+
+/**
+ * A role could come back on `cc/claude-opus-4-6` while `cc/claude-opus-5` sat in the same catalog: the pool
+ * ordering only BIASED towards the newest release, and the LLM tuner is free to name any valid id.
+ */
+describe("versionlessId — what counts as the same model, one release apart", () => {
+  it("treats every release of one model on one source as the same key", () => {
+    const k = versionlessId("cc/claude-opus-5");
+    expect(versionlessId("cc/claude-opus-4-8")).toBe(k);
+    expect(versionlessId("cc/claude-opus-4-5-20251101")).toBe(k); // a date stamp is not a version
+  });
+
+  it("does NOT merge across sources — an upgrade must not move a role to another subscription", () => {
+    expect(versionlessId("aug/claude-opus-4.6")).not.toBe(versionlessId("cc/claude-opus-5"));
+    expect(versionlessId("no-think/cc/claude-opus-4-6")).not.toBe(versionlessId("cc/claude-opus-5"));
+  });
+
+  it("does NOT merge across variants — a no-think or thinking model is not the same model", () => {
+    expect(versionlessId("antigravity/claude-opus-4-6-thinking"))
+      .not.toBe(versionlessId("antigravity/claude-opus-4-6"));
+    // …and modelFamily, which this deliberately does not reuse, DOES conflate them:
+    expect(modelFamily("antigravity/claude-opus-4-6-thinking")).toBe(modelFamily("no-think/cc/claude-opus-4-6"));
+  });
+});
+
+describe("newestPrimary — the primary slot gets the newest release", () => {
+  const POOL = ["cc/claude-opus-5", "cc/claude-opus-4-8", "cc/claude-opus-4-6", "cx/gpt-5.6-sol-high", "aug/claude-opus-4.6"];
+
+  it("upgrades an older primary to the newest release of the same model", () => {
+    expect(newestPrimary(["cc/claude-opus-4-6", "cx/gpt-5.6-sol-high", "aug/claude-opus-4.6"], POOL)[0])
+      .toBe("cc/claude-opus-5");
+  });
+
+  it("leaves the FALLBACKS alone — the previous version is the substitute you want when the newest is limited", () => {
+    const out = newestPrimary(["cc/claude-opus-4-6", "cc/claude-opus-4-8", "cx/gpt-5.6-sol-high"], POOL);
+    expect(out).toEqual(["cc/claude-opus-5", "cc/claude-opus-4-8", "cx/gpt-5.6-sol-high"]);
+  });
+
+  it("swaps rather than duplicates when the newest release is already a fallback", () => {
+    const out = newestPrimary(["cc/claude-opus-4-8", "cc/claude-opus-5", "cx/gpt-5.6-sol-high"], POOL);
+    expect(out).toEqual(["cc/claude-opus-5", "cc/claude-opus-4-8", "cx/gpt-5.6-sol-high"]);
+    expect(new Set(out).size).toBe(3);
+  });
+
+  it("never moves the primary to a different source, even for a higher-scoring model", () => {
+    expect(newestPrimary(["aug/claude-opus-4.6", "cx/gpt-5.6-sol-high"], POOL)[0]).toBe("aug/claude-opus-4.6");
+  });
+
+  it("is a no-op when the primary already is the newest, or the chain is empty", () => {
+    expect(newestPrimary(["cc/claude-opus-5", "cc/claude-opus-4-8"], POOL)).toEqual(["cc/claude-opus-5", "cc/claude-opus-4-8"]);
+    expect(newestPrimary([], POOL)).toEqual([]);
+  });
+});
+
+describe("adjustRoleModels leads every chain with the newest release", () => {
+  it("never hands a role an older Opus while a newer one is in the pool", () => {
+    const pool = ["cc/claude-opus-5", "cc/claude-opus-4-8", "cc/claude-opus-4-6", "cc/claude-sonnet-5", "cc/claude-haiku-4-5-20251001"];
+    for (const { models } of adjustRoleModels(["judge", "coder", "coach", "senior-coder", "team-lead"], pool)) {
+      const head = models[0]!;
+      if (!/opus/.test(head)) continue;
+      expect(head).toBe("cc/claude-opus-5");
+    }
   });
 });
