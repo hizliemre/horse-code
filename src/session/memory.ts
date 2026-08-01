@@ -3,6 +3,9 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { writeAtomic } from "./atomic.js";
+import { stateRoot } from "../engine/session-scope.js";
+import { dedupeMemories, applyMerges } from "../engine/memory-dedupe.js";
+import type { Provider } from "../core/types.js";
 import { readFileSync, statSync } from "node:fs";
 import { deriveAnchors, deriveTags, supersedes, hashAnchors, verifyAnchors, isExpired, SHORT_TTL_MS, type AnchorFs, type MemoryEntry } from "../engine/memory-retrieval.js";
 import { hygiene, type HygieneReport } from "../engine/memory-hygiene.js";
@@ -42,7 +45,15 @@ export class MemoryStore {
   constructor(opts: MemoryStoreOpts) {
     this.now = opts.now ?? ((): number => Date.now());
     this.cwd = opts.cwd;
-    this.file = join(opts.cwd, ".horsecode", "memory.jsonl");
+    /**
+     * Memory belongs to the SESSION, and there is exactly one copy of it per session.
+     *
+     * A task worktree that kept its own would have to merge it back through its branch — and with dozens of
+     * tasks all touching one line-based file, every task becomes a conflict. Resolving to the session base
+     * instead gives one file and one writer, and that file is the base the pull request is cut from, so a
+     * lesson a task learned is delivered with the work rather than left in a directory nobody reads.
+     */
+    this.file = join(stateRoot(opts.cwd), ".horsecode", "memory.jsonl");
   }
 
   /** Project-relative content fingerprint, used to detect that an anchored file moved on. */
@@ -170,17 +181,33 @@ export class MemoryStore {
    * automatic deletion is unrecoverable here (the file is the only copy), so questionable entries are only
    * flagged. Runs once per session and on demand.
    */
-  async runHygiene(): Promise<HygieneReport> {
+  async runHygiene(opts?: { provider: Provider; models: string[]; signal?: AbortSignal }): Promise<HygieneReport> {
     return this.serialize(async () => {
       await this.load();
       this.verify(true); // fresh staleness flags first — "long-stale" is one of the review reasons
       const report = hygiene(this.cache!, this.now());
-      if (report.merged.length) {
-        this.cache = report.entries;
+      let entries = report.entries;
+      let semantic = 0;
+      /**
+       * Then the duplicates that only a reader can see.
+       *
+       * `hygiene` collapses entries whose text normalizes alike; parallel work produces the other kind — two
+       * tasks discovering the same thing and writing it in their own words, which no string comparison
+       * catches. Optional because it costs a model call: without a provider the pool is still reconciled,
+       * just not as far.
+       */
+      if (opts) {
+        const merges = await dedupeMemories({ ...opts, entries });
+        const applied = applyMerges(entries, merges);
+        entries = applied.entries;
+        semantic = applied.removed;
+      }
+      if (report.merged.length || semantic > 0) {
+        this.cache = entries;
         await this.persist();
       }
       this.candidates = report.candidates.map((c) => c.id);
-      return report;
+      return { ...report, entries, semanticMerged: semantic };
     });
   }
 
@@ -243,6 +270,18 @@ export class MemoryStore {
     const gi = join(dir, ".gitignore");
     if (!existsSync(gi)) {
       await writeFile(gi, "# horse-code: local/secret state stays out of git; memory.jsonl is shared\nconfig.json\nsources.json\nworktrees/\n", "utf8");
+    }
+    /**
+     * Two sessions that both learn something must not have to fight over this file.
+     *
+     * It is one JSON object per line and entries are only ever added, so the two sides of a merge are two
+     * sets of lines — `union` keeps both instead of raising a conflict on a file no human wants to resolve
+     * by hand. What union cannot do is notice that the two sides said the SAME thing in different words;
+     * that is what the dedupe pass is for, and it runs after the merge, not instead of it.
+     */
+    const ga = join(dir, ".gitattributes");
+    if (!existsSync(ga)) {
+      await writeFile(ga, "# Append-only: keep both sides of a merge, then let the dedupe pass reconcile them.\nmemory.jsonl merge=union\n", "utf8");
     }
     // Atomic: a crash mid-write must not leave an empty memory. See writeAtomic — this file was lost that way.
     await writeAtomic(this.file, (this.cache ?? []).map((e) => JSON.stringify(e)).join("\n") + "\n");

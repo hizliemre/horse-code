@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryStore } from "../../src/session/memory.js";
@@ -267,5 +268,44 @@ describe("stored tags are re-derived on load", () => {
     const before = await readFile(path, "utf8");
     await new MemoryStore({ home, cwd: join(home, "proj-fresh") }).load();
     expect(await readFile(path, "utf8")).toBe(before);
+  });
+});
+
+/**
+ * Memory belongs to the SESSION. A task worktree that kept its own would have to merge it back through its
+ * branch, and with dozens of tasks touching one line-based file every task becomes a conflict.
+ */
+describe("a task worktree writes to its session's memory, not its own", () => {
+  it("resolves the file to the session base", async () => {
+    const proj = join(home, "proj");
+    const base = join(proj, ".horsecode", "worktrees", "job-a", "base");
+    const task = join(proj, ".horsecode", "worktrees", "job-a", "tasks", "t1");
+    await mkdir(task, { recursive: true });
+
+    await new MemoryStore({ home, cwd: task }).add("a lesson a task learned");
+
+    // …written where the pull request is cut from, not in the task's own directory.
+    const fromBase = await new MemoryStore({ home, cwd: base }).load();
+    expect(fromBase.map((e) => e.text)).toEqual(["a lesson a task learned"]);
+    expect(existsSync(join(task, ".horsecode", "memory.jsonl"))).toBe(false);
+  });
+
+  it("keeps two concurrent sessions' memories apart", async () => {
+    const proj = join(home, "proj2");
+    const a = join(proj, ".horsecode", "worktrees", "job-a", "tasks", "t1");
+    const b = join(proj, ".horsecode", "worktrees", "job-b", "tasks", "t1");
+    await mkdir(a, { recursive: true }); await mkdir(b, { recursive: true });
+    await new MemoryStore({ home, cwd: a }).add("learned in A");
+    await new MemoryStore({ home, cwd: b }).add("learned in B");
+    expect((await new MemoryStore({ home, cwd: a }).load()).map((e) => e.text)).toEqual(["learned in A"]);
+    expect((await new MemoryStore({ home, cwd: b }).load()).map((e) => e.text)).toEqual(["learned in B"]);
+  });
+
+  /** Two sessions both adding lines must merge, not conflict — the file is append-only by construction. */
+  it("marks the file for union merge so concurrent sessions do not conflict", async () => {
+    const s = new MemoryStore({ home, cwd: join(home, "proj3") });
+    await s.add("something");
+    const ga = await readFile(join(home, "proj3", ".horsecode", ".gitattributes"), "utf8");
+    expect(ga).toContain("memory.jsonl merge=union");
   });
 });

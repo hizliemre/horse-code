@@ -25,6 +25,8 @@ export interface HygieneReport {
   /** The reconciled pool — duplicates merged. Callers persist this. */
   entries: MemoryEntry[];
   merged: MergeRecord[];
+  /** Entries collapsed by the model because they said the same thing in different words — see dedupeMemories. */
+  semanticMerged?: number;
   candidates: ReviewCandidate[];
 }
 
@@ -124,6 +126,7 @@ export function hygiene(entries: MemoryEntry[], now: number): HygieneReport {
 export function hygieneSummary(r: HygieneReport): string | undefined {
   const parts: string[] = [];
   if (r.merged.length) parts.push(`merged ${r.merged.reduce((n, m) => n + m.absorbed.length, 0)} duplicate(s)`);
+  if (r.semanticMerged) parts.push(`${r.semanticMerged} said the same thing in different words`);
   if (r.candidates.length) parts.push(`${r.candidates.length} flagged for review`);
   return parts.length ? parts.join(", ") : undefined;
 }
