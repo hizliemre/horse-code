@@ -300,6 +300,25 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
     expect(gi).toContain("!.horsecode/traces/");
   });
 
+  /**
+   * From a real `git status`: three untracked `.claude/worktrees/…` directories, each a full checkout of the
+   * same repository. Committing one commits the repository into itself, and that directory's abandoned
+   * sibling was 29 GB.
+   */
+  it("keeps a nested checkout out, whichever tool made it", async () => {
+    await mkdir(join(cwd, ".claude", "worktrees", "some-job"), { recursive: true });
+    await writeFile(join(cwd, ".gitignore"), "node_modules/\n", "utf8");
+    expect(await ensureGitignore(cwd)).toBe(true);
+    expect(await readFile(join(cwd, ".gitignore"), "utf8")).toContain(".claude/worktrees/");
+  });
+
+  it("says nothing about a tool the project does not use", async () => {
+    await writeFile(join(cwd, ".gitignore"), "node_modules/\n", "utf8");
+    await ensureGitignore(cwd);
+    // No .claude/ in this project → a rule for it would be noise in a file everyone reads.
+    expect(await readFile(join(cwd, ".gitignore"), "utf8")).not.toContain(".claude/worktrees/");
+  });
+
   it("says nothing about a directory the project already excludes deliberately", async () => {
     // graphify-out/ open and its derived files already named → nothing missing, nothing to add.
     await writeFile(join(cwd, ".gitignore"),

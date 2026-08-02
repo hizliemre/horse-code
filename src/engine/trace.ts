@@ -386,6 +386,19 @@ const SHARED_DERIVED = "graphify-out/graph.json";
 const LOCAL_ONLY = ["graphify-out/manifest.json", "graphify-out/graph.html", "graphify-out/.graphify_root"];
 
 /**
+ * Nested checkouts, which must never reach a remote whoever created them.
+ *
+ * horse-code keeps its own out through `.horsecode/.gitignore`, and then a real project showed the other
+ * half of the problem: `git status` listed three untracked `.claude/worktrees/…` directories — another
+ * tool's working copies, each a full checkout of the same repository. Committing one is committing the
+ * repository into itself; the same directory's abandoned sibling was 29 GB.
+ *
+ * Added only when the directory actually exists. A rule for a tool the project does not use is noise in a
+ * file everyone reads.
+ */
+const NESTED_CHECKOUTS = [".claude/worktrees/", ".horsecode/worktrees/"];
+
+/**
  * Git will not descend into an excluded DIRECTORY, so `dir/` cannot be negated for anything inside it.
  * Rewriting the blanket rule to `dir/*` keeps the same exclusion while making a negation possible.
  */
@@ -396,7 +409,7 @@ function openDirectory(text: string, dir: string): string {
 interface Plan { text: string; rules: string[] }
 
 /** What this repository is missing, and the edits needed to make the missing rules possible. */
-function planGitignore(current: string): Plan {
+function planGitignore(current: string, root0 = "."): Plan {
   let text = current;
   const rules: string[] = [];
   const lines = (): string[] => text.split("\n").map((l) => l.trim());
@@ -422,6 +435,12 @@ function planGitignore(current: string): Plan {
   keep(SHARED_DERIVED, false,
     "# Shared — the code graph is minutes of parsing that no clone should have to repeat.");
 
+  const nested = NESTED_CHECKOUTS.filter((d) => existsSync(join(root0, d)) && !has(d) && !has(d.replace(/\/$/, "")));
+  if (nested.length) {
+    rules.push("# Nested checkouts of this repository — committing one commits the repository into itself.");
+    rules.push(...nested);
+  }
+
   const local = LOCAL_ONLY.filter((r) => !has(r) && !has("graphify-out/") && !has("graphify-out/*"));
   if (local.length) {
     rules.push("# Machine-local or derived: an AST cache keyed by local mtimes, and a viewer regenerated on every build.");
@@ -436,7 +455,7 @@ export async function ensureGitignore(cwd: string): Promise<boolean> {
   try { current = await readFile(path, "utf8"); } catch { /* no .gitignore yet → create one */ }
   if (current.includes(GITIGNORE_MARKER)) return false;
 
-  const plan = planGitignore(current);
+  const plan = planGitignore(current, cwd);
   if (!plan.rules.length && plan.text === current) return false; // already says everything needed
   const block = plan.rules.length ? `${GITIGNORE_MARKER}\n${plan.rules.join("\n")}\n` : "";
   const body = `${plan.text.trimEnd()}${plan.text.trim() && block ? "\n\n" : ""}${block}`;

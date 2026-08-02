@@ -266,10 +266,18 @@ export class MemoryStore {
   private async persist(): Promise<void> {
     const dir = dirname(this.file);
     await mkdir(dir, { recursive: true });
-    // Keep the secret-bearing local state out of git, but let memory.jsonl be committed + shared with the team.
+    /**
+     * Keep the machine-local state out of git; memory.jsonl and the installed skills are shared.
+     *
+     * `last-turn.json` is the newest entry and the one most easily missed: it carries a COPY of what the
+     * previous turn overwrote, so it is both machine-local and, on a project with private files, a second
+     * place their contents could reach a remote. It exists to answer "undo that" in this checkout, and it
+     * has no meaning in anyone else's.
+     */
     const gi = join(dir, ".gitignore");
     if (!existsSync(gi)) {
-      await writeFile(gi, "# horse-code: local/secret state stays out of git; memory.jsonl is shared\nconfig.json\nsources.json\nworktrees/\n", "utf8");
+      await writeFile(gi, "# horse-code: local state stays out of git; memory.jsonl + skills are shared\n"
+        + "config.json\nsources.json\nworktrees/\nlast-turn.json\n", "utf8");
     }
     /**
      * Two sessions that both learn something must not have to fight over this file.
