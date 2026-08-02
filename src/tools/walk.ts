@@ -1,4 +1,5 @@
 import { readdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -15,7 +16,21 @@ import { join } from "node:path";
  */
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".horsecode", "graphify-out"]);
 
-/** Yields absolute paths of files under root; SKIP_DIRS entries are skipped. */
+/**
+ * A directory that is its own checkout is not part of this one.
+ *
+ * Another tool's worktrees sit inside the repository, and each is a FULL copy of it. Measured on a real
+ * project with three of them: a search for `*.csproj` returned 158 files where the project has 41. Every
+ * glob and grep came back four times over, and a coach spent its whole turn budget working out which copy
+ * was real — its own narration said so four separate times ("that glob matched the whole repo", "grep is
+ * mixing all the worktrees") before the run died at `maximum turn count exceeded (50)`.
+ *
+ * A nested `.git` is the exact signal, and it costs one stat per directory to ask — against walking entire
+ * duplicate trees, which is what it prevents.
+ */
+const isNestedCheckout = (dir: string): boolean => existsSync(join(dir, ".git"));
+
+/** Yields absolute paths of files under root; SKIP_DIRS and nested checkouts are skipped. */
 export async function* walkFiles(root: string): AsyncIterable<string> {
   let entries;
   try {
@@ -26,7 +41,9 @@ export async function* walkFiles(root: string): AsyncIterable<string> {
   for (const e of entries) {
     if (e.isDirectory()) {
       if (SKIP_DIRS.has(e.name)) continue;
-      yield* walkFiles(join(root, e.name));
+      const dir = join(root, e.name);
+      if (isNestedCheckout(dir)) continue; // another checkout of this repository — see above
+      yield* walkFiles(dir);
     } else if (e.isFile()) {
       yield join(root, e.name);
     }

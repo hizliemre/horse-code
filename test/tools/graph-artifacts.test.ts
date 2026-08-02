@@ -52,3 +52,31 @@ describe("the code graph is served by the graph tools, not read as a file", () =
     expect((await readFileTool.run({ path: "notes.md" }, ctx() as never)).content).toContain("the real notes");
   });
 });
+
+describe("a nested checkout is not part of this one", () => {
+  /**
+   * Measured on a real project with three of another tool's worktrees inside it: a search for `*.csproj`
+   * returned 158 files where the project has 41. Every glob and grep came back four times over, and a coach
+   * spent its entire budget working out which copy was real — its own narration said so four separate times
+   * before the run died at `maximum turn count exceeded (50)`.
+   */
+  it("does not search inside another worktree of the same repository", async () => {
+    await mkdir(join(cwd, "src"), { recursive: true });
+    await mkdir(join(cwd, ".claude", "worktrees", "feature-x", "src"), { recursive: true });
+    await writeFile(join(cwd, "src", "App.ts"), "the real one", "utf8");
+    // A worktree's `.git` is a FILE pointing at the main repo, not a directory — both must count.
+    await writeFile(join(cwd, ".claude", "worktrees", "feature-x", ".git"), "gitdir: /elsewhere", "utf8");
+    await writeFile(join(cwd, ".claude", "worktrees", "feature-x", "src", "App.ts"), "the copy", "utf8");
+
+    const res = await globTool.run({ pattern: "**/App.ts" }, ctx() as never);
+    expect(res.content).toContain("src/App.ts");
+    expect(res.content).not.toContain("feature-x");
+  });
+
+  it("still searches ordinary nested directories", async () => {
+    await mkdir(join(cwd, "packages", "ui", "src"), { recursive: true });
+    await writeFile(join(cwd, "packages", "ui", "src", "Button.ts"), "x", "utf8");
+    expect((await globTool.run({ pattern: "**/Button.ts" }, ctx() as never)).content)
+      .toContain("packages/ui/src/Button.ts");
+  });
+});
