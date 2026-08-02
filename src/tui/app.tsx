@@ -183,6 +183,14 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       void memStore.add(fact).then((r) => { if (r.ok) controller.note(`🧠 **Remembered** — ${fact}${r.superseded.length ? ` _(replaced: ${r.superseded.join("; ")})_` : ""}`); });
     },
     recordInjection: (ids) => { void memStore.recordInjection(ids); }, // durable "shown N times" count → hygiene
+    /**
+     * What the run learns has to land in what ships.
+     *
+     * The store is built when the process starts, so the only directory it can resolve then is the PROJECT;
+     * the session opens later. Measured on a real job: the session's inherited memory was never written
+     * again after it was copied, while the project's gained 26 uses and 85 injections in the same hour.
+     */
+    onSession: (base) => memStore.retarget(base ?? process.cwd()),
     rechainRole: (role, reason) => health.handleChainFailure(role, reason), // dead chain → quarantine + reassign
     // Memory used to work invisibly, so "no memory applied" and "memory is broken" looked identical. Every
     // injection, citation and extraction now surfaces as one compact chat line.

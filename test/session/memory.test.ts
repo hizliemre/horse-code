@@ -309,3 +309,58 @@ describe("a task worktree writes to its session's memory, not its own", () => {
     expect(ga).toContain("memory.jsonl merge=union");
   });
 });
+
+describe("memory follows the session, because the session is what ships", () => {
+  /**
+   * Measured on a real job: the session's inherited `memory.jsonl` was never written after the moment it was
+   * copied, while the PROJECT's gained 26 uses and 85 injections during the same hour. Everything the run
+   * learned landed in the reference copy and outside the pull request.
+   *
+   * The path logic was right — `stateRoot` resolves a session base correctly. The store is simply built when
+   * the process starts, and the only directory available then is the project; the session opens later.
+   */
+  it("writes into the session base once a session is open", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mem-"));
+    try {
+      const base = join(root, ".horsecode", "worktrees", "job", "base");
+      await mkdir(join(base, ".horsecode"), { recursive: true });
+
+      const store = new MemoryStore({ home: root, cwd: root });
+      expect(store.filePath()).toBe(join(root, ".horsecode", "memory.jsonl"));
+
+      store.retarget(base);
+      expect(store.filePath()).toBe(join(base, ".horsecode", "memory.jsonl"));
+      await store.add("the session learned this", "fact");
+      expect(existsSync(join(base, ".horsecode", "memory.jsonl"))).toBe(true);
+      expect(existsSync(join(root, ".horsecode", "memory.jsonl"))).toBe(false); // the project is a reference
+
+      // …and back, so the next chat turn does not write into a worktree that is finished or gone.
+      store.retarget(root);
+      expect(store.filePath()).toBe(join(root, ".horsecode", "memory.jsonl"));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  /**
+   * The cache is dropped on retarget: keeping entries loaded from one file while writing to the other is how
+   * a session would overwrite the project's memory with a stale snapshot of itself.
+   */
+  it("reads the file it was pointed at, not the one it was built with", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mem-"));
+    try {
+      const base = join(root, ".horsecode", "worktrees", "job", "base");
+      await mkdir(join(base, ".horsecode"), { recursive: true });
+      await mkdir(join(root, ".horsecode"), { recursive: true });
+      await writeFile(join(root, ".horsecode", "memory.jsonl"),
+        `${JSON.stringify({ id: "p1", text: "project fact", kind: "fact", anchors: [], tags: [], createdAt: 1 })}
+`, "utf8");
+      await writeFile(join(base, ".horsecode", "memory.jsonl"),
+        `${JSON.stringify({ id: "s1", text: "session fact", kind: "fact", anchors: [], tags: [], createdAt: 1 })}
+`, "utf8");
+
+      const store = new MemoryStore({ home: root, cwd: root });
+      expect((await store.load()).map((e) => e.id)).toEqual(["p1"]);
+      store.retarget(base);
+      expect((await store.load()).map((e) => e.id)).toEqual(["s1"]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});

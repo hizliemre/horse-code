@@ -60,6 +60,14 @@ export interface TaskCycleDeps {
   /** remember_fact tool sink: persist a durable fact the model learned from a tool result. */
   rememberFact?: (fact: string) => void;
   /**
+   * The session's base worktree once one is open, and `undefined` when the run is over.
+   *
+   * Anything that writes project state — memory above all — is built when the process starts, and the only
+   * directory available then is the PROJECT. A session opens later, so a store that resolved its path once
+   * spends the whole run writing to the reference copy instead of to what ships.
+   */
+  onSession?: (baseWorktree: string | undefined) => void;
+  /**
    * Queue a memory PROPOSAL from a review agent. Nothing is written here — the curator rules on the queue once
    * the job ends. Returns whether it was queued (false = duplicate or queue full).
    */

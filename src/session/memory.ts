@@ -26,7 +26,7 @@ export interface MemoryStoreOpts {
  * home. A sibling .gitignore keeps the secret-bearing config out of git while allowing memory.jsonl to be shared.
  */
 export class MemoryStore {
-  private readonly file: string;
+  private file: string;
   private readonly now: () => number;
   private cache?: MemoryEntry[];
   private queue: Promise<unknown> = Promise.resolve(); // serializes mutations (safe under parallel writers)
@@ -55,6 +55,32 @@ export class MemoryStore {
      */
     this.file = join(stateRoot(opts.cwd), ".horsecode", "memory.jsonl");
   }
+
+  /**
+   * Points the store at a session's base worktree, or back at the project when the session ends.
+   *
+   * `stateRoot` resolves the right file for a given directory — but the store is built once, when the
+   * process starts, and the only directory it can be given then is the PROJECT. A session opens later, so
+   * the path computed in the constructor stayed the project's for the whole run.
+   *
+   * Measured on a real job: the session's inherited `memory.jsonl` was never written after the moment it was
+   * copied, while the project's gained 26 uses and 85 injections during the same hour. Everything the run
+   * learned landed in the reference copy and outside the pull request — the opposite of the rule that the
+   * root is read, and the session is what ships.
+   *
+   * The cache is dropped rather than carried across: the two files are separate records, and keeping entries
+   * loaded from one while writing to the other is how a session would overwrite the project's memory with a
+   * stale snapshot of itself.
+   */
+  retarget(cwd: string): void {
+    const next = join(stateRoot(cwd), ".horsecode", "memory.jsonl");
+    if (next === this.file) return;
+    this.file = next;
+    this.cache = undefined;
+  }
+
+  /** Where entries are being written right now — for tests, and for anything that reports on state. */
+  filePath(): string { return this.file; }
 
   /** Project-relative content fingerprint, used to detect that an anchored file moved on. */
   private readonly anchorFs: AnchorFs = {

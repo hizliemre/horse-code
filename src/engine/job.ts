@@ -250,6 +250,8 @@ export async function runJob(
       // …and, for a resumed session, whatever came into existence after it was opened.
       const topped = describeTopUp(session.toppedUp ?? []);
       if (topped) emit({ kind: "note", text: topped });
+      // From here the session owns the project's state: what the run learns has to land in what ships.
+      deps.onSession?.(session.baseWorktree);
     }
     return session.baseWorktree;
   };
@@ -460,5 +462,14 @@ export async function runJob(
     // only in process memory — rethrowing without curating would throw away exactly the hardest-won signal.
     if (session) await curate(deps, opts.prompt, [], [], session.baseWorktree);
     throw e;
+  } finally {
+    /**
+     * Back to the project, whichever way the run ended.
+     *
+     * A store still pointed at a finished session would write the next chat turn's memory into a worktree
+     * that is closed, or gone — and the failure would be silent, because writing to a path nobody reads
+     * looks exactly like writing.
+     */
+    deps.onSession?.(undefined);
   }
 }
