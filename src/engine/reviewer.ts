@@ -6,6 +6,7 @@ import { ToolRegistry } from "../tools/registry.js";
 import { readFileTool } from "../tools/read.js";
 import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
+import { gitTool } from "../tools/git.js";
 import { applySkills, buildSkillTool } from "../skills/apply.js";
 import { rememberFactTool } from "../tools/remember.js";
 import { proposeMemoryTool } from "../tools/propose-memory.js";
@@ -41,6 +42,9 @@ export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean
   r.register(readFileTool);
   r.register(grepTool);
   r.register(globTool);
+  // What only git knows: what changed, when, and how this branch compares to another. Read-only by
+  // construction — see src/tools/git.ts.
+  r.register(gitTool);
   r.register(buildSkillTool(deps.skillRegistry));
   for (const t of contextTools(deps)) r.register(t);
   if (opts.remember) r.register(rememberFactTool);
