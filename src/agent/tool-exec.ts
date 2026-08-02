@@ -129,6 +129,31 @@ async function runTool(
   return result;
 }
 
+/**
+ * What to say when a tool does not exist.
+ *
+ * The whole message used to be `unknown tool: <name>`, which tells the model nothing it can act on — so it
+ * guesses. Observed on a real run: a project-manager invented an MCP tool that was never registered for it
+ * and spent SEVEN turns extending the name one fragment at a time
+ * (`…list_projects_ide`, `…_9564507f_ide`, `…_9564507f2f_ide`, …) before the phase died without writing its
+ * file. A hundred and thirty-three minutes and eighteen million input tokens, ended by a message that had
+ * the answer and did not give it.
+ *
+ * The nearest name comes first — a wrong name is almost always a near miss — and the full list follows,
+ * because "there is no such tool" is only useful next to "these exist".
+ */
+export function unknownTool(name: string, available: string[]): string {
+  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const target = norm(name);
+  // Longest shared prefix on the normalised names: cheap, and exactly right for a mangled or truncated one.
+  const shared = (a: string): number => { let n = 0; while (n < a.length && n < target.length && a[n] === target[n]) n++; return n; };
+  const ranked = [...available].sort((a, b) => shared(norm(b)) - shared(norm(a)));
+  const best = ranked[0];
+  const close = best && shared(norm(best)) >= 4 ? ` Did you mean \`${best}\`?` : "";
+  return `unknown tool: ${name}.${close} There is no tool by that name — do not guess at variants of it. `
+    + `The tools you have are: ${available.join(", ")}.`;
+}
+
 export async function* executeToolCalls(
   calls: ToolCall[],
   deps: ToolExecDeps,
@@ -145,7 +170,7 @@ export async function* executeToolCalls(
     }
     const tool = deps.tools.get(call.name);
     if (!tool) {
-      plans.push({ index: i, call, kind: "error", errorContent: `unknown tool: ${call.name}` });
+      plans.push({ index: i, call, kind: "error", errorContent: unknownTool(call.name, deps.tools.list().map((t) => t.name)) });
       continue;
     }
     let args: Record<string, unknown>;
