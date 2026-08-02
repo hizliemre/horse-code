@@ -20,6 +20,17 @@ export interface RevisionDeps extends TaskCycleDeps {
 }
 export type PostComments = (comments: string[]) => Promise<void>;
 
+/**
+ * The board row that records the PR revision rounds. It is BOOKKEEPING, not work.
+ *
+ * Named here and exported because two other places have to know it is not a task. A wave engine that
+ * schedules it hands "PR revision" to a coder, which writes straight into the base worktree while tasks are
+ * still merging into it — measured on a real run: the card was reopened on resume, picked up as a task, and
+ * the base was left mid-merge, so the next task's merge died with "You have not concluded your merge
+ * (MERGE_HEAD exists)" and took the run down with it.
+ */
+export const REVISION_CARD = "__revision__";
+
 export const PrincipalReviewSchema = z.object({
   decision: z.enum(["approve", "request-changes"]),
   comments: z.array(z.string()),
@@ -126,26 +137,26 @@ export async function runRevision(
    * Reusing it is also the right behaviour, not just the safe one: the card's history is the record of the
    * earlier revision rounds, and a resumed run continues them.
    */
-  if (!board.get("__revision__")) board.addCard({ id: "__revision__", title: "PR revision" });
+  if (!board.get(REVISION_CARD)) board.addCard({ id: REVISION_CARD, title: "PR revision" });
   const base = session.baseWorktree;
   const rounds = Math.max(1, maxRounds);
 
   for (let round = 1; round <= rounds; round++) {
     const v = await principalReview(deps, base, prDiff, round === 1 ? deferred : undefined);
     if (v.decision === "approve") {
-      board.appendStage("__revision__", { role: "principal-coder", action: "pr:approved" });
+      board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:approved" });
       return { status: "approved", rounds: round - 1 };
     }
-    board.appendStage("__revision__", { role: "principal-coder", action: "pr:changes", note: v.comments.join("; ") });
+    board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:changes", note: v.comments.join("; ") });
 
     if (round === rounds) {
       const f = await principalFinal(deps, base);
       if (f.decision === "accept") {
-        board.appendStage("__revision__", { role: "principal-coder", action: "pr:final:accept" });
+        board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:final:accept" });
         return { status: "accepted", rounds };
       }
       const answer = await askUser(f.question);
-      board.appendStage("__revision__", { role: "human", action: "pr:human", note: answer });
+      board.appendStage(REVISION_CARD, { role: "human", action: "pr:human", note: answer });
       return { status: "human", rounds, answer };
     }
 
@@ -155,20 +166,20 @@ export async function runRevision(
     // A revision that changed nothing means the next principal review would see IDENTICAL code and repeat the
     // same comments — burning every remaining round. Retry once with an explicit instruction, then stop.
     if (beforeRevise !== undefined && (await worktreeState(deps, base)) === beforeRevise) {
-      board.appendStage("__revision__", { role: "senior-coder", action: "pr:no-changes" });
+      board.appendStage(REVISION_CARD, { role: "senior-coder", action: "pr:no-changes" });
       await seniorRevise(deps, base, [...v.comments, "Your previous attempt changed NO files. Apply the fixes with write_file/edit_file, or state clearly which comment is wrong and why."]);
       if ((await worktreeState(deps, base)) === beforeRevise) {
         const f = await principalFinal(deps, base); // nothing is moving → settle it now instead of looping
         if (f.decision === "accept") {
-          board.appendStage("__revision__", { role: "principal-coder", action: "pr:final:accept" });
+          board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:final:accept" });
           return { status: "accepted", rounds: round };
         }
         const answer = await askUser(f.question);
-        board.appendStage("__revision__", { role: "human", action: "pr:human", note: answer });
+        board.appendStage(REVISION_CARD, { role: "human", action: "pr:human", note: answer });
         return { status: "human", rounds: round, answer };
       }
     }
-    board.appendStage("__revision__", { role: "senior-coder", action: "pr:revised" });
+    board.appendStage(REVISION_CARD, { role: "senior-coder", action: "pr:revised" });
     /**
      * A revision round writes straight into the base worktree, so it never passes the merge that refreshes
      * traces — and this is the LAST code to enter the pull request. Left alone, the files a reviewer just had

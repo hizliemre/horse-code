@@ -1,4 +1,5 @@
 import type { Board } from "../board/board.js";
+import { REVISION_CARD } from "./revision.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult, PRAdapter } from "../worktree/manager.js";
 import type { EscalationDeps } from "./escalation.js";
 import { runWaveTask } from "./wave-task.js";
@@ -109,7 +110,16 @@ export async function runReady(
   board: Board,
 ): Promise<WaveOutcome> {
   const ser = createMutex();
-  const cards = board.list();
+  /**
+   * The revision row is not schedulable work.
+   *
+   * `__revision__` records the PR revision rounds on the board; it has no worktree and no deliverable. Given
+   * to the wave engine it becomes a task, and the coder that picks it up writes straight into the BASE
+   * worktree while other tasks are still merging into it. Measured on a real run: the card was reopened on
+   * resume, scheduled, and left the base mid-merge — the next task's merge died with "You have not concluded
+   * your merge (MERGE_HEAD exists)" and took the run with it.
+   */
+  const cards = board.list().filter((c) => c.id !== REVISION_CARD);
   // A task already in DONE was implemented and merged by an earlier (interrupted) run — re-running it would
   // redo the whole implementation.
   /**

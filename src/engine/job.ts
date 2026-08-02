@@ -14,7 +14,7 @@ import { runProjectManager } from "./project-manager.js";
 import { auditBreakdown, repairRequest } from "./task-audit.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
-import { runRevision, type RevisionResult } from "./revision.js";
+import { REVISION_CARD, runRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
 import { describeInherited, describeTopUp } from "../worktree/inherit.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
@@ -347,7 +347,8 @@ export async function runJob(
        * no model, their clocks counting up from the moment the panel first saw them. Returned to TODO they
        * are simply work still to do, which is what they are; the wave loop re-runs them either way.
        */
-      const interrupted = board.list().filter((c) => c.column === "IN-PROGRESS" || c.column === "REVIEW");
+      const interrupted = board.list().filter((c) => c.id !== REVISION_CARD
+        && (c.column === "IN-PROGRESS" || c.column === "REVIEW"));
       for (const c of interrupted) board.reopen(c.id);
       /**
        * …and the ones that were never tried at all.
@@ -361,7 +362,8 @@ export async function runJob(
        * `attempts: 0`. That counter is the whole distinction — a card that was tried and gave up has a
        * number there, and is left alone.
        */
-      const neverTried = board.list().filter((c) => c.column === "ABANDONED" && (c.attempts ?? 0) === 0);
+      const neverTried = board.list().filter((c) => c.id !== REVISION_CARD
+        && c.column === "ABANDONED" && (c.attempts ?? 0) === 0);
       for (const c of neverTried) board.reopen(c.id);
       const done = board.list().filter((c) => c.column === "MERGED").length;
       emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` +
