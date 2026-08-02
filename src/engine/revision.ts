@@ -218,9 +218,16 @@ async function refreshAfterRevision(deps: RevisionDeps, base: string, headBefore
     const line = describeRefresh(r);
     if (line) deps.note?.(line);
     // Committed here too, for the same reason: a loose trace in the base breaks whatever merges next.
-    if (r.traced || r.removed) {
-      const { traceRootRel } = await import("./trace.js");
-      await commitRefreshed(gitOf(deps), base, traceRootRel());
-    }
+    /**
+     * Unconditional, because the condition was wrong.
+     *
+     * A refresh rebuilds the graph BEFORE deciding whether any trace needs rewriting, so the commonest
+     * outcome — nothing to re-describe — still leaves `graphify-out/graph.json` modified. Gating the commit
+     * on "did we write a trace" left that file loose on exactly the merges where nothing else happened,
+     * which is the same failure one step along. `commitRefreshed` asks git whether anything is staged, so
+     * calling it when nothing changed costs one command and commits nothing.
+     */
+    const { traceRootRel } = await import("./trace.js");
+    await commitRefreshed(gitOf(deps), base, traceRootRel());
   } catch { /* never the reason a revised pull request is reported as failed */ }
 }

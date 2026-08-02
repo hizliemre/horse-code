@@ -151,10 +151,16 @@ async function refreshAfterMerge(
      * same path a documentation task edits. Measured on a real run: the refresh left
      * `docs/architecture/…/safe-html.pipe.ts.md` loose in the base worktree, and the next task's merge
      * aborted with "Your local changes … would be overwritten by merge" — eleven tasks in.
+     *
+     * Unconditional, because the condition was wrong.
+     *
+     * A refresh rebuilds the graph BEFORE deciding whether any trace needs rewriting, so the commonest
+     * outcome — nothing to re-describe — still leaves `graphify-out/graph.json` modified. Gating the commit
+     * on "did we write a trace" left that file loose on exactly the merges where nothing else happened,
+     * which is the same failure one step along. `commitRefreshed` asks git whether anything is staged, so
+     * calling it when nothing changed costs one command and commits nothing.
      */
-    if (r.traced || r.removed) {
-      const { traceRootRel } = await import("./trace.js");
-      await commitRefreshed(git, session.baseWorktree, traceRootRel());
-    }
+    const { traceRootRel } = await import("./trace.js");
+    await commitRefreshed(git, session.baseWorktree, traceRootRel());
   } catch { /* documentation must never be the reason a merged task is reported as failed */ }
 }
