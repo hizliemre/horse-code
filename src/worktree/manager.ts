@@ -1,7 +1,7 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import { inheritFromRoot, type Inherited } from "./inherit.js";
+import { inheritFromRoot, topUpInherited, type Inherited } from "./inherit.js";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
 import { readCheckpoint, checkpointKey, isContinuePrompt, checkpointMtime } from "../engine/checkpoint.js";
@@ -17,6 +17,8 @@ export interface WorktreeSession {
   resumed?: boolean; // true when this session reuses a preserved worktree from an earlier interrupted run
   /** What the project's working state contributed at open time — see inheritFromRoot. */
   inherited?: Inherited;
+  /** Assets a RESUMED session picked up because they did not exist when it was opened. */
+  toppedUp?: string[];
 }
 export interface TaskWorktree {
   taskSlug: string;
@@ -172,7 +174,17 @@ export class WorktreeManager {
     // phase at all — outrank the real work simply because it was touched later, and "continue" would then
     // restart the pipeline from the constitution while a spec'd, committed feature sat next to it untouched.
     candidates.sort((a, b) => (b.progress > 0 ? 1 : 0) - (a.progress > 0 ? 1 : 0) || b.mtime - a.mtime);
-    return candidates[0].session;
+    const picked = candidates[0].session;
+    /**
+     * A resumed session still holds the project as it was on the day it was opened.
+     *
+     * Inheritance runs once, at openSession. Measured on a real project: the worktree was cut before a
+     * constitution existed, the user then wrote one, resumed the job — and the run announced "No `.specify/`
+     * directory exists yet" and started a second one, with the first thirty-two kilobytes away in the root.
+     * Only what is missing is filled in; anything the session already has is its own work.
+     */
+    const added = await topUpInherited(this.repoRoot, picked.baseWorktree);
+    return added.length ? { ...picked, toppedUp: added } : picked;
   }
 
   /**

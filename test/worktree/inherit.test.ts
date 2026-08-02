@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { inheritFromRoot, describeInherited, INHERITED_ASSETS } from "../../src/worktree/inherit.js";
+import { inheritFromRoot, describeInherited, topUpInherited, describeTopUp, INHERITED_ASSETS } from "../../src/worktree/inherit.js";
 import { WorktreeManager } from "../../src/worktree/manager.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { initTmpRepo } from "./helpers.js";
@@ -49,6 +49,7 @@ describe("a new session inherits the project's working state", () => {
     await put(repo, ".horsecode/memory.jsonl", '{"id":"m1","text":"a fact","anchors":[],"tags":[],"createdAt":1}\n');
     await put(repo, ".horsecode/skills/impeccable/SKILL.md", "---\nname: impeccable\ndescription: d\n---\nbody");
     await put(repo, ".specify/memory/constitution.md", "# principles");
+    await put(repo, ".horsecode/migrated.json", '{"version":1,"at":0,"files":["CLAUDE.md"]}');
     await put(repo, ".gitignore", "graphify-out/\n.horsecode/\n.specify/\n");
 
     const wm = new WorktreeManager({ repoRoot: repo });
@@ -111,5 +112,50 @@ describe("inheritFromRoot — another checkout is not this project's work in pro
   it("says what it left behind — a silent omission looks exactly like having nothing to carry", () => {
     expect(describeInherited({ modified: [], untracked: ["a.ts"], assets: [], deleted: [], skipped: 26_159 }))
       .toMatch(/26159 left behind/);
+  });
+});
+
+describe("a resumed session picks up what did not exist when it was opened", () => {
+  /**
+   * Measured on a real project: the worktree was cut before a constitution existed, the user wrote one, then
+   * resumed the job — and the run reported "No `.specify/` directory exists yet" and set about writing a
+   * second one, with the first thirty-two kilobytes away in the root. Inheritance runs at openSession, and
+   * a resumed session never opens.
+   */
+  it("fills in a missing asset", async () => {
+    repo = await initTmpRepo();
+    const session = join(repo, ".horsecode", "worktrees", "job", "base");
+    await mkdir(session, { recursive: true });
+    await put(repo, ".specify/memory/constitution.md", "# the real constitution\n");
+
+    const added = await topUpInherited(repo, session);
+    expect(added).toContain(join(".specify", "memory", "constitution.md"));
+    expect(await readFile(join(session, ".specify", "memory", "constitution.md"), "utf8")).toBe("# the real constitution\n");
+  });
+
+  it("never overwrites what the session already has — that is the work it is resuming", async () => {
+    repo = await initTmpRepo();
+    const session = join(repo, ".horsecode", "worktrees", "job", "base");
+    await mkdir(session, { recursive: true });
+    await put(repo, ".specify/memory/constitution.md", "ROOT version\n");
+    await put(session, ".specify/memory/constitution.md", "the session's own draft\n");
+
+    const added = await topUpInherited(repo, session);
+    expect(added).not.toContain(join(".specify", "memory", "constitution.md"));
+    expect(await readFile(join(session, ".specify", "memory", "constitution.md"), "utf8")).toBe("the session's own draft\n");
+  });
+
+  it("carries the migrated-rules record, so the guard is not inert inside a session", async () => {
+    repo = await initTmpRepo();
+    const session = join(repo, ".horsecode", "worktrees", "job", "base");
+    await mkdir(session, { recursive: true });
+    await put(repo, ".horsecode/migrated.json", '{"version":1,"at":0,"files":["CLAUDE.md"]}');
+
+    expect(await topUpInherited(repo, session)).toContain(join(".horsecode", "migrated.json"));
+    expect(INHERITED_ASSETS).toContain(join(".horsecode", "migrated.json"));
+  });
+
+  it("says nothing when the session was already complete", () => {
+    expect(describeTopUp([])).toBeUndefined();
   });
 });

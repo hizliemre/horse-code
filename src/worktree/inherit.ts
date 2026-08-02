@@ -28,6 +28,7 @@ export const INHERITED_ASSETS: string[] = [
   join(".horsecode", "memory.jsonl"),
   join(".horsecode", "skills"),
   join(".specify", "memory", "constitution.md"),
+  join(".horsecode", "migrated.json"),
 ];
 
 /**
@@ -151,4 +152,36 @@ export function describeInherited(i: Inherited): string | undefined {
   if (i.skipped) parts.push(`${i.skipped} left behind (another checkout, or past the ${MAX_UNTRACKED} bound)`);
   if (i.assets.length) parts.push(i.assets.map((a) => `\`${a}\``).join(", "));
   return parts.length ? `📥 Carried into this session: ${parts.join(" · ")}.` : undefined;
+}
+
+
+/**
+ * Tops a RESUMED session up with the project state it never saw.
+ *
+ * A session inherits once, when it is opened. A preserved worktree that is picked up days later still holds
+ * the project as it was that day — and measured on a real one, that is exactly what went wrong: the session
+ * was cut before the constitution existed, the user wrote one in the project, resumed the job, and the run
+ * reported "No `.specify/` directory exists yet" and set about writing a second one. The file was thirty-two
+ * kilobytes away in the root the whole time.
+ *
+ * Only what is MISSING, and never an overwrite. The session's copy of any of these may be its own work in
+ * progress — a memory it added, a constitution it drafted — and replacing that with the root's version to
+ * make it "fresh" would destroy the thing the resume exists to continue.
+ */
+export async function topUpInherited(repoRoot: string, baseWorktree: string): Promise<string[]> {
+  const added: string[] = [];
+  if (repoRoot === baseWorktree) return added;
+  for (const rel of INHERITED_ASSETS) {
+    const from = join(repoRoot, rel);
+    const to = join(baseWorktree, rel);
+    if (!existsSync(from) || existsSync(to)) continue;
+    try { await copyPath(from, to); added.push(rel); } catch { /* one asset must not stop a resume */ }
+  }
+  return added;
+}
+
+/** One line for the user when a resumed session picked something up that it had never seen. */
+export function describeTopUp(added: string[]): string | undefined {
+  if (!added.length) return undefined;
+  return `📥 This session was opened before ${added.map((a) => `\`${a}\``).join(", ")} existed — carried in now.`;
 }
