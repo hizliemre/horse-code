@@ -1,5 +1,5 @@
 import { cp, lstat, mkdir, readFile, readlink, rm } from "node:fs/promises";
-import { recordMigrated } from "./migrated.js";
+import { recordMigrated, loadMigrated } from "./migrated.js";
 import { dirname, join, resolve } from "node:path";
 import type { Provider } from "../core/types.js";
 import type { MemoryStore } from "../session/memory.js";
@@ -355,11 +355,34 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
   const migratedRules = findings
     .filter((f) => f.kind === "rules" && !f.label.startsWith("~/"))
     .map((f) => f.label);
-  if (result.rules > 0 && migratedRules.length) {
-    await recordMigrated(deps.cwd, migratedRules).catch(() => { /* bookkeeping must not fail a migration */ });
-    deps.note(`🔒 ${migratedRules.map((f) => `\`${f}\``).join(", ")} ${migratedRules.length === 1 ? "is" : "are"} `
-      + `no longer read as rules — their content is in this project's memory, and an agent that opens one is `
-      + `told where the rules went.`);
+  if (migratedRules.length) {
+    const already = (await loadMigrated(deps.cwd))?.files ?? [];
+    const unrecorded = migratedRules.filter((f) => !already.includes(f));
+    /**
+     * Declining the import usually means "you already did this", not "leave those files in charge".
+     *
+     * Gating the record on `result.rules > 0` meant a second migration — the commonest way anyone would
+     * arrive here after the fact — recorded nothing: the user declines the re-import precisely BECAUSE the
+     * rules are already in memory, and the files stayed authoritative. So when nothing was imported but the
+     * project already holds rules, the question is asked directly instead of inferred.
+     */
+    const stop = result.rules > 0
+      ? unrecorded.length > 0
+      : unrecorded.length > 0 && countKind(deps.memStore, "rule") > 0
+        && /^y/i.test(await deps.ask(
+          `${unrecorded.map((f) => `\`${f}\``).join(", ")} ${unrecorded.length === 1 ? "was" : "were"} `
+          + `left in place, and this project already has rules in memory — so ${unrecorded.length === 1 ? "it was" : "they were"} `
+          + `most likely migrated already. Stop reading ${unrecorded.length === 1 ? "it" : "them"} as this project's rules?`,
+          { options: [
+            { label: "Yes — the rules are in memory", description: "An agent that opens the file is told where the rules went" },
+            { label: "No — keep reading them", description: "The file stays a source of rules alongside memory" },
+          ] }));
+    if (stop) {
+      await recordMigrated(deps.cwd, unrecorded).catch(() => { /* bookkeeping must not fail a migration */ });
+      deps.note(`🔒 ${unrecorded.map((f) => `\`${f}\``).join(", ")} ${unrecorded.length === 1 ? "is" : "are"} `
+        + `no longer read as rules — their content is in this project's memory, and an agent that opens one is `
+        + `told where the rules went.`);
+    }
   }
 
   return result;
