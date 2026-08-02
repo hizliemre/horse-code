@@ -17,7 +17,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface ConflictDeps extends EscalationDeps {
-  manager: Pick<WorktreeManager, "unmergedFiles" | "commitMerge" | "abortMerge">;
+  manager: Pick<WorktreeManager, "unmergedFiles" | "commitMerge" | "abortMerge" | "resolveWithBase">;
 }
 
 export type ConflictResult = { status: "resolved" } | { status: "unresolved"; task: TaskWorktree };
@@ -91,6 +91,12 @@ async function hasConflictMarkers(baseWorktree: string, files: string[]): Promis
  * code-reviewer → commitMerge. If unresolved after N rounds, abortMerge + ask a human. (The `git merge` itself
  * stays deterministic; only the intelligent conflict resolution is delegated to the agent.)
  */
+/**
+ * Files a package manager writes and a person never should. Their conflicts are resolved by re-running the
+ * tool, not by choosing lines.
+ */
+const LOCKFILE = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum)$/;
+
 export async function resolveMergeConflict(
   deps: ConflictDeps,
   session: WorktreeSession,
@@ -99,9 +105,37 @@ export async function resolveMergeConflict(
   task: TaskWorktree,
 ): Promise<ConflictResult> {
   if (!board.get(taskId)) throw new Error(`resolveMergeConflict: unknown task: ${taskId}`);
-  const conflicted = await deps.manager.unmergedFiles(session);
+  const allConflicted = await deps.manager.unmergedFiles(session);
   const rounds = Math.max(1, deps.rounds);
   const base = session.baseWorktree;
+
+  /**
+   * A lockfile is not merged. It is regenerated.
+   *
+   * `package-lock.json` is the output of a resolver, not a document: its conflicts are thousands of lines of
+   * machine-written JSON whose correct resolution is "run the package manager again". Handing that to a
+   * model is asking it to do by hand what a program does exactly, and it fails the way that always fails —
+   * measured on a real board, T006 conflicted on `toucan/package-lock.json` twice and both attempts ended
+   * with "maximum turn count exceeded (12)", the task's own review already passed. Twelve turns, twice, on a
+   * file nobody wrote.
+   *
+   * Taking OURS and regenerating is right because the base is where the other tasks' installs have already
+   * landed: `T002` and `T003` both declared this file and merged before this one came back. What the branch
+   * has to add is its own dependency, and the install re-derives that from the manifest.
+   */
+  const lockfiles = allConflicted.filter((f) => LOCKFILE.test(f));
+  const conflicted = allConflicted.filter((f) => !LOCKFILE.test(f));
+  if (lockfiles.length) {
+    deps.note?.(`🔒 ${lockfiles.join(", ")} — generated file, taking the base's copy and regenerating rather `
+      + `than merging it by hand.`);
+    for (const f of lockfiles) {
+      try { await deps.manager.resolveWithBase(session, f); } catch { /* fall through to the resolver */ }
+    }
+  }
+  if (!conflicted.length && lockfiles.length) {
+    // Nothing left that needs judgement — the merge can be completed on the regenerated file alone.
+    return { status: "resolved" };
+  }
   deps.note?.(`🔀 Merge conflict in ${conflicted.join(", ")} — operational resolving…`);
 
   /**

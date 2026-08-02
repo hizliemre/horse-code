@@ -264,6 +264,19 @@ export class WorktreeManager {
     return r.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
   }
 
+  /**
+   * Resolves one conflicted path by taking the BASE's copy, for files that are regenerated rather than merged.
+   *
+   * `--ours` during a merge means the branch being merged INTO — the session base, where the other tasks'
+   * work has already landed. For a lockfile that is the right side: it already carries every dependency the
+   * merged tasks installed, and the incoming branch's own addition is re-derived by running the package
+   * manager, not by choosing lines from a machine-written file.
+   */
+  async resolveWithBase(session: WorktreeSession, file: string): Promise<void> {
+    await this.git(["checkout", "--ours", "--", file], session.baseWorktree);
+    await this.git(["add", "--", file], session.baseWorktree);
+  }
+
   /** Unified diff of changes in the base worktree against the base branch (the PR diff). */
   async diff(session: WorktreeSession, base: string): Promise<string> {
     const r = await this.git(["diff", `${base}...${session.baseBranch}`], session.baseWorktree);
