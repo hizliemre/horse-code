@@ -94,6 +94,9 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
     provider: deps.provider, ...resolved, tools,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
+    // The last code to enter the pull request: what the reviser says about each comment — fixed it, or why
+    // it is by design — is the argument the user is being asked to accept.
+    ...(deps.note ? { onSay: deps.note } : {}),
   };
   await runToCompletion(opts);
 }

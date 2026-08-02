@@ -1,6 +1,7 @@
 import type {
   AgentEvent, ChatRequest, Message, Provider, ToolCall,
 } from "../core/types.js";
+import { stripThinking } from "../tui/format.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { executeToolCalls } from "./tool-exec.js";
@@ -47,6 +48,19 @@ export interface RoleAgentOptions {
   onLiveActivity?: (label: string) => void; // live "writing <file> · N chars" while a tool call is generated
   onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit
   onUsage?: (u: { promptTokens: number; completionTokens: number; model: string }) => void; // per-call usage + the model that served it
+  /**
+   * Everything the role SAYS, message by message — its prose, not its tool calls.
+   *
+   * Here rather than at each caller because the gap was structural, not local: `runToCompletion` keeps the
+   * last message and drops every one before it, so any role driven through it could talk to the user and be
+   * heard by nobody. Found in a spec-kit phase — the analyst offered to show a skeleton before writing,
+   * showed it, and asked "do you approve the skeleton above?" with nothing above it — but `clarify` and the
+   * PR revision run the same way and were equally mute.
+   *
+   * Left unset for roles whose prose is not addressed to anyone: a structured role answers with a schema, and
+   * a wave of parallel implementers would interleave into noise (their work shows in the agent panel).
+   */
+  onSay?: (text: string) => void;
 }
 
 /** 1394 → "1.4k"; keeps the live activity line compact. */
@@ -220,8 +234,12 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
 export async function runToCompletion(opts: RoleAgentOptions): Promise<Message> {
   let last: Message | undefined;
   for await (const ev of runRoleAgent(opts)) {
-    if (ev.type === "message.done") last = ev.message;
-    else if (ev.type === "error") throw new Error(ev.message);
+    if (ev.type === "message.done") {
+      last = ev.message;
+      // A turn that only called a tool says nothing; the tool card is already its own record.
+      const said = stripThinking(ev.message.content).trim();
+      if (said) opts.onSay?.(said);
+    } else if (ev.type === "error") throw new Error(ev.message);
     else if (ev.type === "abort") throw new Error("cancelled");
   }
   if (!last) throw new Error("runToCompletion: no message was produced");

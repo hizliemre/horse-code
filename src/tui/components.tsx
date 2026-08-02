@@ -2043,9 +2043,21 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             onHelp={() => setHelpOpen(true)}
             makePasteToken={makePasteToken}
             onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); setSlashSel(0); }}
-            onSubmit={(t) => {
+            onSubmit={(raw) => {
+              /**
+               * A paste placeholder is a DISPLAY device for the composer, and nothing downstream may ever
+               * see one.
+               *
+               * The expansion used to sit at the bottom, past every early return — so it covered a plain
+               * prompt and nothing else. Answering a question with pasted text sent the literal
+               * `⟨paste #1: 1 line⟩` as the answer, and `/remember <paste>` stored the placeholder as the
+               * memory. Expanding here makes the composer's shorthand invisible to every path by
+               * construction, rather than by remembering to call it in each one.
+               */
+              const t = expandPasteTokens(raw, pasteMapRef.current);
+              const usedPastes = (): void => { pasteMapRef.current.clear(); pasteIdRef.current = 0; };
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
-              if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); controller.answer(t); return; }
+              if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.answer(t); return; }
               // @-file picker open → Enter inserts the highlighted path instead of submitting.
               if (atOpen) { const p = atMatches[atIdx]; if (p) { insertAtFile(p); return; } }
               // Slash palette open → Enter runs the highlighted command instead of submitting a prompt.
@@ -2056,36 +2068,35 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               const known = COMMANDS.find((c) => c.name === cmd);
               if (known) { runSlash(known); return; }
               if (cmd === "/roles setmodel") { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); controller.openRolePicker((listRoles?.() ?? []).map((r) => r.name)); return; }
-              if (cmd === "/roles adjust") { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doRolesAdjust(); return; }
+              if (cmd === "/roles adjust") { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doRolesAdjust(); return; }
               // /resume N (argument form) → resume the N-th session.
-              if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doResume(trimmed.slice("/resume".length).trim()); return; }
+              if (cmd.startsWith("/resume ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doResume(trimmed.slice("/resume".length).trim()); return; }
               // /next N (argument form) → run the N-th suggested follow-up.
-              if (cmd.startsWith("/next ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doNext(trimmed.slice("/next".length).trim()); return; }
+              if (cmd.startsWith("/next ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doNext(trimmed.slice("/next".length).trim()); return; }
               // /pin <text> | /pin rm N (argument form).
-              if (cmd.startsWith("/pin ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doPin(trimmed.slice("/pin".length).trim()); return; }
+              if (cmd.startsWith("/pin ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doPin(trimmed.slice("/pin".length).trim()); return; }
               // /remember <text> · /forget N (argument forms).
-              if (cmd.startsWith("/remember ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doRemember(trimmed.slice("/remember".length).trim()); return; }
-              if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doForget(trimmed.slice("/forget".length).trim()); return; }
+              if (cmd.startsWith("/remember ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doRemember(trimmed.slice("/remember".length).trim()); return; }
+              if (cmd.startsWith("/forget ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doForget(trimmed.slice("/forget".length).trim()); return; }
               // /sources refresh (argument form).
-              if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doSources(trimmed.slice("/sources".length).trim()); return; }
-              if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doSkills(trimmed.slice("/skills".length).trim()); return; }
-              if (cmd.startsWith("/watch ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doWatch(trimmed.slice("/watch".length).trim()); return; }
-              if (cmd.startsWith("/monitor ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doMonitor(trimmed.slice("/monitor".length).trim()); return; }
-              if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doParallel(trimmed.slice("/parallel".length).trim()); return; }
-              if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doMcp(trimmed.slice("/mcp".length).trim()); return; }
-              if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doGraph(trimmed.slice("/graph".length).trim()); return; }
-              if (cmd.startsWith("/continue-from-claude ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doContinueFromClaude(trimmed.slice("/continue-from-claude".length).trim()); return; }
+              if (cmd.startsWith("/sources ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doSources(trimmed.slice("/sources".length).trim()); return; }
+              if (cmd.startsWith("/skills ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doSkills(trimmed.slice("/skills".length).trim()); return; }
+              if (cmd.startsWith("/watch ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doWatch(trimmed.slice("/watch".length).trim()); return; }
+              if (cmd.startsWith("/monitor ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMonitor(trimmed.slice("/monitor".length).trim()); return; }
+              if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doParallel(trimmed.slice("/parallel".length).trim()); return; }
+              if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMcp(trimmed.slice("/mcp".length).trim()); return; }
+              if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doGraph(trimmed.slice("/graph".length).trim()); return; }
+              if (cmd.startsWith("/continue-from-claude ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doContinueFromClaude(trimmed.slice("/continue-from-claude".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
-              if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); controller.echoCommand(trimmed); doMode(trimmed.slice("/mode".length).trim()); return; }
+              if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
               if (trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);
                 controller.note(`Unknown command: \`${trimmed}\` — type \`/\` to see the available commands.`);
                 return;
               }
-              // Expand any collapsed-paste placeholders back to their full text before the prompt goes out.
-              const full = expandPasteTokens(t, pasteMapRef.current);
-              pasteMapRef.current.clear(); pasteIdRef.current = 0;
+              const full = t; // already expanded at the top — no path may see a placeholder
+              usedPastes();
               if (full.trim()) historyRef.current = [...historyRef.current, full];
               histIdxRef.current = -1; stashRef.current = "";
               setScroll(0); setDraft(""); setDraftCursor(0);

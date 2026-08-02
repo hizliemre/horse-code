@@ -1,7 +1,5 @@
 import { relative } from "node:path";
-import { runRoleAgent } from "../agent/loop.js";
-import { stripThinking } from "../tui/format.js";
-import type { Message } from "../core/types.js";
+import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "../engine/task-types.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
@@ -79,28 +77,17 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     onActivity: p.deps.onActivity,
     onLiveActivity: p.deps.onLiveActivity,
     onWrite: (path) => commitFile(p.deps, p.workdir, path).then(() => {}), // per-write conventional commit
+    /**
+     * What the role says reaches the user.
+     *
+     * A phase used to show tool cards and an artefact and nothing else. Reported twice in the same shape:
+     * the analyst offered "I'll show you the skeleton first and wait for approval", the user chose it, the
+     * analyst wrote the skeleton — and asked "do you approve the skeleton above?" with nothing above it.
+     * The model did exactly what it promised; the words were thrown away.
+     */
+    ...(p.deps.note ? { onSay: p.deps.note } : {}),
   };
-  /**
-   * What the role SAYS reaches the user, not only what it writes to disk.
-   *
-   * `runToCompletion` keeps the last message and discards every one before it, so a spec-kit phase showed
-   * tool cards and an artefact and nothing else. Reported twice, in the same shape both times: the analyst
-   * offered "I'll show you the skeleton first and wait for approval", the user chose it, the analyst wrote
-   * the skeleton — and then asked "do you approve the skeleton above?" with nothing above it. The model had
-   * done exactly what it promised. We threw the words away and left the user approving something invisible.
-   *
-   * One note per completed assistant message, which is the same granularity a chat reply has.
-   */
-  let last: Message | undefined;
-  for await (const ev of runRoleAgent(opts)) {
-    if (ev.type === "message.done") {
-      last = ev.message;
-      const said = stripThinking(ev.message.content).trim();
-      if (said) p.deps.note?.(said);
-    } else if (ev.type === "error") throw new Error(ev.message);
-    else if (ev.type === "abort") throw new Error("cancelled");
-  }
-  if (!last) throw new Error(`${role}: no message was produced`);
+  await runToCompletion(opts);
 }
 
 export async function runConstitution(p: PhaseDeps): Promise<void> {

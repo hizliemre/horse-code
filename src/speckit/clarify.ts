@@ -74,6 +74,8 @@ export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 
       cwd: p.workdir,
       signal: p.deps.signal,
       onActivity: p.deps.onActivity,
+      // Clarify rewrites the spec from the user's own answers; what it says about that is addressed to them.
+      ...(p.deps.note ? { onSay: p.deps.note } : {}),
     };
     await runToCompletion(opts);
   }
