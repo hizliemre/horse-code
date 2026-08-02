@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { z } from "zod";
 import { runStructuredRole } from "../agent/structured.js";
+import { extractChoicesFrom } from "../engine/normalize-question.js";
 import { runToCompletion } from "../agent/loop.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { writerRegistry } from "../engine/writer-registry.js";
@@ -50,7 +51,18 @@ export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 
     };
     const step = await runStructuredRole(opts, ClarifyStepSchema);
     if (!step.nextQuestion) break;
-    const answer = await p.askUser(step.nextQuestion);
+    /**
+     * Clarify's questions get the same structuring as every other question.
+     *
+     * It asked through the raw `askUser`, so a question whose author had put the choices in prose arrived as
+     * prose. Measured on a real one: nine lines of unbroken text with "(A) … (B) … (C) …" buried in the
+     * middle and nothing to select — for the one phase whose entire purpose is getting a decision out of the
+     * user.
+     */
+    const structured = extractChoicesFrom(step.nextQuestion);
+    const answer = structured.choices.length >= 2
+      ? await p.askUser(structured.question, { options: structured.choices })
+      : await p.askUser(step.nextQuestion);
     qa.push(`Q: ${step.nextQuestion}\nA: ${answer}`);
   }
 

@@ -94,5 +94,46 @@ export function extractChoicesFrom(text: string): ExtractedChoices {
     return { choices: lettered, question };
   }
 
+  /**
+   * …and the same list written INLINE, inside a paragraph: `… Options: (A) … (B) … (C) …`.
+   *
+   * Measured on a real clarify question: `looksLikeChoices` said yes, the extractor found nothing, and the
+   * user was handed a nine-line wall of prose with three options buried in it and no list to choose from.
+   * The line-anchored form was the only one it knew, and a model writing a question in flowing text does
+   * not use it.
+   *
+   * Split on the MARKERS rather than on sentences: the option bodies contain full stops, commas and their
+   * own parentheses, and any attempt to find their edges by punctuation cuts them in the wrong places.
+   */
+  const MARKER = /\(([A-Ea-e])\)\s*/g;
+  const marks = [...text.matchAll(MARKER)];
+  // Must run A, B, C… in order and start at A — otherwise this is prose that happens to contain "(a)".
+  const inOrder = marks.length >= 2
+    && marks.every((m, i) => m[1].toUpperCase() === String.fromCharCode(65 + i));
+  if (inOrder) {
+    const first = marks[0].index ?? 0;
+    const parts = marks.map((m, i) => {
+      const start = (m.index ?? 0) + m[0].length;
+      const end = i + 1 < marks.length ? marks[i + 1].index ?? text.length : text.length;
+      return { letter: m[1].toUpperCase(), body: text.slice(start, end).trim().replace(/\s+/g, " ") };
+    }).filter((p) => p.body);
+    if (parts.length >= 2) {
+      // The lead-in that introduced them ("Options:", "Seçenekler:") goes with the list, not the question.
+      const question = text.slice(0, first).replace(/\s*(Se\u00e7enekler|Options|Choices)\s*:?\s*$/i, "").trim();
+      return {
+        choices: parts.map((p) => ({ label: `${p.letter} — ${clipLabel(p.body)}`, description: p.body })),
+        question: question || text,
+      };
+    }
+  }
+
   return { choices: [], question: text };
 }
+
+/** A label is one line in a list; the full text stays in the description beside it. */
+const clipLabel = (body: string): string => {
+  const cut = body.replace(/^\[[^\]]*\]\s*/, ""); // a leading tag like "[RECOMMENDED]" is not the label
+  const stop = cut.search(/[—–.;:]\s/);
+  const head = stop > 12 ? cut.slice(0, stop) : cut;
+  return head.length > 72 ? `${head.slice(0, 71)}…` : head;
+};

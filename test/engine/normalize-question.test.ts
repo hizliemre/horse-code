@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { looksLikeChoices, normalizeQuestion } from "../../src/engine/normalize-question.js";
+import { looksLikeChoices, normalizeQuestion, extractChoicesFrom } from "../../src/engine/normalize-question.js";
 import { buildAskUserTool } from "../../src/engine/writer-registry.js";
 import { MockProvider } from "../../src/providers/mock.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
@@ -113,5 +113,49 @@ describe("buildAskUserTool with normalize", () => {
     const t2 = buildAskUserTool(ask, async () => { throw new Error("boom"); });
     await t2.run({ question: prose }, ctx);
     expect(seen[1].q).toBe(prose); // normalizer threw → raw question
+  });
+});
+
+describe("choices written inline, inside a paragraph", () => {
+  /**
+   * Measured on a real clarify question: `looksLikeChoices` said yes, the extractor found nothing, and the
+   * user was handed nine lines of unbroken prose with three options buried in the middle and no list to
+   * choose from — in the one phase whose entire purpose is getting a decision out of them. The extractor
+   * knew only the line-anchored form, and a model writing in flowing text does not use it.
+   */
+  const Q = 'What should the pipe return when the sanitizer cannot run? FR-006 only says "must not throw". '
+    + 'Options: (A) Empty output — fully fail-closed, the text never appears. '
+    + '(B) [RECOMMENDED] The input is returned as HTML-escaped plain text — no tag is interpreted, the '
+    + 'content stays visible. (C) The raw input is returned marked safe (fail-open) — reopens the hole.';
+
+  it("extracts every option and keeps the question", () => {
+    const r = extractChoicesFrom(Q);
+    expect(r.choices.length).toBe(3);
+    expect(r.question).toContain("must not throw");
+    expect(r.question).not.toContain("(A)");
+    expect(r.question).not.toMatch(/Options:\s*$/);   // the lead-in belongs to the list, not the question
+  });
+
+  it("puts a readable line in the label and the whole option beside it", () => {
+    const [a, b] = extractChoicesFrom(Q).choices as { label: string; description: string }[];
+    expect(a.label).toMatch(/^A — Empty output/);
+    expect(b.label).not.toContain("[RECOMMENDED]");    // a tag is not the name of the choice
+    expect(b.description).toContain("HTML-escaped plain text");
+    expect(b.label.length).toBeLessThanOrEqual(76);
+  });
+
+  it("ignores prose that merely contains a parenthesised letter", () => {
+    expect(extractChoicesFrom("See note (a) above, and also section (c).").choices).toEqual([]);
+    expect(extractChoicesFrom("Only one option here: (A) do it.").choices).toEqual([]);
+  });
+
+  it("requires the markers to run in order from A", () => {
+    expect(extractChoicesFrom("Pick: (B) second (C) third").choices).toEqual([]);
+  });
+
+  it("still handles the line-anchored form it always knew", () => {
+    const r = extractChoicesFrom("Which one?\nA) keep it\nB) replace it");
+    expect(r.choices.length).toBe(2);
+    expect(r.question).toBe("Which one?");
   });
 });
