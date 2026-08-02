@@ -215,6 +215,21 @@ export async function runJob(
   let session: WorktreeSession | undefined;
   // nameHint = the refiner's short English title → a meaningful worktree name; falls back to the job name
   // (raw-prompt slug) only if the refiner produced no title.
+  /**
+   * Adopting a session — the ONE place that does it, because the bookkeeping was forgettable and was forgotten.
+   *
+   * `ensureWorktree` announced the session and pointed the memory store at it; the resume path assigned
+   * `session` directly and did neither. Measured on a real "devam" run: the session's memory.jsonl was never
+   * written after it was copied, while the project's gained two new entries and 325 injections in the same
+   * hour — the exact failure the retarget was written to fix, reappearing through the door it did not cover.
+   */
+  const adopt = (s: WorktreeSession): WorktreeSession => {
+    session = s;
+    // From here the session owns the project's state: what the run learns has to land in what ships.
+    deps.onSession?.(s.baseWorktree);
+    return s;
+  };
+
   const ensureWorktree = async (nameHint?: string): Promise<string> => {
     if (!session) {
       /**
@@ -229,8 +244,8 @@ export async function runJob(
       emit({ kind: "phase", phase: "worktree" });
       // Resume: reuse a preserved worktree from an earlier interrupted run of the same prompt (so the user
       // continues from where they left off — even after restarting hcode); otherwise open a fresh session.
-      session = (await deps.manager.findResumable(opts.resumeKey ?? opts.prompt))
-        ?? await deps.manager.openSession(opts.fromBranch, nameHint || opts.jobName);
+      const opened = adopt((await deps.manager.findResumable(opts.resumeKey ?? opts.prompt))
+        ?? await deps.manager.openSession(opts.fromBranch, nameHint || opts.jobName));
       /**
        * A REVISED request keeps the worktree but not the finished phases.
        *
@@ -240,22 +255,21 @@ export async function runJob(
        * the pipeline re-derives from what was actually asked for.
        */
       const revised = opts.resumeKey !== undefined && opts.resumeKey !== opts.prompt;
-      if (session.resumed && revised) {
-        clearCheckpoint(session.root);
-        emit({ kind: "note", text: `⏩ Keeping the work at \`${session.baseWorktree}\` — the request changed, so the plan is re-derived.` });
-      } else if (session.resumed) {
-        emit({ kind: "note", text: `⏩ Resuming earlier work at \`${session.baseWorktree}\` — completed phases are skipped.` });
+      if (opened.resumed && revised) {
+        clearCheckpoint(opened.root);
+        emit({ kind: "note", text: `⏩ Keeping the work at \`${opened.baseWorktree}\` — the request changed, so the plan is re-derived.` });
+      } else if (opened.resumed) {
+        emit({ kind: "note", text: `⏩ Resuming earlier work at \`${opened.baseWorktree}\` — completed phases are skipped.` });
       }
       // What the branch alone would not have given it — see inheritFromRoot.
-      const carried = session.inherited ? describeInherited(session.inherited) : undefined;
+      const carried = opened.inherited ? describeInherited(opened.inherited) : undefined;
       if (carried) emit({ kind: "note", text: carried });
       // …and, for a resumed session, whatever came into existence after it was opened.
-      const topped = describeTopUp(session.toppedUp ?? []);
+      const topped = describeTopUp(opened.toppedUp ?? []);
       if (topped) emit({ kind: "note", text: topped });
-      // From here the session owns the project's state: what the run learns has to land in what ships.
-      deps.onSession?.(session.baseWorktree);
     }
-    return session.baseWorktree;
+    // `adopt` set it on every path above; the assertion is for the type system, not a claim about runtime.
+    return session!.baseWorktree;
   };
   // A bare "continue" request (e.g. "kaldığımız yerden devam edelim") resumes the most recent preserved work
   // WITHOUT re-running the refiner: adopt its worktree + checkpoint up front so the pipeline drives from it.
@@ -265,7 +279,7 @@ export async function runJob(
     const cp = resumable ? readCheckpoint(resumable.root) : null;
     if (resumable && cp) {
       const at = cp.done.length ? `already done: ${cp.done.join(", ")}` : "nothing finished yet";
-      session = resumable;
+      adopt(resumable);
       resume = cp;
       emit({ kind: "note", text: `⏩ Resuming "${cp.title}" at \`${resumable.baseWorktree}\` — ${at}.` });
     } else {

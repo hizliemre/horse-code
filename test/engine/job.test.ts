@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { Board } from "../../src/board/board.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -436,5 +437,25 @@ describe("a resume brings back what was never tried", () => {
 
     expect(board.get("blocked")!.column).toBe("TODO");
     expect(board.get("tried")!.column).toBe("ABANDONED");
+  });
+});
+
+describe("adopting a session tells the rest of the system, on every path", () => {
+  /**
+   * `ensureWorktree` announced the session and pointed the memory store at it. The RESUME path assigned
+   * `session` directly and did neither — so a run started with "devam" wrote everything it learned into the
+   * project instead of into what ships. Measured live: the session's memory.jsonl untouched since the moment
+   * it was copied, while the project's gained two entries and 325 injections in the same hour. Exactly the
+   * failure the retarget was written to fix, reappearing through the door it did not cover.
+   *
+   * The fix is one adopt() that every path goes through; this guards that no second door opens.
+   */
+  it("has no path that assigns the session without going through adopt", () => {
+    const src = readFileSync(new URL("../../src/engine/job.ts", import.meta.url), "utf8");
+    const body = src.slice(src.indexOf("const adopt ="));
+    // The only bare `session = …` left is the one inside adopt itself.
+    const assignments = body.match(/^\s*session = /gm) ?? [];
+    expect(assignments.length).toBe(1);
+    expect(body).toContain("deps.onSession?.(s.baseWorktree)");
   });
 });
