@@ -77,6 +77,22 @@ export const readFileTool: Tool = {
      * Answered rather than refused: a refusal invites another way in (glob, shell, a different path). A
      * sentence saying the rules are already in context is something the agent can act on.
      */
+    /**
+     * The code graph is served by the graph tools, never read as a file.
+     *
+     * `graphify-out` also holds a dated BACKUP of the previous graph after every rebuild. A coach that found
+     * one read a 250 MB snapshot describing a directory the user had already deleted, and concluded a live
+     * worktree was an abandoned backup. Searching no longer walks in there; this closes the path a model can
+     * still name from memory.
+     */
+    if (/(^|[\\/])graphify-out[\\/]/.test(args.path.replace(/^\.\//, ""))) {
+      return {
+        content: "`graphify-out/` holds the code graph and dated backups of earlier builds — reading it as a "
+          + "file gives you a snapshot, which may describe paths that no longer exist. Use `graph_overview`, "
+          + "`graph_find`, `graph_context`, `graph_impact` or `graph_trace`: they read the CURRENT graph.",
+        isError: false,
+      };
+    }
     const migrated = loadMigratedSync(ctx.cwd, (p) => readFileSync(p, "utf8"));
     if (isMigrated(migrated, args.path) && migrated) {
       return { content: migratedNotice(args.path, migrated), isError: false };
