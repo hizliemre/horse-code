@@ -142,6 +142,8 @@ export async function resolveMergeConflict(
         permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
         perAttemptMs: LONG_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
         maxTurns: resolveTurnBudget(conflicted.length),
+        // It is combining two sides of the user's own code; how it read the conflict is the thing to check.
+        ...(deps.note ? { onSay: (t: string) => deps.note?.(`  ↳ ${t}`) } : {}),
       };
       await runToCompletion(resolveOpts);
       board.appendStage(taskId, { role: "operational", action: "conflict:resolve-attempt" });

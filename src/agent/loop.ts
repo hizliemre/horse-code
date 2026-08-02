@@ -60,7 +60,7 @@ export interface RoleAgentOptions {
    * Left unset for roles whose prose is not addressed to anyone: a structured role answers with a schema, and
    * a wave of parallel implementers would interleave into noise (their work shows in the agent panel).
    */
-  onSay?: (text: string) => void;
+  onSay?: (text: string, final: boolean) => void;
 }
 
 /** 1394 → "1.4k"; keeps the live activity line compact. */
@@ -236,9 +236,19 @@ export async function runToCompletion(opts: RoleAgentOptions): Promise<Message> 
   for await (const ev of runRoleAgent(opts)) {
     if (ev.type === "message.done") {
       last = ev.message;
-      // A turn that only called a tool says nothing; the tool card is already its own record.
+      /**
+       * Everything the role says, with whether it was the LAST thing.
+       *
+       * The two kinds of caller need opposite answers, which is why the flag is passed rather than decided
+       * here: the coach's final message is returned and rendered by its caller, so noting it too would print
+       * the answer twice — while a spec-kit phase returns nothing, and its final message is the only place
+       * it ever explains what it just wrote. A single global rule served one and broke the other.
+       *
+       * A turn that only called a tool says nothing; the tool card is already its own record.
+       */
       const said = stripThinking(ev.message.content).trim();
-      if (said) opts.onSay?.(said);
+      // A message carrying tool calls is by definition not the end — the loop runs again after it.
+      if (said) opts.onSay?.(said, !ev.message.toolCalls?.length);
     } else if (ev.type === "error") throw new Error(ev.message);
     else if (ev.type === "abort") throw new Error("cancelled");
   }

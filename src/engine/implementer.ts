@@ -230,6 +230,15 @@ export async function runImplementer(
     signal: AbortSignal.any([deps.signal, budget]),
     // Stamped with the card id: the agent panel is keyed by it, and unattributed activity goes to the chat.
     onActivity: deps.onActivity ? (a) => deps.onActivity?.({ ...a, agent: task.id }) : undefined,
+    /**
+     * Attributed, because a wave runs several of these at once.
+     *
+     * Unattributed prose from four implementers interleaves into something no one can read, which is why
+     * this was left out at first. The answer is not silence, though — the reasoning behind a change is
+     * exactly what a reviewer wants and the agent panel only shows WHAT is being touched, never why. A name
+     * in front of each line costs nothing and makes the interleaving legible.
+     */
+    ...(deps.note ? { onSay: (t: string) => deps.note?.(`  ↳ **${role}** · ${task.title}: ${t}`) } : {}),
     onLiveActivity: deps.onLiveActivity,
     onWrite: (path) => {
       touched.push(path); // …and remembered, so the memories anchored to this file can be credited below

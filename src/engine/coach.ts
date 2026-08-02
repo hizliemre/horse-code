@@ -29,6 +29,13 @@ async function summarizeConversation(deps: TaskCycleDeps, conversation: string):
     approve: deps.approve,
     cwd: ".",
     signal: deps.signal,
+    /**
+     * Deliberately no `onSay`.
+     *
+     * This one is not talking to anyone: it compresses earlier turns into a briefing that goes back into the
+     * coach's own context. It has no tools, so it produces exactly one message, and that message IS the
+     * summary — printing it would show the user a condensed replay of the conversation they just had.
+     */
   };
   const msg = await runToCompletion(opts);
   return msg.content;
@@ -79,7 +86,6 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
   const hits = selectable.length ? selectMemories(selectable, prompt, { load, role: "coach", ...(deps.injectionLog ? { log: deps.injectionLog } : {}) }) : [];
   deps.injectionLog?.record(hits.map((h) => h.id), Date.now());
   const memoryMsg: Message[] = hits.length ? [{ role: "user", content: renderMemoryHints(hits) }] : [];
-  let previous: string | undefined; // the coach's last-but-one message — see onSay
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     model,
@@ -99,19 +105,11 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
      * What the coach says while it works, not only its verdict.
      *
      * A read-only exploration turn can run for minutes over a dozen tool calls, and until it finished the
-     * screen held a spinner and nothing else — no way to tell a coach that is reading the right files from
-     * one that is not, and no chance to redirect it before the tokens are spent. Its FINAL message is
-     * returned to the caller and rendered there; the ones on the way used to be dropped.
-     *
-     * The last message is not noted here, because the caller renders it as the reply — noting it too would
-     * print the answer twice.
+     * screen held a spinner and nothing else — no way to tell a coach reading the right files from one that
+     * is not, and no chance to redirect it before the tokens were spent.
      */
-    onSay: (text) => {
-      // One message behind, so the FINAL one is never noted: the caller renders that as the reply, and
-      // noting it too would print the answer twice.
-      if (previous !== undefined) deps.note?.(previous);
-      previous = text;
-    },
+    // …but not the final message: the caller renders that as the reply.
+    ...(deps.note ? { onSay: (t: string, final: boolean) => { if (!final) deps.note?.(t); } } : {}),
   };
   const msg = await runToCompletion(opts);
   // Reinforcement: bump the memories the reply actually cited so they rank higher on future ties.

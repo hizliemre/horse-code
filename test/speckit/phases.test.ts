@@ -106,3 +106,37 @@ describe("a phase shows what the role SAYS, not only what it writes", () => {
     expect(notes.join("")).toBe("The skeleton is ready.");
   });
 });
+
+describe("onSay draws the line where the caller needs it", () => {
+  /**
+   * The two kinds of caller need opposite answers, and a single global rule broke one of them.
+   *
+   * A spec-kit phase returns nothing: its final message is the only place it ever explains what it wrote,
+   * so it must be shown. The coach's final message is returned and rendered by its caller, so showing it
+   * again would print the answer twice. The flag carries the distinction instead of each caller
+   * rediscovering it.
+   */
+  it("marks the last message as final and the others as not", async () => {
+    const seen: { text: string; final: boolean }[] = [];
+    const { runToCompletion } = await import("../../src/agent/loop.js");
+    const p = new MockProvider([
+      [{ type: "text-delta", text: "First I will read the template." },
+       { type: "tool-call", toolCall: { id: "r", name: "read_file", arguments: JSON.stringify({ path: "x" }) } },
+       { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text-delta", text: "Done — here is what I wrote." }, { type: "done", finishReason: "stop" }],
+    ]);
+    await runToCompletion({
+      provider: p, model: "m", systemPrompt: "s",
+      tools: new (await import("../../src/tools/registry.js")).ToolRegistry(),
+      messages: [{ role: "user", content: "go" }],
+      permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
+      approve: async () => true,
+      cwd: ".", signal: new AbortController().signal,
+      onSay: (text, final) => seen.push({ text, final }),
+    });
+    expect(seen).toEqual([
+      { text: "First I will read the template.", final: false },
+      { text: "Done — here is what I wrote.", final: true },
+    ]);
+  });
+});

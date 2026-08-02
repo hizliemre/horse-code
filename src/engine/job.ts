@@ -179,6 +179,8 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
     tools: readOnlyRegistry(deps),
     messages: [{ role: "user", content: `Work complete. Board state:\n${summary}\nGive the user a short final report (what happened in each task).` }],
     permission: deps.permission, approve: deps.approve, cwd: session.baseWorktree, signal: deps.signal,
+    // The report itself is returned and rendered by the caller; only the working-out is noted.
+    ...(deps.note ? { onSay: (t: string, final: boolean) => { if (!final) deps.note?.(t); } } : {}),
   };
   const msg = await runToCompletion(opts);
   return msg.content;
