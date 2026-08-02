@@ -98,3 +98,23 @@ describe("renderResult strips a model's own thinking tags", () => {
     expect(renderResult({ kind: "chat", response: "Plain answer.", refinedPrompt: "x" } as never)).toBe("Plain answer.");
   });
 });
+
+describe("a model's own thinking never reaches the report", () => {
+  /**
+   * `renderResult` stripped the CHAT reply and nothing else, so the job report — the longest thing a user
+   * reads at the end of a run — went out with whatever the model had emitted. Seen live: a 187-minute run
+   * whose summary opened with a bare `</think>`, a closing tag with no opening one, because the stream began
+   * before anything was watching.
+   */
+  it("removes a closing tag that never had an opening one", () => {
+    expect(stripThinking("</think>İnceleme tamam. İşte son durum:")).toBe("İnceleme tamam. İşte son durum:");
+  });
+
+  it("removes a whole thinking block", () => {
+    expect(stripThinking("<think>weighing it up</think>The answer.")).toBe("The answer.");
+  });
+
+  it("leaves ordinary text alone, including the word think", () => {
+    expect(stripThinking("I think this is right.")).toBe("I think this is right.");
+  });
+});

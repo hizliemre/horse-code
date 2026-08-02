@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Board } from "../../src/board/board.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -409,5 +410,31 @@ describe("opening the session is narrated", () => {
     const { PHASE_LABELS } = await import("../../src/tui/labels.js");
     expect(PHASE_LABELS.worktree).toBeDefined();
     expect(PHASE_LABELS.worktree).not.toBe(PHASE_LABELS.upstream);
+  });
+});
+
+describe("a resume brings back what was never tried", () => {
+  /**
+   * A task blocked behind a failure is parked `waiting`, and when nothing can wake it the wave engine files
+   * it ABANDONED. For that run the verdict is earned. For the NEXT one it is simply wrong: the user has
+   * since fixed the task that failed, and everything behind it is still buried where a resume does not look
+   * — only IN-PROGRESS and REVIEW were reopened.
+   *
+   * Measured on a real board: 1 failed, 10 blocked, all eleven ABANDONED and every one with `attempts: 0`.
+   * That counter is the whole distinction.
+   */
+  it("reopens an abandoned card that was never attempted, and leaves a spent one alone", () => {
+    const board = new Board();
+    board.addCard({ id: "tried", title: "the ladder was spent on this" });
+    board.addCard({ id: "blocked", title: "never got a turn" });
+    board.incrementAttempts("tried");
+    board.move("tried", "ABANDONED", "team-lead");
+    board.move("blocked", "ABANDONED", "team-lead");
+
+    const neverTried = board.list().filter((c) => c.column === "ABANDONED" && (c.attempts ?? 0) === 0);
+    for (const c of neverTried) board.reopen(c.id);
+
+    expect(board.get("blocked")!.column).toBe("TODO");
+    expect(board.get("tried")!.column).toBe("ABANDONED");
   });
 });

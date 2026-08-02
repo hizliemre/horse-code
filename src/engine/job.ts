@@ -1,4 +1,5 @@
 import { runToCompletion } from "../agent/loop.js";
+import { stripThinking } from "../tui/format.js";
 import { recordTurn } from "./turn-effect.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import type { Message } from "../core/types.js";
@@ -183,7 +184,8 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
     ...(deps.note ? { onSay: (t: string, final: boolean) => { if (!final) deps.note?.(t); } } : {}),
   };
   const msg = await runToCompletion(opts);
-  return msg.content;
+  // A model that emits its own <think> tags must not leak them into the report the user is handed.
+  return stripThinking(msg.content);
 }
 
 /**
@@ -333,9 +335,24 @@ export async function runJob(
        */
       const interrupted = board.list().filter((c) => c.column === "IN-PROGRESS" || c.column === "REVIEW");
       for (const c of interrupted) board.reopen(c.id);
+      /**
+       * …and the ones that were never tried at all.
+       *
+       * A task blocked behind a failure is parked `waiting`, and when nothing can wake it the wave engine
+       * files it ABANDONED. For THAT run the verdict is earned — nothing was going to change. For the NEXT
+       * one it is simply wrong: the user has since fixed the task that failed, and the ten behind it are
+       * still buried where a resume does not look.
+       *
+       * Measured on a real board: 1 failed, 10 blocked, all eleven ABANDONED and every one of them with
+       * `attempts: 0`. That counter is the whole distinction — a card that was tried and gave up has a
+       * number there, and is left alone.
+       */
+      const neverTried = board.list().filter((c) => c.column === "ABANDONED" && (c.attempts ?? 0) === 0);
+      for (const c of neverTried) board.reopen(c.id);
       const done = board.list().filter((c) => c.column === "MERGED").length;
       emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` +
-        (interrupted.length ? ` ${interrupted.length} was interrupted mid-flight and goes back in the queue.` : "") });
+        (interrupted.length ? ` ${interrupted.length} was interrupted mid-flight and goes back in the queue.` : "") +
+        (neverTried.length ? ` ${neverTried.length} was blocked behind a failure and never tried — back in the queue too.` : "") });
     } else {
       board = await gateBreakdown(deps, workdir, up.tasksPath, up.planPath, emit);
       await saveBoard(board, boardPath);

@@ -126,7 +126,9 @@ export function renderResult(res: JobResult): string {
       ? (res.wave.pr ? `PR: ${res.wave.pr.url}` : "all tasks completed")
       : `Partial: ${res.wave.failed.length} failed, ${res.wave.skipped.length} skipped`;
   const rev = res.revision ? `\nrevision: ${res.revision.status}` : "";
-  return `${res.report}\n\nStatus: ${res.wave.status} — ${outcome}${rev}\n\n${describeDelivery(res.wave.delivery)}`;
+  // Stripped here as well as at the source: the report is the longest thing the user reads, and a stray
+  // `</think>` at the top of it is the first thing they see. Idempotent, so belt and braces costs nothing.
+  return `${stripThinking(res.report)}\n\nStatus: ${res.wave.status} — ${outcome}${rev}\n\n${describeDelivery(res.wave.delivery)}`;
 }
 
 // TUI opens only when both stdin and stdout are a TTY: if stdin is piped (echo x | hcode)
