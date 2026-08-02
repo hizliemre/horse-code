@@ -115,3 +115,56 @@ describe("the base's copy is settled, then re-derived from the manifest", () => 
     expect(await regenerateLockfile("src/app.ts", "/tmp")).toBeUndefined();
   });
 });
+
+describe("a trace conflict is regenerated, not reconciled", () => {
+  /**
+   * Two branches both rewrote horse-code's own description of a source file — one because a task was told to
+   * update the architecture doc, the other because the merge refresh re-derived it. Neither text is a
+   * decision anybody made; both are accounts of the same code, and asking a model to reconcile two AI-written
+   * prose descriptions is asking it to choose between paraphrases.
+   *
+   * Measured live: three `conflict:resolve-attempt` rounds on one `.md`, the merge still unresolved, the base
+   * stuck for five minutes with `UU`.
+   */
+  const session = { baseWorktree: "/tmp/x", baseBranch: "hc/j/base", jobSlug: "j", root: "/tmp" } as never;
+  const TASK = { taskSlug: "t1", worktree: "/tmp/t1", branch: "hc/j/t1" } as never;
+
+  const deps = (unmerged: string[], resolved: string[], asked: { n: number }) => ({
+    manager: {
+      unmergedFiles: async () => unmerged,
+      commitMerge: async () => {},
+      abortMerge: async () => {},
+      resolveWithBase: async (_s: unknown, f: string) => { resolved.push(f); },
+    },
+    rounds: 1,
+    note: () => {},
+    provider: { async *chat() { asked.n++; yield { type: "done", finishReason: "stop" } as never; } },
+    roleRegistry: { resolve: () => ({ model: "m", systemPrompt: "p" }) },
+    permission: { check: () => "allow" },
+    approve: async () => true,
+    signal: new AbortController().signal,
+  }) as never;
+
+  it("takes the base's copy of a per-file trace and never asks a model", async () => {
+    const board = new Board();
+    board.addCard({ id: "t1", title: "t" });
+    const resolved: string[] = [];
+    const asked = { n: 0 };
+    const f = ".horsecode/traces/toucan/libs/pipes/safe-html.pipe.ts.md";
+    const res = await resolveMergeConflict(deps([f], resolved, asked), session, board, "t1", TASK);
+    expect(res.status).toBe("resolved");
+    expect(resolved).toEqual([f]);
+    expect(asked.n).toBe(0);
+  });
+
+  it("leaves the project's OWN documents to the resolver — those are written by people", async () => {
+    const board = new Board();
+    board.addCard({ id: "t1", title: "t" });
+    const resolved: string[] = [];
+    const asked = { n: 0 };
+    // `47-orders.md` is not `<source>.<ext>.md`; it is a document the team wrote.
+    await resolveMergeConflict(deps([".horsecode/traces/47-orders.md"], resolved, asked), session, board, "t1", TASK)
+      .catch(() => { /* the stub is incomplete past the resolver, which is the point */ });
+    expect(resolved).toEqual([]);
+  });
+});

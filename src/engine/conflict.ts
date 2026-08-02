@@ -5,6 +5,7 @@ import type { EscalationDeps } from "./escalation.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
 import { runReviewer } from "./reviewer.js";
+import { traceRootRel } from "./trace.js";
 import { contextTools } from "./task-types.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { readFileTool } from "../tools/read.js";
@@ -182,8 +183,34 @@ export async function resolveMergeConflict(
    * landed: `T002` and `T003` both declared this file and merged before this one came back. What the branch
    * has to add is its own dependency, and the install re-derives that from the manifest.
    */
+  /**
+   * A trace is generated too, and conflicts on it are resolved the same way: by regenerating.
+   *
+   * Two branches both rewrote horse-code's own description of a source file — one because a task was told to
+   * update the architecture doc, the other because the merge refresh re-derived it. Neither text is a
+   * decision anybody made; both are accounts of the same code. Asking a model to reconcile two AI-written
+   * prose descriptions is asking it to choose between paraphrases, and it went exactly as that goes —
+   * measured live: three `conflict:resolve-attempt` rounds on one `.md`, the merge still unresolved, the
+   * base stuck for five minutes.
+   *
+   * Taking the base's copy is enough because the refresh that runs straight after the merge re-derives it
+   * from the source that just landed. The right answer is written a moment later, for free.
+   */
+  const isTrace = (f: string): boolean => {
+    const root = traceRootRel().replace(/\\/g, "/");
+    return f.startsWith(`${root}/`) && /\.[A-Za-z0-9]{1,5}\.md$/.test(f);
+  };
+  const generated = allConflicted.filter((f) => LOCKFILE.test(f) || isTrace(f));
   const lockfiles = allConflicted.filter((f) => LOCKFILE.test(f));
-  const conflicted = allConflicted.filter((f) => !LOCKFILE.test(f));
+  const conflicted = allConflicted.filter((f) => !generated.includes(f));
+  const traces = generated.filter((f) => !LOCKFILE.test(f));
+  if (traces.length) {
+    deps.note?.(`📝 ${traces.length} trace file(s) conflicted — taking the base's copy; the refresh after this `
+      + `merge re-derives them from the code that just landed.`);
+    for (const f of traces) {
+      try { await deps.manager.resolveWithBase(session, f); } catch { /* the resolver will see it if this fails */ }
+    }
+  }
   if (lockfiles.length) {
     deps.note?.(`🔒 ${lockfiles.join(", ")} — generated file, taking the base's copy and regenerating rather `
       + `than merging it by hand.`);
@@ -198,7 +225,7 @@ export async function resolveMergeConflict(
       } catch { /* the base's copy is already staged; the merge can proceed */ }
     }
   }
-  if (!conflicted.length && lockfiles.length) {
+  if (!conflicted.length && generated.length) {
     // Nothing left that needs judgement — the merge can be completed on the regenerated file alone.
     return { status: "resolved" };
   }
