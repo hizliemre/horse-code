@@ -243,6 +243,20 @@ export function noteLines(note: string, noting: boolean, width: number): (string
   return [...tail, ...Array<string>(NOTE_ROWS - tail.length).fill("")];
 }
 
+/**
+ * A choice label is ONE line, whatever the model sent.
+ *
+ * This is the bug that survived three attempts at it, because each time I looked at how the row was rendered
+ * instead of at what it was rendering. `wrapPlain` emits a line per `\n`, empty ones included — so a label
+ * that begins with a newline wraps to `["", "the actual text"]`, the marker and the cursor are printed onto
+ * that empty first line, and every visible word lands on the continuation rows at their six-space indent.
+ * The selection marker was never missing. It was on a blank line above the text it belonged to.
+ *
+ * Normalised here rather than only at the tool boundary: options arrive from a model, from prose extraction
+ * and from tests, and a label that cannot be a single line is not a label.
+ */
+export const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
+
 export function wrapPlain(text: string, width: number): string[] {
   const w = Math.max(8, width);
   const out: string[] = [];
@@ -404,13 +418,13 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
               * the one structural difference between the line that vanishes and the lines that do not, and
               * it buys nothing here — the whole line shares one style.
               */}
-            {wrapPlain(c.label, listW - 4).map((line, k) => (
+            {wrapPlain(oneLine(c.label), listW - 4).map((line, k) => (
               <Text key={k} color={isSel ? "cyan" : undefined} bold={isSel}>
                 {k === 0 ? `${isSel ? `${CURSOR} ` : "  "}${mark}${line}` : `      ${line}`}
               </Text>
             ))}
             {c.description
-              ? wrapPlain(c.description, listW - 6).map((line, k) => (
+              ? wrapPlain(oneLine(c.description), listW - 6).map((line, k) => (
                 <Text key={`d${k}`} dimColor>{`      ${line}`}</Text>
               ))
               : null}

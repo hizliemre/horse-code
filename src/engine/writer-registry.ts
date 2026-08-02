@@ -43,8 +43,12 @@ export function buildAskUserTool(
       "choices) — the UI shows a selectable list the user checks off; set `multiSelect: true` when they may " +
       "pick several. Omit `options` for an open-ended (free-text) question. An option may be a plain string, " +
       "or {label, description, preview} when the decision turns on trade-offs the label cannot carry — the " +
-      "preview is shown beside the list as the user moves the cursor. The user may attach a free-text note to " +
-      "their choice, which arrives appended to the answer.",
+      "preview is shown beside the list as the user moves the cursor. A `label` is a SHORT single line (a few " +
+      "words, no line breaks): it is a name for the choice, not the argument for it. Put the reasoning in " +
+      "`description` (one sentence) and the detail in `preview`. If you have findings to report, WRITE THEM " +
+      "as your message before calling this — a question that says \"the evaluation is above\" when you never " +
+      "wrote one leaves the user choosing between options whose basis they cannot see. The user may attach a " +
+      "free-text note to their choice, which arrives appended to the answer.",
     permissionLevel: "safe",
     parameters: askUserParams,
     run: async (rawArgs) => {
