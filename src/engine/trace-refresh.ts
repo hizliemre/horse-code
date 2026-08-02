@@ -148,10 +148,22 @@ export function describeRefresh(r: RefreshResult): string | undefined {
 export async function commitRefreshed(
   git: GitRunner, baseWorktree: string, traceRootRel: string,
 ): Promise<boolean> {
-  const add = await git(["add", "--", traceRootRel], baseWorktree);
+  /**
+   * The graph goes with the traces.
+   *
+   * A refresh rebuilds the code graph before it writes anything — a new file has to have symbols before it
+   * can be described — so `graphify-out/graph.json` is modified too. Committing only the traces left THAT
+   * loose, which is the same failure one file along: git will not merge a branch over a modified working
+   * file, whichever file it is.
+   *
+   * It also belongs in the commit for the same reason the traces do: the graph is shared project knowledge,
+   * committed deliberately, and a session's rebuild of it should ship with the work that caused it.
+   */
+  const paths = [traceRootRel, "graphify-out/graph.json"];
+  const add = await git(["add", "--", ...paths], baseWorktree);
   if (add.code !== 0) return false;
-  const staged = await git(["diff", "--cached", "--quiet", "--", traceRootRel], baseWorktree);
+  const staged = await git(["diff", "--cached", "--quiet", "--", ...paths], baseWorktree);
   if (staged.code === 0) return false; // nothing actually changed
-  const r = await git(["commit", "-m", "docs(traces): refresh for the files this task changed", "--", traceRootRel], baseWorktree);
+  const r = await git(["commit", "-m", "docs(traces): refresh for the files this task changed", "--", ...paths], baseWorktree);
   return r.code === 0;
 }

@@ -170,6 +170,11 @@ describe("a refreshed trace is committed, not left loose", () => {
       await mkdir(traces, { recursive: true });
       await writeFile(join(traces, "a.ts.md"), "# a trace", "utf8");
 
+      // A refresh rebuilds the graph before writing, so that file is dirty too — and one loose file is
+      // enough to stop the next merge, whichever file it is.
+      await mkdir(join(repo, "graphify-out"), { recursive: true });
+      await writeFile(join(repo, "graphify-out", "graph.json"), '{"nodes":[]}', "utf8");
+
       expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(true);
       const st = await defaultGitRunner(["status", "--porcelain"], repo);
       expect(st.stdout.trim()).toBe("");   // nothing left that a merge could collide with
