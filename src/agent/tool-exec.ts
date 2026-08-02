@@ -142,6 +142,16 @@ async function runTool(
  * The nearest name comes first — a wrong name is almost always a near miss — and the full list follows,
  * because "there is no such tool" is only useful next to "these exist".
  */
+/** Punctuation removed: the only thing that differs when a model rewrites `mcp__a-b__c` as `mcp_a_b_c`. */
+const shapeOf = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/** The one tool whose name differs from `called` only in punctuation, or undefined when it is not unique. */
+export function resolveByShape(called: string, available: string[]): string | undefined {
+  const want = shapeOf(called);
+  const hits = available.filter((n) => shapeOf(n) === want);
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
 export function unknownTool(name: string, available: string[]): string {
   const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const target = norm(name);
@@ -168,10 +178,29 @@ export async function* executeToolCalls(
       plans.push({ index: i, call, kind: "error", errorContent: "invalid tool-call id" });
       continue;
     }
-    const tool = deps.tools.get(call.name);
+    const names = deps.tools.list().map((t) => t.name);
+    /**
+     * A name that differs only in punctuation is the same name.
+     *
+     * MCP tools are registered as `mcp__<server>__<tool>`, and a server name may contain a hyphen —
+     * `mcp__angular-cli__list_projects`. Models rewrite that as `mcp_angular_cli_list_projects` with
+     * dependable regularity: measured twice in one run, and in an earlier run it cost seven turns and the
+     * phase's whole output. There is nothing to disambiguate: strip the punctuation from both and they are
+     * the same string, so the call is resolved rather than refused.
+     *
+     * Only when the match is UNIQUE. Two tools that normalise alike is a genuine ambiguity, and guessing
+     * between them would be the mistake this is meant to prevent.
+     */
+    const tool = deps.tools.get(call.name) ?? (() => {
+      const resolved = resolveByShape(call.name, names);
+      return resolved ? deps.tools.get(resolved) : undefined;
+    })();
     if (!tool) {
-      plans.push({ index: i, call, kind: "error", errorContent: unknownTool(call.name, deps.tools.list().map((t) => t.name)) });
+      plans.push({ index: i, call, kind: "error", errorContent: unknownTool(call.name, names) });
       continue;
+    }
+    if (tool.name !== call.name) {
+      telemetry().event("tool.renamed", { "hc.tool": tool.name, "hc.called": call.name });
     }
     let args: Record<string, unknown>;
     try {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { unknownTool, executeToolCalls } from "../../src/agent/tool-exec.js";
+import { unknownTool, resolveByShape, executeToolCalls } from "../../src/agent/tool-exec.js";
 import { Telemetry, setTelemetry, NO_TELEMETRY } from "../../src/obs/telemetry.js";
 import { MemorySink } from "../../src/obs/sink.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
@@ -68,5 +68,47 @@ describe("a call that never ran still happened", () => {
       expect(events[0].attributes["hc.tool"]).toContain("9564507f");
       expect(events[0].attributes["hc.outcome"]).toBe("unknown-or-invalid");
     } finally { setTelemetry(NO_TELEMETRY); }
+  });
+});
+
+describe("a name that differs only in punctuation is the same name", () => {
+  /**
+   * MCP tools register as `mcp__<server>__<tool>`, and a server name may contain a hyphen. Models rewrite
+   * that as `mcp_angular_cli_list_projects` with dependable regularity — measured twice in one run, and in
+   * an earlier run it cost seven turns and the phase's entire output. Strip the punctuation from both and
+   * they are the same string, so there is nothing to disambiguate.
+   */
+  const TOOLS = ["read_file", "mcp__angular-cli__list_projects", "mcp__angular-cli__search_documentation"];
+
+  it("resolves the mangling that actually happens", () => {
+    expect(resolveByShape("mcp_angular_cli_list_projects", TOOLS)).toBe("mcp__angular-cli__list_projects");
+    expect(resolveByShape("MCP__ANGULAR-CLI__LIST_PROJECTS", TOOLS)).toBe("mcp__angular-cli__list_projects");
+  });
+
+  it("refuses when two tools would normalise alike — that is a real ambiguity", () => {
+    expect(resolveByShape("read_file", ["read_file", "readfile"])).toBeUndefined();
+  });
+
+  it("does not rescue a name that is simply wrong", () => {
+    // `view_file` is not `read_file` with different punctuation; it is a different word, and was also seen.
+    expect(resolveByShape("view_file", TOOLS)).toBeUndefined();
+  });
+
+  it("runs the tool when the call differs only in punctuation", async () => {
+    const registry = new ToolRegistry();
+    let ran = false;
+    registry.register({
+      name: "mcp__angular-cli__list_projects", description: "d", permissionLevel: "safe",
+      parameters: { safeParse: () => ({ success: true, data: {} }) } as never,
+      run: async () => { ran = true; return { content: "ok", isError: false }; },
+    } as never);
+    const gen = executeToolCalls([{ id: "1", name: "mcp_angular_cli_list_projects", arguments: "{}" }], {
+      tools: registry,
+      permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
+      approve: async () => true,
+      cwd: ".", signal: new AbortController().signal,
+    } as never);
+    for await (const _ of gen) { /* drain */ }
+    expect(ran).toBe(true);
   });
 });
