@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { resolveMergeConflict } from "../../src/engine/conflict.js";
+import { resolveMergeConflict, regenerateLockfile } from "../../src/engine/conflict.js";
+import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Board } from "../../src/board/board.js";
 
 /**
@@ -67,5 +70,48 @@ describe("a lockfile conflict is regenerated, not merged", () => {
       resolveMergeConflict(deps(["src/app.ts", "package-lock.json"], resolved, asked), session, board, "t1", TASK),
     ).rejects.toThrow(); // …it went on to the resolver rather than returning "resolved"
     expect(resolved).toEqual(["package-lock.json"]);
+  });
+});
+
+describe("the base's copy is settled, then re-derived from the manifest", () => {
+  /**
+   * Taking the base's lockfile settles the conflict and leaves the file STALE: the branch's own dependency
+   * is in `package.json` and not in the lockfile it just inherited. The manifest is the source of truth, so
+   * the fix is the one command that regenerates the other — which is also the command a person would run,
+   * and the one thing the resolver could never do: it was given read/write/edit and no shell at all.
+   */
+  it("runs the package manager and the lockfile ends up carrying the manifest's dependency", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lock-"));
+    try {
+      await mkdir(join(dir, "toucan"), { recursive: true });
+      await writeFile(join(dir, "toucan", "package.json"),
+        JSON.stringify({ name: "t", version: "1.0.0", dependencies: { "left-pad": "1.3.0" } }), "utf8");
+      await writeFile(join(dir, "toucan", "package-lock.json"), "{}", "utf8"); // the base's stale copy
+
+      const said = await regenerateLockfile("toucan/package-lock.json", dir);
+      expect(said, said).toMatch(/regenerated with `npm install --package-lock-only`/);
+      const lock = await readFile(join(dir, "toucan", "package-lock.json"), "utf8");
+      expect(lock).toContain("left-pad"); // …derived from the manifest, not merged by hand
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }, 200_000);
+
+  it("says so plainly when it cannot regenerate, rather than implying the file is correct", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lock-"));
+    try {
+      await mkdir(join(dir, "x"), { recursive: true }); // no package.json → npm fails
+      await writeFile(join(dir, "x", "package-lock.json"), "{}", "utf8");
+      const said = await regenerateLockfile("x/package-lock.json", dir);
+      expect(said).toMatch(/could not regenerate/);
+      expect(said).toMatch(/run it yourself before merging/);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  }, 200_000);
+
+  /**
+   * Yarn is deliberately absent: the command differs between Yarn 1 and Yarn 2+, the lockfile does not say
+   * which, and running the wrong one rewrites it in the other format — worse than the conflict.
+   */
+  it("does not guess a command it cannot know", async () => {
+    expect(await regenerateLockfile("yarn.lock", "/tmp")).toBeUndefined();
+    expect(await regenerateLockfile("src/app.ts", "/tmp")).toBeUndefined();
   });
 });

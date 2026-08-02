@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import type { Board } from "../board/board.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree } from "../worktree/manager.js";
 import type { EscalationDeps } from "./escalation.js";
@@ -14,7 +15,7 @@ import { globTool } from "../tools/glob.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { callSignal, LONG_CALL_MS } from "../agent/deadline.js";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 export interface ConflictDeps extends EscalationDeps {
   manager: Pick<WorktreeManager, "unmergedFiles" | "commitMerge" | "abortMerge" | "resolveWithBase">;
@@ -97,6 +98,64 @@ async function hasConflictMarkers(baseWorktree: string, files: string[]): Promis
  */
 const LOCKFILE = /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|go\.sum)$/;
 
+/**
+ * How each lockfile is re-derived from its manifest.
+ *
+ * Taking the base's copy settles the conflict but leaves the file stale: the branch's OWN dependency is in
+ * `package.json` and not in the lockfile it just inherited. The manifest is the source of truth, so the fix
+ * is to run the one command that regenerates the other — which is also the command a person would run, and
+ * the one thing the resolver could never do, having been given read/write/edit and no shell at all.
+ *
+ * Lockfile-only where the ecosystem offers it: the conflict is about the dependency GRAPH, and downloading
+ * packages to settle it would turn a second into minutes.
+ *
+ * `yarn.lock` is deliberately absent. The command differs between Yarn 1 and Yarn 2+ and the file itself
+ * does not say which, and running the wrong one rewrites the lockfile in the other format — worse than the
+ * conflict. It keeps the base's copy, and the note says so.
+ */
+const REGENERATE: { file: RegExp; cmd: string[] }[] = [
+  { file: /package-lock\.json$|npm-shrinkwrap\.json$/, cmd: ["npm", "install", "--package-lock-only"] },
+  { file: /pnpm-lock\.yaml$/, cmd: ["pnpm", "install", "--lockfile-only"] },
+  { file: /Cargo\.lock$/, cmd: ["cargo", "generate-lockfile"] },
+  { file: /poetry\.lock$/, cmd: ["poetry", "lock", "--no-update"] },
+  { file: /Gemfile\.lock$/, cmd: ["bundle", "lock"] },
+  { file: /composer\.lock$/, cmd: ["composer", "update", "--lock"] },
+  { file: /go\.sum$/, cmd: ["go", "mod", "tidy"] },
+];
+
+/** Ceiling for a regeneration. Long enough for a real dependency graph, short enough not to stall a wave. */
+export const REGENERATE_TIMEOUT_MS = 180_000;
+
+function runCmd(cmd: string[], cwd: string): Promise<{ ok: boolean; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd[0]!, cmd.slice(1), { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    const take = (d: Buffer): void => { if (out.length < 8_000) out += d.toString(); };
+    child.stdout.on("data", take);
+    child.stderr.on("data", take);
+    const timer = setTimeout(() => child.kill("SIGKILL"), REGENERATE_TIMEOUT_MS);
+    child.on("error", (e) => { clearTimeout(timer); resolve({ ok: false, out: e.message }); });
+    child.on("close", (c) => { clearTimeout(timer); resolve({ ok: c === 0, out }); });
+  });
+}
+
+/**
+ * Regenerates one lockfile in place. Returns what to tell the user, or undefined when nothing was run.
+ *
+ * Best-effort by design: the base's copy is already staged, so a failure here leaves the merge resolvable
+ * and the branch no worse off than before — just with a lockfile that a later install will correct.
+ */
+export async function regenerateLockfile(file: string, baseWorktree: string): Promise<string | undefined> {
+  const rule = REGENERATE.find((r) => r.file.test(file));
+  if (!rule) return undefined;
+  const dir = join(baseWorktree, dirname(file));
+  const r = await runCmd(rule.cmd, dir);
+  return r.ok
+    ? `regenerated with \`${rule.cmd.join(" ")}\``
+    : `could not regenerate (\`${rule.cmd.join(" ")}\`: ${r.out.trim().split("\n").slice(-1)[0]?.slice(0, 120) ?? "failed"}) — `
+      + `kept the base's copy; run it yourself before merging`;
+}
+
 export async function resolveMergeConflict(
   deps: ConflictDeps,
   session: WorktreeSession,
@@ -129,7 +188,14 @@ export async function resolveMergeConflict(
     deps.note?.(`🔒 ${lockfiles.join(", ")} — generated file, taking the base's copy and regenerating rather `
       + `than merging it by hand.`);
     for (const f of lockfiles) {
-      try { await deps.manager.resolveWithBase(session, f); } catch { /* fall through to the resolver */ }
+      try {
+        await deps.manager.resolveWithBase(session, f);
+        // …and then re-derive it from the manifest, which is the part that makes the base's copy correct
+        // rather than merely conflict-free.
+        const said = await regenerateLockfile(f, base);
+        if (said) deps.note?.(`   \`${f}\` — ${said}`);
+        await deps.manager.resolveWithBase(session, f); // re-stage whatever the regeneration wrote
+      } catch { /* the base's copy is already staged; the merge can proceed */ }
     }
   }
   if (!conflicted.length && lockfiles.length) {
