@@ -352,8 +352,18 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
    * Only the RULE files. A migrated skill was copied, not distilled, and reading it is reading the thing
    * itself.
    */
+  /**
+   * Only files that were ANOTHER tool's system prompt.
+   *
+   * `f.own` excludes the project's own PRODUCT.md and DESIGN.md, which share the rules table because they
+   * are instruction material but are nobody else's: the team writes them and goes on editing them. Marking
+   * them migrated told an agent looking for the design tokens that "the rules moved to memory" while the
+   * file was still the living source — a worse answer than the stale one this whole mechanism exists to
+   * prevent. `~/` excludes the user-level file: those are the user's standing preferences across projects,
+   * not this project's rules.
+   */
   const migratedRules = findings
-    .filter((f) => f.kind === "rules" && !f.label.startsWith("~/"))
+    .filter((f) => f.kind === "rules" && !f.own && !f.label.startsWith("~/"))
     .map((f) => f.label);
   if (migratedRules.length) {
     const already = (await loadMigrated(deps.cwd))?.files ?? [];

@@ -64,6 +64,29 @@ describe("a migrated rule file no longer speaks for the project", () => {
   });
 });
 
+describe("what may be marked migrated at all", () => {
+  /**
+   * Caught in a real run: the record came back as CLAUDE.md, DESIGN.md, PRODUCT.md. The last two sit in the
+   * rules table because they ARE instruction material — but they belong to the project, the team edits them,
+   * and they stay the living source. Marking them migrated would answer an agent looking for the design
+   * tokens with "the rules moved to memory" while the file was still the truth: a worse failure than the
+   * stale one the mechanism exists to prevent.
+   */
+  it("marks another tool's prompt, never the project's own documents", async () => {
+    const { discover } = await import("../../src/migrate/discover.js");
+    await writeFile(join(cwd, "CLAUDE.md"), "# other tool's rules", "utf8");
+    await writeFile(join(cwd, "DESIGN.md"), "# our design tokens", "utf8");
+    await writeFile(join(cwd, "PRODUCT.md"), "# our product", "utf8");
+
+    const found = await discover({ cwd, home: join(cwd, "nohome") });
+    const rules = found.filter((f) => f.kind === "rules");
+    const byLabel = new Map(rules.map((f) => [f.label, f]));
+    expect(byLabel.get("CLAUDE.md")?.own).toBeFalsy();   // another tool's → may be superseded
+    expect(byLabel.get("DESIGN.md")?.own).toBe(true);    // ours → never
+    expect(byLabel.get("PRODUCT.md")?.own).toBe(true);
+  });
+});
+
 describe("the record itself", () => {
   it("merges across migrations instead of replacing", async () => {
     await recordMigrated(cwd, ["CLAUDE.md"]);

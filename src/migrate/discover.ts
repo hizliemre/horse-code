@@ -28,10 +28,19 @@ export interface Finding {
   bytes: number;
   /** File content, read for everything small enough to act on. */
   text?: string;
+  /**
+   * The PROJECT's own document, not another tool's system prompt.
+   *
+   * `PRODUCT.md` and `DESIGN.md` sit in the rules table because they are instruction material — but they
+   * belong to this project, the team edits them, and they go on being the living source after a migration.
+   * Everything else in that table is a file another tool reads, whose content is superseded the moment it
+   * is distilled into memory. Only the latter may ever be answered with "the rules moved".
+   */
+  own?: boolean;
 }
 
 /** Rule files, by the tool that writes them. The list is what these tools actually use, not a guess. */
-const RULE_FILES: { file: string; tool: string }[] = [
+const RULE_FILES: { file: string; tool: string; own?: boolean }[] = [
   { file: "CLAUDE.md", tool: "Claude Code" },
   { file: "CLAUDE.local.md", tool: "Claude Code" },
   { file: "AGENTS.md", tool: "Codex / OpenAI" },
@@ -54,8 +63,8 @@ const RULE_FILES: { file: string; tool: string }[] = [
    * register those conventions serve. Leaving them behind meant every agent rebuilt its taste from scratch
    * while the answer sat in the repo root.
    */
-  { file: "PRODUCT.md", tool: "project convention" },
-  { file: "DESIGN.md", tool: "project convention" },
+  { file: "PRODUCT.md", tool: "project convention", own: true },
+  { file: "DESIGN.md", tool: "project convention", own: true },
 ];
 
 /** Directories of rule fragments — a newer convention than one big file. */
@@ -110,14 +119,14 @@ export interface DiscoverOptions {
 export async function discover(opts: DiscoverOptions): Promise<Finding[]> {
   const { cwd, home } = opts;
   const out: Finding[] = [];
-  const push = async (kind: SourceKind, tool: string, path: string, label: string): Promise<void> => {
+  const push = async (kind: SourceKind, tool: string, path: string, label: string, own = false): Promise<void> => {
     const r = await read(path);
-    if (r) out.push({ kind, tool, path, label, bytes: r.bytes, ...(r.text ? { text: r.text } : {}) });
+    if (r) out.push({ kind, tool, path, label, bytes: r.bytes, ...(own ? { own } : {}), ...(r.text ? { text: r.text } : {}) });
   };
 
   // Project rule files, plus the user-level CLAUDE.md — the second holds standing preferences ("never use
   // language X") that are exactly the kind of thing that must not be lost in a move.
-  for (const { file, tool } of RULE_FILES) await push("rules", tool, join(cwd, file), file);
+  for (const { file, tool, own } of RULE_FILES) await push("rules", tool, join(cwd, file), file, own);
   await push("rules", "Claude Code (user-level)", join(home, ".claude", "CLAUDE.md"), "~/.claude/CLAUDE.md");
   await push("rules", "Codex (user-level)", join(home, ".codex", "AGENTS.md"), "~/.codex/AGENTS.md");
 
