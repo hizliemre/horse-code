@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { unknownTool } from "../../src/agent/tool-exec.js";
+import { unknownTool, executeToolCalls } from "../../src/agent/tool-exec.js";
+import { Telemetry, setTelemetry, NO_TELEMETRY } from "../../src/obs/telemetry.js";
+import { MemorySink } from "../../src/obs/sink.js";
+import { ToolRegistry } from "../../src/tools/registry.js";
+import { PermissionEngine } from "../../src/permission/engine.js";
 
 /**
  * Observed on a real run: a project-manager invented an MCP tool that was never registered for it, and spent
@@ -33,5 +37,36 @@ describe("unknown tool: the message a model can act on", () => {
     const msg = unknownTool("anything", []);
     expect(msg).toContain("unknown tool: anything");
     expect(msg).not.toContain("Did you mean");
+  });
+});
+
+describe("a call that never ran still happened", () => {
+  /**
+   * Only the executing path was recorded, so a call to a tool that does not exist left NOTHING in the
+   * telemetry. Found while diagnosing a run that died after seven such turns: the log showed model calls
+   * with shrinking output and no tool activity between them, which reads as "the model stopped calling
+   * tools" — the opposite of what happened. Measuring that absence proved nothing, and nearly led to the
+   * conclusion that the fix did not apply to the failure it was written for.
+   */
+  it("records an unknown tool in the telemetry", async () => {
+    const sink = new MemorySink();
+    setTelemetry(new Telemetry(sink));
+    try {
+      const gen = executeToolCalls(
+        [{ id: "1", name: "mcp_angular_cli_list_projects_9564507f2f430e1e52_ide", arguments: "{}" }],
+        {
+          tools: new ToolRegistry(),
+          permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
+          approve: async () => true,
+          cwd: ".",
+          signal: new AbortController().signal,
+        } as never,
+      );
+      for await (const _ of gen) { /* drain */ }
+      const events = sink.records.filter((e) => e.name === "tool.result");
+      expect(events.length).toBe(1);
+      expect(events[0].attributes["hc.tool"]).toContain("9564507f");
+      expect(events[0].attributes["hc.outcome"]).toBe("unknown-or-invalid");
+    } finally { setTelemetry(NO_TELEMETRY); }
   });
 });

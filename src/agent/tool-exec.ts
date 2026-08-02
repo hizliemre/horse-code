@@ -205,6 +205,23 @@ export async function* executeToolCalls(
       const result = p.kind === "error"
         ? errResult(p.call.name, p.errorContent!)
         : errResult(p.call.name, "user denied");
+      /**
+       * A call that never ran still happened.
+       *
+       * Only the executing path was recorded, so a call to a tool that does not exist — or one the user
+       * denied — left NOTHING in the telemetry. That is the one class of failure the record most needs to
+       * carry: a role guessing at a tool name looks, in the log, like a role doing nothing at all.
+       *
+       * Found while diagnosing a run that died after seven such turns. The log showed model calls with
+       * shrinking output and no tool activity between them, which reads as "the model stopped calling
+       * tools" — the opposite of what happened. Measuring the absence proved nothing, and I nearly
+       * concluded the fix did not apply.
+       */
+      telemetry().event("tool.result", {
+        "hc.tool": p.call.name,
+        "hc.outcome": p.kind === "error" ? "unknown-or-invalid" : "denied",
+        "hc.error": result.content.slice(0, 200),
+      });
       yield { type: "tool.request", toolCall: p.call };
       results[p.index] = { id: p.call.id, name: p.call.name, result };
       yield { type: "tool.result", toolCallId: p.call.id, result };
