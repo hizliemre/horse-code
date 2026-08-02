@@ -862,3 +862,38 @@ describe("echoCommand — the session record says what was ASKED, not only what 
     expect(c.getState().transcript.length).toBe(before);
   });
 });
+
+describe("the refined prompt reaches the screen even when the turn has already spoken", () => {
+  /**
+   * From a real session: the user asked why their Turkish prompt had not been refined. It had been — the
+   * display never caught up. The swap walked back through the transcript and stopped at the first assistant
+   * line, and the refiner's own fallback had printed two of them ("… → gemini-3.5-flash-medium", "Benched
+   * …") between the prompt and the swap.
+   */
+  it("replaces the prompt even after the turn printed notes", () => {
+    const c = new TuiController();
+    c.onEvent({ kind: "note", text: "previous turn's answer" });
+    void c.awaitTask(); // the REPL is waiting → submitTask records the prompt
+    c.submitTask("claude ile çalışırken bu adımda kalmıştım");
+    c.onEvent({ kind: "note", text: "⤷ qwen3.7-plus → gemini-3.5-flash-medium" });
+    c.onEvent({ kind: "note", text: "⛔ Benched qwen3.7-plus" });
+    c.onEvent({ kind: "refined", refinedPrompt: "Explore what was done on this branch." });
+
+    const users = c.getState().transcript.filter((i) => !("kind" in i) && i.role === "user");
+    expect(users[users.length - 1]).toEqual({ role: "user", text: "Explore what was done on this branch." });
+  });
+
+  it("still leaves an earlier turn's prompt alone", () => {
+    const c = new TuiController();
+    void c.awaitTask();
+    c.submitTask("first prompt");
+    c.onEvent({ kind: "refined", refinedPrompt: "FIRST refined" });
+    c.onEvent({ kind: "note", text: "the answer" });
+    void c.awaitTask();
+    c.submitTask("second prompt");
+    c.onEvent({ kind: "refined", refinedPrompt: "SECOND refined" });
+
+    const users = c.getState().transcript.filter((i) => !("kind" in i) && i.role === "user").map((i) => (i as { text: string }).text);
+    expect(users).toEqual(["FIRST refined", "SECOND refined"]);
+  });
+});

@@ -730,11 +730,22 @@ function replaceLastUser(
   text: string,
 ): TuiState["transcript"] {
   const t = [...transcript];
-  // Find the last user message in the current turn (skip inline tool items; stop at a previous assistant reply).
+  /**
+   * The LAST user line, whatever has been printed since.
+   *
+   * It used to stop at the first assistant line on the way back, on the theory that one marks the previous
+   * turn. It does not: a turn can print before the refined prompt arrives, and the commonest case is the
+   * refiner itself falling to its next model — two notes ("… → gemini-3.5-flash-medium", "Benched …") land
+   * between the prompt and the swap, the walk stops on them, and the raw prompt stays on screen. Measured on
+   * a real session, which is how it was found: the user asked why their Turkish prompt had not been refined,
+   * and it had been — the display simply never caught up.
+   *
+   * The last user line is always the current turn's prompt: a new turn appends one, so anything after it
+   * belongs to that same turn.
+   */
   for (let i = t.length - 1; i >= 0; i--) {
     const item = t[i];
     if ("kind" in item) continue; // tool activity → skip
-    if (item.role === "assistant") break; // reached the previous turn
     if (item.role === "user") { t[i] = { role: "user", text }; break; }
   }
   return t;
