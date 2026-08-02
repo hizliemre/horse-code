@@ -131,3 +131,27 @@ export function describeRefresh(r: RefreshResult): string | undefined {
   if (r.failed) bits.push(`${r.failed} failed`);
   return `${bits.join(" · ")} — the changed files now describe themselves.`;
 }
+
+
+/**
+ * Commits what a refresh wrote, immediately.
+ *
+ * Leaving the new traces uncommitted in the base worktree broke the NEXT merge: git refuses to merge a
+ * branch that would overwrite a modified working file, and a trace lives at the same path a documentation
+ * task edits. Measured on a real run — `error: Your local changes to the following files would be
+ * overwritten by merge: docs/architecture/…/safe-html.pipe.ts.md` — the run died there, with eleven tasks
+ * already merged.
+ *
+ * They belong in the commit anyway. The whole point of writing them into the session is that they ship with
+ * the work; leaving them loose in the working tree was never the intent, only the omission.
+ */
+export async function commitRefreshed(
+  git: GitRunner, baseWorktree: string, traceRootRel: string,
+): Promise<boolean> {
+  const add = await git(["add", "--", traceRootRel], baseWorktree);
+  if (add.code !== 0) return false;
+  const staged = await git(["diff", "--cached", "--quiet", "--", traceRootRel], baseWorktree);
+  if (staged.code === 0) return false; // nothing actually changed
+  const r = await git(["commit", "-m", "docs(traces): refresh for the files this task changed", "--", traceRootRel], baseWorktree);
+  return r.code === 0;
+}

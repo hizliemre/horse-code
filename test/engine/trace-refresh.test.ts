@@ -3,7 +3,9 @@ import { mkdtemp, rm, mkdir, writeFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedByMerge, refreshTraces, describeRefresh } from "../../src/engine/trace-refresh.js";
+import { changedByMerge, refreshTraces, describeRefresh, commitRefreshed } from "../../src/engine/trace-refresh.js";
+import { initTmpRepo } from "../worktree/helpers.js";
+import { defaultGitRunner } from "../../src/worktree/git.js";
 import { planTraces, saveTrace, saveTraceIndex, loadTraceIndex, hashContent, tracePath } from "../../src/engine/trace.js";
 import { runTraces } from "../../src/engine/trace-run.js";
 import type { Provider } from "../../src/core/types.js";
@@ -147,5 +149,37 @@ describe("describeRefresh", () => {
   });
   it("reports failures alongside successes", () => {
     expect(describeRefresh({ traced: 3, failed: 1, removed: 0, skipped: 0 })).toMatch(/3 trace\(s\) refreshed · 1 failed/);
+  });
+});
+
+describe("a refreshed trace is committed, not left loose", () => {
+  /**
+   * git refuses to merge a branch that would overwrite a MODIFIED working file, and a trace sits at exactly
+   * the path a documentation task edits. Measured on a real run: the refresh left
+   * `docs/architecture/…/safe-html.pipe.ts.md` uncommitted in the base worktree and the next task's merge
+   * aborted — "Your local changes to the following files would be overwritten by merge" — killing a run that
+   * had already merged eleven tasks.
+   *
+   * They belong in the commit anyway: the point of writing them into the session is that they ship with the
+   * work. Leaving them loose was never the intent, only the omission.
+   */
+  it("leaves the working tree clean so the next merge can proceed", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const traces = join(repo, ".horsecode", "traces", "src");
+      await mkdir(traces, { recursive: true });
+      await writeFile(join(traces, "a.ts.md"), "# a trace", "utf8");
+
+      expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(true);
+      const st = await defaultGitRunner(["status", "--porcelain"], repo);
+      expect(st.stdout.trim()).toBe("");   // nothing left that a merge could collide with
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  it("does nothing when the refresh changed nothing — an empty commit is noise", async () => {
+    const repo = await initTmpRepo();
+    try {
+      expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(false);
+    } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

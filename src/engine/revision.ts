@@ -11,7 +11,7 @@ import { readOnlyRegistry } from "./reviewer.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
-import { changedByMerge, refreshTraces, describeRefresh } from "./trace-refresh.js";
+import { changedByMerge, refreshTraces, describeRefresh, commitRefreshed } from "./trace-refresh.js";
 
 export interface RevisionDeps extends TaskCycleDeps {
   manager: Pick<WorktreeManager, "commitMerge" | "push">;
@@ -217,5 +217,10 @@ async function refreshAfterRevision(deps: RevisionDeps, base: string, headBefore
     });
     const line = describeRefresh(r);
     if (line) deps.note?.(line);
+    // Committed here too, for the same reason: a loose trace in the base breaks whatever merges next.
+    if (r.traced || r.removed) {
+      const { traceRootRel } = await import("./trace.js");
+      await commitRefreshed(gitOf(deps), base, traceRootRel());
+    }
   } catch { /* never the reason a revised pull request is reported as failed */ }
 }

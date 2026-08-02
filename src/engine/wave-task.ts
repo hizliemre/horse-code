@@ -3,7 +3,7 @@ import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult } from
 import { runTaskWithEscalation, type EscalationDeps } from "./escalation.js";
 import { squashTask } from "./operational.js";
 import { telemetry } from "../obs/telemetry.js";
-import { changedByMerge, refreshTraces, describeRefresh } from "./trace-refresh.js";
+import { changedByMerge, refreshTraces, describeRefresh, commitRefreshed } from "./trace-refresh.js";
 import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 
 /** E4a only uses these three methods (a narrow interface for stub/mock injection). */
@@ -144,5 +144,17 @@ async function refreshAfterMerge(
     });
     const line = describeRefresh(r);
     if (line) deps.note?.(line);
+    /**
+     * Committed straight away, or the next merge dies on it.
+     *
+     * git refuses to merge a branch that would overwrite a MODIFIED working file, and a trace sits at the
+     * same path a documentation task edits. Measured on a real run: the refresh left
+     * `docs/architecture/…/safe-html.pipe.ts.md` loose in the base worktree, and the next task's merge
+     * aborted with "Your local changes … would be overwritten by merge" — eleven tasks in.
+     */
+    if (r.traced || r.removed) {
+      const { traceRootRel } = await import("./trace.js");
+      await commitRefreshed(git, session.baseWorktree, traceRootRel());
+    }
   } catch { /* documentation must never be the reason a merged task is reported as failed */ }
 }
