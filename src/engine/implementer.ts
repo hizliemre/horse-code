@@ -240,14 +240,17 @@ export async function runImplementer(
     // Stamped with the card id: the agent panel is keyed by it, and unattributed activity goes to the chat.
     onActivity: deps.onActivity ? (a) => deps.onActivity?.({ ...a, agent: task.id }) : undefined,
     /**
-     * Attributed, because a wave runs several of these at once.
+     * Attributed by ID, not by title.
      *
-     * Unattributed prose from four implementers interleaves into something no one can read, which is why
-     * this was left out at first. The answer is not silence, though — the reasoning behind a change is
-     * exactly what a reviewer wants and the agent panel only shows WHAT is being touched, never why. A name
-     * in front of each line costs nothing and makes the interleaving legible.
+     * A wave runs several implementers at once, so unattributed prose interleaves into something no one can
+     * read — that much was right. Using the task's TITLE for it was not: one agent narrating fifteen times
+     * printed the same forty-word title fifteen times, and the user reported it as the tool "saying the same
+     * thing over and over". They were reading it correctly; two thirds of every line WAS the same.
+     *
+     * The id is unique, it is what the board and the agent panel already show, and it leaves the line to the
+     * sentence that differs.
      */
-    ...(deps.note ? { onSay: (t: string) => deps.note?.(`  ↳ **${role}** · ${task.title}: ${t}`) } : {}),
+    ...(deps.note ? { onSay: (t: string) => deps.note?.(`  ↳ **${role}** \`${task.id}\` ${t}`) } : {}),
     onLiveActivity: deps.onLiveActivity,
     onWrite: (path) => {
       touched.push(path); // …and remembered, so the memories anchored to this file can be credited below
