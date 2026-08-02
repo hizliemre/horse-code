@@ -19,11 +19,11 @@ export class RoleRegistry {
   private roleOverrides = new Map<string, string[]>(); // per-role model CHAIN override (highest priority)
   // Models that failed retryably (429/5xx/quota) → skipped in every chain until released. Kept WITH the
   // reason and the time so a coordinator can report them and later re-probe whether the limit has reset.
-  private readonly quarantine = new Map<string, { at: number; reason: string }>();
+  private readonly quarantine = new Map<string, { at: number; reason: string; until?: number }>();
   private notify?: (msg: string) => void; // fallback UI note sink (wired once the controller exists)
   private onQuarantine?: (model: string, reason: string) => void;
   /** What each model has actually managed to do in each ROLE — see setFitness. */
-  private fitness?: { unfit(role: string, model: string): boolean };
+  private fitness?: { unfit(role: string, model: string): boolean; record?(role: string, model: string, reason: string): number };
   // Models that answered in prose instead of calling the submit tool. Not a transport error, so nothing ever
   // benched them: the chain quietly slid to the fallback on EVERY call, forever, in every role that held them.
   private readonly strikes = new Map<string, number>();
@@ -76,7 +76,7 @@ export class RoleRegistry {
    * this role in prose instead of doing its work stops being offered to this role — while staying available
    * to every other role, where it may be perfectly good.
    */
-  setFitness(f: { unfit(role: string, model: string): boolean }): void {
+  setFitness(f: { unfit(role: string, model: string): boolean; record?(role: string, model: string, reason: string): number }): void {
     this.fitness = f;
   }
 
@@ -86,11 +86,21 @@ export class RoleRegistry {
   }
 
   /** Mark a model spent — every chain skips it from now on, until it is released. */
-  markExhausted(model: string, reason = "unavailable", now = Date.now()): void {
-    if (!model || this.quarantine.has(model)) return;
-    this.quarantine.set(model, { at: now, reason });
+  markExhausted(model: string, reason = "unavailable", now = Date.now(), until?: number): void {
+    if (!model || this.isQuarantined(model)) return;
+    this.quarantine.set(model, { at: now, reason, ...(until !== undefined && { until }) });
     this.onQuarantine?.(model, reason);
   }
+
+  /**
+   * How long a BEHAVIOURAL bench lasts before the model is tried again.
+   *
+   * A model that is out of quota is out until the quota returns, and nothing here can shorten that. A model
+   * that answered in prose is a different case entirely: the transport was fine, and the next prompt may not
+   * be the one it stumbled on. Benching it for the rest of a multi-hour run costs every role that held it —
+   * measured live, one such bench re-assigned SIXTEEN roles away from the best model available.
+   */
+  static readonly STRUCTURAL_BENCH_MS = 10 * 60_000;
 
   /**
    * How many structured failures a model gets before it is benched. One miss can be a genuinely hard prompt;
@@ -104,21 +114,61 @@ export class RoleRegistry {
    * retryable path that benches a model, and the chain slid to the fallback on every single call instead.
    * Returns the strike count; at the threshold the model is quarantined like any other spent one.
    */
-  markStructuralFailure(model: string, reason = "no valid structured result"): number {
+  markStructuralFailure(model: string, reason = "no valid structured result", role?: string): number {
     if (!model) return 0;
-    const n = (this.strikes.get(model) ?? 0) + 1;
-    this.strikes.set(model, n);
-    if (n >= RoleRegistry.STRUCTURAL_STRIKES) this.markExhausted(model, reason);
+    /**
+     * Counted per ROLE, and only escalated to the whole model when the pattern is not about one role.
+     *
+     * The strike used to be global, so two misses in two different roles added up and benched the model
+     * everywhere. Measured live: `cc/claude-opus-5` answered in prose twice and was re-assigned away from
+     * SIXTEEN roles — the best model in the catalogue removed from every job in the run, because two prompts
+     * had been hard.
+     *
+     * "This model cannot do THIS job" and "this model is broken" are different claims and want different
+     * remedies. The first is what `fitness` already records — per role, leaving the model available
+     * everywhere else. The second is a bench, and it should need evidence from more than one role.
+     */
+    const key = role ? `${model}::${role}` : model;
+    const n = (this.strikes.get(key) ?? 0) + 1;
+    this.strikes.set(key, n);
+    if (n < RoleRegistry.STRUCTURAL_STRIKES) return n;
+
+    if (role) {
+      // This role stops offering it; every other role is untouched.
+      this.fitness?.record?.(role, model, reason);
+      const rolesFailed = [...this.strikes.entries()]
+        .filter(([k, v]) => k.startsWith(`${model}::`) && v >= RoleRegistry.STRUCTURAL_STRIKES).length;
+      // …unless it is failing this way in several roles, which is no longer a statement about any of them.
+      if (rolesFailed >= RoleRegistry.STRUCTURAL_ROLES_BEFORE_BENCH) {
+        this.markExhausted(model, `${reason} (in ${rolesFailed} roles)`, Date.now(),
+          Date.now() + RoleRegistry.STRUCTURAL_BENCH_MS);
+      }
+      return n;
+    }
+    this.markExhausted(model, reason, Date.now(), Date.now() + RoleRegistry.STRUCTURAL_BENCH_MS);
     return n;
   }
+
+  /**
+   * How many DISTINCT roles must reject a model this way before it is benched outright.
+   *
+   * Two, because one role can have a prompt that a good model reads badly — and the fitness record already
+   * takes it out of that role. A second, unrelated role failing the same way is the first evidence that the
+   * model, not the prompt, is the problem.
+   */
+  static readonly STRUCTURAL_ROLES_BEFORE_BENCH = 2;
 
   /** Models currently quarantined, with why and when — surfaced to the user and re-probed before an adjust. */
   quarantined(): { model: string; at: number; reason: string }[] {
     return [...this.quarantine].map(([model, q]) => ({ model, ...q }));
   }
 
-  isQuarantined(model: string): boolean {
-    return this.quarantine.has(model);
+  isQuarantined(model: string, now = Date.now()): boolean {
+    const q = this.quarantine.get(model);
+    if (!q) return false;
+    // A bench with an expiry is a behavioural one; once it lapses the model is in play again.
+    if (q.until !== undefined && now >= q.until) { this.quarantine.delete(model); this.strikes.clear(); return false; }
+    return true;
   }
 
   /** Put a model back in play (its quota reset, or the user forced it). */
@@ -148,7 +198,7 @@ export class RoleRegistry {
   /** True when every model assigned to this role is quarantined — the chain has collapsed and needs replacing. */
   chainCollapsed(roleName: string): boolean {
     const raw = this.rawChain(roleName);
-    return raw.length > 0 && raw.every((m) => this.quarantine.has(m));
+    return raw.length > 0 && raw.every((m) => this.isQuarantined(m));
   }
 
   /** The full model chain for a role by priority: per-role override → global override (non-refiner) → config. */
@@ -158,7 +208,7 @@ export class RoleRegistry {
     // Strict priority: primary first. Drop quarantined models, but never strand — if the whole chain is spent,
     // fall back to the raw chain (better to retry a spent model than to have no model at all). `chainCollapsed`
     // is how a caller detects that this fallback is in effect and asks for a replacement chain instead.
-    const live = base.filter((m) => !this.quarantine.has(m));
+    const live = base.filter((m) => !this.isQuarantined(m));
     const usable = live.length ? live : base;
     // Then drop what this ROLE has proven it cannot use. Never strand: a role with no model stops the run,
     // which is worse than a role with a model that wastes one attempt and rotates.
@@ -194,7 +244,7 @@ export class RoleRegistry {
       model: chain[0] ?? "",
       fallbacks: chain.slice(1),
       onExhausted: (m, reason) => this.markExhausted(m, reason ?? "unavailable"),
-      onStructuralFailure: (m, reason) => this.markStructuralFailure(m, reason),
+      onStructuralFailure: (m, reason) => this.markStructuralFailure(m, reason, roleName),
       onFallback: notify ? (from, to, reason) => notify(`⤵ \`${from}\` → \`${to}\` — ${reason}`) : undefined,
     };
   }
