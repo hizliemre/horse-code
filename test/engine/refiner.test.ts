@@ -61,6 +61,15 @@ describe("runRefiner", () => {
 });
 
 describe("routeIntent — what a request costs is not a judgement call", () => {
+  /**
+   * The odd one out: the other four all mean "produce something". A request to reverse the previous turn
+   * operates ON that turn, and forcing it into a produce-something bucket is how "undo your change, go back
+   * to the previous version" became a third rewrite of the same document.
+   */
+  it("routes an undo to its own path, never to a pipeline", () => {
+    expect(routeIntent("undo")).toBe("undo");
+  });
+
   it("routes governance work away from the pipeline entirely", () => {
     expect(routeIntent("govern")).toBe("govern");
     expect(routeIntent("chat")).toBe("chat");
@@ -75,6 +84,7 @@ describe("routeIntent — what a request costs is not a judgement call", () => {
    */
   it("accepts govern as a classification the model may return", () => {
     expect(RefinerSchema.safeParse({ refinedPrompt: "Write the project constitution from CLAUDE.md", intent: "govern" }).success).toBe(true);
+    expect(RefinerSchema.safeParse({ refinedPrompt: "Revert your last change", intent: "undo" }).success).toBe(true);
     expect(RefinerSchema.safeParse({ refinedPrompt: "x", intent: "governance" }).success).toBe(false);
   });
 });

@@ -114,6 +114,7 @@ export function renderResult(res: JobResult): string {
    * Saying so explicitly matters: the pipeline's habit is to leave work on a branch, and a user who expects
    * that would go looking for one.
    */
+  if (res.kind === "undone") return res.report;
   if (res.kind === "governed") {
     return res.written
       ? `**Constitution written** — \`${res.path}\`\n\n_Written directly in your working tree: no branch, `

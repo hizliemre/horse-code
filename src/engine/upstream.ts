@@ -3,6 +3,7 @@ import { relative, dirname } from "node:path";
 import type { Message } from "../core/types.js";
 import type { ReviewDeps, AskUser } from "./review.js";
 import { runRefiner, routeIntent, type Intent } from "./refiner.js";
+import { lastTurn, undoTurn, clearTurn, describeUndo, describeForContext, snapshot, recordTurn } from "./turn-effect.js";
 import { runCoachChat } from "./coach.js";
 import { extractListBlock } from "./next-steps.js";
 import { runReviewLoop } from "./review.js";
@@ -21,7 +22,8 @@ export type UpstreamResult =
   | { intent: Intent; refinedPrompt: string; kind: "chat"; response: string; nextSteps: string[]; rules: string[]; remembered: string[]; lessons: string[] }
   | { intent: Intent; refinedPrompt: string; kind: "approved"; specPath: string; planPath: string; tasksPath: string }
   | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" }
-  | { intent: Intent; refinedPrompt: string; kind: "governed"; path: string; written: boolean };
+  | { intent: Intent; refinedPrompt: string; kind: "governed"; path: string; written: boolean }
+  | { intent: Intent; refinedPrompt: string; kind: "undone"; report: string };
 
 /**
  * Upstream pipeline: refiner → route; chat→coach response; feature/bugfix→spec-kit phases
@@ -52,9 +54,21 @@ export async function runUpstream(
   // pass, no re-classification. Otherwise the refiner sees the history → follow-ups are refined in context.
   // Refiner + chat run WITHOUT a worktree (read-only / classify); the worktree is opened lazily below,
   // only for the feature/bugfix pipeline — so a plain chat never creates a worktree.
+  /**
+   * What the last turn DID, in front of the classifier and the coach.
+   *
+   * Only the transcript's text crossed the turn boundary, so "undo your changes" arrived with nothing for
+   * "your changes" to point at — and a request about work already done was read as a request for more of it.
+   * One sentence naming the files closes that, and it is the same sentence that lets the coach answer "what
+   * did you change?" at all.
+   */
+  const priorContext = describeForContext(await lastTurn(process.cwd()));
+  const withPrior: Message[] = priorContext
+    ? [{ role: "assistant", content: priorContext }, ...history]
+    : history;
   const r = resume
     ? { intent: "feature" as Intent, refinedPrompt: resume.refinedPrompt, title: resume.title, language: resume.language }
-    : await runRefiner(deps, prompt, history);
+    : await runRefiner(deps, prompt, withPrior);
   // Surface the refined prompt as soon as it's ready → the UI can replace the raw prompt before the
   // coach/pipeline runs (the refined prompt is what actually gets handed downstream).
   emit({ kind: "refined", refinedPrompt: r.refinedPrompt });
@@ -63,7 +77,7 @@ export async function runUpstream(
     // coach-waiting status ("zottiring…") while the coach runs, not the refine status.
     emit({ kind: "phase", phase: "chat" });
     // Chat: no worktree — the coach reads the repo in place (cwd ".") + history → a contextual response.
-    const raw = await runCoachChat(deps, r.refinedPrompt, ".", history, r.language, images);
+    const raw = await runCoachChat(deps, r.refinedPrompt, ".", withPrior, r.language, images);
     const ns = extractListBlock(raw, "nextsteps"); // suggested follow-ups
     const ru = extractListBlock(ns.text, "rule"); // durable behavioral rules → always-honored memory
     const rm = extractListBlock(ru.text, "remember"); // durable facts to persist to memory
@@ -83,15 +97,35 @@ export async function runUpstream(
    * with it from there is theirs to decide. A tool that commits to someone's branch unasked is a tool that
    * has to be undone.
    */
+  /**
+   * Undo runs on git and a snapshot, never on a model.
+   *
+   * The model's whole job here was deciding that the sentence WAS an undo; what to put back is a question
+   * with an exact answer, and a wrong undo is worse than the wrong write it exists to fix.
+   */
+  if (!resume && routeIntent(r.intent) === "undo") {
+    const cwd = process.cwd();
+    const effect = await lastTurn(cwd);
+    const res = await undoTurn(cwd, effect);
+    if (!res.refused) await clearTurn(cwd); // a turn is undone once; a second "undo" must not undo the undo
+    return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "undone", report: describeUndo(res) };
+  }
+
   if (!resume && routeIntent(r.intent) === "govern") {
     emitPhase("constitution");
     const templates = await deps.specKit();
     // The project the user is standing in — the same place the coach reads from on a chat turn.
     const cwd = process.cwd();
     const p: PhaseDeps = { deps, templates, workdir: cwd, askUser };
+    // Taken BEFORE the phase runs — the only moment the previous version still exists.
+    const rel = relative(cwd, constitutionPath(cwd));
+    const before = await snapshot(cwd, rel);
     await runConstitution(p);
     const path = constitutionPath(cwd);
     const written = existsSync(path);
+    if (written) {
+      await recordTurn(cwd, { prompt: r.refinedPrompt, kind: "in-place", files: [before], unsnapshotted: [] });
+    }
     if (!written) {
       emit({ kind: "note", text: `⚠️ The constitution phase never wrote \`${relative(cwd, path)}\` — nothing was changed.` });
     }

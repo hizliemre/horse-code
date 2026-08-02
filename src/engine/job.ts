@@ -1,4 +1,5 @@
 import { runToCompletion } from "../agent/loop.js";
+import { recordTurn } from "./turn-effect.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import type { Message } from "../core/types.js";
 import type { Board } from "../board/board.js";
@@ -62,7 +63,9 @@ export type JobResult =
   | { kind: "rejected"; stage: "spec" | "plan"; refinedPrompt?: string }
   | { kind: "done"; wave: WaveEngineResult; revision?: RevisionResult; report: string; session: WorktreeSession; refinedPrompt?: string }
   /** Governance work: written in place, no worktree, no branch, nothing to merge. */
-  | { kind: "governed"; path: string; written: boolean; refinedPrompt?: string };
+  | { kind: "governed"; path: string; written: boolean; refinedPrompt?: string }
+  /** The previous turn's writes, put back. */
+  | { kind: "undone"; report: string; refinedPrompt?: string };
 
 function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
   const resolved = deps.roleRegistry.resolve("project-manager");
@@ -285,6 +288,8 @@ export async function runJob(
     if (up.kind === "governed") {
       return { kind: "governed", path: up.path, written: up.written, refinedPrompt: up.refinedPrompt };
     }
+    // Undo touched the working tree directly; like govern, there was never a session to close.
+    if (up.kind === "undone") return { kind: "undone", report: up.report, refinedPrompt: up.refinedPrompt };
     if (up.kind === "rejected") {
       emit({ kind: "phase", phase: "rejected", detail: up.stage });
       // Don't discard the rejected draft: commit it to its branch (so the work survives) and tell the user
@@ -430,6 +435,17 @@ export async function runJob(
         `up without redoing the ${board.list().length - unfinished.length} that are done.` });
     }
     emit({ kind: "phase", phase: "done" });
+    /**
+     * Recorded as BRANCH work, which is a statement about what undo may not do.
+     *
+     * A pipeline run never overwrote anything in the user's working tree — it built on a branch. So there is
+     * nothing to restore, and dropping someone's branch because a sentence was read as "undo" is not a
+     * favour. Saying that plainly is better than a silent refusal, and far better than a guess.
+     */
+    await recordTurn(process.cwd(), {
+      prompt: up.refinedPrompt, kind: "branch", files: [], unsnapshotted: [],
+      branch: wave.delivery.branch,
+    }).catch(() => { /* bookkeeping must not fail a delivered run */ });
     return { kind: "done", wave, revision, report, session, refinedPrompt: up.refinedPrompt };
   } catch (e) {
     // Keep the worktree on error so the user can inspect whatever the pipeline produced before it failed

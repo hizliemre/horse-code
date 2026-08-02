@@ -9,13 +9,17 @@ import type { TaskCycleDeps } from "./task-types.js";
 /**
  * What the user is asking for, and therefore what machinery the request deserves.
  *
+ * `undo` is the fifth, and it is the odd one: the other four all mean "produce something". A request to
+ * revert the previous turn operates ON that turn, and forcing it into a produce-something bucket is how
+ * "undo your change, go back to the previous version" became a third rewrite of the same document.
+ *
  * `govern` is the fourth because three were not enough: establishing the project's constitution is neither a
  * conversation nor a change to the software, and classifying it as a feature bought it the entire pipeline —
  * a worktree cut from a branch, a spec, a plan, a task board, waves. None of that has anything to hold: the
  * output is one document stating the project's own principles, and it belongs in the project the user is
  * standing in, not in a branch waiting to be merged.
  */
-export type Intent = "chat" | "feature" | "bugfix" | "govern";
+export type Intent = "chat" | "feature" | "bugfix" | "govern" | "undo";
 export interface RefinerOutput {
   refinedPrompt: string;
   intent: Intent;
@@ -24,7 +28,7 @@ export interface RefinerOutput {
 }
 export const RefinerSchema = z.object({
   refinedPrompt: z.string().describe("The refined instruction, ALWAYS in English — translate from the user's language if needed; never output the user's original language here."),
-  intent: z.enum(["chat", "feature", "bugfix", "govern"]),
+  intent: z.enum(["chat", "feature", "bugfix", "govern", "undo"]),
   // The natural language the user wrote in (English name, e.g. "Turkish") → the coach replies in it.
   language: z.string().default("English"),
   // A concise 2-5 word English kebab-case summary → used as the worktree/branch name (e.g. "add-login-page").
@@ -59,7 +63,8 @@ export async function runRefiner(deps: TaskCycleDeps, prompt: string, history: M
  * Deterministic on purpose. The model decides WHAT the request is; what that costs is not a judgement call,
  * and a run that opens a worktree because a classifier hedged is a run nobody can explain.
  */
-export function routeIntent(intent: Intent): "chat" | "govern" | "pipeline" {
+export function routeIntent(intent: Intent): "chat" | "govern" | "undo" | "pipeline" {
   if (intent === "chat") return "chat";
+  if (intent === "undo") return "undo";
   return intent === "govern" ? "govern" : "pipeline";
 }
