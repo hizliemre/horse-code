@@ -152,14 +152,38 @@ export function resolveByShape(called: string, available: string[]): string | un
   return hits.length === 1 ? hits[0] : undefined;
 }
 
+/** Character-pair overlap (Dice). Cheap, and unlike a prefix it sees a difference at the FRONT of a word. */
+function similarity(a: string, b: string): number {
+  const pairs = (s: string): string[] => Array.from({ length: Math.max(0, s.length - 1) }, (_, i) => s.slice(i, i + 2));
+  const A = pairs(a), B = pairs(b);
+  if (!A.length || !B.length) return a === b ? 1 : 0;
+  const pool = [...B];
+  let hit = 0;
+  for (const p of A) { const at = pool.indexOf(p); if (at >= 0) { pool.splice(at, 1); hit++; } }
+  return (2 * hit) / (A.length + B.length);
+}
+
 export function unknownTool(name: string, available: string[]): string {
-  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const target = norm(name);
-  // Longest shared prefix on the normalised names: cheap, and exactly right for a mangled or truncated one.
-  const shared = (a: string): number => { let n = 0; while (n < a.length && n < target.length && a[n] === target[n]) n++; return n; };
-  const ranked = [...available].sort((a, b) => shared(norm(b)) - shared(norm(a)));
-  const best = ranked[0];
-  const close = best && shared(norm(best)) >= 4 ? ` Did you mean \`${best}\`?` : "";
+  /**
+   * Ranked by shape, not by prefix.
+   *
+   * The first version compared leading characters, which is right for a truncated name and useless for the
+   * mistake that actually recurs: a model reaching for `read_file` and writing `view_file`. Measured live —
+   * four attempts at `view_file` in one run, and the suggester offered nothing for it, nor for `open_file`,
+   * `list_files` or `cat`. The differing letters are at the FRONT, which is exactly where a prefix match
+   * looks and finds nothing.
+   *
+   * Several names are offered rather than one. `view_file` sits equally close to `read_file` and
+   * `edit_file`, and picking one of them by a hair would be a guess dressed as an answer.
+   */
+  const scored = available
+    .map((n) => ({ n, s: similarity(shapeOf(name), shapeOf(n)) }))
+    .filter((x) => x.s >= 0.4)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, 3);
+  const close = scored.length
+    ? ` Did you mean ${scored.map((x) => `\`${x.n}\``).join(" or ")}?`
+    : "";
   return `unknown tool: ${name}.${close} There is no tool by that name — do not guess at variants of it. `
     + `The tools you have are: ${available.join(", ")}.`;
 }

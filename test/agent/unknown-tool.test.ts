@@ -16,8 +16,24 @@ describe("unknown tool: the message a model can act on", () => {
   const TOOLS = ["read_file", "write_file", "grep", "glob", "git", "submit"];
 
   it("names the closest tool when the name is a near miss", () => {
-    const msg = unknownTool("read_files", TOOLS);
-    expect(msg).toContain("Did you mean `read_file`?");
+    expect(unknownTool("read_files", TOOLS)).toContain("Did you mean `read_file`");
+  });
+
+  /**
+   * The first version ranked by leading characters, which is right for a truncated name and useless for the
+   * mistake that recurs: a model reaching for `read_file` and writing `view_file`. Measured live — four
+   * attempts at `view_file` in one run, with the suggester offering nothing for it, nor for `open_file` or
+   * `list_files`. The differing letters are at the FRONT, exactly where a prefix match looks.
+   */
+  it("sees a near miss whose difference is at the front of the word", () => {
+    for (const wrong of ["view_file", "open_file", "list_files"]) {
+      expect(unknownTool(wrong, TOOLS), wrong).toMatch(/Did you mean .*read_file|Did you mean .*write_file/);
+    }
+  });
+
+  it("offers several when several are equally close, rather than a guess dressed as an answer", () => {
+    const msg = unknownTool("view_file", TOOLS);
+    expect(msg).toContain(" or ");
   });
 
   it("lists what exists, always — 'no such tool' is only useful beside 'these do'", () => {
