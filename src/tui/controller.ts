@@ -81,6 +81,9 @@ export interface TuiState {
  * by the session store, so nothing durable is lost by dropping the oldest items from the live view.
  */
 export const MAX_TRANSCRIPT_ITEMS = 1_500;
+
+/** See addInboxNote: the window a folded note waits before it is answered separately instead. */
+export const INBOX_FOLD_WINDOW_MS = 90_000;
 /**
  * How many scrolled-off chat turns are kept for a resume.
  *
@@ -425,15 +428,38 @@ export class TuiController {
    * live state instead of waiting for a turn that is not coming.
    */
   addInboxNote(text: string, answerNow?: (q: string) => void): void {
-    if (answerNow) {
-      this.note(`↳ by-the-way: ${text}`);
-      answerNow(text);
-      return;
-    }
+    /**
+     * Folded in FIRST, answered separately only if nothing takes it.
+     *
+     * The previous version passed `answerNow` whenever a job was running — which is precisely when folding
+     * in is possible — so the inbox was never used and every mid-run message came back as its own little
+     * answer about a snapshot. What a person typing mid-run usually means is "while you are doing that:
+     * also…", a correction to the work in hand, not a new question.
+     *
+     * Whether anything will consume it cannot be known from here: it depends which role is mid-turn. So it
+     * is not guessed — the note is queued, and if no turn has taken it by the time the window closes, THEN
+     * it is answered separately and the user is told which of the two happened. Being wrong slowly and
+     * visibly beats being wrong instantly and silently.
+     */
     this.inbox.push(text);
-    this.note(`↳ by-the-way (folded into the running turn): ${text}`);
+    this.note(`↳ folded into the running turn: ${text}`);
+    if (!answerNow) return;
+    const timer = setTimeout(() => {
+      const at = this.inbox.indexOf(text);
+      if (at < 0) return; // a turn took it — nothing to do
+      this.inbox.splice(at, 1);
+      this.note(`↳ nothing picked that up — the current step does not read mid-run notes, so answering it separately.`);
+      answerNow(text);
+    }, INBOX_FOLD_WINDOW_MS);
+    timer.unref?.(); // never hold the process open for a note
   }
 
+  /**
+   * How long a mid-run note waits to be folded into a turn before it is answered on its own.
+   *
+   * Long enough to outlast a slow tool call — a single trace write has taken four minutes — and short
+   * enough that a phase which will never read it does not swallow the message for the rest of the job.
+   */
   /** What the running job looks like right now — the context a mid-run question is asked about. */
   liveSnapshot(): string {
     const s = this.state;

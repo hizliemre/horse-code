@@ -78,6 +78,14 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     onLiveActivity: p.deps.onLiveActivity,
     onWrite: (path) => commitFile(p.deps, p.workdir, path).then(() => {}), // per-write conventional commit
     /**
+     * A phase can be interrupted with a correction.
+     *
+     * These are the longest interactive stretches in the tool — writing a constitution, a spec, a plan — and
+     * they were the only ones a mid-run note could not reach. "Actually, keep it to one page" arriving four
+     * minutes in is worth more than the same sentence after the document is finished and reviewed.
+     */
+    inbox: p.deps.inbox,
+    /**
      * What the role says reaches the user.
      *
      * A phase used to show tool cards and an artefact and nothing else. Reported twice in the same shape:

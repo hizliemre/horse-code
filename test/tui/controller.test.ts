@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { TuiController } from "../../src/tui/controller.js";
+import { vi } from "vitest";
+import { TuiController, INBOX_FOLD_WINDOW_MS } from "../../src/tui/controller.js";
 
 describe("TuiController", () => {
   it("onEvent phase → updates state.phase + calls the listener", () => {
@@ -483,21 +484,42 @@ describe("TuiController", () => {
    * answer.
    */
   describe("a by-the-way question asked mid-run", () => {
-    it("is answered on the spot when an answerer is supplied", () => {
-      const c = new TuiController();
-      const asked: string[] = [];
-      c.addInboxNote("how many tasks are left?", (q) => asked.push(q));
-      expect(asked).toEqual(["how many tasks are left?"]);
-      expect(c.takeInboxNote()).toBeUndefined(); // not also queued — it would be answered twice
+    /**
+     * What a person typing mid-run usually means is "while you are doing that: also…" — a correction to the
+     * work in hand, not a new question. The previous version passed an answerer whenever a job was running,
+     * which is exactly when folding in is possible, so the inbox was never used and every mid-run message
+     * came back as its own small answer about a snapshot.
+     */
+    it("is folded into the running turn, and the answerer is never used when a turn takes it", () => {
+      vi.useFakeTimers();
+      try {
+        const c = new TuiController();
+        const asked: string[] = [];
+        c.addInboxNote("keep it to one page", (q) => asked.push(q));
+        expect(c.takeInboxNote()).toBe("keep it to one page"); // a turn consumes it…
+        vi.advanceTimersByTime(INBOX_FOLD_WINDOW_MS * 2);
+        expect(asked).toEqual([]);                             // …so it is never answered separately
+      } finally { vi.useRealTimers(); }
     });
 
-    // The old message was a promise nothing kept. Whichever path is taken, the wording has to match it.
-    it("does not claim it was folded into a turn that will answer it", () => {
-      const c = new TuiController();
-      c.addInboxNote("q", () => {});
-      const said = c.getState().transcript.filter((m) => "role" in m).map((m) => (m as { text: string }).text).join("\n");
-      expect(said).toContain("q");
-      expect(said).not.toContain("folded into the running turn");
+    /**
+     * Whether anything will consume it depends on which role is mid-turn, which the controller cannot know.
+     * So it is not guessed: if the window closes with the note still queued, it is answered on its own and
+     * the user is told which of the two happened.
+     */
+    it("answers it separately only after nothing has taken it", () => {
+      vi.useFakeTimers();
+      try {
+        const c = new TuiController();
+        const asked: string[] = [];
+        c.addInboxNote("how many tasks are left?", (q) => asked.push(q));
+        expect(asked).toEqual([]);                             // not immediately
+        vi.advanceTimersByTime(INBOX_FOLD_WINDOW_MS + 1);
+        expect(asked).toEqual(["how many tasks are left?"]);
+        expect(c.takeInboxNote()).toBeUndefined();             // …and removed, so it cannot also be folded
+        const said = c.getState().transcript.filter((m) => "role" in m).map((m) => (m as { text: string }).text).join("\n");
+        expect(said).toContain("nothing picked that up");
+      } finally { vi.useRealTimers(); }
     });
 
     it("still queues, and still says so, when there is no answerer", () => {

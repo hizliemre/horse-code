@@ -527,7 +527,12 @@ export function FilePicker({ matches, selected, query, cols }: { matches: string
 export type SendMode = "queue" | "byTheWay" | "steer";
 const SEND_MODES: { mode: SendMode; key: string; label: string; desc: string }[] = [
   { mode: "queue", key: "q", label: "Queue", desc: "run after the current turn finishes" },
-  { mode: "byTheWay", key: "b", label: "By the way", desc: "answer it now — the running work is untouched" },
+  /**
+   * The label described the fallback, not the behaviour — and a user who read "the running work is
+   * untouched" reasonably concluded it was for side questions, which is the opposite of what they wanted.
+   * It hands the sentence to whoever is mid-turn, as the next thing said to them.
+   */
+  { mode: "byTheWay", key: "b", label: "Interject", desc: "hand it to the work in hand, without stopping it" },
   { mode: "steer", key: "s", label: "Steer", desc: "stop the current turn and run this next" },
 ];
 
@@ -1204,7 +1209,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (t === null) return;
     // While a job runs, nothing will read the inbox until it ends — so the question is answered now
     // instead of being queued behind hours of work.
-    if (mode === "byTheWay") { controller.addInboxNote(t, state.mode === "running" ? answerByTheWay : undefined); return; }
+    // `answerByTheWay` is the FALLBACK, not the path: addInboxNote folds the note into the running turn and
+    // only answers it separately if no turn takes it. See addInboxNote.
+    if (mode === "byTheWay") { controller.addInboxNote(t, answerByTheWay); return; }
     controller.submitTask(t); // Queue and Steer both enqueue…
     if (mode === "steer") cancelJob?.(); // …Steer also aborts the current turn so the queued prompt runs now
   };
