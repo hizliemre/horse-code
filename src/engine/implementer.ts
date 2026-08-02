@@ -166,7 +166,16 @@ export async function runImplementer(
   if (kept.length) {
     deps.note?.(`📎 \`${role}\` · ${kept.map((m) => `**${m.name}**`).join(", ")}${verdict.asked ? " _(adjudicated)_" : ""}`);
   } else if (routed.length && verdict.asked) {
-    deps.note?.(`📎 \`${role}\` · ${routed.map((m) => m.name).join(", ")} — rejected: ${verdict.reasoning ?? "does not apply"}`);
+    /**
+     * The VERDICT leads, not the skill's name.
+     *
+     * It used to read "📎 coder · postgresql-optimization — rejected: …", and a user scanning a frontend
+     * task saw "coder · postgresql-optimization" and asked, reasonably, why PostgreSQL was involved in it.
+     * Nothing was wrong underneath — word overlap proposed a candidate and the adjudicator threw it out with
+     * the right reason — but a line that opens with the rejected name reads as a line about that name.
+     */
+    deps.note?.(`📎 \`${role}\` · **no skill applied** — considered ${routed.map((m) => m.name).join(", ")}: `
+      + `${verdict.reasoning ?? "none of them fit this task"}`);
   }
   const withSkills = kept.length
     ? applySkills(resolved.systemPrompt, kept.map((m) => m.name), deps.skillRegistry)
