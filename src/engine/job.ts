@@ -364,6 +364,13 @@ export async function runJob(
        */
       const neverTried = board.list().filter((c) => c.id !== REVISION_CARD
         && c.column === "ABANDONED" && (c.attempts ?? 0) === 0);
+      /**
+       * The revision row is left wherever the last run stopped, and it is not a task, so nothing will ever
+       * move it again. Measured after the fix that stopped it being SCHEDULED: the board still reported
+       * `IN-PROGRESS 3` while two tasks were running — a count the user reads and reasonably believes.
+       */
+      const rev = board.get(REVISION_CARD);
+      if (rev && rev.column !== "TODO") board.move(REVISION_CARD, "TODO", "team-lead");
       for (const c of neverTried) board.reopen(c.id);
       const done = board.list().filter((c) => c.column === "MERGED").length;
       emit({ kind: "note", text: `⏩ Resuming the board — ${done}/${board.list().length} task(s) already done.` +
