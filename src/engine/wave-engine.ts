@@ -144,6 +144,8 @@ export async function runReady(
   const parked = new Map<string, Parked>();
   /** Tasks whose merge has failed often enough to be rewritten, with the worktree to retire. */
   const restartOn = new Map<string, TaskWorktree>();
+  /** The worktree of every task whose merge conflicted — the handle a rewrite needs, whenever it is decided. */
+  const conflictedAt = new Map<string, TaskWorktree>();
   /** Failed resolutions since this task was last rewritten — a rewrite starts the count over. */
   const conflictRuns = (cardId: string): number => {
     const h = board.get(cardId)?.stageHistory ?? [];
@@ -291,6 +293,16 @@ export async function runReady(
                 role: "operational", action: "conflict:resolve-failed",
                 note: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
               });
+              /**
+               * The worktree is remembered for EVERY failed resolution, not only at the threshold.
+               *
+               * `restartOn` served two purposes at once — "this task may be rewritten" and "here is the
+               * worktree to retire" — so the handle only existed once the eager threshold was met. The
+               * last-resort rewrite, which runs when the alternative is abandonment, then had nothing to
+               * work with and could never fire. The two questions are now separate: the handle is always
+               * kept, and the threshold decides only whether to rewrite EAGERLY.
+               */
+              conflictedAt.set(id, tw);
               if (conflictRuns(id) >= RESTART_AFTER_CONFLICTS && restartsSoFar(id) < MAX_RESTARTS) {
                 restartOn.set(id, tw); // the merge is not the problem any more — see RESTART_AFTER_CONFLICTS
               }
@@ -343,6 +355,46 @@ export async function runReady(
        * parked task last tried — that is the only thing that could make a retry mean anything.
        */
       if (wake() > 0) continue;
+      /**
+       * Last resort before giving up: rewrite the conflicted task from today's base.
+       *
+       * The rewrite existed, and was unreachable. It triggered at RESTART_AFTER_CONFLICTS failed
+       * resolutions, but a conflicted task only gets another attempt when something ELSE merges and wakes
+       * it — and once nothing is left to merge, there is nothing to wake it with. Measured on a real board:
+       * T006 recorded exactly two `conflict:resolve-failed` and then went straight to ABANDONED, with the
+       * rewrite it was entitled to never once considered. The threshold could not be met because the budget
+       * that would have met it runs out first.
+       *
+       * So it is tried HERE, where the alternative is abandonment rather than another attempt. A rewrite
+       * that fails leaves the task exactly where it already was.
+       */
+      const stuck = [...parked].filter(([id, p]) => p.reason === "conflict" && conflictedAt.has(id)
+        && restartsSoFar(id) < MAX_RESTARTS);
+      let rewrote = 0;
+      for (const [id] of stuck) {
+        const tw = conflictedAt.get(id)!;
+        conflictedAt.delete(id);
+        restartOn.delete(id);
+        try {
+          const retired = await deps.manager.restartTask(session, tw);
+          board.appendStage(id, {
+            role: "team-lead", action: "restarted",
+            note: `merge unresolvable and nothing left to wake it — rewriting from the current base ` +
+              `(the reviewed work is kept on ${retired})`,
+          });
+          board.resetAttempts(id);
+          board.move(id, "TODO", "team-lead");
+          parked.delete(id);
+          pending.add(id);
+          rewrote++;
+        } catch (e) {
+          board.appendStage(id, {
+            role: "team-lead", action: "restart-failed",
+            note: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200),
+          });
+        }
+      }
+      if (rewrote > 0) continue;
       /**
        * Nothing can wake: every parked task is either waiting on something that will never merge, or has
        * already been tried since the last merge, or is out of wakes. THIS is the verdict `abandoned` was

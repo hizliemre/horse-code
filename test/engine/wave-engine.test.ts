@@ -675,7 +675,7 @@ describe("a merge that cannot be resolved rewrites the task instead of parking i
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  it("parks as before while the conflict is still young", async () => {
+  it("parks first, and rewrites only when nothing is left to wake it", async () => {
     const repo = await initTmpRepo();
     try {
       const mgr = new WorktreeManager({ repoRoot: repo });
@@ -686,9 +686,19 @@ describe("a merge that cannot be resolved rewrites the task instead of parking i
 
       await runReady(edeps(alwaysConflicts(mgr), fakeAdapter()), session, board);
 
-      const h = board.get("t1")!.stageHistory;
-      expect(h.find((e) => e.action === "restarted")).toBeUndefined();
-      expect(h.find((e) => e.action === "parked")).toBeDefined();
+      /**
+       * Parking still comes FIRST — a young conflict waits for another merge to move the base, which is
+       * cheaper than rewriting and often enough. What changed is what happens when that wait runs out:
+       * the rewrite is now tried as the last resort, where the alternative is abandonment.
+       *
+       * The threshold could never be reached before. A conflicted task only gets another attempt when
+       * something else merges and wakes it, and once nothing is left to merge there is nothing to wake it
+       * with. Measured on a real board: T006 recorded exactly two failed resolutions and went straight to
+       * ABANDONED, with the rewrite it was entitled to never once considered.
+       */
+      const actions = board.get("t1")!.stageHistory.map((e) => e.action);
+      expect(actions).toContain("parked");
+      expect(actions.indexOf("parked")).toBeLessThan(actions.indexOf("restarted")); // parked, THEN rewritten
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
