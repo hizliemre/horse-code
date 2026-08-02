@@ -1,4 +1,5 @@
 import { cp, lstat, mkdir, readFile, readlink, rm } from "node:fs/promises";
+import { recordMigrated } from "./migrated.js";
 import { dirname, join, resolve } from "node:path";
 import type { Provider } from "../core/types.js";
 import type { MemoryStore } from "../session/memory.js";
@@ -338,6 +339,27 @@ export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
       `${mcp.map((m) => `\`${m}\``).join(", ")}.\n\n_These are not imported automatically — add the ones you ` +
       `want under \`mcp\` in your config, and mark a read-only server \`"readOnly": true\` so every agent can ` +
       `use it._`);
+  }
+
+  /**
+   * Written down at the end: which of the other tool's rule files this project no longer reads.
+   *
+   * Their content is now in memory, which every role carries. The files themselves stay — the user may still
+   * run those tools — and that is precisely why the record is needed: a second copy of the rules is on disk,
+   * it stopped moving the moment it was migrated, and nothing but this record can tell an agent that what it
+   * is about to read has been superseded.
+   *
+   * Only the RULE files. A migrated skill was copied, not distilled, and reading it is reading the thing
+   * itself.
+   */
+  const migratedRules = findings
+    .filter((f) => f.kind === "rules" && !f.label.startsWith("~/"))
+    .map((f) => f.label);
+  if (result.rules > 0 && migratedRules.length) {
+    await recordMigrated(deps.cwd, migratedRules).catch(() => { /* bookkeeping must not fail a migration */ });
+    deps.note(`🔒 ${migratedRules.map((f) => `\`${f}\``).join(", ")} ${migratedRules.length === 1 ? "is" : "are"} `
+      + `no longer read as rules — their content is in this project's memory, and an agent that opens one is `
+      + `told where the rules went.`);
   }
 
   return result;

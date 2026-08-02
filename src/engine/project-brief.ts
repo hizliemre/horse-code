@@ -57,7 +57,7 @@ export function briefPath(cwd: string): string {
 }
 
 /** Picks the documents worth reading, best first. */
-export function selectDocs(files: string[]): string[] {
+export function selectDocs(files: string[], excluded: ReadonlySet<string> = new Set()): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const pattern of DOC_PATTERNS) {
@@ -65,6 +65,16 @@ export function selectDocs(files: string[]): string[] {
       if (seen.has(f) || !pattern.test(f)) continue;
       // Generated and vendored trees describe someone else's product.
       if (/(^|\/)(node_modules|dist|build|vendor|\.horsecode|graphify-out|CHANGELOG)/i.test(f)) continue;
+      /**
+       * …and our own output describes THIS one, which is worse.
+       *
+       * `docs/**.md` is a reasonable pattern until horse-code writes into `docs/`. Measured on a real
+       * project whose traces live in `docs/architecture/`: the brief was assembled from `PROJECT.md` — the
+       * previous brief — and from per-file traces like `…/Models/BimSourceType.cs.md`. A briefing on what
+       * the product IS, written from the tool's own account of the code, and then fed back into writing
+       * the next account of it.
+       */
+      if (excluded.has(f)) continue;
       seen.add(f);
       out.push(f);
     }
@@ -80,7 +90,7 @@ export interface BriefInput {
 
 /** Reads the selected documents, within budget. Returns undefined when the project documents nothing. */
 export async function gatherBriefInput(cwd: string, files: string[]): Promise<BriefInput | undefined> {
-  const picked = selectDocs(files);
+  const picked = selectDocs(files, await ourOwnOutput(cwd));
   const sources: { file: string; text: string }[] = [];
   let chars = 0;
   for (const file of picked) {
@@ -94,6 +104,26 @@ export async function gatherBriefInput(cwd: string, files: string[]): Promise<Br
   }
   if (!sources.length) return undefined;
   return { sources, hash: hashContent(sources.map((s) => `${s.file}:${s.text}`).join("\n")), chars };
+}
+
+/**
+ * Everything in the documentation tree that horse-code wrote itself.
+ *
+ * Taken from the trace index and the brief's own path, so the test is identity rather than a pattern: an
+ * entry with a `doc` points at one of the PROJECT's documents and belongs in a brief; an entry without one
+ * is a file we wrote, and feeding it back in is how a description becomes a description of a description.
+ */
+async function ourOwnOutput(cwd: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const { loadTraceIndex, traceRootRel } = await import("./trace.js");
+    const root = traceRootRel().replace(/\\/g, "/");
+    out.add(`${root}/PROJECT.md`);
+    out.add(`${root}/PROJECT.json`);
+    const index = await loadTraceIndex(cwd);
+    for (const [file, rec] of Object.entries(index.traces)) if (!rec.doc) out.add(`${root}/${file}.md`);
+  } catch { /* no index → nothing of ours to leave out */ }
+  return out;
 }
 
 /** The instruction that turns documents into a brief. */

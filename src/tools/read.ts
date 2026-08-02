@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { loadMigratedSync, isMigrated, migratedNotice } from "../migrate/migrated.js";
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
@@ -64,6 +66,21 @@ export const readFileTool: Tool = {
     }
     const args = parsed.data;
     const abs = resolve(ctx.cwd, args.path);
+    /**
+     * A migrated rule file answers with where its rules went, not with its text.
+     *
+     * `CLAUDE.md` and its siblings are another tool's system prompt. After migration their content lives in
+     * this project's memory, which every role already carries — so the file on disk is a second copy that
+     * stopped moving on the day it was read. An agent that opens it gets the rules as they WERE and trusts
+     * them over the memory it was given, silently, with no way for anyone to notice.
+     *
+     * Answered rather than refused: a refusal invites another way in (glob, shell, a different path). A
+     * sentence saying the rules are already in context is something the agent can act on.
+     */
+    const migrated = loadMigratedSync(ctx.cwd, (p) => readFileSync(p, "utf8"));
+    if (isMigrated(migrated, args.path) && migrated) {
+      return { content: migratedNotice(args.path, migrated), isError: false };
+    }
     // Registered BEFORE the await, not after: auto-approved tool calls in one turn run in PARALLEL, so a
     // read+write issued together would otherwise race and the write would be refused at random. Recording the
     // intent is enough — the guard exists to catch a write with NO read at all, not to police ordering.
