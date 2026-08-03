@@ -1,7 +1,7 @@
 import type { Provider } from "../core/types.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { traceable, loadTraceIndex, saveTraceIndex, pruneTraces } from "./trace.js";
+import { traceable, loadTraceIndex, saveTraceIndex, pruneTraces, sharedDerived } from "./trace.js";
 import { planFor, runTraces } from "./trace-run.js";
 import { buildProjectGraph } from "./project-graph.js";
 import type { GitRunner } from "../worktree/git.js";
@@ -157,9 +157,20 @@ export async function commitRefreshed(
    * file, whichever file it is.
    *
    * It also belongs in the commit for the same reason the traces do: the graph is shared project knowledge,
-   * committed deliberately, and a session's rebuild of it should ship with the work that caused it.
+   * committed deliberately, and a session's rebuild of it should ship with the work that caused it. The same
+   * goes for the community names beside it — taken from the one list that also decides what `.gitignore`
+   * lets through, so the two can never disagree about which files are shared.
    */
-  const paths = [traceRootRel, "graphify-out/graph.json"];
+  /**
+   * Only the paths that are actually there.
+   *
+   * `git add -- <missing path>` is fatal, not a no-op, and it fails the WHOLE command — so one shared file a
+   * project happens not to have would leave the traces beside it unstaged and skip the commit entirely,
+   * restoring the exact loose-file failure above on every project without that file. Which, for the community
+   * names, is most of them.
+   */
+  const paths = [traceRootRel, ...sharedDerived()].filter((p) => existsSync(join(baseWorktree, p)));
+  if (!paths.length) return false;
   const add = await git(["add", "--", ...paths], baseWorktree);
   if (add.code !== 0) return false;
   const staged = await git(["diff", "--cached", "--quiet", "--", ...paths], baseWorktree);

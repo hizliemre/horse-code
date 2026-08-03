@@ -46,6 +46,8 @@ describe("a new session inherits the project's working state", () => {
   it("carries the state git does not: graph, memory, skills, constitution", async () => {
     repo = await initTmpRepo();
     await put(repo, "graphify-out/graph.json", '{"nodes":[],"links":[]}');
+    // The names beside the graph: without them the session's graph tools fall back to community numbers.
+    await put(repo, "graphify-out/.graphify_labels.json", '{"0":"Billing"}');
     await put(repo, ".horsecode/memory.jsonl", '{"id":"m1","text":"a fact","anchors":[],"tags":[],"createdAt":1}\n');
     await put(repo, ".horsecode/skills/impeccable/SKILL.md", "---\nname: impeccable\ndescription: d\n---\nbody");
     await put(repo, ".specify/memory/constitution.md", "# principles");

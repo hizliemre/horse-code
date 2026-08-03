@@ -187,4 +187,40 @@ describe("a refreshed trace is committed, not left loose", () => {
       expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(false);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
+
+  /**
+   * `git add -- a-path-that-does-not-exist` is a FATAL error, not a no-op, and it takes the whole command with
+   * it: the traces beside it never get staged and the commit never happens. So one shared file a project does
+   * not have would silently restore the exact loose-file failure this function exists to prevent — and it
+   * would do it on every project without one, which is most of them.
+   */
+  it("commits what the project has, and is not stopped by a shared file it does not", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const traces = join(repo, ".horsecode", "traces", "src");
+      await mkdir(traces, { recursive: true });
+      await writeFile(join(traces, "a.ts.md"), "# a trace", "utf8");
+      await mkdir(join(repo, "graphify-out"), { recursive: true });
+      await writeFile(join(repo, "graphify-out", "graph.json"), '{"nodes":[]}', "utf8");
+      // …and no .graphify_labels.json: this project has never been labelled.
+
+      expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(true);
+      expect((await defaultGitRunner(["status", "--porcelain"], repo)).stdout.trim()).toBe("");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+
+  /** And when the project DOES have the names, they ship with the work rather than sitting untracked. */
+  it("carries the community names along with the graph", async () => {
+    const repo = await initTmpRepo();
+    try {
+      await mkdir(join(repo, "graphify-out"), { recursive: true });
+      await writeFile(join(repo, "graphify-out", "graph.json"), '{"nodes":[]}', "utf8");
+      await writeFile(join(repo, "graphify-out", ".graphify_labels.json"), '{"0":"Billing"}', "utf8");
+
+      expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(true);
+      const tracked = await defaultGitRunner(["ls-files", "graphify-out"], repo);
+      expect(tracked.stdout).toContain(".graphify_labels.json");
+      expect((await defaultGitRunner(["status", "--porcelain"], repo)).stdout.trim()).toBe("");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  });
 });

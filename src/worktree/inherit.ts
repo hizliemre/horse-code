@@ -25,6 +25,9 @@ export type Git = (args: string[], cwd: string) => Promise<{ code: number; stdou
  */
 export const INHERITED_ASSETS: string[] = [
   join("graphify-out", "graph.json"),
+  // The community names beside it: without them a session's graph tools fall back to numbers, which is the
+  // difference between "this touches Wallet Member & Balance" and "this touches community 47".
+  join("graphify-out", ".graphify_labels.json"),
   join(".horsecode", "memory.jsonl"),
   join(".horsecode", "skills"),
   join(".specify", "memory", "constitution.md"),

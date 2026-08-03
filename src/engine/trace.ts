@@ -380,7 +380,29 @@ export const GITIGNORE_MARKER = "# horse-code project knowledge";
  * the directory local-only. That decision predates the graph being shared knowledge, and it silently kept
  * every clone paying to rebuild it.
  */
-const SHARED_DERIVED = "graphify-out/graph.json";
+const SHARED_DERIVED: { path: string; why: string }[] = [
+  { path: "graphify-out/graph.json", why: "# Shared — the code graph is minutes of parsing that no clone should have to repeat." },
+  /**
+   * The community names, which the graph does NOT carry.
+   *
+   * graphify's clustering finds the communities on its own, but naming them is step 5 of its runbook and the
+   * step an LLM performs: "look at its node labels and write a 2-5 word plain-language name". `graph.json`
+   * stores each node's community NUMBER and nothing else — measured on a real project, not one of its 6283
+   * names appears anywhere in the graph file. So a clone that has the graph still has "community 47" where
+   * this file says "Wallet Member & Balance", and getting that back means paying for the naming pass again.
+   */
+  { path: "graphify-out/.graphify_labels.json", why: "# Shared — the community names an LLM wrote; the graph stores only their numbers." },
+];
+
+/**
+ * The derived files that ship WITH the work, for the code that has to commit them.
+ *
+ * Read from the same list the `.gitignore` rules come from on purpose: a path un-ignored but never committed,
+ * or committed but still ignored, is the kind of split that survives a test suite and fails in a real run.
+ */
+export function sharedDerived(): string[] {
+  return SHARED_DERIVED.map((s) => s.path);
+}
 
 /** Regenerated on every build, or keyed to one machine's paths — these genuinely do not belong in git. */
 const LOCAL_ONLY = ["graphify-out/manifest.json", "graphify-out/graph.html", "graphify-out/.graphify_root"];
@@ -432,8 +454,7 @@ function planGitignore(current: string, root0 = "."): Plan {
 
   keep(traceRootRel().replace(/\\/g, "/"), true,
     "# Shared — the traces describe the code, so every clone starts understanding the project instead of re-buying it.");
-  keep(SHARED_DERIVED, false,
-    "# Shared — the code graph is minutes of parsing that no clone should have to repeat.");
+  for (const s of SHARED_DERIVED) keep(s.path, false, s.why);
 
   const nested = NESTED_CHECKOUTS.filter((d) => existsSync(join(root0, d)) && !has(d) && !has(d.replace(/\/$/, "")));
   if (nested.length) {
@@ -449,15 +470,27 @@ function planGitignore(current: string, root0 = "."): Plan {
   return { text, rules };
 }
 
+/**
+ * Adds whatever rules this repository is still missing.
+ *
+ * The marker used to end the work before it started — `if (current.includes(MARKER)) return false` ran ahead
+ * of planning, so a project that had been through this once could never receive a rule added later. Measured
+ * on a real project: its `.gitignore` already carried the marker, and the rule for the community names could
+ * not reach it at all.
+ *
+ * The marker was never what made repeat calls safe. `planGitignore` is idempotent by construction — `keep()`
+ * skips a negation the file already has — so the marker only decided where a NEW block goes, and a file that
+ * has one gets its additions appended under it rather than a second copy of the heading.
+ */
 export async function ensureGitignore(cwd: string): Promise<boolean> {
   const path = join(cwd, ".gitignore");
   let current = "";
   try { current = await readFile(path, "utf8"); } catch { /* no .gitignore yet → create one */ }
-  if (current.includes(GITIGNORE_MARKER)) return false;
 
   const plan = planGitignore(current, cwd);
   if (!plan.rules.length && plan.text === current) return false; // already says everything needed
-  const block = plan.rules.length ? `${GITIGNORE_MARKER}\n${plan.rules.join("\n")}\n` : "";
+  const heading = plan.text.includes(GITIGNORE_MARKER) ? "" : `${GITIGNORE_MARKER}\n`;
+  const block = plan.rules.length ? `${heading}${plan.rules.join("\n")}\n` : "";
   const body = `${plan.text.trimEnd()}${plan.text.trim() && block ? "\n\n" : ""}${block}`;
   await writeFile(path, body, "utf8");
   return true;

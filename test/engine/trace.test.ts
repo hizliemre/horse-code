@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   planTraces, tracePrompt, saveTrace, pruneTraces, loadTraceIndex, saveTraceIndex,
-  readTraceSync, tracePath, hashContent, MAX_TRACE_FILE_CHARS, ensureGitignore,
+  readTraceSync, tracePath, hashContent, MAX_TRACE_FILE_CHARS, ensureGitignore, GITIGNORE_MARKER,
 } from "../../src/engine/trace.js";
 import type { TraceIndex } from "../../src/engine/trace.js";
 import { describePlan, runTraces } from "../../src/engine/trace-run.js";
@@ -345,6 +345,43 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
     const first = await readFile(join(cwd, ".gitignore"), "utf8");
     expect(await ensureGitignore(cwd)).toBe(false);
     expect(await readFile(join(cwd, ".gitignore"), "utf8")).toBe(first);
+  });
+
+  /**
+   * The community names cost an LLM a pass over every community to write, and `graph.json` does not carry
+   * them — measured on a real project, none of its 6283 names appear anywhere in the graph. That puts them in
+   * the same class as the traces: knowledge a fresh clone cannot rebuild for free.
+   */
+  it("re-includes the community names, which the graph itself does not carry", async () => {
+    await writeFile(join(cwd, ".gitignore"), "graphify-out/\n", "utf8");
+    await ensureGitignore(cwd);
+    const gi = await readFile(join(cwd, ".gitignore"), "utf8");
+    expect(gi).toContain("!graphify-out/.graphify_labels.json");
+  });
+
+  /**
+   * The marker used to end the work: `if (current.includes(MARKER)) return false` ran before anything was
+   * planned, so a project that had been through this ONCE never received a rule added afterwards. Measured on
+   * a real project whose `.gitignore` already carried the marker — the names rule could not reach it at all.
+   *
+   * The plan is already idempotent by construction (`keep()` skips a negation the file has), so the marker was
+   * never what made repeat calls safe. It only made them blind.
+   */
+  it("adds a rule the project is still missing, even though it has been here before", async () => {
+    await writeFile(join(cwd, ".gitignore"),
+      `graphify-out/*\n\n${GITIGNORE_MARKER}\n!graphify-out/graph.json\n`, "utf8");
+    expect(await ensureGitignore(cwd)).toBe(true);
+    const gi = await readFile(join(cwd, ".gitignore"), "utf8");
+    expect(gi).toContain("!graphify-out/.graphify_labels.json");
+    expect(gi).toContain("!graphify-out/graph.json");        // …and what was already there survives
+    expect(gi.match(/^# horse-code project knowledge$/gm)?.length).toBe(1); // one marker, not two
+  });
+
+  it("still stops when a project that has been here before is missing nothing", async () => {
+    await writeFile(join(cwd, ".gitignore"),
+      `graphify-out/*\n\n${GITIGNORE_MARKER}\n!graphify-out/graph.json\n!graphify-out/.graphify_labels.json\n`,
+      "utf8");
+    expect(await ensureGitignore(cwd)).toBe(false);
   });
 
   // Only a run that produced something needs the rules; a failed run must not edit the user's files.

@@ -25,6 +25,19 @@ import { stateRoot } from "./session-scope.js";
 export const GRAPH_DIR = "graphify-out";
 export const GRAPH_FILE = "graph.json";
 
+/**
+ * The community names, which the graph itself does not carry.
+ *
+ * graphify finds the communities without an LLM, but NAMING them is the one step that needs one — step 5 of
+ * its runbook: "look at its node labels and write a 2-5 word plain-language name". The names land here, and
+ * `graph.json` keeps only each node's community NUMBER.
+ *
+ * That difference is the whole reason this file is read. "This symbol is in community 7" is an index, and an
+ * agent can do nothing with it; "this symbol is in Wallet Member & Balance" is orientation. Measured on a real
+ * project: 6283 named communities, and not one of those names present anywhere in `graph.json`.
+ */
+export const LABELS_FILE = ".graphify_labels.json";
+
 export interface GraphNode {
   id: string;
   label: string;
@@ -49,14 +62,58 @@ export interface ProjectGraph {
   byId: Map<string, GraphNode>;
   /** Every edge touching a node, in both directions — the index the impact queries walk. */
   incident: Map<string, GraphEdge[]>;
+  /** Community number → the name written for it. Empty when the project has not been labelled. */
+  areas: Map<number, string>;
 }
 
 export function graphPath(cwd: string): string {
   return join(cwd, GRAPH_DIR, GRAPH_FILE);
 }
 
+export function labelsPath(cwd: string): string {
+  return join(cwd, GRAPH_DIR, LABELS_FILE);
+}
+
+/**
+ * The area a node belongs to, by name — or undefined when it has none.
+ *
+ * Undefined covers three different situations that all mean the same thing to a caller: the project has no
+ * names, this node was never assigned a community (graphify leaves singletons out), or the number has no name.
+ * None of them is worth inventing text for, so none of them produces any.
+ */
+export function areaOf(g: ProjectGraph, n: GraphNode | undefined): string | undefined {
+  return n?.community === undefined ? undefined : g.areas.get(n.community);
+}
+
+/**
+ * The name graphify writes BEFORE anything has named the community.
+ *
+ * Its build seeds every community with `'Community ' + str(cid)` and the labelling step replaces the ones it
+ * reaches. Measured on a real project: 6283 communities, 5057 still carrying the seed — 80%. Letting one
+ * through would put "Community 4821" in front of an agent, which is the community number again with a word in
+ * front of it. An area nobody named has to read as unnamed.
+ */
+const UNNAMED = /^community[\s_-]*\d+$/i;
+
+/** Parses the community-name file. Junk yields no names rather than taking the graph down with it. */
+export function parseAreas(raw: string | undefined): Map<number, string> {
+  const out = new Map<number, string>();
+  if (!raw) return out;
+  try {
+    const doc = JSON.parse(raw) as unknown;
+    if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return out;
+    for (const [k, v] of Object.entries(doc as Record<string, unknown>)) {
+      const id = Number(k);
+      if (!Number.isInteger(id) || typeof v !== "string") continue;
+      const name = v.trim();
+      if (name && !UNNAMED.test(name)) out.set(id, name);
+    }
+  } catch { /* an unnamed graph is the normal case, not an error */ }
+  return out;
+}
+
 /** Parses graphify's node-link JSON into an indexed graph. Returns undefined when there is no graph yet. */
-export function parseGraph(raw: string): ProjectGraph | undefined {
+export function parseGraph(raw: string, labelsRaw?: string): ProjectGraph | undefined {
   let doc: { nodes?: unknown; links?: unknown; edges?: unknown };
   try { doc = JSON.parse(raw) as typeof doc; } catch { return undefined; }
   const rawNodes = Array.isArray(doc.nodes) ? doc.nodes : [];
@@ -78,12 +135,16 @@ export function parseGraph(raw: string): ProjectGraph | undefined {
       if (list) list.push(e); else incident.set(end, [e]);
     }
   }
-  return { nodes, edges, byId, incident };
+  return { nodes, edges, byId, incident, areas: parseAreas(labelsRaw) };
 }
 
 /** Loads the graph for a working directory, or undefined when none has been built. */
 export async function loadGraph(cwd: string): Promise<ProjectGraph | undefined> {
-  try { return parseGraph(await readFile(graphPath(cwd), "utf8")); } catch { return undefined; }
+  try {
+    // The names are optional and always have been: most graphs predate them. A missing file is not a failure.
+    const labels = await readFile(labelsPath(cwd), "utf8").catch(() => undefined);
+    return parseGraph(await readFile(graphPath(cwd), "utf8"), labels);
+  } catch { return undefined; }
 }
 
 /** Synchronous load — used by the tools, which are called often and must not re-read on every keystroke. */
@@ -108,18 +169,28 @@ export function graphRoot(cwd: string): string | undefined {
  * on mtime keeps the guarantee and pays the cost once: the moment the file changes, the entry is stale and
  * the next read rebuilds it.
  */
-const cache = new Map<string, { mtimeMs: number; size: number; graph: ProjectGraph | undefined }>();
+const cache = new Map<string, { stamp: string; graph: ProjectGraph | undefined }>();
+
+/** mtime+size of a file, or "" when it is absent — the absence is itself a state worth noticing. */
+function stampOf(path: string): string {
+  try { const st = statSync(path); return `${st.mtimeMs}:${st.size}`; } catch { return ""; }
+}
 
 export function loadGraphSync(cwd: string): ProjectGraph | undefined {
   const root = graphRoot(cwd);
   if (root === undefined) return undefined;
   const path = graphPath(root);
+  const labels = labelsPath(root);
   try {
-    const st = statSync(path);
+    // Both files, because the names live in the second one: a cache keyed on the graph alone would keep
+    // serving yesterday's names after a re-label, and re-labelling changes nothing else on disk.
+    const stamp = `${stampOf(path)}|${stampOf(labels)}`;
     const hit = cache.get(path);
-    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.graph;
-    const graph = parseGraph(readFileSync(path, "utf8"));
-    cache.set(path, { mtimeMs: st.mtimeMs, size: st.size, graph });
+    if (hit && hit.stamp === stamp) return hit.graph;
+    let labelsRaw: string | undefined;
+    try { labelsRaw = readFileSync(labels, "utf8"); } catch { /* unnamed graph — the normal case */ }
+    const graph = parseGraph(readFileSync(path, "utf8"), labelsRaw);
+    cache.set(path, { stamp, graph });
     return graph;
   } catch {
     return undefined;

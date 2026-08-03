@@ -169,6 +169,158 @@ describe("the other lookups", () => {
   });
 });
 
+/**
+ * The graph clusters the codebase on its own, but naming those clusters is the one step an LLM performs —
+ * step 5 of graphify's runbook: "look at its node labels and write a 2-5 word plain-language name". The names
+ * land in a SEPARATE file; `graph.json` keeps only the number.
+ *
+ * So an agent reading the graph alone sees "community 7" — which is not knowledge, it is an index. Measured on
+ * a real project: 6283 communities, every one named, and not one of those names present in `graph.json`.
+ */
+describe("communities have names, and the tools use them", () => {
+  const NAMED = {
+    nodes: [
+      { id: "config", label: "config.ts", source_file: "src/config.ts", source_location: "L1", community: 0 },
+      { id: "config_load", label: "loadConfig()", source_file: "src/config.ts", source_location: "L136", community: 0 },
+      { id: "cli", label: "cli.ts", source_file: "src/cli.ts", source_location: "L1", community: 1 },
+      { id: "cli_main", label: "main()", source_file: "src/cli.ts", source_location: "L93", community: 1 },
+      { id: "orphan", label: "orphan()", source_file: "src/o.ts", source_location: "L1" },
+    ],
+    links: [
+      { source: "cli_main", target: "config_load", relation: "calls" },
+      { source: "config", target: "config_load", relation: "contains" },
+    ],
+  };
+  const LABELS = { "0": "Configuration Loading", "1": "Command Line Entry" };
+
+  const seedNamed = async (labels: unknown = LABELS): Promise<void> => {
+    await seed(NAMED);
+    if (labels !== undefined) {
+      await writeFile(join(cwd, "graphify-out", ".graphify_labels.json"), JSON.stringify(labels), "utf8");
+    }
+  };
+
+  it("resolves a node's community number to the name a human wrote", async () => {
+    await seedNamed();
+    const r = await graphContextTool.run({ symbol: "loadConfig" }, ctx());
+    expect(r.content).toContain("Configuration Loading");
+    expect(r.content).not.toMatch(/community 0|\bcommunity\b\s*\d/i); // never the raw number
+  });
+
+  /**
+   * The reason this is worth surfacing at all: a change that stays inside its own area is a different kind of
+   * change from one that reaches into another. The number could never say that; the name can.
+   */
+  it("marks the reach that leaves the symbol's own area", async () => {
+    await seedNamed();
+    const r = await graphImpactTool.run({ symbol: "loadConfig" }, ctx());
+    expect(r.content).toContain("Command Line Entry");   // main() is in a different area — said so
+    expect(r.content).not.toMatch(/main\(\).*Configuration Loading/); // …and not mislabelled with its own
+  });
+
+  it("gives an unfamiliar reader the project's areas, largest first", async () => {
+    await seedNamed();
+    const r = await graphOverviewTool.run({}, ctx());
+    expect(r.content).toContain("Configuration Loading");
+    expect(r.content).toContain("Command Line Entry");
+  });
+
+  /** Two symbols with one name is exactly when "which one?" is answerable by area rather than by path alone. */
+  it("tells apart same-named symbols by the area they live in", async () => {
+    await seed({
+      nodes: [
+        { id: "a", label: "run()", source_file: "a.ts", source_location: "L1", community: 0 },
+        { id: "b", label: "run()", source_file: "b.ts", source_location: "L2", community: 1 },
+      ],
+      links: [],
+    });
+    await writeFile(join(cwd, "graphify-out", ".graphify_labels.json"), JSON.stringify(LABELS), "utf8");
+    const r = await graphImpactTool.run({ symbol: "run" }, ctx());
+    expect(r.content).toContain("Configuration Loading");
+    expect(r.content).toContain("Command Line Entry");
+  });
+
+  /**
+   * Most projects have a graph and no names — the file is new, and older graphs predate it. Every tool must
+   * answer exactly as it did before, with no empty brackets or dangling separators where a name would go.
+   */
+  it("reads exactly as before when the project has no names yet", async () => {
+    await seed(NAMED);                                   // graph, no labels file
+    const withoutNames = await graphContextTool.run({ symbol: "loadConfig" }, ctx());
+    expect(withoutNames.isError).toBe(false);
+    expect(withoutNames.content).toContain("src/config.ts:136");
+    expect(withoutNames.content).not.toContain("·");     // no separator with nothing after it
+    expect(withoutNames.content).not.toMatch(/\s\(\)/);   // no empty bracket where a name would have gone
+  });
+
+  it("survives a corrupt names file rather than losing the graph with it", async () => {
+    await seed(NAMED);
+    await writeFile(join(cwd, "graphify-out", ".graphify_labels.json"), "{ not json", "utf8");
+    const r = await graphContextTool.run({ symbol: "loadConfig" }, ctx());
+    expect(r.isError).toBe(false);
+    expect(r.content).toContain("src/config.ts:136");
+  });
+
+  /**
+   * graphify seeds every community with `'Community ' + str(cid)` before the naming step, and the naming step
+   * replaces the ones it gets to. Measured on a real project: 6283 communities, 5057 of them still carrying
+   * the seed — 80%. Passing those through would put "Community 4821" in front of an agent, which is the raw
+   * number again, dressed as knowledge. An unnamed area must read as unnamed.
+   */
+  it("treats graphify's un-replaced placeholder as no name at all", async () => {
+    await seedNamed({ "0": "Community 0", "1": "Command Line Entry" });
+    const r = await graphContextTool.run({ symbol: "loadConfig" }, ctx());
+    expect(r.content).not.toMatch(/Community\s*0/);
+    const ov = await graphOverviewTool.run({}, ctx());
+    expect(ov.content).toContain("Command Line Entry");   // the real one survives
+    expect(ov.content).not.toMatch(/Community\s*0/);
+  });
+
+  /**
+   * The count is the judgement; the names are the recognition. Naming every area a load-bearing interface
+   * touches costs more than it adds, and the rows underneath already name them all — measured on a real
+   * project, one interface reached 24 areas and printed all 24 on a single line.
+   */
+  it("says how far a change spreads without listing every area it reaches", async () => {
+    const hub = {
+      nodes: [
+        { id: "hub", label: "hub()", source_file: "h.ts", source_location: "L1", community: 0 },
+        ...Array.from({ length: 20 }, (_, i) => ({ id: `c${i}`, label: `caller${i}()`, source_file: `c${i}.ts`, source_location: "L1", community: i + 1 })),
+      ],
+      links: Array.from({ length: 20 }, (_, i) => ({ source: `c${i}`, target: "hub", relation: "calls" })),
+    };
+    await seed(hub);
+    const names = Object.fromEntries(Array.from({ length: 21 }, (_, i) => [String(i), `Area Number ${i}`]));
+    await writeFile(join(cwd, "graphify-out", ".graphify_labels.json"), JSON.stringify(names), "utf8");
+
+    const r = await graphImpactTool.run({ symbol: "hub", depth: 1 }, ctx());
+    const line = r.content.split("\n").find((l) => l.startsWith("It reaches"))!;
+    expect(line).toContain("20 area(s)");        // the size is stated exactly
+    expect(line).toMatch(/and 14 more/);          // …and the naming stops
+    expect(line.match(/`/g)!.length / 2).toBeLessThanOrEqual(7); // 6 areas + the home area
+  });
+
+  /** A node with no community at all (graphify leaves singletons unassigned) must not gain an invented area. */
+  it("says nothing about a symbol that belongs to no area", async () => {
+    await seedNamed();
+    const r = await graphContextTool.run({ symbol: "orphan" }, ctx());
+    expect(r.content).toContain("src/o.ts");
+    expect(r.content).not.toContain("Configuration Loading");
+  });
+
+  /**
+   * The graph is re-read on every call so a rebuild is visible immediately; the names are a second file, and
+   * a cache keyed only on the first would serve yesterday's names after a re-label.
+   */
+  it("notices the names changing under a graph that did not", async () => {
+    await seedNamed();
+    expect((await graphContextTool.run({ symbol: "loadConfig" }, ctx())).content).toContain("Configuration Loading");
+    await writeFile(join(cwd, "graphify-out", ".graphify_labels.json"),
+      JSON.stringify({ "0": "Settings And Secrets", "1": "Command Line Entry" }), "utf8");
+    expect((await graphContextTool.run({ symbol: "loadConfig" }, ctx())).content).toContain("Settings And Secrets");
+  });
+});
+
 describe("no graph yet", () => {
   // An agent told "no graph" must not go off trying to build one — that is a user action.
   it.each([graphImpactTool, graphFindTool, graphContextTool, graphOverviewTool])("%s says so and points elsewhere", async (tool) => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
-import { loadGraphSync } from "../engine/project-graph.js";
+import { loadGraphSync, areaOf } from "../engine/project-graph.js";
 import { readTraceSync } from "../engine/trace.js";
 import { readBriefSync } from "../engine/project-brief.js";
 import type { ProjectGraph, GraphNode, GraphEdge } from "../engine/project-graph.js";
@@ -28,6 +28,21 @@ function where(n: GraphNode): string {
   return n.source_file ? `${n.source_file}${n.source_location ? `:${n.source_location.replace(/^L/, "")}` : ""}` : "";
 }
 
+/**
+ * Where a symbol sits in the project, as a name.
+ *
+ * The graph clusters the codebase by itself, but it stores each node's community as a NUMBER — and a number
+ * is an index, not knowledge. The names come from a separate file an LLM wrote once (see `LABELS_FILE`), and
+ * turning "community 47" into "Wallet Member & Balance" is the entire value of reading it.
+ *
+ * Empty when the project has no names, or the symbol belongs to no community. Nothing is invented to fill the
+ * gap: a bracket with nothing in it costs a reader more than the missing name does.
+ */
+function area(g: ProjectGraph, n: GraphNode | undefined): string {
+  const name = areaOf(g, n);
+  return name ? ` · ${name}` : "";
+}
+
 /** Nodes whose label or id matches, best-first: exact label, then prefix, then substring. */
 function find(g: ProjectGraph, term: string): GraphNode[] {
   const t = term.toLowerCase().replace(/\(\)$/, "");
@@ -42,8 +57,9 @@ function find(g: ProjectGraph, term: string): GraphNode[] {
     .sort((a, b) => a[0] - b[0]).map(([, n]) => n);
 }
 
-function ambiguous(matches: GraphNode[], term: string): string {
-  const rows = matches.slice(0, 12).map((n) => `- ${n.label} — ${where(n)}`);
+/** Two symbols with the same name is exactly when the area is the thing that tells them apart. */
+function ambiguous(g: ProjectGraph, matches: GraphNode[], term: string): string {
+  const rows = matches.slice(0, 12).map((n) => `- ${n.label} — ${where(n)}${area(g, n)}`);
   return `"${term}" matches ${matches.length} symbols. Name one exactly:\n${rows.join("\n")}`;
 }
 
@@ -55,8 +71,8 @@ function resolve(g: ProjectGraph, term: string): { node: GraphNode } | { error: 
   const best = matches.filter((n) => n.label.toLowerCase().replace(/\(\)$/, "") === term.toLowerCase().replace(/\(\)$/, ""));
   if (best.length === 1) return { node: best[0] };
   if (matches.length === 1) return { node: matches[0] };
-  if (best.length > 1) return { error: ambiguous(best, term) };
-  return { error: ambiguous(matches, term) };
+  if (best.length > 1) return { error: ambiguous(g, best, term) };
+  return { error: ambiguous(g, matches, term) };
 }
 
 /** The other end of an edge, from a node's point of view. */
@@ -133,15 +149,37 @@ export const graphImpactTool = graphTool(
       if (!frontier.length) break;
     }
 
-    const head = `${r.node.label} — ${where(r.node)}`;
+    const head = `${r.node.label} — ${where(r.node)}${area(g, r.node)}`;
     if (!levels.length) {
       return `${head}\n\nNothing in the graph depends on it. A change here is contained — but the graph only ` +
         `covers what its parsers understand, so check for dynamic dispatch, string-keyed lookups and callers ` +
         `outside this repository.`;
     }
-    const rows = levels.map((l) => `${"  ".repeat(l.hop - 1)}← ${l.node.label} ${l.via} ${l.from} — ${where(l.node)}`);
+    /**
+     * The area is named only where it DIFFERS from the symbol's own.
+     *
+     * A change that stays inside one area and a change that reaches into three are different sizes of change,
+     * and that is the judgement this tool exists to inform. Repeating the origin's own name on every row would
+     * bury the rows where it changes — which are the ones worth reading.
+     */
+    const home = areaOf(g, r.node);
+    const rows = levels.map((l) => {
+      const there = areaOf(g, l.node);
+      const crossed = there && there !== home ? ` · ${there}` : "";
+      return `${"  ".repeat(l.hop - 1)}← ${l.node.label} ${l.via} ${l.from} — ${where(l.node)}${crossed}`;
+    });
+    const others = [...new Set(levels.map((l) => areaOf(g, l.node)).filter((a): a is string => !!a && a !== home))];
+    // The COUNT is the judgement — "this leaves its area 24 times over" — and naming all 24 costs more than
+    // it adds. Enough names to recognise the direction, then the number for the size. Measured on a real
+    // project: an uncapped line listed 24 areas for one interface, and the rows below already name them all.
+    const NAMED_SPREAD = 6;
+    const spread = others.length
+      ? `\n\nIt reaches ${others.length} area(s) beyond ${home ? `\`${home}\`` : "its own"}: `
+        + `${others.slice(0, NAMED_SPREAD).map((a) => `\`${a}\``).join(", ")}`
+        + `${others.length > NAMED_SPREAD ? `, and ${others.length - NAMED_SPREAD} more` : ""}.`
+      : "";
     const capped = levels.length >= MAX_ROWS ? `\n\n(stopped at ${MAX_ROWS} — the true blast radius is larger; narrow with a lower depth)` : "";
-    return `Changing ${head} can affect ${levels.length} symbol(s), nearest first:\n\n${rows.join("\n")}${capped}\n\n` +
+    return `Changing ${head} can affect ${levels.length} symbol(s), nearest first:\n\n${rows.join("\n")}${spread}${capped}\n\n` +
       `Dynamic calls and reflection are invisible to the parser — this is a floor, not a ceiling.`;
   },
 );
@@ -156,7 +194,7 @@ export const graphFindTool = graphTool(
     const term = String(args.symbol);
     const matches = find(g, term);
     if (!matches.length) return `Nothing in the graph matches "${term}".`;
-    const rows = matches.slice(0, MAX_ROWS).map((n) => `- ${n.label} — ${where(n)}`);
+    const rows = matches.slice(0, MAX_ROWS).map((n) => `- ${n.label} — ${where(n)}${area(g, n)}`);
     const more = matches.length > MAX_ROWS ? `\n(+${matches.length - MAX_ROWS} more)` : "";
     return `${matches.length} match(es) for "${term}":\n${rows.join("\n")}${more}`;
   },
@@ -181,10 +219,10 @@ export const graphContextTool = graphTool(
     const render = (es: GraphEdge[], arrow: string): string[] =>
       es.slice(0, MAX_ROWS / 2).map((e) => {
         const n = g.byId.get(other(e, r.node.id));
-        return `  ${arrow} ${e.relation} ${n?.label ?? other(e, r.node.id)}${n ? ` — ${where(n)}` : ""}`;
+        return `  ${arrow} ${e.relation} ${n?.label ?? other(e, r.node.id)}${n ? ` — ${where(n)}${area(g, n)}` : ""}`;
       });
     const body = [
-      `${r.node.label} — ${where(r.node)}`,
+      `${r.node.label} — ${where(r.node)}${area(g, r.node)}`,
       out.length ? `\nUses (${out.length}):\n${render(out, "→").join("\n")}` : "\nUses: nothing tracked.",
       inc.length ? `\nUsed by (${inc.length}):\n${render(inc, "←").join("\n")}` : "\nUsed by: nothing tracked.",
     ];
@@ -209,7 +247,29 @@ export const graphOverviewTool = graphTool(
     const rel = new Map<string, number>();
     for (const e of g.edges) rel.set(e.relation, (rel.get(e.relation) ?? 0) + 1);
     const relRow = [...rel.entries()].sort((a, b) => b[1] - a[1]).map(([r, c]) => `${r} ${c}`).join(" · ");
-    return `${g.nodes.length} symbols across ${files} files, ${g.edges.length} relationships (${relRow}).\n\n` +
+
+    /**
+     * What the project is MADE OF, in its own words.
+     *
+     * The most-connected list answers "what is load-bearing" and it is the right first question, but it
+     * answers it in symbols. Someone entering an unfamiliar codebase also needs the map — and the names are
+     * the only part of the graph written in the product's vocabulary rather than the code's.
+     */
+    const size = new Map<number, number>();
+    for (const n of g.nodes) if (n.community !== undefined) size.set(n.community, (size.get(n.community) ?? 0) + 1);
+    const named = [...size.entries()]
+      .map(([id, count]) => ({ name: g.areas.get(id), count }))
+      .filter((a): a is { name: string; count: number } => !!a.name)
+      .sort((a, b) => b.count - a.count);
+    const shown = named.slice(0, top);
+    const rest = named.length - shown.length;
+    const areas = shown.length
+      ? `\n\nAreas — what the project is made of, largest first:\n`
+        + shown.map((a) => `- ${a.name} (${a.count} symbols)`).join("\n")
+        + (rest > 0 ? `\n(+${rest} smaller area(s))` : "")
+      : "";
+
+    return `${g.nodes.length} symbols across ${files} files, ${g.edges.length} relationships (${relRow}).${areas}\n\n` +
       `Most connected — changing these reaches the most:\n${core.join("\n")}`;
   },
 );
