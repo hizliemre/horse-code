@@ -18,6 +18,7 @@ import { basename } from "node:path";
 import { TuiController } from "./controller.js";
 import { App } from "./components.js";
 import { REQUIRED_ROLES } from "../prompts.js";
+import { saveMode } from "../config/save-mode.js";
 import { SessionStore } from "../session/store.js";
 import { PinStore } from "../session/pins.js";
 import { MemoryStore } from "../session/memory.js";
@@ -794,7 +795,12 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}
       listMcp={listMcp}
       sourcesInfo={opts.sourcesInfo} refreshSources={opts.refreshSources}
-      permMode={() => deps0.permission.mode} setPermMode={(m) => deps0.permission.setMode(m)}
+      permMode={() => deps0.permission.mode} setPermMode={(m) => {
+        deps0.permission.setMode(m);
+        // …and remembered. A choice about how much you want to be asked is not a per-session one, and having
+        // to make it again at every start is how a deliberate setting turns into a chore.
+        void saveMode(homedir(), m);
+      }}
       cancelJob={() => jobAbort?.abort()}
       onExit={() => { restore(); process.exit(0); }} />,
   );

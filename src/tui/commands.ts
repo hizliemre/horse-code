@@ -29,6 +29,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/parallel", desc: "How many tasks run at once (/parallel N) — takes effect on the running job too" },
   { name: "/monitor", desc: "Where the run's time is going (/monitor enable shows the panel, disable hides it, log shows the file, heap writes a snapshot)" },
   { name: "/watch", desc: "Watch any command — each line it prints becomes an event (/watch <cmd>, /watch stop N)" },
+  { name: "/paste", desc: "Put the clipboard's image into the input (same as Ctrl+V, for terminals that swallow it)" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },

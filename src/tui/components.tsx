@@ -1722,6 +1722,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/skills") doSkills("");
     else if (c.name === "/graph") doGraph("");
     else if (c.name === "/clean-worktrees") doCleanWorktrees("");
+    else if (c.name === "/paste") pasteImage();
     else if (c.name === "/migrate") doMigrate();
     else if (c.name === "/continue-from-claude") doContinueFromClaude("");
     else if (c.name === "/mode") doMode("");
