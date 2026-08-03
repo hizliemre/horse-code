@@ -95,6 +95,26 @@ async function principalFinal(deps: RevisionDeps, base: string) {
   return runStructuredRole(opts, PrincipalFinalSchema);
 }
 
+/**
+ * Turns per review comment, and a floor.
+ *
+ * The revision ran on the default 50 — a number that knows nothing about the work. Measured on a real PR of
+ * seventeen commits: `maximum turn count exceeded (50)`, the pass abandoned, and the card left carrying
+ * `pr:changes` while the merged work shipped unreviewed. This is the third fixed ceiling to fail the same
+ * way: five minutes for a graph build, twelve turns for a conflict, fifty here. A budget that ignores the
+ * size of the job is a guess, and the guess is wrong exactly when the job is big.
+ *
+ * Each comment is read, located, fixed and verified, which is several turns; the floor covers the case where
+ * a single comment turns out to be the hard one.
+ */
+export const REVISE_TURNS_PER_COMMENT = 8;
+export const REVISE_TURNS_MIN = 30;
+export const REVISE_TURNS_MAX = 200;
+
+export function reviseTurnBudget(commentCount: number): number {
+  return Math.min(REVISE_TURNS_MAX, Math.max(REVISE_TURNS_MIN, commentCount * REVISE_TURNS_PER_COMMENT));
+}
+
 async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<void> {
   const resolved = deps.roleRegistry.resolve("senior-coder");
   const tools = createDefaultRegistry();
@@ -105,11 +125,26 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
     provider: deps.provider, ...resolved, tools,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
+    maxTurns: reviseTurnBudget(comments.length),
     // The last code to enter the pull request: what the reviser says about each comment — fixed it, or why
     // it is by design — is the argument the user is being asked to accept.
     ...(deps.note ? { onSay: deps.note } : {}),
   };
-  await runToCompletion(opts);
+  try {
+    await runToCompletion(opts);
+  } catch (e) {
+    /**
+     * A revision that ran out of turns still did work, and saying only "could not run" hides it.
+     *
+     * The previous message reported the failure and nothing else, so a user could not tell a pass that
+     * achieved nothing from one that fixed nine comments out of ten. The commits are already on the branch
+     * either way — the per-write auto-commit sees to that — so what is missing is the account of them.
+     */
+    const why = e instanceof Error ? e.message : String(e);
+    deps.note?.(`⚠️ The revision pass stopped: ${why}. It had ${comments.length} comment(s) to address and its `
+      + `work up to that point is committed on the branch — re-run to continue from there.`);
+    throw e;
+  }
 }
 
 /**
