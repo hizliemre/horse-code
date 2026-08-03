@@ -273,8 +273,9 @@ describe("runJob", () => {
       expect(res.kind).toBe("done");
       const phases = events.filter((e) => e.kind === "phase").map((e) => (e as { phase: string }).phase);
       // "worktree" sits between the refiner and the first spec-kit phase: opening the session is work, and
-      // narrating it as "refining…" made a finished step look like a hang.
-      expect(phases).toEqual(["upstream", "worktree", "constitution", "brainstorm", "specify", "clarify", "plan", "tasks", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
+      // narrating it as "refining…" made a finished step look like a hang. "sizing" comes before even that —
+      // a request is measured before a worktree is cut for it, so a one-line change does not buy a session.
+      expect(phases).toEqual(["upstream", "sizing", "worktree", "constitution", "brainstorm", "specify", "clarify", "plan", "tasks", "approved", "board", "waves", "waves-done", "pr", "revision", "revision-done", "report", "done"]);
       expect(events.some((e) => e.kind === "board")).toBe(true);
     } finally {
       await rm(repo, { recursive: true, force: true });

@@ -23,7 +23,7 @@ describe("reporting something noticed in passing", () => {
   it("records it and tells the tester exactly what NOT to do about it", async () => {
     const q = new FindingQueue();
     const tool = buildReportFindingTool(q);
-    const res = await tool.run(F, ctx() as never);
+    const res = await tool.run({ ...F } as Record<string, unknown>, ctx() as never);
     expect(res.isError).toBe(false);
     expect(q.length).toBe(1);
     expect(res.content).toMatch(/do not fix it yourself/i);

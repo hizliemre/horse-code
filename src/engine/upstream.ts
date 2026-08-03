@@ -24,7 +24,8 @@ export type UpstreamResult =
   | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" }
   | { intent: Intent; refinedPrompt: string; kind: "governed"; path: string; written: boolean }
   | { intent: Intent; refinedPrompt: string; kind: "undone"; report: string }
-  | { intent: Intent; refinedPrompt: string; kind: "verified"; report: string; reportPath: string; written: boolean };
+  | { intent: Intent; refinedPrompt: string; kind: "verified"; report: string; reportPath: string; written: boolean }
+  | { intent: Intent; refinedPrompt: string; kind: "tweaked"; report: string; done: boolean };
 
 /**
  * Upstream pipeline: refiner → route; chat→coach response; feature/bugfix→spec-kit phases
@@ -42,6 +43,14 @@ export async function runUpstream(
   emit: (ev: ProgressEvent) => void = () => {},
   images?: string[], // pasted images → attached to the coach's chat turn (vision)
   resume?: Checkpoint, // set when resuming preserved work: skip the refiner, drive the pipeline from the checkpoint
+  /**
+   * Whether unfinished work for this project is waiting.
+   *
+   * Sizing has to happen BEFORE a worktree exists, and the checkpoint that says "this is half-built" lives
+   * inside one. So the caller, which can see whether anything is preserved, says so — otherwise a feature
+   * abandoned mid-plan could be re-sized as a small change and quietly finished by one implementer.
+   */
+  hasPreservedWork = false,
 ): Promise<UpstreamResult> {
   // Each spec-kit phase is driven by a specific role — surface it (+ its model) in the status detail so the
   // user sees WHO is working (e.g. "Writing spec… — analyst · cc/opus-4-8"), not just the persistent coach badge.
@@ -152,6 +161,37 @@ export async function runUpstream(
       emit({ kind: "note", text: `⚠️ The constitution phase never wrote \`${relative(cwd, path)}\` — nothing was changed.` });
     }
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "governed", path, written };
+  }
+
+  /**
+   * Small change → done where the user is standing, before a worktree exists.
+   *
+   * Measured: "ikonu ortala" classified as a feature and bought the entire pipeline — a worktree, a
+   * constitution check, a brainstorm WITH the user, a spec, a plan, a board, waves, a review council and a
+   * pull request. To centre an icon.
+   *
+   * The upstream half of the pipeline exists to work out WHAT to build, and for a request like that there is
+   * nothing to work out. The downstream half is kept whole — an implementer writes it, a reviewer reads it,
+   * and the acceptance gate checks it — because "small" says the work is obvious, not that it is correct.
+   *
+   * Sized BEFORE the worktree, because the worktree is most of what makes the pipeline expensive.
+   */
+  if (!resume && !hasPreservedWork && routeIntent(r.intent) === "pipeline") {
+    const cwd = process.cwd();
+    emitPhase("sizing");
+    const { sizeRequest } = await import("./triage.js");
+    const size = await sizeRequest(deps, cwd, r.refinedPrompt);
+    if (size.small) {
+      emitPhase("small change");
+      emit({ kind: "note", text: `⚡ Small change — ${size.reason}. No branch, no spec, no plan.` });
+      const { runSmallChange, describeSmallChange } = await import("./fix.js");
+      const { currentBranchOf } = await import("./verify.js");
+      const res = await runSmallChange(deps, cwd, r.title, r.refinedPrompt, size);
+      return {
+        intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "tweaked",
+        report: describeSmallChange(res, size.reason, await currentBranchOf(cwd)), done: res.fixed,
+      };
+    }
   }
 
   // Feature/bugfix → open the worktree now; name it from the refiner's short English title (not the raw

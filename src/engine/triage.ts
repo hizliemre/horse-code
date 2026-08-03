@@ -10,6 +10,29 @@ import type { TaskCycleDeps } from "./task-types.js";
 import type { Finding } from "./finding.js";
 
 /**
+ * Bounds on the sizing call.
+ *
+ * A ceiling is right here, unlike almost everywhere else in this codebase, because sizing is a BOUNDED
+ * question with a safe default: if it does not answer in time, the request takes the pipeline, which is what
+ * it would have done anyway. Measured before these existed: a live sizing call had not returned after nine
+ * minutes — a gate in front of every pipeline run, costing more than it saves.
+ *
+ * The turn limit matters as much as the clock. Sizing is "read enough to tell how big this is", not "explore
+ * the repository"; on a 45,000-symbol project an unbounded reader will happily do the latter.
+ */
+export const SIZE_MAX_TURNS = 12;
+/**
+ * Tuned against a real repository rather than guessed.
+ *
+ * Measured on a 45,000-symbol project: a sizing that answered correctly took 74 seconds, and a 90-second
+ * ceiling timed out two requests out of three — which is safe (they take the pipeline) but is exactly the
+ * outcome the sizing exists to avoid. Three minutes is still nothing beside the pipeline it stands in front
+ * of, and it is the difference between the gate working and the gate always failing open.
+ */
+export const SIZE_TOTAL_MS = 180_000;
+export const SIZE_ATTEMPT_MS = 90_000;
+
+/**
  * How much machinery a finding deserves.
  *
  * The same shape as `routeIntent`, one level down, and for the same reason: the model decides WHAT the work
@@ -76,7 +99,9 @@ export async function triageFinding(deps: TaskCycleDeps, workdir: string, f: Fin
     onFallback,
     systemPrompt: PROMPT,
     tools,
-    maxTurns: 30,
+    maxTurns: SIZE_MAX_TURNS,
+    perAttemptMs: SIZE_ATTEMPT_MS,
+    totalMs: SIZE_TOTAL_MS,
     messages: [{ role: "user", content: message }],
     permission: deps.permission,
     approve: deps.approve,
@@ -103,4 +128,91 @@ export function describeEscalation(f: Finding, t: Triage): string {
     ? "decide the approach with you first, then implement it"
     : "write a spec and a plan for it, then break it into tasks";
   return `**${f.title}**\n\nThis is bigger than a single fix — ${t.reason}\n\nI would ${what}.`;
+}
+
+/**
+ * How much machinery a REQUEST deserves — the same question, asked before a worktree exists.
+ *
+ * Measured: "ikonu ortala" classified as a feature and bought the whole pipeline — a worktree cut from the
+ * branch, a constitution check, a brainstorm WITH the user, a spec, a plan, a task board, waves, a review
+ * council, and a pull request. To centre an icon.
+ *
+ * Binary here, unlike a finding's three depths: the pipeline already contains a brainstorm, so a request that
+ * needs one simply belongs in the pipeline.
+ */
+export interface RequestSize {
+  small: boolean;
+  /** One sentence — shown when the small path is taken, so the user can see the judgement that was made. */
+  reason: string;
+  /**
+   * For a small change: what must hold when it is done, and the files it touches.
+   *
+   * Produced HERE because this call already read the code to size it, and because the alternative is an
+   * acceptance gate with nothing to check — which passes anything that was attempted.
+   */
+  acceptance: string[];
+  files: string[];
+}
+
+export const RequestSizeSchema = z.object({
+  small: z.boolean(),
+  reason: z.string().describe("One sentence: what about this request makes it small, or what makes it not."),
+  acceptance: z.array(z.string()).default([]).describe("If small: what must be true when it is done. One checkable statement each."),
+  files: z.array(z.string()).default([]).describe("If small: the repo-relative files it touches."),
+});
+
+const SIZE_PROMPT =
+  "You size a change request, to decide how much process it deserves. You are not doing the work and you are "
+  + "not designing it.\n\n"
+  + "Read the code first. The same sentence describes a one-line style change and a rework of a component, "
+  + "and only the code says which this is.\n\n"
+  + "You are sizing, not implementing: stop as soon as you can tell which side of the line it falls on.\n\n"
+  + "SMALL means: the work is already known from the request itself, it is contained to a file or two, and "
+  + "there is nothing to decide. Centre an icon. Change a colour. Fix a typo. Rename a label. Correct a "
+  + "format string. It goes straight to an implementer, is reviewed, and is checked against your acceptance "
+  + "criteria — no spec, no plan, no branch.\n\n"
+  + "NOT SMALL means anything else: a new capability, a change whose approach is worth deciding with the "
+  + "user, something touching several parts of the system, or anything where you had to guess what was "
+  + "wanted. Those get the full pipeline, which exists to work out WHAT to build.\n\n"
+  + "When in doubt, say it is not small. A request that is too big for the small path is written and reviewed "
+  + "as though it were understood, which is the more expensive mistake.\n\n"
+  + "If it IS small, give the acceptance criteria and the files. Those are what the change will be judged "
+  + "against, so they must be checkable by looking at the result — not \"the icon looks better\".";
+
+/** Sizes a request before any worktree exists. Never throws: a sizing that fails takes the pipeline. */
+export async function sizeRequest(deps: TaskCycleDeps, workdir: string, prompt: string): Promise<RequestSize> {
+  const tools = new ToolRegistry();
+  tools.register(readFileTool);
+  tools.register(grepTool);
+  tools.register(globTool);
+  for (const t of contextTools(deps)) tools.register(t);
+
+  const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("analyst");
+  const opts: RoleAgentOptions = {
+    provider: deps.provider,
+    model,
+    fallbacks,
+    onExhausted,
+    onFallback,
+    systemPrompt: SIZE_PROMPT,
+    tools,
+    maxTurns: SIZE_MAX_TURNS,
+    perAttemptMs: SIZE_ATTEMPT_MS,
+    totalMs: SIZE_TOTAL_MS,
+    messages: [{ role: "user", content: `Request: "${prompt}"\n\nSize it.` }],
+    permission: deps.permission,
+    approve: deps.approve,
+    cwd: workdir,
+    signal: deps.signal,
+  };
+  try {
+    const r = await runStructuredRole(opts, RequestSizeSchema);
+    // A "small" verdict with nothing to check is not usable: the gate would pass anything attempted.
+    if (r.small && !r.acceptance.length) return { ...r, small: false, reason: `${r.reason} (no acceptance criteria given)` };
+    return r;
+  } catch {
+    // Including the timeout. Falling through to the pipeline is the same thing that would have happened
+    // without sizing at all, so a slow answer costs the wait and nothing else.
+    return { small: false, reason: "the request could not be sized in time", acceptance: [], files: [] };
+  }
 }

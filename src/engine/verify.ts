@@ -21,7 +21,8 @@ import { loadGraphSync } from "./project-graph.js";
 import { attachedImages } from "../agent/attach.js";
 import { FindingQueue, buildReportFindingTool, type Finding } from "./finding.js";
 import { triageFinding, describeEscalation } from "./triage.js";
-import { runFix, commitFix, describeFix } from "./fix.js";
+import { runFix, commitFix, describeFix, dirtyPaths } from "./fix.js";
+import { defaultGitRunner } from "../worktree/git.js";
 import type { ReviewDeps } from "./review.js";
 
 /**
@@ -276,8 +277,11 @@ async function handleFindings(
       continue;
     }
     opts.note?.(`🔧 Fixing: **${f.title}** — ${t.reason}`);
+    // Taken BEFORE: the report is half-written and the session's memory is modified, and neither belongs in
+    // a commit titled after the fix.
+    const before = await dirtyPaths(defaultGitRunner, opts.workdir);
     const res = await runFix(opts.deps, opts.workdir, f, `fix-${done.length + 1}`);
-    if (res.fixed) await commitFix(opts.workdir, f);
+    if (res.fixed) await commitFix(opts.workdir, f, before);
     opts.note?.(describeFix(res));
     done.push(res.fixed ? `${f.title} — FIXED` : `${f.title} — NOT fixed (${res.notes.join("; ") || "see above"})`);
   }

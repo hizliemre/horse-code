@@ -68,7 +68,9 @@ export type JobResult =
   /** The previous turn's writes, put back. */
   | { kind: "undone"; report: string; refinedPrompt?: string }
   /** A verification of work that already exists: a report in the user's tree, no worktree, nothing to merge. */
-  | { kind: "verified"; report: string; reportPath: string; written: boolean; refinedPrompt?: string };
+  | { kind: "verified"; report: string; reportPath: string; written: boolean; refinedPrompt?: string }
+  /** A small change, done in the working tree: no worktree, no branch, nothing to merge. */
+  | { kind: "tweaked"; report: string; done: boolean; refinedPrompt?: string };
 
 function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
   const resolved = deps.roleRegistry.resolve("project-manager");
@@ -296,7 +298,15 @@ export async function runJob(
   deps.onProgress = emit; // implementers report per-agent usage/model through the same channel as reviews
   try {
     emit({ kind: "phase", phase: "upstream" });
-    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images, resume);
+    /**
+     * Is anything half-built already waiting?
+     *
+     * The small-change path is decided before a worktree exists, and the record of unfinished work lives
+     * inside one — so the question is answered here, where the manager can see it, and passed down. Without
+     * it a feature abandoned mid-plan could be re-sized as a small change on its next mention.
+     */
+    const preserved = resume ? true : !!(await deps.manager.findResumable(opts.prompt).catch(() => null));
+    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images, resume, preserved);
 
     if (up.kind === "chat") {
       // The "chat" phase is emitted inside runUpstream (right before the coach runs) so the UI shows the
@@ -315,6 +325,10 @@ export async function runJob(
     }
     // Undo touched the working tree directly; like govern, there was never a session to close.
     if (up.kind === "undone") return { kind: "undone", report: up.report, refinedPrompt: up.refinedPrompt };
+    // A small change is done in place too, and for the same reason: nothing was opened to close.
+    if (up.kind === "tweaked") {
+      return { kind: "tweaked", report: up.report, done: up.done, refinedPrompt: up.refinedPrompt };
+    }
     // Verification writes its report in place, for the same reason govern does — no session was ever opened.
     if (up.kind === "verified") {
       return { kind: "verified", report: up.report, reportPath: up.reportPath, written: up.written, refinedPrompt: up.refinedPrompt };

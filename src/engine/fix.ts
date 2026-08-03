@@ -1,6 +1,6 @@
 import { Board } from "../board/board.js";
 import { runTaskCycle } from "./task-cycle.js";
-import { defaultGitRunner } from "../worktree/git.js";
+import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 import type { ReviewDeps } from "./review.js";
 import type { Finding } from "./finding.js";
 
@@ -71,20 +71,47 @@ export async function runFix(
   }
 }
 
+/** Repo-relative paths with any uncommitted change right now — the tree as it stood before the work. */
+export async function dirtyPaths(git: GitRunner, cwd: string): Promise<Set<string>> {
+  const r = await git(["status", "--porcelain"], cwd);
+  if (r.code !== 0) return new Set();
+  return new Set(r.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean));
+}
+
 /**
- * Commits the fix on its own.
+ * Commits exactly what changed while the work was being done, and nothing else.
+ *
+ * `git add -A` was the obvious thing, and it is wrong the moment a commit happens without being asked for. A
+ * working tree is never only the change: a session leaves `.horsecode/memory.jsonl` modified, a verification
+ * leaves a half-written report beside it, and the developer has their own edits in progress. Sweeping those
+ * into a commit titled after a one-line fix is how someone's work disappears under a message that does not
+ * mention it.
+ *
+ * A file that was ALREADY dirty is left out even when the work touched it too: there is no way to take the
+ * work's half without taking the developer's. That one is theirs to sort out, and they can see it.
+ */
+export async function commitOnly(
+  git: GitRunner, cwd: string, before: Set<string>, message: string,
+): Promise<boolean> {
+  const after = await dirtyPaths(git, cwd);
+  const mine = [...after].filter((p) => !before.has(p));
+  if (!mine.length) return false;
+  const add = await git(["add", "--", ...mine], cwd);
+  if (add.code !== 0) return false;
+  const staged = await git(["diff", "--cached", "--quiet", "--", ...mine], cwd);
+  if (staged.code === 0) return false;
+  const r = await git(["commit", "-m", message, "--", ...mine], cwd);
+  return r.code === 0;
+}
+
+/**
+ * Commits a fix on its own, taking only what the fix wrote.
  *
  * Separately from the report, because they are different things and the pull request should show them as
  * such: one commit changes the product, the other records what was observed of it.
  */
-export async function commitFix(workdir: string, f: Finding): Promise<boolean> {
-  const git = defaultGitRunner;
-  const add = await git(["add", "-A"], workdir);
-  if (add.code !== 0) return false;
-  const staged = await git(["diff", "--cached", "--quiet"], workdir);
-  if (staged.code === 0) return false; // nothing changed — not a failure, just nothing to record
-  const r = await git(["commit", "-m", `fix: ${f.title}`], workdir);
-  return r.code === 0;
+export async function commitFix(workdir: string, f: Finding, before: Set<string>): Promise<boolean> {
+  return commitOnly(defaultGitRunner, workdir, before, `fix: ${f.title}`);
 }
 
 /** What the user is told after each one. */
@@ -93,4 +120,49 @@ export function describeFix(r: FixResult): string {
     ? `🔧 Fixed: **${r.title}** — implemented, reviewed, and checked against what the finding asked for.`
     : `⚠️ Not fixed: **${r.title}**${r.notes.length ? ` — ${r.notes.slice(0, 3).join("; ")}` : ""}. `
       + `It stays in the report as an open finding.`;
+}
+
+/**
+ * A small change, done where the user is standing.
+ *
+ * The same cycle a finding gets — implement, review, check against what was asked — with the acceptance
+ * criteria coming from the sizing call rather than from a person watching a screen. No worktree and no pull
+ * request: a branch exists to hold work that needs reviewing as a unit before it lands, and this already had
+ * its review.
+ */
+export async function runSmallChange(
+  deps: ReviewDeps, workdir: string, title: string, prompt: string,
+  spec: { acceptance: string[]; files: string[] },
+): Promise<FixResult & { committed: boolean }> {
+  const before = await dirtyPaths(defaultGitRunner, workdir);
+  let res: FixResult;
+  try {
+    const board = new Board();
+    board.addCard({ id: "small-1", title: prompt, acceptance: spec.acceptance, files: spec.files });
+    const verdict = await runTaskCycle(deps, board, "small-1", workdir);
+    res = {
+      title,
+      fixed: verdict.verdict === "pass",
+      notes: verdict.verdict === "pass" ? [] : (verdict.noProgress ? ["nothing was written"] : verdict.notes),
+    };
+  } catch (e) {
+    res = { title, fixed: false, notes: [e instanceof Error ? e.message : String(e)] };
+  }
+  const committed = res.fixed ? await commitOnly(defaultGitRunner, workdir, before, prompt) : false;
+  return { ...res, committed };
+}
+
+/** What the user is told after a small change. */
+export function describeSmallChange(
+  r: FixResult & { committed: boolean }, reason: string, branch: string,
+): string {
+  if (!r.fixed) {
+    return `⚠️ Not done: ${r.notes.join("; ") || "the change did not pass review"}.\n\n`
+      + `Nothing was committed. Ask again with more detail, or say so and I will treat it as a full piece of work.`;
+  }
+  return `✅ Done — implemented, reviewed, and checked against what was asked.\n\n`
+    + `_Handled as a small change (${reason}): no branch, no spec, no plan._ `
+    + (r.committed
+      ? `Committed on \`${branch}\`.`
+      : `Nothing was left to commit — the working tree already had it.`);
 }

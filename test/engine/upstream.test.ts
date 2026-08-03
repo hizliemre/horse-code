@@ -270,9 +270,11 @@ describe("runUpstream", () => {
     // Only the plan review needs a judge verdict now — spec review must NOT run again.
     const p = upstreamProvider({ intent: "feature", judge: ['{"decision":"pass","feedback":[],"question":""}'] });
     const phases: string[] = [];
-    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); });
+    // `hasPreservedWork` is what the caller passes when something is half-built: sizing must not run, or a
+    // feature abandoned mid-plan could be re-measured as a small change and finished by one implementer.
+    const res = await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); }, undefined, undefined, true);
     expect(res.kind).toBe("approved");
-    expect(phases).toEqual(["plan", "tasks"]); // constitution/specify/clarify were skipped
+    expect(phases).toEqual(["plan", "tasks"]); // constitution/specify/clarify were skipped, and nothing was re-sized
     expect(await readFile(join(dir, "specs", slug, "spec.md"), "utf8")).toBe("# existing spec"); // untouched
     // No COMMAND:specify request was issued — the spec phase truly did not re-run.
     expect(p.requests.some((r) => (typeof r.messages[0]?.content === "string" ? r.messages[0].content : "").includes("COMMAND:specify"))).toBe(false);
@@ -323,7 +325,9 @@ describe("runUpstream", () => {
     await runUpstream(udeps(p), () => Promise.resolve(dir), "Add X", async () => "x", 3, [], (ev) => { if (ev.kind === "phase") phases.push(ev.phase); });
     // brainstorm sits between the constitution and the spec: the approach is decided WITH the user before
     // anything is specified, and everything after that point runs autonomously.
-    expect(phases).toEqual(["constitution", "brainstorm", "specify", "clarify", "plan", "tasks"]);
+    // "sizing" comes first: a request is measured before a worktree is cut for it, so that "centre the icon"
+    // does not buy a spec, a plan and a board. Only what it does NOT size goes on to the phases below.
+    expect(phases).toEqual(["sizing", "constitution", "brainstorm", "specify", "clarify", "plan", "tasks"]);
   });
 
   it("throws if cancelled", async () => {

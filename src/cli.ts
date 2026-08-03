@@ -117,6 +117,7 @@ export function renderResult(res: JobResult): string {
   if (res.kind === "undone") return res.report;
   // Same shape as governance: written where the user is standing, so there is no branch to point them at.
   if (res.kind === "verified") return res.report;
+  if (res.kind === "tweaked") return res.report;
   if (res.kind === "governed") {
     return res.written
       ? `**Constitution written** — \`${res.path}\`\n\n_Written directly in your working tree: no branch, `
