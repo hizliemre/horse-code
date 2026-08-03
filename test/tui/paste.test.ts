@@ -103,11 +103,35 @@ describe("pasted images get a visible placeholder too", () => {
 describe("which key can actually trigger an image paste", () => {
   it("recognises Ctrl+V and Alt+V, and nothing that would eat a real keystroke", async () => {
     const { isImagePaste } = await import("../../src/tui/keys.js");
-    expect(isImagePaste("\x16")).toBe(true);      // Ctrl+V — reaches the app in every terminal
+    expect(isImagePaste("\x16")).toBe(true);      // Ctrl+V — the raw byte
     expect(isImagePaste("\x1bv")).toBe(true);     // Alt+V — needs Option-as-Meta
     expect(isImagePaste("\x1bV")).toBe(true);
     expect(isImagePaste("v")).toBe(false);
     expect(isImagePaste("\x1b")).toBe(false);
     expect(isImagePaste("")).toBe(false);
+  });
+
+  /**
+   * The form the key ACTUALLY arrives in, which is not the raw byte.
+   *
+   * This TUI turns the kitty keyboard protocol on (`\x1b[>1u`, app.tsx), and under it a modified key comes as
+   * a CSI-u sequence rather than a control byte — the codebase already knows this for Ctrl+C, which it checks
+   * for as `\x1b[99;5u` beside `\x03`. Ctrl+V had only the raw byte, so it was parsed as an unknown
+   * functional key and dropped in silence.
+   *
+   * Measured in the user's own terminal: outside horse-code Ctrl+V gives `0x16`, which is exactly why the
+   * key test looked fine while the key did nothing.
+   */
+  it("recognises the CSI-u form the kitty protocol actually sends", async () => {
+    const { isImagePaste } = await import("../../src/tui/keys.js");
+    expect(isImagePaste("\x1b[118;5u")).toBe(true);  // ctrl+v   (118 = "v", modifier 5 = ctrl)
+    expect(isImagePaste("\x1b[118;3u")).toBe(true);  // alt+v
+    expect(isImagePaste("\x1b[118;7u")).toBe(true);  // ctrl+alt+v
+    // …and never the unmodified key, which is a person typing the letter v.
+    expect(isImagePaste("\x1b[118u")).toBe(false);
+    expect(isImagePaste("\x1b[118;1u")).toBe(false);
+    expect(isImagePaste("\x1b[118;2u")).toBe(false); // shift+v is a capital V
+    // …nor another letter with the same modifier.
+    expect(isImagePaste("\x1b[99;5u")).toBe(false);  // that is Ctrl+C
   });
 });

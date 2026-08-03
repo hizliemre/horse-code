@@ -53,5 +53,20 @@ export function isInterrupt(s: string): boolean {
  * already have Option bound to Meta.
  */
 export function isImagePaste(s: string): boolean {
-  return s === "\x16" || s === "\x1bv" || s === "\x1bV";
+  if (s === "\x16" || s === "\x1bv" || s === "\x1bV") return true;
+  /**
+   * …and the form it actually arrives in here.
+   *
+   * This TUI turns the kitty keyboard protocol on, and under it a MODIFIED key comes as a CSI-u sequence
+   * instead of a control byte — which is why the raw byte alone did nothing while a key test outside the
+   * program showed `0x16` arriving perfectly. The same thing was already known about Ctrl+C, handled as
+   * `\x1b[99;5u` beside `\x03`; Ctrl+V simply had not been given its half.
+   *
+   * The modifier is a bitfield offset by one: shift 1, alt 2, ctrl 4. Ctrl or alt is what makes this a
+   * command rather than the letter v, so an unmodified or shift-only "v" is left alone to be typed.
+   */
+  const m = /^\x1b\[118(?:;(\d+))?u$/.exec(s);
+  if (!m) return false;
+  const mods = Number(m[1] ?? 1) - 1;
+  return (mods & 4) !== 0 || (mods & 2) !== 0;   // ctrl or alt
 }
