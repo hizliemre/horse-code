@@ -138,6 +138,48 @@ export function parseGraph(raw: string, labelsRaw?: string): ProjectGraph | unde
   return { nodes, edges, byId, incident, areas: parseAreas(labelsRaw) };
 }
 
+/**
+ * Forgets the names of communities the graph no longer has.
+ *
+ * Every rebuild re-partitions the graph and renumbers what it finds, so a name written for community 47 may
+ * afterwards belong to nothing — it stays in the file, unreachable, and the next rebuild adds more. Measured
+ * on a real project before this existed: 6283 names, 2822 of them (44%) resolving to no community, in a file
+ * that is committed and read by people.
+ *
+ * Nothing is lost by dropping them. A name that cannot be looked up describes a grouping the graph no longer
+ * makes; the clusters that replaced it have their own names, written against the partition that exists.
+ *
+ * The guard matters more than the pruning. A rebuild that failed, or one interrupted before it assigned
+ * communities, leaves a graph with none — and pruning against that would delete EVERY name in the file. An
+ * LLM pass over thousands of communities is not something to lose to a build that did not finish, so a graph
+ * with no communities is treated as no information rather than as "none of them exist".
+ */
+export async function pruneAreaNames(cwd: string): Promise<number> {
+  const path = labelsPath(cwd);
+  let labels: Record<string, unknown>;
+  try {
+    const doc = JSON.parse(await readFile(path, "utf8")) as unknown;
+    if (typeof doc !== "object" || doc === null || Array.isArray(doc)) return 0;
+    labels = doc as Record<string, unknown>;
+  } catch { return 0; }   // no names to prune is the normal case
+
+  const graph = await loadGraph(cwd);
+  if (!graph) return 0;
+  const live = new Set<number>();
+  for (const n of graph.nodes) if (n.community !== undefined) live.add(n.community);
+  if (!live.size) return 0;   // a graph that assigned no communities says nothing about which names are dead
+
+  const kept = Object.keys(labels).filter((k) => live.has(Number(k)));
+  if (kept.length === Object.keys(labels).length) return 0;
+
+  const ordered: Record<string, unknown> = {};
+  for (const k of kept.sort((a, b) => Number(a) - Number(b))) ordered[k] = labels[k];
+  // One key per line, in numeric order: the file is committed, so a change to one name has to be a change to
+  // one line rather than to the whole document.
+  await writeAtomic(path, `${JSON.stringify(ordered, null, 2)}\n`);
+  return Object.keys(labels).length - kept.length;
+}
+
 /** Loads the graph for a working directory, or undefined when none has been built. */
 export async function loadGraph(cwd: string): Promise<ProjectGraph | undefined> {
   try {

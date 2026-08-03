@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { traceable, loadTraceIndex, saveTraceIndex, pruneTraces, sharedDerived } from "./trace.js";
 import { planFor, runTraces } from "./trace-run.js";
-import { buildProjectGraph } from "./project-graph.js";
+import { buildProjectGraph, pruneAreaNames } from "./project-graph.js";
 import type { GitRunner } from "../worktree/git.js";
 
 /**
@@ -32,6 +32,8 @@ export interface RefreshResult {
   /** Files that were changed but needed no new trace — unchanged content, or not a trace subject. */
   skipped: number;
   graph?: string;
+  /** Community names dropped because the rebuild left them pointing at no community. */
+  staleNames?: number;
 }
 
 /**
@@ -100,6 +102,16 @@ export async function refreshTraces(opts: {
     const g = await buildProjectGraph(opts.cwd);
     out.graph = g.message;
 
+    /**
+     * …and the rebuild is exactly what makes some community names unreachable.
+     *
+     * Re-partitioning renumbers what it finds, so names written for the previous partition point at nothing
+     * afterwards. Left alone they accumulate: measured on a real project, 44% of a committed names file
+     * resolved to no community. Pruning here, right after the rebuild that caused it, keeps the file honest
+     * without anyone remembering to look.
+     */
+    out.staleNames = await pruneAreaNames(opts.cwd);
+
     const plan = await planFor(opts.cwd, targets);
     // An unchanged file is already up to date and produces no job; this is how a task that touched ten files
     // but only really changed two ends up paying for two.
@@ -125,9 +137,11 @@ export async function refreshTraces(opts: {
 
 /** One line for the run log, or nothing when there was nothing to say. */
 export function describeRefresh(r: RefreshResult): string | undefined {
-  if (!r.traced && !r.failed && !r.removed) return undefined;
+  if (!r.traced && !r.failed && !r.removed && !r.staleNames) return undefined;
   const bits = [`📝 ${r.traced} trace(s) refreshed`];
   if (r.removed) bits.push(`${r.removed} removed for deleted file(s)`);
+  // Quiet pruning of a committed file is how a diff nobody expected turns up in someone's pull request.
+  if (r.staleNames) bits.push(`${r.staleNames} area name(s) dropped — the rebuild left them pointing at nothing`);
   if (r.failed) bits.push(`${r.failed} failed`);
   return `${bits.join(" · ")} — the changed files now describe themselves.`;
 }
