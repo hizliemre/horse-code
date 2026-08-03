@@ -13,7 +13,7 @@ import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage, flattenMarkdown, flattenTool } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { filterModelsForRole, adjustRoleModels } from "./role-models.js";
-import { isInterrupt, parseKittyKey } from "./keys.js";
+import { isImagePaste, isInterrupt, parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
 import { readClipboardImage } from "./clipboard.js";
 import { GLYPHS as ICONS } from "./glyphs.js";
@@ -903,7 +903,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
       // Every motion and deletion key, from one table — see applyKey.
       const ed = applyKey(s, v, c);
       if (ed) { change(ed.value, ed.cursor); return; }
-      if (s === "\x1bv" || s === "\x1bV") { onPasteImageRef.current?.(); return; } // Alt+V → paste clipboard image
+      if (isImagePaste(s)) { onPasteImageRef.current?.(); return; } // Ctrl+V / Alt+V → clipboard image
       if (s === "?" && v.length === 0) { onHelpRef.current?.(); return; } // "?" on an empty input → help overlay
       if (s === "\x1bOM") { onSubmitRef.current(v); return; } // numpad Enter → submit (app-keypad SS3)
       const np = NUMPAD[s];

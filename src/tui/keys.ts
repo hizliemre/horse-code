@@ -41,3 +41,17 @@ export function parseKittyKey(s: string): KittyKey {
 export function isInterrupt(s: string): boolean {
   return s === "\x03" || s === "\x1b[99;5u";
 }
+
+/**
+ * The keys that mean "put the clipboard's image here".
+ *
+ * NOT Cmd+V, and it cannot be: the terminal owns that chord, reads the clipboard itself, and writes the
+ * result to stdin — and an image has no text form, so nothing is written and the application is never told
+ * anything happened. There is no keystroke to hook.
+ *
+ * `\x16` (Ctrl+V) does arrive, in every terminal, with nothing to configure. Alt+V is kept for the people who
+ * already have Option bound to Meta.
+ */
+export function isImagePaste(s: string): boolean {
+  return s === "\x16" || s === "\x1bv" || s === "\x1bV";
+}

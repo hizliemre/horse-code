@@ -89,3 +89,25 @@ describe("pasted images get a visible placeholder too", () => {
     expect(expandPasteTokens(text, new Map([[1, "hello"]]))).toBe("hello and [Pasted Image #1]");
   });
 });
+
+/**
+ * Cmd+V cannot be the trigger, however much a Mac user expects it to be.
+ *
+ * The terminal owns that chord: it reads the clipboard itself and writes the result to stdin, and for an
+ * IMAGE there is no text to write — so the application is never told anything happened. Nothing can be
+ * hooked, because nothing arrives.
+ *
+ * Ctrl+V does arrive: `\x16`, straight through, no terminal configuration. Alt+V works too but needs Option
+ * bound to Meta, which is not the default anywhere.
+ */
+describe("which key can actually trigger an image paste", () => {
+  it("recognises Ctrl+V and Alt+V, and nothing that would eat a real keystroke", async () => {
+    const { isImagePaste } = await import("../../src/tui/keys.js");
+    expect(isImagePaste("\x16")).toBe(true);      // Ctrl+V — reaches the app in every terminal
+    expect(isImagePaste("\x1bv")).toBe(true);     // Alt+V — needs Option-as-Meta
+    expect(isImagePaste("\x1bV")).toBe(true);
+    expect(isImagePaste("v")).toBe(false);
+    expect(isImagePaste("\x1b")).toBe(false);
+    expect(isImagePaste("")).toBe(false);
+  });
+});
