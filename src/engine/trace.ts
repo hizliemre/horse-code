@@ -456,15 +456,26 @@ function planGitignore(current: string, root0 = "."): Plan {
     "# Shared — the traces describe the code, so every clone starts understanding the project instead of re-buying it.");
   for (const s of SHARED_DERIVED) keep(s.path, false, s.why);
 
+  /**
+   * The heading for a group of rules, written once per block.
+   *
+   * Deliberately NOT skipped when the file already has the same sentence somewhere else. Additions can now
+   * arrive on a later run than the block they belong to, and a rule appended under whatever heading happened
+   * to be written last reads as belonging to it — measured here, `.horsecode/worktrees/` landed under
+   * "the community names an LLM wrote". A sentence repeated once is cheaper for a reader than a rule filed
+   * under the wrong reason.
+   */
+  const note = (comment: string): void => { if (!rules.includes(comment)) rules.push(comment); };
+
   const nested = NESTED_CHECKOUTS.filter((d) => existsSync(join(root0, d)) && !has(d) && !has(d.replace(/\/$/, "")));
   if (nested.length) {
-    rules.push("# Nested checkouts of this repository — committing one commits the repository into itself.");
+    note("# Nested checkouts of this repository — committing one commits the repository into itself.");
     rules.push(...nested);
   }
 
   const local = LOCAL_ONLY.filter((r) => !has(r) && !has("graphify-out/") && !has("graphify-out/*"));
   if (local.length) {
-    rules.push("# Machine-local or derived: an AST cache keyed by local mtimes, and a viewer regenerated on every build.");
+    note("# Machine-local or derived: an AST cache keyed by local mtimes, and a viewer regenerated on every build.");
     rules.push(...local);
   }
   return { text, rules };

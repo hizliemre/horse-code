@@ -377,6 +377,30 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
     expect(gi.match(/^# horse-code project knowledge$/gm)?.length).toBe(1); // one marker, not two
   });
 
+  /**
+   * A rule added on a LATER visit still has to say why it is there.
+   *
+   * Measured while applying this to a real project: `.horsecode/worktrees/` was appended after the community
+   * names, and with the heading suppressed as a duplicate it read as one of them — a nested checkout filed
+   * under "the community names an LLM wrote". Repeating one sentence costs a reader far less than that.
+   */
+  it("gives a late-arriving rule its own reason, not the previous group's", async () => {
+    const nested = "# Nested checkouts of this repository — committing one commits the repository into itself.";
+    await mkdir(join(cwd, ".claude", "worktrees", "a"), { recursive: true });
+    await writeFile(join(cwd, ".gitignore"), "graphify-out/*\nnode_modules/\n", "utf8");
+    await ensureGitignore(cwd);
+
+    // …and now the OTHER nested checkout appears, on a later run.
+    await mkdir(join(cwd, ".horsecode", "worktrees", "b"), { recursive: true });
+    expect(await ensureGitignore(cwd)).toBe(true);
+    const lines = (await readFile(join(cwd, ".gitignore"), "utf8")).split("\n").map((l) => l.trim());
+    const rule = lines.lastIndexOf(".horsecode/worktrees/");
+    expect(rule).toBeGreaterThan(-1);
+    // Whatever else lands in the block, the line explaining this rule is the comment above it.
+    const heading = lines.slice(0, rule).filter((l) => l.startsWith("#")).pop();
+    expect(heading).toBe(nested);
+  });
+
   it("still stops when a project that has been here before is missing nothing", async () => {
     await writeFile(join(cwd, ".gitignore"),
       `graphify-out/*\n\n${GITIGNORE_MARKER}\n!graphify-out/graph.json\n!graphify-out/.graphify_labels.json\n`,
