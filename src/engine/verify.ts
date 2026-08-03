@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { relative } from "node:path";
 import type { RoleAgentOptions } from "../agent/loop.js";
-import { runRoleAgent } from "../agent/loop.js";
+import { runToCompletion } from "../agent/loop.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { readFileTool } from "../tools/read.js";
 import { writeFileTool } from "../tools/write.js";
@@ -100,8 +100,22 @@ async function runTester(
     approve: deps.approve,
     cwd: workdir,
     signal: deps.signal,
+    // A verification is the longest interactive stretch there is: the tool cards ARE the record of what was
+    // observed, and everything the tester says is addressed to the developer sitting in front of it.
+    onActivity: deps.onActivity,
+    onLiveActivity: deps.onLiveActivity,
+    /** …and a correction — "skip that one, the data is gone" — must reach it mid-run, not after the report. */
+    inbox: deps.inbox,
+    ...(deps.note ? { onSay: deps.note } : {}),
   };
-  await runRoleAgent(opts);
+  /**
+   * `runToCompletion`, not `runRoleAgent`.
+   *
+   * `runRoleAgent` is an async GENERATOR: awaiting it hands back the generator object and never iterates it,
+   * so the agent does not run and the call returns instantly having done nothing. Measured: one call in the
+   * whole turn — the refiner's — and then "no test plan was written", with the tester never having spoken.
+   */
+  await runToCompletion(opts);
 }
 
 /** The scenario table a report is filled in against — written by horse-code, not asked for. */
@@ -151,7 +165,16 @@ export async function runVerify(opts: {
   const { deps, workdir, prompt, title, askUser } = opts;
   const slug = featureSlugFor(workdir, title);
   const paths = verifyPaths(workdir, slug);
-  mkdirSync(paths.dir, { recursive: true });
+  /**
+   * The directory is NOT created here.
+   *
+   * It used to be, and a run that wrote nothing left an empty folder behind — which then claimed its number,
+   * so the next attempt was numbered past it. Measured after two failed runs: `002-product-wizard-testing`
+   * and `003-product-creation-wizard-smoke-tests`, both empty, for work that had produced not one line.
+   *
+   * `write_file` creates the parents of whatever it writes, so the directory appears exactly when there is
+   * something to put in it.
+   */
 
   const dirRel = relative(workdir, paths.dir);
   const planRel = relative(workdir, paths.plan);

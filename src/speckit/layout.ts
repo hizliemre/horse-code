@@ -33,19 +33,52 @@ export function verifyPaths(workdir: string, slug: string): VerifyPaths {
 }
 
 /**
+ * Words that say what is being DONE rather than what it is being done TO.
+ *
+ * Matching on them would put every verification a project ever runs into whichever folder happened to be
+ * numbered first — "smoke tests for checkout" and "wallet balance tests" share only the word "tests", and
+ * they are not the same work.
+ */
+const ACTIVITY_WORDS = new Set([
+  "test", "tests", "testing", "smoke", "e2e", "verify", "verification", "verifying", "check", "checking",
+  "run", "running", "continue", "continuing", "report", "session", "the", "for", "of", "a", "an", "and",
+]);
+
+const subjectWords = (slug: string): Set<string> =>
+  new Set(slug.split("-").filter((w) => w.length > 2 && !ACTIVITY_WORDS.has(w)));
+
+/**
  * The folder this work already has, or the next number when it has none.
  *
  * A verify run is usually the SECOND visit to a piece of work: it was built, and now its scenarios are being
  * run. Numbering a fresh directory for that would split one piece of work's account across two — the thing
  * the single-folder convention exists to prevent.
+ *
+ * Matching an exact name was not enough, because the same work is not asked for in the same words twice.
+ * Measured across two runs minutes apart: "continue testing the product creation wizard" produced
+ * `002-product-wizard-testing`, and "continue running the smoke tests for the product creation wizard"
+ * produced `003-product-creation-wizard-smoke-tests` — one piece of work, two directories, and a third
+ * waiting behind the next rephrasing.
+ *
+ * So the SUBJECT is compared: the words left after the ones naming the activity. Two shared subject words is
+ * the threshold — one is a coincidence ("product list page" shares "product" with the wizard and is not it),
+ * two is the same thing being talked about.
  */
 export function featureSlugFor(workdir: string, title: string): string {
   const want = toSlug(title);
   const dir = specsDir(workdir);
   if (existsSync(dir)) {
-    for (const name of readdirSync(dir)) {
+    const names = readdirSync(dir);
+    for (const name of names) {
       if (name.replace(/^\d+-/, "") === want) return name;
     }
+    const wanted = subjectWords(want);
+    let best: { name: string; shared: number } | undefined;
+    for (const name of names) {
+      const shared = [...subjectWords(name.replace(/^\d+-/, ""))].filter((w) => wanted.has(w)).length;
+      if (shared >= 2 && (!best || shared > best.shared)) best = { name, shared };
+    }
+    if (best) return best.name;
   }
   return nextFeatureSlug(workdir, title);
 }

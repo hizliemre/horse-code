@@ -67,6 +67,37 @@ describe("everything one run produces lands in one folder", () => {
   it("starts at 001 in a project that has never run one", () => {
     expect(featureSlugFor(cwd, "first thing")).toBe("001-first-thing");
   });
+
+  /**
+   * The same work, asked for in different words, is still the same work.
+   *
+   * Measured across two runs a few minutes apart: "continue testing the product creation wizard" produced
+   * `002-product-wizard-testing`, and "continue running the smoke tests for the product creation wizard"
+   * produced `003-product-creation-wizard-smoke-tests`. Exact-name matching cannot see that those are one
+   * piece of work, and every rephrasing opened another directory beside the last.
+   */
+  it("returns to the folder even when the request is phrased differently", async () => {
+    await mkdir(join(specsDir(cwd), "002-product-wizard-testing"), { recursive: true });
+    expect(featureSlugFor(cwd, "product creation wizard smoke tests")).toBe("002-product-wizard-testing");
+    expect(featureSlugFor(cwd, "testing the product wizard")).toBe("002-product-wizard-testing");
+  });
+
+  /** …but a different piece of work that merely shares a word is not the same work. */
+  it("does not drag an unrelated request into someone else's folder", async () => {
+    await mkdir(join(specsDir(cwd), "001-product-wizard-testing"), { recursive: true });
+    expect(featureSlugFor(cwd, "product list page")).toBe("002-product-list-page");
+    expect(featureSlugFor(cwd, "wizard for invoices")).toBe("002-wizard-for-invoices");
+  });
+
+  /**
+   * "test", "smoke", "verify" say what is being DONE, not what it is being done to. Matching on them would
+   * put every verification the project ever runs into whichever folder was numbered first.
+   */
+  it("matches on the subject, not on the word 'test'", async () => {
+    await mkdir(join(specsDir(cwd), "001-wallet-balance-tests"), { recursive: true });
+    // toSlug keeps the first five words, so the trailing "flow" is not part of the name.
+    expect(featureSlugFor(cwd, "smoke tests for the checkout flow")).toBe("002-smoke-tests-for-the-checkout");
+  });
 });
 
 describe("the tester is a real role", () => {
