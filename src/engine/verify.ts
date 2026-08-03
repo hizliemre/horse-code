@@ -18,6 +18,7 @@ import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.j
 import type { TaskCycleDeps } from "./task-types.js";
 import { verifyPaths, featureSlugFor, specsDir } from "../speckit/layout.js";
 import { loadGraphSync } from "./project-graph.js";
+import { attachedImages } from "../agent/attach.js";
 
 /**
  * Verifying work that already exists.
@@ -95,7 +96,11 @@ async function runTester(
       + BATCH_TOOLS_NOTE,
     tools,
     maxTurns: VERIFY_MAX_TURNS,
-    messages: [{ role: "user", content: message }],
+    // A screenshot named in the request comes with it — the same way a mid-run note carries one.
+    messages: [{ role: "user", content: message, ...(() => {
+      const images = attachedImages(message, workdir);
+      return images.length ? { images } : {};
+    })() }],
     permission: deps.permission,
     approve: deps.approve,
     cwd: workdir,

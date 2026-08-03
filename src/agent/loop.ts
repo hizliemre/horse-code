@@ -1,6 +1,7 @@
 import type {
   AgentEvent, ChatRequest, Message, Provider, ToolCall,
 } from "../core/types.js";
+import { attachedImages } from "./attach.js";
 import { stripThinking } from "../tui/format.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
@@ -100,7 +101,16 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     // "By-the-way" injection: fold any queued note in as a user message before this turn's request.
     // Safe here — the previous turn's tool results are already appended, so a user message is well-ordered.
     for (let note = opts.inbox?.(); note !== undefined; note = opts.inbox?.()) {
-      working.push({ role: "user", content: note });
+      /**
+       * A note that names a screenshot brings it along.
+       *
+       * This is the moment a picture is worth handing over: the agent is mid-scenario and the person watching
+       * has just seen something. Everything needed was already here — the provider sends images, a message
+       * carries them — except a way to say "here". A terminal will not paste image bytes, so the file name is
+       * the way, and it is what a person types anyway.
+       */
+      const images = attachedImages(note, opts.cwd);
+      working.push({ role: "user", content: note, ...(images.length ? { images } : {}) });
     }
     turn++;
 
