@@ -22,7 +22,7 @@ import { applyKey } from "./input-edit.js";
 import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { shouldCollapsePaste, pasteToken, expandPasteTokens, imageToken, expandImageTokens } from "./paste.js";
+import { shouldCollapsePaste, pasteToken, expandPasteTokens, imageToken, expandImageTokens, tokenBefore } from "./paste.js";
 import type { AskChoice } from "../engine/review.js";
 import { asChoice } from "../engine/review.js";
 import { readTelemetry, summarize, describeReport, type RunReport as MonitorReport } from "../obs/report.js";
@@ -824,7 +824,7 @@ const NUMPAD: Record<string, string> = {
 };
 
 
-export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage, onHelp, makePasteToken }: {
+export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpen = false, jobRunning = false, onPasteImage, onHelp, makePasteToken, onDropToken }: {
   value: string;
   cursor: number;
   onChange: (value: string, cursor: number) => void;
@@ -835,6 +835,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   onPasteImage?: () => void; // Alt+V → grab an image off the clipboard (App reads it + stages it)
   onHelp?: () => void; // "?" on an empty input → open the help overlay
   makePasteToken?: (text: string) => string; // App collapses a large paste → returns the placeholder to insert
+  onDropToken?: (kind: "text" | "image", id: number) => void; // a placeholder was deleted whole → forget what it stood for
 }): React.ReactElement {
   // Controlled: state lives in App (draft+cursor) → height is computed synchronously (no flicker on newline).
   const valRef = useRef(value); valRef.current = value;
@@ -851,6 +852,7 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
   const onPasteImageRef = useRef(onPasteImage); onPasteImageRef.current = onPasteImage;
   const onHelpRef = useRef(onHelp); onHelpRef.current = onHelp;
   const makePasteTokenRef = useRef(makePasteToken); makePasteTokenRef.current = makePasteToken;
+  const onDropTokenRef = useRef(onDropToken); onDropTokenRef.current = onDropToken;
   const pasteRef = useRef<{ active: boolean; buf: string }>({ active: false, buf: "" }); // accumulates a bracketed paste across chunks
   const { stdin, setRawMode, isRawModeSupported } = useStdin();
   // Raw stdin: Enter(CR) submits; LF/kitty-CSI-u newline; left/right arrow moves the cursor; insert/delete
@@ -900,6 +902,21 @@ export function InputLine({ value, cursor, onChange, onSubmit, width, paletteOpe
       if (NEWLINE_SEQS.has(s)) { change(v.slice(0, c) + "\n" + v.slice(c), c + 1); return; }
       // The palette owns → while it is open (it moves the selection), so that guard comes before editing.
       if (RIGHT.has(s) && paletteRef.current) return;
+      /**
+       * Backspace onto a placeholder takes the WHOLE placeholder.
+       *
+       * It stands for one thing — a screenshot, a pasted block — so erasing it one character at a time is
+       * both eighteen keystrokes and eighteen states in which the composer holds neither a token nor clean
+       * text. The owner is told which one went, so the image it was standing for is dropped with it.
+       */
+      if ((s === "\x7f" || s === "\x08") && v.length) {
+        const tok = tokenBefore(v, c);
+        if (tok) {
+          change(v.slice(0, tok.start) + v.slice(tok.end), tok.start);
+          onDropTokenRef.current?.(tok.kind, tok.id);
+          return;
+        }
+      }
       // Every motion and deletion key, from one table — see applyKey.
       const ed = applyKey(s, v, c);
       if (ed) { change(ed.value, ed.cursor); return; }
@@ -2126,6 +2143,14 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
             onPasteImage={pasteImage}
             onHelp={() => setHelpOpen(true)}
             makePasteToken={makePasteToken}
+            onDropToken={(kind, id) => {
+              if (kind === "image") {
+                const f = imageMapRef.current.get(id);
+                imageMapRef.current.delete(id);
+                // The file was only ever a way to hand the picture over; with the placeholder gone it is litter.
+                if (f) void import("node:fs/promises").then((fs) => fs.rm(f, { force: true })).catch(() => undefined);
+              } else pasteMapRef.current.delete(id);
+            }}
             onChange={(v, c) => { if (v !== draftRef.current) histIdxRef.current = -1; setDraft(v); setDraftCursor(c); setSlashSel(0); }}
             onSubmit={(raw) => {
               /**

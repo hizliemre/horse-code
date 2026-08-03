@@ -49,3 +49,25 @@ const IMAGE_TOKEN_RE = /\[Pasted Image #(\d+)\]/g;
 export function expandImageTokens(text: string, map: Map<number, string>): string {
   return text.replace(IMAGE_TOKEN_RE, (m, n) => map.get(Number(n)) ?? m);
 }
+
+export interface TokenSpan { start: number; end: number; kind: "text" | "image"; id: number }
+
+/**
+ * The placeholder that ends exactly at the cursor, if there is one.
+ *
+ * A placeholder stands for one thing, so a single backspace should take one thing. `[Pasted Image #1]` is
+ * eighteen characters and erasing it took eighteen presses, each leaving a half-destroyed marker on the
+ * screen — and the intermediate states are not placeholders at all, so whatever reads the composer next sees
+ * debris rather than either a token or clean text.
+ *
+ * Anchored at the END only. Deleting forwards into the middle of one is a different gesture, and a person
+ * editing the text around a placeholder must still be able to.
+ */
+export function tokenBefore(value: string, cursor: number): TokenSpan | undefined {
+  const head = value.slice(0, cursor);
+  const image = /\[Pasted Image #(\d+)\]$/.exec(head);
+  if (image) return { start: cursor - image[0].length, end: cursor, kind: "image", id: Number(image[1]) };
+  const text = /⟨paste #(\d+): \d+ lines?⟩$/.exec(head);
+  if (text) return { start: cursor - text[0].length, end: cursor, kind: "text", id: Number(text[1]) };
+  return undefined;
+}

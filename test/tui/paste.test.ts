@@ -135,3 +135,44 @@ describe("which key can actually trigger an image paste", () => {
     expect(isImagePaste("\x1b[99;5u")).toBe(false);  // that is Ctrl+C
   });
 });
+
+/**
+ * A placeholder is one thing, so backspace deletes one thing.
+ *
+ * `[Pasted Image #1]` is eighteen characters and erasing it took eighteen presses, each one leaving a
+ * half-destroyed marker on screen — `[Pasted Image #`, `[Pasted Imag`. Worse, the intermediate states are no
+ * longer a token, so anything reading the composer sees debris.
+ *
+ * The text placeholder has the same shape and the same problem.
+ */
+describe("a placeholder is deleted whole", () => {
+  it("finds the placeholder that ends exactly at the cursor", async () => {
+    const { tokenBefore } = await import("../../src/tui/paste.js");
+    const v = "look at [Pasted Image #2] ok";
+    expect(tokenBefore(v, 25)).toEqual({ start: 8, end: 25, kind: "image", id: 2 });
+    // …and nothing when the cursor is anywhere else in it.
+    expect(tokenBefore(v, 24)).toBeUndefined();
+    expect(tokenBefore(v, 28)).toBeUndefined();
+  });
+
+  it("finds a collapsed text paste too", async () => {
+    const { tokenBefore, pasteToken } = await import("../../src/tui/paste.js");
+    const tok = pasteToken(3, "a\nb\nc\nd");
+    const v = `before ${tok}`;
+    expect(tokenBefore(v, v.length)).toEqual({ start: 7, end: v.length, kind: "text", id: 3 });
+  });
+
+  it("says nothing about ordinary text", async () => {
+    const { tokenBefore } = await import("../../src/tui/paste.js");
+    expect(tokenBefore("just words", 10)).toBeUndefined();
+    expect(tokenBefore("", 0)).toBeUndefined();
+    expect(tokenBefore("[Pasted Image #x]", 17)).toBeUndefined();  // not a number → not a placeholder
+  });
+
+  /** Two of them in a row must not be taken as one. */
+  it("takes only the last one when several sit together", async () => {
+    const { tokenBefore } = await import("../../src/tui/paste.js");
+    const v = "[Pasted Image #1][Pasted Image #2]";
+    expect(tokenBefore(v, v.length)).toEqual({ start: 17, end: 34, kind: "image", id: 2 });
+  });
+});
