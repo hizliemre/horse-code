@@ -22,3 +22,30 @@ const TOKEN_RE = /⟨paste #(\d+): \d+ lines?⟩/g;
 export function expandPasteTokens(text: string, map: Map<number, string>): string {
   return text.replace(TOKEN_RE, (m, n) => map.get(Number(n)) ?? m);
 }
+
+/**
+ * The placeholder for a pasted IMAGE.
+ *
+ * A count under the input ("2 images staged") was all there was, and it is not the same thing: it does not
+ * say where in the sentence the picture belongs, and it leaves nothing behind in the transcript. Reported
+ * from a live run — "yapıştırdığıma dair bir ibare göremiyorum" — and the shape asked for is this one.
+ *
+ * Deliberately unlike the text placeholder: the two share a composer, and a person retyping one must not
+ * silently produce the other.
+ */
+export function imageToken(id: number): string {
+  return `[Pasted Image #${id}]`;
+}
+
+const IMAGE_TOKEN_RE = /\[Pasted Image #(\d+)\]/g;
+
+/**
+ * Replaces every image placeholder with the PATH the image was written to.
+ *
+ * A path, not the bytes: everything downstream that can carry a picture already resolves a named file — the
+ * inbox note that reaches a running agent, the request that starts a verification. Expanding to a path makes
+ * the composer's shorthand work through all of them without any of them knowing about the composer.
+ */
+export function expandImageTokens(text: string, map: Map<number, string>): string {
+  return text.replace(IMAGE_TOKEN_RE, (m, n) => map.get(Number(n)) ?? m);
+}

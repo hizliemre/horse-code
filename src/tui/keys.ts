@@ -30,3 +30,14 @@ export function parseKittyKey(s: string): KittyKey {
   if (char) return { type: "char", char };
   return { type: "other" };
 }
+
+/**
+ * Ctrl+C, in both the forms a terminal sends it.
+ *
+ * Raw `\x03` normally; `CSI 99;5u` when the kitty keyboard protocol is on (what iTerm2 sends with it
+ * enabled). Both were already handled inside the input line — this names them so App can claim the gesture
+ * while a job is running, which is the one time the input line deliberately does not.
+ */
+export function isInterrupt(s: string): boolean {
+  return s === "\x03" || s === "\x1b[99;5u";
+}

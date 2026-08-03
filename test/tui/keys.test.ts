@@ -29,3 +29,21 @@ describe("parseKittyKey", () => {
     expect(parseKittyKey("\r")).toBeUndefined();
   });
 });
+
+/**
+ * While a job runs, Ctrl+C did nothing at all.
+ *
+ * `InputLine` returns early on it (`if (runningRef.current) return`) so that App can own the gesture — and
+ * App never claimed it. The gap only bites where the job STOPS for an answer: a pending question owns the
+ * screen, the input is the answer box, and there is no way out of it. Reported from a live run: "soru ekranı
+ * geldiğinde cevap vermeden çıkamıyorum, ctrl+c çalışmıyor".
+ */
+describe("Ctrl+C while a job is running", () => {
+  it("is recognised in both the raw and the CSI-u form the terminals send", async () => {
+    const { isInterrupt } = await import("../../src/tui/keys.js");
+    expect(isInterrupt("\x03")).toBe(true);
+    expect(isInterrupt("\x1b[99;5u")).toBe(true);
+    expect(isInterrupt("c")).toBe(false);
+    expect(isInterrupt("\x1b")).toBe(false);
+  });
+});

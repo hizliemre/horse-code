@@ -55,3 +55,37 @@ describe("a placeholder must never leave the composer", () => {
     expect(expandPasteTokens("⟨paste #9: 3 lines⟩", new Map())).toBe("⟨paste #9: 3 lines⟩");
   });
 });
+
+/**
+ * A pasted image needs to be VISIBLE in the composer.
+ *
+ * Reported from a live run: "resim yapıştıramadım, ya da yapıştırdığıma dair bir ibare göremiyorum —
+ * [Pasted Image #1] gibi bir ibare görmek istiyorum". A count under the input is not the same thing: it does
+ * not say WHERE in the sentence the picture belongs, and it disappears from the transcript afterwards.
+ *
+ * The token carries the image the same way the text one carries a paste — the composer shows a placeholder,
+ * and submitting expands it to something downstream can act on: the file the image was written to.
+ */
+describe("pasted images get a visible placeholder too", () => {
+  it("reads as a person would expect, and is expanded to the file on submit", async () => {
+    const { imageToken, expandImageTokens } = await import("../../src/tui/paste.js");
+    expect(imageToken(1)).toBe("[Pasted Image #1]");
+    const map = new Map([[1, "/tmp/hc-paste-1.png"], [2, "/tmp/hc-paste-2.png"]]);
+    expect(expandImageTokens("before [Pasted Image #1] after", map)).toBe("before /tmp/hc-paste-1.png after");
+    expect(expandImageTokens("[Pasted Image #2] and [Pasted Image #1]", map))
+      .toBe("/tmp/hc-paste-2.png and /tmp/hc-paste-1.png");
+  });
+
+  it("leaves a placeholder nobody staged alone, rather than deleting the words", async () => {
+    const { expandImageTokens } = await import("../../src/tui/paste.js");
+    expect(expandImageTokens("[Pasted Image #9] here", new Map())).toBe("[Pasted Image #9] here");
+  });
+
+  /** The two kinds of paste share a composer and must not eat each other's placeholders. */
+  it("does not collide with the text paste placeholder", async () => {
+    const { expandImageTokens, expandPasteTokens } = await import("../../src/tui/paste.js");
+    const text = "⟨paste #1: 4 lines⟩ and [Pasted Image #1]";
+    expect(expandImageTokens(text, new Map([[1, "/tmp/a.png"]]))).toBe("⟨paste #1: 4 lines⟩ and /tmp/a.png");
+    expect(expandPasteTokens(text, new Map([[1, "hello"]]))).toBe("hello and [Pasted Image #1]");
+  });
+});

@@ -13,14 +13,16 @@ import type { StyledLine } from "./lines.js";
 import { flattenSplash, flattenMessage, flattenMarkdown, flattenTool } from "./lines.js";
 import { ModelPicker, PICKER_HEIGHT } from "./model-picker.js";
 import { filterModelsForRole, adjustRoleModels } from "./role-models.js";
-import { parseKittyKey } from "./keys.js";
+import { isInterrupt, parseKittyKey } from "./keys.js";
 import { COMMANDS, matchCommands, helpText, type SlashCommand } from "./commands.js";
 import { readClipboardImage } from "./clipboard.js";
 import { GLYPHS as ICONS } from "./glyphs.js";
 import { helpSections } from "./help.js";
 import { applyKey } from "./input-edit.js";
 import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
-import { shouldCollapsePaste, pasteToken, expandPasteTokens } from "./paste.js";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { shouldCollapsePaste, pasteToken, expandPasteTokens, imageToken, expandImageTokens } from "./paste.js";
 import type { AskChoice } from "../engine/review.js";
 import { asChoice } from "../engine/review.js";
 import { readTelemetry, summarize, describeReport, type RunReport as MonitorReport } from "../obs/report.js";
@@ -1173,6 +1175,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   // re-expanded when the prompt is submitted.
   const pasteMapRef = useRef<Map<number, string>>(new Map());
   const pasteIdRef = useRef(0);
+  const imageMapRef = useRef<Map<number, string>>(new Map());
+  const imageIdRef = useRef(0);
+  const draftCursorRef = useRef(0); draftCursorRef.current = draftCursor;
   const makePasteToken = (text: string): string => {
     const id = ++pasteIdRef.current;
     pasteMapRef.current.set(id, text);
@@ -1273,12 +1278,35 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       });
     }, (e) => controller.note(`resume error: ${e instanceof Error ? e.message : String(e)}`));
   };
-  // Alt+V → pull an image off the clipboard and stage it for the next prompt (coach sees it via vision).
+  /**
+   * Alt+V → the clipboard's image, written down and named in the sentence.
+   *
+   * It used to stage the bytes and show a count. That count was the ONLY sign anything had happened, it said
+   * nothing about where in the sentence the picture belonged, and — the part that mattered — a staged image
+   * was drained by the prompt path only, so answering a QUESTION with one silently dropped it. A question is
+   * exactly when a screenshot is the evidence.
+   *
+   * So the image goes to a file and the composer gets `[Pasted Image #N]`. On submit the placeholder becomes
+   * the path, and every route that carries a picture already resolves a named file.
+   */
   const pasteImage = (): void => {
     readClipboardImage().then(
-      (uri) => {
-        if (uri) controller.addAttachment(uri);
-        else controller.note("No image on the clipboard — copy a screenshot first, then press Alt+V.");
+      async (uri) => {
+        if (!uri) { controller.note("No image on the clipboard — copy a screenshot first, then press Alt+V."); return; }
+        try {
+          const { writeFile, mkdir } = await import("node:fs/promises");
+          const dir = join(homedir(), ".horsecode", "pastes");
+          await mkdir(dir, { recursive: true });
+          const id = ++imageIdRef.current;
+          const file = join(dir, `paste-${process.pid}-${id}.png`);
+          await writeFile(file, Buffer.from(uri.slice(uri.indexOf(",") + 1), "base64"));
+          imageMapRef.current.set(id, file);
+          const tok = imageToken(id);
+          setDraft((d) => d.slice(0, draftCursorRef.current) + tok + d.slice(draftCursorRef.current));
+          setDraftCursor((c) => c + tok.length);
+        } catch (e) {
+          controller.note(`Could not keep the pasted image: ${e instanceof Error ? e.message : String(e)}`);
+        }
       },
       () => controller.note("Could not read the clipboard."),
     );
@@ -1765,6 +1793,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     timer.unref?.(); // a repeating check must never be the reason the process stays alive
     return () => clearInterval(timer);
   }, [rootStdin, fullscreen]);
+  // Armed by a first Ctrl+C while running; a second one cancels. Never cancels on a single press.
+  const [cancelArmed, setCancelArmed] = useState(false);
   const keyRef = useRef<(s: string) => void>(() => {});
   keyRef.current = (s: string): void => {
     // Help overlay owns stdin while open: Esc / q / ? closes it, everything else is swallowed.
@@ -1772,6 +1802,26 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     if (sendModeText !== null) return; // the SendModePicker owns stdin while it's open
     if (!fullscreen || state.mode === "picker") return;
     if (state.pending?.options?.length) return; // ChoiceInput owns stdin while a choice is pending
+    /**
+     * Ctrl+C while a job runs — the one gesture nothing owned.
+     *
+     * `InputLine` returns early on it so App can take it, and App never did. Harmless anywhere else; a trap
+     * where the job STOPS FOR AN ANSWER, because then the pending question owns the screen, the input is the
+     * answer box, and there is no way out of it at all.
+     *
+     * Two steps, because cancelling loses a run: the first press asks, the second one does it. A question is
+     * where this matters, so it says what cancelling means THERE — the answer never arrives and the agent
+     * waiting for it stops.
+     */
+    if (isInterrupt(s) && (state.mode ?? "running") === "running") {
+      if (cancelArmed) { setCancelArmed(false); controller.note("⛔ Cancelled."); cancelJob?.(); return; }
+      setCancelArmed(true);
+      controller.note(state.pending
+        ? "Press Ctrl+C again to cancel the run — the question goes unanswered and the agent waiting for it stops."
+        : "Press Ctrl+C again to cancel the run.");
+      return;
+    }
+    if (cancelArmed && !isInterrupt(s)) setCancelArmed(false); // any other key stands the cancel down
     const isInput = (state.mode ?? "running") === "input";
     const up = s === "\x1b[A" || s === "\x1bOA";
     const down = s === "\x1b[B" || s === "\x1bOB";
@@ -2087,7 +2137,9 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
                * memory. Expanding here makes the composer's shorthand invisible to every path by
                * construction, rather than by remembering to call it in each one.
                */
-              const t = expandPasteTokens(raw, pasteMapRef.current);
+              // Both placeholders expand here, for the reason the comment above gives: the composer's
+              // shorthand must be invisible to every downstream path by construction, not by remembering.
+              const t = expandImageTokens(expandPasteTokens(raw, pasteMapRef.current), imageMapRef.current);
               const usedPastes = (): void => { pasteMapRef.current.clear(); pasteIdRef.current = 0; };
               // Pending approval question → the answer routes to controller.answer (single input, no modal).
               if (state.pending) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.answer(t); return; }

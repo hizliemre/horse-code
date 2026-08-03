@@ -236,6 +236,22 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     for (const r of results) {
       // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.
       working.push({ role: "tool", toolCallId: r.id, name: r.name, content: shieldToolOutput(r.result.content) });
+      /**
+       * An answer that names a screenshot brings it along.
+       *
+       * A tool RESULT is text and cannot carry an image, which is why answering a question with one silently
+       * dropped it — and a question is exactly when a screenshot is the evidence: the agent has stopped to
+       * ask what the screen shows. So the picture follows its own answer as a user message.
+       *
+       * Only `ask_user`, deliberately. Every other tool's output is machinery, and a build log that happens
+       * to mention a png is not somebody handing over evidence.
+       */
+      if (r.name === "ask_user") {
+        const images = attachedImages(r.result.content, opts.cwd);
+        if (images.length) {
+          working.push({ role: "user", content: "(the screenshot referred to in that answer)", images });
+        }
+      }
     }
     // loop goes back to the top → LLM sees the tool results
   }
