@@ -49,6 +49,45 @@ export function setTraceRoot(rel: string | undefined): void {
 export function traceRootRel(): string {
   return traceRoot;
 }
+
+/** Deeper than this and a stray `index.json` is not the project's trace root, it is something else's data. */
+const MAX_DISCOVERY_DEPTH = 4;
+
+/**
+ * The trace root a project already has, read from the index the traces carry.
+ *
+ * Where traces live is a decision about the PROJECT, but it is recorded in `.horsecode/config.json` — a file
+ * that must stay out of git, because it takes the same shape as the user's own config and can therefore hold
+ * an api key. So every OTHER checkout of the same repository loses the setting: a fresh clone, a colleague's
+ * machine, another tool's worktree.
+ *
+ * Measured on a real project: a worktree reported "no per-file traces" at startup while 2,101 of them sat in
+ * `docs/architecture/` beside it, committed and current. An agent asking `graph_trace` about any file there
+ * would have been told there is no trace for it — the cheapest orientation the project has, invisible for
+ * want of one line of configuration.
+ *
+ * The traces answer this themselves. Their index is committed WITH them, so it is present wherever they are,
+ * and finding it is better than sharing a file that can carry a secret.
+ */
+export function discoverTraceRoot(cwd: string, trackedFiles: string[]): string | undefined {
+  const candidates = trackedFiles
+    .map((f) => f.replace(/\\/g, "/"))
+    .filter((f) => f.endsWith(`/${TRACE_INDEX}`) && f.split("/").length <= MAX_DISCOVERY_DEPTH)
+    // Shallowest first: a repository with two is choosing between a root and something buried in it.
+    .sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
+
+  for (const rel of candidates) {
+    try {
+      const raw = readFileSync(join(cwd, rel), "utf8");
+      const doc = JSON.parse(raw) as TraceIndex;
+      // An index recording nothing is a root someone set up and never used — it names no useful location.
+      if (doc?.version !== 1 || typeof doc.traces !== "object" || doc.traces === null) continue;
+      if (!Object.keys(doc.traces).length) continue;
+      return rel.slice(0, -(`/${TRACE_INDEX}`.length));
+    } catch { /* not a trace index, not on disk, or not readable — none is a reason to fail startup */ }
+  }
+  return undefined;
+}
 export const TRACE_INDEX = "index.json";
 
 /** Extensions worth a trace — source code, not data or markup. */

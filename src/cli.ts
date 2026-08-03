@@ -13,7 +13,7 @@ import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl 
 import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
 import { briefStatus } from "./engine/project-brief.js";
-import { setTraceRoot } from "./engine/trace.js";
+import { setTraceRoot, discoverTraceRoot } from "./engine/trace.js";
 import { planFor, runTraces, describePlan, buildBrief } from "./engine/trace-run.js";
 import { traceable } from "./engine/trace.js";
 import { WorktreeManager } from "./worktree/manager.js";
@@ -139,6 +139,14 @@ export function shouldUseTui(stdinTTY: boolean, stdoutTTY: boolean, noTui: boole
   return stdinTTY && stdoutTTY && !noTui;
 }
 
+/** Files git tracks, for the one startup lookup that needs them. Empty when this is not a repository. */
+async function trackedFiles(cwd: string): Promise<string[]> {
+  try {
+    const r = await defaultGitRunner(["ls-files"], cwd);
+    return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
+  } catch { return []; }
+}
+
 async function currentBranch(cwd: string): Promise<string> {
   try {
     // symbolic-ref reports the branch name even on an unborn HEAD (fresh `git init`, e.g. "master"),
@@ -258,8 +266,18 @@ export async function main(argv: string[]): Promise<void> {
   const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
   // ONE memory store for every entry point (REPL, one-shot TUI, headless). Rules live in memory, and rules must
   // reach every agent — so the store is created here, at the composition root, and handed to buildJobDeps.
-  // Traces go where this project keeps its generated file-documentation, when it says so — see setTraceRoot.
-  setTraceRoot(config.traceDir);
+  /**
+   * Traces go where this project keeps its generated file-documentation.
+   *
+   * The config says so when it is there — but it lives in `.horsecode/config.json`, which is deliberately not
+   * committed (it takes the same shape as the user's own config and can hold an api key). So in any OTHER
+   * checkout of the same repository the setting is simply absent, and horse-code would fall back to its
+   * default and report "no per-file traces" with thousands of them sitting beside it, committed.
+   *
+   * When the config is silent, the traces are asked instead: their index ships with them, so it is present
+   * wherever they are. Only then, and only over the files git already tracks.
+   */
+  setTraceRoot(config.traceDir || discoverTraceRoot(cwd, await trackedFiles(cwd)));
   const memStore = new MemoryStore({ home, cwd });
   await memStore.load();
   await memStore.pruneExpired(); // short-lived scaffolding past its TTL never reaches a prompt
