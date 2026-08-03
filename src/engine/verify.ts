@@ -19,6 +19,10 @@ import type { TaskCycleDeps } from "./task-types.js";
 import { verifyPaths, featureSlugFor, specsDir } from "../speckit/layout.js";
 import { loadGraphSync } from "./project-graph.js";
 import { attachedImages } from "../agent/attach.js";
+import { FindingQueue, buildReportFindingTool, type Finding } from "./finding.js";
+import { triageFinding, describeEscalation } from "./triage.js";
+import { runFix, commitFix, describeFix } from "./fix.js";
+import type { ReviewDeps } from "./review.js";
 
 /**
  * Verifying work that already exists.
@@ -61,7 +65,7 @@ export interface VerifyResult {
  * report either — a project whose rules say an untriggerable scenario must be opened up by changing the mock
  * server needs a role that can change the mock server.
  */
-function testerTools(deps: TaskCycleDeps, askUser: AskUser): ToolRegistry {
+function testerTools(deps: TaskCycleDeps, askUser: AskUser, findings: FindingQueue): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
   r.register(writeFileTool);
@@ -74,6 +78,8 @@ function testerTools(deps: TaskCycleDeps, askUser: AskUser): ToolRegistry {
   r.register(buildSkillTool(deps.skillRegistry));
   // The developer is present for this whole run — asking them is the point, not a fallback.
   r.register(buildAskUserTool(askUser));
+  // The one thing the tester does about a defect: say so. Fixing is another role's job, deliberately.
+  r.register(buildReportFindingTool(findings));
   for (const t of contextTools(deps)) r.register(t);
   // Whatever the project has connected: a work-item tracker holding the scenarios, a log or metrics server.
   for (const t of deps.mcpTools?.() ?? []) r.register(t);
@@ -225,6 +231,70 @@ function runMessage(prompt: string, planRel: string, reportRel: string, inPlace:
     + `they see. Their answer is the evidence; record it as theirs.`;
 }
 
+
+/** Two rounds is a loop; a third is a conversation the developer should be having instead. */
+export const MAX_FIX_ROUNDS = 2;
+
+/**
+ * Sizes each finding, fixes what is a fix, and asks before spending more than that.
+ *
+ * The escalation is where the user's judgement belongs and nowhere else: a contained change happens in front
+ * of them and they see it, but a brainstorm or a spec is a different order of cost and interrupts the test
+ * session they are in the middle of. Deciding that silently is how a verification turns into an afternoon.
+ */
+async function handleFindings(
+  opts: { deps: ReviewDeps; workdir: string; askUser: AskUser; note?: (text: string) => void },
+  found: Finding[],
+): Promise<string[]> {
+  const done: string[] = [];
+  for (const f of found) {
+    const t = await triageFinding(opts.deps, opts.workdir, f);
+    if (t.depth !== "task") {
+      const answer = await opts.askUser(
+        `${describeEscalation(f, t)}\n\nStart that now, or leave it in the report and carry on testing?`,
+        { options: [
+          { label: "Leave it — carry on testing", description: "It stays as an open finding; you can start it after the session." },
+          { label: "Start it now", description: "The test session pauses while it is designed and built." },
+        ] },
+      );
+      if (!/start it now/i.test(answer.trim())) {
+        opts.note?.(`📌 Left open: **${f.title}** — ${t.reason}`);
+        done.push(`${f.title} — left open, to be handled separately (${t.reason})`);
+        continue;
+      }
+      /**
+       * Deliberately not run here.
+       *
+       * Brainstorm and spec-and-plan are the upstream pipeline, and starting it from inside a verification
+       * would nest one long interactive flow inside another — with the developer's environment running and a
+       * half-finished report on disk. Saying plainly what to do next is worth more than an automation that
+       * loses the session.
+       */
+      opts.note?.(`📋 **${f.title}** needs ${t.depth === "brainstorm" ? "a design decision" : "a spec and a plan"}. `
+        + `Finish or stop this session, then ask for it as its own piece of work — the finding and its evidence are in the report.`);
+      done.push(`${f.title} — needs its own piece of work; not fixed in this session`);
+      continue;
+    }
+    opts.note?.(`🔧 Fixing: **${f.title}** — ${t.reason}`);
+    const res = await runFix(opts.deps, opts.workdir, f, `fix-${done.length + 1}`);
+    if (res.fixed) await commitFix(opts.workdir, f);
+    opts.note?.(describeFix(res));
+    done.push(res.fixed ? `${f.title} — FIXED` : `${f.title} — NOT fixed (${res.notes.join("; ") || "see above"})`);
+  }
+  return done;
+}
+
+/** What the tester is told when it is handed back the session after a fix. */
+function resumeMessage(activeRel: string, reportRel: string, inPlace: boolean, done: string[]): string {
+  return `The findings you reported have been dealt with:\n${done.map((d) => `- ${d}`).join("\n")}\n\n`
+    + `Anything marked FIXED has been changed in the working tree and committed. Re-check the scenarios those `
+    + `findings affected — against the corrected product, with fresh evidence — and record the result. Then `
+    + `carry on from where you were.\n\n`
+    + `Anything NOT fixed stays in the report as an open finding. Do not fix it yourself, and do not fail a `
+    + `scenario for it unless the scenario itself does not pass.\n\n`
+    + runMessage("", activeRel, reportRel, inPlace);
+}
+
 /**
  * Runs the verification, in place.
  *
@@ -233,7 +303,8 @@ function runMessage(prompt: string, planRel: string, reportRel: string, inPlace:
  * run that already has a plan skips straight to the second, which is what makes a stopped session resumable.
  */
 export async function runVerify(opts: {
-  deps: TaskCycleDeps;
+  /** ReviewDeps, not TaskCycleDeps: a finding is fixed by the same implement→review→accept cycle the pipeline uses. */
+  deps: ReviewDeps;
   workdir: string;
   prompt: string;
   title: string;
@@ -254,10 +325,11 @@ export async function runVerify(opts: {
    * something to put in it.
    */
 
+  const findings = new FindingQueue();
   const dirRel = relative(workdir, paths.dir);
   const planRel = relative(workdir, paths.plan);
   const reportRel = relative(workdir, paths.report);
-  const tools = testerTools(deps, askUser);
+  const tools = testerTools(deps, askUser, findings);
 
   /**
    * The locate step runs unless THIS run already settled the question.
@@ -293,7 +365,28 @@ export async function runVerify(opts: {
   opts.note?.(inPlace
     ? `🧪 Continuing \`${active}\` in place — it already holds results, and a second document beside it would disagree with it.`
     : `🧪 Verifying against \`${active}\`.`);
-  await runTester(deps, workdir, tools, runMessage(prompt, active, reportRel, inPlace));
+  /**
+   * Verify → fix → verify, until the tester stops raising findings.
+   *
+   * The tester never fixes anything; it reports. So a finding is the one thing that has to interrupt the
+   * scenarios, and the loop exists because fixing is only half of it — the point is to fold the fix BACK into
+   * the verification, so the scenario it affected is run again against the corrected product.
+   *
+   * Bounded, because a fix that keeps producing findings is a conversation, not a loop.
+   */
+  let round = 0;
+  let message = runMessage(prompt, active, reportRel, inPlace);
+  for (;;) {
+    await runTester(deps, workdir, tools, message);
+    const found = findings.drain();
+    if (!found.length || round >= MAX_FIX_ROUNDS) {
+      if (found.length) opts.note?.(`⚠️ ${found.length} finding(s) left unfixed — ${MAX_FIX_ROUNDS} rounds of fixing is the limit for one session.`);
+      break;
+    }
+    round++;
+    const done = await handleFindings(opts, found);
+    message = resumeMessage(active, reportRel, inPlace, done);
+  }
   return {
     dir: dirRel,
     planPath: active,

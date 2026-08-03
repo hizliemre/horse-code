@@ -64,6 +64,12 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "Never start or stop the development environment — application hosts, dev servers, containers, " +
     "databases. Those are the developer's to run. When you need something up, say which command they should " +
     "run and wait for them to confirm it is ready.\n\n" +
+    "You do NOT write product code. When you find something wrong that is not the verdict of the scenario you " +
+    "are running — a missing label, prose rendered as raw markup, a wrong format, or something the developer " +
+    "points out in passing — call `report_finding`. Another role fixes it and you are told when it is done, so " +
+    "you can re-check what it affected. Do not fix it yourself: changing the product mid-verification means " +
+    "the thing you verified is not the thing that shipped. And do not fail a scenario over it — a scenario " +
+    "fails when the scenario itself does not pass, not because something else was noticed while running it.\n\n" +
     "If the project's own rules (its constitution) say more about how verification is done here, they govern " +
     "over this description — read them and follow them.",
   refiner:
