@@ -142,6 +142,37 @@ describe("RoleRegistry.setRoleModel", () => {
     expect(r.model).toBe("x/primary");
     expect(r.fallbacks).toEqual(["y/fb1", "z/fb2"]);
   });
+
+  /**
+   * A role the config has never heard of is exactly the one that needs assigning, and it was the one case
+   * assigning could not reach.
+   *
+   * `rawChain` bailed on an empty config chain BEFORE consulting the override, so a role added in a new
+   * version — `tester` — stayed broken for the whole session however it was fixed. The error it raised named
+   * three remedies and none of them worked: `/roles setmodel` and `/roles adjust` both write the override
+   * that was being skipped, and `/model` writes the global one, skipped by the same line.
+   */
+  it("can assign a role the config never configured — that is what assigning is FOR", () => {
+    const reg = new RoleRegistry({ tester: { models: [] } }, { tester: "P-tester" });
+    expect(() => reg.resolve("tester")).toThrow(/no model defined/);
+
+    reg.setRoleModel("tester", ["x/primary", "y/fb"]);
+    const r = reg.resolve("tester");
+    expect(r.model).toBe("x/primary");
+    expect(r.fallbacks).toEqual(["y/fb"]);
+  });
+
+  it("lets the session model rescue an unconfigured role too — the error offers it", () => {
+    const reg = new RoleRegistry({ tester: { models: [] } }, { tester: "P-tester" });
+    reg.setModelOverride("live/global");
+    expect(reg.resolve("tester").model).toBe("live/global");
+  });
+
+  /** …and a role nobody has assigned still says so, rather than borrowing another role's model. */
+  it("still refuses a role with nothing assigned anywhere", () => {
+    const reg = new RoleRegistry({ tester: { models: [] }, coder: { models: ["m1"] } }, { tester: "P" });
+    expect(() => reg.resolve("tester")).toThrow(/no model defined/);
+  });
 });
 
 describe("RoleRegistry.setRules", () => {

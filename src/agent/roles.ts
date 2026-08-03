@@ -185,14 +185,21 @@ export class RoleRegistry {
     return this.names().filter((r) => this.rawChain(r).includes(model));
   }
 
-  /** The role's chain BEFORE quarantine filtering — what was actually assigned to it. */
+  /**
+   * The role's chain BEFORE quarantine filtering — what was actually assigned to it.
+   *
+   * The order is the documented one and nothing precedes it: per-role override, then the session model, then
+   * the config. It used to bail on an empty CONFIG chain before either override was consulted, which made a
+   * role the config had never heard of impossible to assign — the one case where assigning is the whole
+   * point. Measured with `tester`, added in a version the user's config predated: `/roles adjust` set the
+   * override, the override was skipped, and the role stayed broken for the rest of the session while the
+   * error message recommended running `/roles adjust`.
+   */
   rawChain(roleName: string): string[] {
-    const role = this.roles[roleName];
-    if (!role || !role.models.length) return [];
     const perRole = this.roleOverrides.get(roleName);
     if (perRole && perRole.length) return perRole;
     if (this.modelOverride && roleName !== "refiner") return [this.modelOverride];
-    return role.models;
+    return this.roles[roleName]?.models ?? [];
   }
 
   /** True when every model assigned to this role is quarantined — the chain has collapsed and needs replacing. */
@@ -257,7 +264,9 @@ export class RoleRegistry {
   resolve(roleName: string): ResolvedRole {
     const role = this.roles[roleName];
     if (!role) throw new Error(`undefined role: ${roleName}`);
-    if (!role.models.length) {
+    // Against the EFFECTIVE chain, not the config's: an override assigned this session is what the role will
+    // actually run on, and checking the config instead is what made the error's own advice impossible to take.
+    if (!this.rawChain(roleName).length) {
       throw new Error(
         `role '${roleName}' has no model defined — set one with \`/roles setmodel\`, run \`/roles adjust\`, ` +
         `or choose a session model with \`/model\`.`);
