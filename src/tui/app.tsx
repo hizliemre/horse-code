@@ -80,6 +80,7 @@ export interface RunTuiReplOpts {
   reloadProjectSkills?: () => Promise<void>;
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
+  cleanWorktrees?: (apply: boolean, branch?: string) => Promise<string>; // /clean-worktrees
   migrate?: () => Promise<string>; // /migrate
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   maxParallel?: number; // configured task parallelism → /parallel shows and changes it
@@ -787,7 +788,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} planTraces={opts.planTraces} runTraces={opts.runTraces ? (onProgress) => opts.runTraces!(onProgress, deps.provider) : undefined} migrate={migrate} continueFromClaude={continueFromClaude} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} cleanWorktrees={opts.cleanWorktrees} planTraces={opts.planTraces} runTraces={opts.runTraces ? (onProgress) => opts.runTraces!(onProgress, deps.provider) : undefined} migrate={migrate} continueFromClaude={continueFromClaude} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}

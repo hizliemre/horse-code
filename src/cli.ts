@@ -406,6 +406,20 @@ export async function main(argv: string[]): Promise<void> {
         return `**Project graph** — ${st.nodes} symbols, ${st.edges} relationships, built ${age}.${fresh}${briefLine}\n\n_Every agent can query it: \`graph_impact\` (blast radius), \`graph_trace\`, \`graph_find\`, \`graph_context\`, \`graph_overview\`._`;
       };
       const buildGraphText = async (): Promise<string> => (await buildProjectGraph(cwd)).message;
+      /**
+       * `/clean-worktrees` — the sessions whose work has already landed.
+       *
+       * Judged against `fromBranch` by default: that is the branch sessions are cut FROM, so it is the one
+       * their work goes back to. Naming a branch here is for the case where it went somewhere else.
+       */
+      const cleanWorktreesText = async (apply: boolean, branch?: string): Promise<string> => {
+        const { surveySessions, cleanSessions, describeSurvey, describeClean } = await import("./worktree/clean.js");
+        const target = branch?.trim() || fromBranch;
+        const known = await defaultGitRunner(["rev-parse", "--verify", "--quiet", target], cwd);
+        if (known.code !== 0) return `There is no branch \`${target}\` in this repository.`;
+        if (!apply) return describeSurvey(await surveySessions(defaultGitRunner, cwd, target), target);
+        return describeClean(await cleanSessions(defaultGitRunner, cwd, target), target);
+      };
       /** Everything git tracks or would track — the pool the brief's documents are chosen from. */
       const gitFiles = async (): Promise<string[]> =>
         (await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd)).stdout.split("\n").filter(Boolean);
@@ -470,6 +484,7 @@ export async function main(argv: string[]): Promise<void> {
         reloadProjectSkills,
         graphStatus: graphStatusText,
         buildGraph: buildGraphText,
+        cleanWorktrees: cleanWorktreesText,
         planTraces: planTracesFn,
         runTraces: runTracesFn,
         jobBase: { fromBranch, maxRounds: args.rounds ?? 3, ...(args.revisionRounds !== undefined && { revisionRounds: args.revisionRounds }) },

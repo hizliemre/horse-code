@@ -1064,7 +1064,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, migrate, continueFromClaude, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, cleanWorktrees, migrate, continueFromClaude, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -1091,6 +1091,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
+  cleanWorktrees?: (apply: boolean, branch?: string) => Promise<string>; // /clean-worktrees
   migrate?: () => Promise<string>; // /migrate
   continueFromClaude?: (arg: string) => Promise<void>; // /continue-from-claude <worktree name>
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
@@ -1533,6 +1534,30 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     void continueFromClaude(arg);
   };
   // /graph [build] → the project's code graph: what exists, whether it is fresh, and rebuilding it.
+  /**
+   * `/clean-worktrees` — list what has landed, `go` to remove it.
+   *
+   * Two things it refuses to do. It never removes without being asked twice, because the directories it takes
+   * are not recoverable and a listing costs one command. And it does nothing at all while a job is running:
+   * that job owns a session, and a pull request merged during a revision round would make its base look
+   * finished while its worktrees are still in use.
+   */
+  const doCleanWorktrees = (arg: string): void => {
+    if (!cleanWorktrees) { controller.note("Worktree cleanup is not available here."); return; }
+    if (state.mode === "running") {
+      controller.note("Not while a run is in progress — it owns a session, and that session's worktrees are in use.");
+      return;
+    }
+    const words = arg.trim().split(/\s+/).filter(Boolean);
+    const apply = words.some((w) => w.toLowerCase() === "go");
+    const branch = words.find((w) => w.toLowerCase() !== "go");
+    controller.startBusy("worktrees");
+    cleanWorktrees(apply, branch).then(
+      (r) => { controller.endBusy(); controller.note(r); },
+      (e) => { controller.endBusy(); controller.note(`Worktree cleanup failed: ${e instanceof Error ? e.message : String(e)}`); },
+    );
+  };
+
   const doGraph = (arg: string): void => {
     if (!graphStatus || !buildGraph) { controller.note("The project graph is not available."); return; }
     if (arg.trim().toLowerCase() === "build") {
@@ -1668,6 +1693,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");
     else if (c.name === "/graph") doGraph("");
+    else if (c.name === "/clean-worktrees") doCleanWorktrees("");
     else if (c.name === "/migrate") doMigrate();
     else if (c.name === "/continue-from-claude") doContinueFromClaude("");
     else if (c.name === "/mode") doMode("");
@@ -2093,6 +2119,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doParallel(trimmed.slice("/parallel".length).trim()); return; }
               if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMcp(trimmed.slice("/mcp".length).trim()); return; }
               if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doGraph(trimmed.slice("/graph".length).trim()); return; }
+              if (cmd.startsWith("/clean-worktrees ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doCleanWorktrees(trimmed.slice("/clean-worktrees".length).trim()); return; }
               if (cmd.startsWith("/continue-from-claude ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doContinueFromClaude(trimmed.slice("/continue-from-claude".length).trim()); return; }
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
               if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMode(trimmed.slice("/mode".length).trim()); return; }

@@ -29,7 +29,8 @@ describe("slash commands", () => {
   });
 
   it("filters by prefix (case-insensitive) and trims", () => {
-    expect(matchCommands("/clea").map((c) => c.name)).toEqual(["/clear"]);
+    // Both match; the name the user has already finished typing comes first — see matchCommands.
+    expect(matchCommands("/clea").map((c) => c.name)).toEqual(["/clear", "/clean-worktrees"]);
     expect(matchCommands("  /MOD  ").map((c) => c.name).sort()).toEqual(["/mode", "/model"]); // both match /mod
     expect(matchCommands("/xyz")).toEqual([]);
   });

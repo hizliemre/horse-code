@@ -23,6 +23,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/migrate", desc: "Bring a project from Claude Code / Codex / Cursor into horse-code (rules, memory, skills)" },
   { name: "/continue-from-claude", desc: "Continue work started in a Claude Code worktree (/continue-from-claude <name>) — its branch becomes the base" },
   { name: "/graph", desc: "Project code graph (/graph build · /graph trace) — what calls what, blast radius, per-file intent" },
+  { name: "/clean-worktrees", desc: "Remove the sessions whose work is already merged (/clean-worktrees lists, `go` removes, `<branch>` judges against another branch)" },
   { name: "/skills", desc: "Show loaded skills (/skills add <github-url> installs one, /skills update re-installs them)" },
   { name: "/mode", desc: "Permission mode (/mode ask|acceptEdits|auto)" },
   { name: "/parallel", desc: "How many tasks run at once (/parallel N) — takes effect on the running job too" },
