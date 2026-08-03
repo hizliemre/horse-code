@@ -23,7 +23,8 @@ export type UpstreamResult =
   | { intent: Intent; refinedPrompt: string; kind: "approved"; specPath: string; planPath: string; tasksPath: string }
   | { intent: Intent; refinedPrompt: string; kind: "rejected"; stage: "spec" | "plan" }
   | { intent: Intent; refinedPrompt: string; kind: "governed"; path: string; written: boolean }
-  | { intent: Intent; refinedPrompt: string; kind: "undone"; report: string };
+  | { intent: Intent; refinedPrompt: string; kind: "undone"; report: string }
+  | { intent: Intent; refinedPrompt: string; kind: "verified"; report: string; reportPath: string; written: boolean };
 
 /**
  * Upstream pipeline: refiner → route; chat→coach response; feature/bugfix→spec-kit phases
@@ -109,6 +110,27 @@ export async function runUpstream(
     const res = await undoTurn(cwd, effect);
     if (!res.refused) await clearTurn(cwd); // a turn is undone once; a second "undo" must not undo the undo
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "undone", report: describeUndo(res) };
+  }
+
+  /**
+   * Verify → in place, like govern, and for the same reason: the output is a document about work that already
+   * exists, so there is nothing to cut a branch for. It also has to be in place — the developer runs the
+   * environment and looks at the screen, and a report growing anywhere but their own working tree is one they
+   * cannot watch.
+   */
+  if (!resume && routeIntent(r.intent) === "verify") {
+    emitPhase("verify");
+    const cwd = process.cwd();
+    const { runVerify, describeVerify, currentBranchOf } = await import("./verify.js");
+    const branch = await currentBranchOf(cwd);
+    const res = await runVerify({
+      deps, workdir: cwd, prompt: r.refinedPrompt, title: r.title, askUser,
+      note: (text) => emit({ kind: "note", text }),
+    });
+    return {
+      intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "verified",
+      report: describeVerify(res, branch), reportPath: res.reportPath, written: res.reportWritten,
+    };
   }
 
   if (!resume && routeIntent(r.intent) === "govern") {

@@ -19,7 +19,13 @@ import type { TaskCycleDeps } from "./task-types.js";
  * output is one document stating the project's own principles, and it belongs in the project the user is
  * standing in, not in a branch waiting to be merged.
  */
-export type Intent = "chat" | "feature" | "bugfix" | "govern" | "undo";
+/**
+ * `verify` is the sixth, and it exists for the reason `govern` does: a request that produces no software must
+ * not buy the machinery for producing software. Running an existing pull request's scenarios and recording
+ * what they did is not a feature — nothing is built, the output is a report, and the developer is present
+ * throughout because the environment is theirs to start and stop.
+ */
+export type Intent = "chat" | "feature" | "bugfix" | "govern" | "undo" | "verify";
 export interface RefinerOutput {
   refinedPrompt: string;
   intent: Intent;
@@ -28,7 +34,7 @@ export interface RefinerOutput {
 }
 export const RefinerSchema = z.object({
   refinedPrompt: z.string().describe("The refined instruction, ALWAYS in English — translate from the user's language if needed; never output the user's original language here."),
-  intent: z.enum(["chat", "feature", "bugfix", "govern", "undo"]),
+  intent: z.enum(["chat", "feature", "bugfix", "govern", "undo", "verify"]),
   // The natural language the user wrote in (English name, e.g. "Turkish") → the coach replies in it.
   language: z.string().default("English"),
   // A concise 2-5 word English kebab-case summary → used as the worktree/branch name (e.g. "add-login-page").
@@ -63,8 +69,9 @@ export async function runRefiner(deps: TaskCycleDeps, prompt: string, history: M
  * Deterministic on purpose. The model decides WHAT the request is; what that costs is not a judgement call,
  * and a run that opens a worktree because a classifier hedged is a run nobody can explain.
  */
-export function routeIntent(intent: Intent): "chat" | "govern" | "undo" | "pipeline" {
+export function routeIntent(intent: Intent): "chat" | "govern" | "undo" | "verify" | "pipeline" {
   if (intent === "chat") return "chat";
   if (intent === "undo") return "undo";
+  if (intent === "verify") return "verify";
   return intent === "govern" ? "govern" : "pipeline";
 }

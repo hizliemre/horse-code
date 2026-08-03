@@ -66,7 +66,9 @@ export type JobResult =
   /** Governance work: written in place, no worktree, no branch, nothing to merge. */
   | { kind: "governed"; path: string; written: boolean; refinedPrompt?: string }
   /** The previous turn's writes, put back. */
-  | { kind: "undone"; report: string; refinedPrompt?: string };
+  | { kind: "undone"; report: string; refinedPrompt?: string }
+  /** A verification of work that already exists: a report in the user's tree, no worktree, nothing to merge. */
+  | { kind: "verified"; report: string; reportPath: string; written: boolean; refinedPrompt?: string };
 
 function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
   const resolved = deps.roleRegistry.resolve("project-manager");
@@ -313,6 +315,10 @@ export async function runJob(
     }
     // Undo touched the working tree directly; like govern, there was never a session to close.
     if (up.kind === "undone") return { kind: "undone", report: up.report, refinedPrompt: up.refinedPrompt };
+    // Verification writes its report in place, for the same reason govern does — no session was ever opened.
+    if (up.kind === "verified") {
+      return { kind: "verified", report: up.report, reportPath: up.reportPath, written: up.written, refinedPrompt: up.refinedPrompt };
+    }
     if (up.kind === "rejected") {
       emit({ kind: "phase", phase: "rejected", detail: up.stage });
       // Don't discard the rejected draft: commit it to its branch (so the work survives) and tell the user
