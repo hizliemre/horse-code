@@ -34,14 +34,48 @@ export function checkpointKey(prompt: string): string {
 }
 
 /**
+ * The words a continuation is MADE of — the verb, its inflections, and the padding people put around it.
+ *
+ * Not a stopword list in general: every entry is here because it can appear in "just carry on" and carries no
+ * subject of its own. Turkish inflects the verb and English spreads it over several words, so both are
+ * enumerated rather than guessed at.
+ */
+const CONTINUE_FILLER = new Set([
+  // Turkish: devam + its inflections, "where we left off", and the usual padding.
+  "devam", "et", "et.", "edelim", "edin", "ediyoruz", "edeceğiz", "edecegiz", "edeceksin", "ettik", "edeyim",
+  "kaldığımız", "kaldigimiz", "kaldığın", "kaldigin", "kaldığı", "kaldigi", "kaldık", "kaldik", "yerden",
+  "hadi", "lütfen", "lutfen", "tamam", "bakalım", "bakalim", "artık", "artik", "mi", "mı", "mu", "mü",
+  // English.
+  "continue", "resume", "carry", "on", "keep", "going", "pick", "up", "where", "from", "we", "left", "off",
+  "let's", "lets", "us", "please", "ok", "okay", "just", "the", "it", "you", "i", "and", "then", "now",
+]);
+
+/** The word that makes it a continuation at all — without one of these, nothing else matters. */
+const CONTINUE_VERB = /(^|\s)(devam|kald[ıi]\w*|continue|resume|carry on|keep going|pick up (where|from))(\s|$|[.,!?])/i;
+
+/**
  * Is this a bare "continue where we left off" request (rather than a fresh task)? Such a prompt should resume
  * the most recently touched preserved worktree — the user must NOT have to retype the exact original request.
- * Kept short-only to avoid mistaking a real task that merely mentions "resume/continue" for a continuation.
+ *
+ * The test used to be length: under sixty characters and containing the word meant "resume". That was wrong in
+ * the language it was written for. Turkish puts the continuation verb at the END, so naming a subject in front
+ * of it — "ürün yaratma sihirbazının testlerine devam edeceğiz" — stays well inside sixty characters, and a
+ * real request was answered with "there is no preserved work to continue" without ever reaching intent
+ * classification.
+ *
+ * The distinction was never length. It is whether the sentence says anything BESIDES continuing: strip the
+ * continuation vocabulary and the padding, and a bare continue has nothing left. One leftover word is still
+ * bare ("devam et bakalım"); two is a subject, and a subject is a request.
  */
 export function isContinuePrompt(text: string): boolean {
   const t = text.trim();
-  if (t.length > 60) return false; // a long prompt is a real new request, not a bare "continue"
-  return /(^|\s)(devam|kald[ıi]\w*|continue|resume|carry on|keep going|pick up (where|from))(\s|$|\.|,|!)/i.test(t);
+  if (!t || t.length > 200) return false;  // an essay is a request, whatever words it contains
+  if (!CONTINUE_VERB.test(t)) return false;
+  const rest = t.toLowerCase()
+    .split(/[\s,.!?;:]+/)
+    .filter(Boolean)
+    .filter((w) => !CONTINUE_FILLER.has(w));
+  return rest.length <= 1;
 }
 
 /** Last-modified time (ms) of a worktree's checkpoint, or 0 if none — used to pick the most recent to resume. */

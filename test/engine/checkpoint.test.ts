@@ -59,6 +59,33 @@ describe("isContinuePrompt", () => {
     expect(isContinuePrompt("Add a button that lets the user resume a paused download from the last byte offset")).toBe(false); // long → real task
     expect(isContinuePrompt("implement session persistence")).toBe(false);
   });
+
+  /**
+   * A request that says WHAT to continue is not a bare continue — it is a request, and it has to reach the
+   * refiner to be classified.
+   *
+   * This was a length test: under sixty characters and containing "devam" meant "resume the last worktree".
+   * Turkish puts the continuation word at the END, so naming a subject in front of it stays well inside sixty
+   * — and a real request was answered with "there is no preserved work to continue", never reaching intent
+   * classification at all. The distinction was never length; it is whether anything but the continuing is
+   * being said.
+   */
+  it("does NOT flag a request that names what to continue", () => {
+    expect(isContinuePrompt("ürün yaratma sihirbazının testlerine devam edeceğiz.")).toBe(false);
+    expect(isContinuePrompt("PR 677'nin test adımlarına devam et")).toBe(false);
+    expect(isContinuePrompt("continue the checkout tests")).toBe(false);
+    expect(isContinuePrompt("resume the wallet migration")).toBe(false);
+  });
+
+  /** …while the ways a person actually says "just carry on" keep working, filler and all. */
+  it("still flags a bare continue however it is padded", () => {
+    for (const t of [
+      "devam edelim lütfen", "hadi devam", "devam et bakalım", "tamam devam",
+      "let's continue where we left off", "ok, keep going", "please resume",
+    ]) {
+      expect(isContinuePrompt(t), t).toBe(true);
+    }
+  });
 });
 
 describe("checkpoint carries the deferred notes", () => {
