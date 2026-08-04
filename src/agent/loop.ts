@@ -69,8 +69,27 @@ function fmtChars(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k chars` : `${n} chars`;
 }
 
+/**
+ * Where the agent is, said once, because nothing else said it.
+ *
+ * Every tool an agent has resolves relative paths against `cwd`, and no prompt ever named it. Measured on a
+ * live revision round: the reviser opened with `ls`, `pwd && git status`, `git worktree list && git
+ * rev-parse --show-toplevel`, and `cd /Users/…/parrot && git status` — four calls establishing where it was
+ * — and then prefixed `cd <absolute path>` to twenty-eight of its remaining shell commands. It spent all 56
+ * of its turns orienting and reading, and wrote nothing.
+ *
+ * A checkout inside `.horsecode/worktrees/<slug>/base` is not somewhere an agent can guess it is.
+ */
+export function workingDirectoryNote(cwd: string): string {
+  return `\n\n# Working directory\n\nYou are already in \`${cwd}\`. Every relative path resolves from here, `
+    + `and every tool runs here — do not \`cd\` elsewhere, and do not go looking for the repository.`;
+}
+
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
-  const working: Message[] = [{ role: "system", content: opts.systemPrompt }, ...opts.messages];
+  const working: Message[] = [
+    { role: "system", content: opts.systemPrompt + (opts.cwd ? workingDirectoryNote(opts.cwd) : "") },
+    ...opts.messages,
+  ];
   const schemas = opts.tools.schemas();
   // The blind-overwrite guard is only wired for agents whose writes are NOT individually committed.
   //

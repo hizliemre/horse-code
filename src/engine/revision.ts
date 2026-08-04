@@ -124,7 +124,17 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
   const hints = memoryHints(deps, comments.join(" "), { role: "senior-coder" });
-  const ask = { role: "user" as const, content: `PR revision: address the following comments (fix them or justify as "by design"), work in the main worktree:\n${comments.map((c) => `- ${c}`).join("\n")}` };
+  /**
+   * "the main worktree" pointed AWAY from where the agent already was.
+   *
+   * The reviser runs in the session's base checkout, and that phrase reads as the project's own — which is
+   * exactly where it went: `git worktree list`, `cd /Users/…/parrot && git status`, `find . -name
+   * "*safe-html-pr-revision*"`. Naming nothing is better than naming the wrong thing; the working directory
+   * is now stated once, for every role, by the agent loop.
+   */
+  const ask = { role: "user" as const, content: `PR revision: address the following comments — fix each one, or `
+    + `say plainly which is wrong and why. Start by editing; you have already been given what to change:\n`
+    + `${comments.map((c) => `- ${c}`).join("\n")}` };
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved, tools,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],

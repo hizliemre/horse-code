@@ -55,10 +55,12 @@ describe("runRoleAgent", () => {
   it("systemPrompt and user message go into the first request", async () => {
     const p = new MockProvider([[{ type: "done", finishReason: "stop" }]]);
     await drain(runRoleAgent(opts(p)));
-    expect(p.requests[0].messages).toEqual([
-      { role: "system", content: "you are a test role" },
-      { role: "user", content: "hello" },
-    ]);
+    // The role's own prompt comes first; the working directory is appended to it — see
+    // test/agent/working-directory.test.ts for why an agent has to be told where it is.
+    const [system, user] = p.requests[0].messages;
+    expect(system.role).toBe("system");
+    expect(String(system.content).startsWith("you are a test role")).toBe(true);
+    expect(user).toEqual({ role: "user", content: "hello" });
   });
 
   it("tool-call turn: tool runs, result is appended to the second request, then it ends", async () => {
