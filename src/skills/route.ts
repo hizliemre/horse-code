@@ -143,6 +143,20 @@ export const MATCH_BAR = 3;
  */
 export const MAX_ROUTED = 3;
 
+/**
+ * How much routed skill text a role may be handed, in characters.
+ *
+ * A COUNT is not a budget: three skills was the limit, and a skill is anything from two thousand characters
+ * to forty thousand. Measured on a live run — the analyst was given `image-to-code` (36k) and
+ * `imagegen-frontend-mobile` (40k) for a task about HTML rendering and a line-clamp, in a 131,265-character
+ * prompt where the one instruction that mattered ("write the spec to this path") was a single sentence. It
+ * grepped nine times, read three files, and never called `write_file`. Twice.
+ *
+ * Guidance a role cannot find is not guidance. The highest-scoring skills that FIT are taken, and the rest
+ * stay discoverable through the `skill` tool, which is where a role goes when it actually wants one.
+ */
+export const MAX_ROUTED_CHARS = 24_000;
+
 export interface SkillMatch {
   name: string;
   /** Distinct description terms the task hit — the reason, so a routing decision can be explained. */
@@ -195,6 +209,7 @@ export function routeSkills(
   } = {},
 ): SkillMatch[] {
   const bar = opts.bar ?? MATCH_BAR;
+  let spent = 0;
   const have = new Set(already);
   const placed = new Set(opts.placed ?? []);
   // The ROLE is part of what is being asked. "Add a dark theme toggle" is ambiguous on its own; the same
@@ -203,7 +218,7 @@ export function routeSkills(
   // Directory names are evidence in their own right: a path through `components/` says what kind of work
   // this is even when the title does not.
   const paths = (opts.files ?? []).join(" ");
-  const base = [opts.role ?? "", task, paths].filter(Boolean).join(" ");
+  const base = [opts.role ?? "", routingSubject(task), paths].filter(Boolean).join(" ");
   const subject = [base, expandExtensions(opts.files ?? []), expandAbbreviations(base)].filter(Boolean).join(" ");
   return registry.list()
     .filter((s) => !have.has(s.name))
@@ -223,7 +238,27 @@ export function routeSkills(
     // between them by name is picking at random: it is what kept `review-animations` out of an animation
     // review while `impeccable` — which lists every UI concern there is — took the slot on incidental hits.
     .sort((a, b) => b.score - a.score || b.density - a.density || a.name.localeCompare(b.name))
-    .slice(0, opts.max ?? MAX_ROUTED);
+    .slice(0, opts.max ?? MAX_ROUTED)
+    // …and then by SIZE, best-scoring first, because what is inlined has to be readable to be useful.
+    .filter((m) => {
+      const len = registry.get(m.name)?.content.length ?? 0;
+      if (spent + len > MAX_ROUTED_CHARS) return false;
+      spent += len;
+      return true;
+    });
+}
+
+/**
+ * The text the router is allowed to read, with our own plumbing removed.
+ *
+ * A pasted screenshot is written to `~/.horsecode/pastes/paste-N.png`, and its path travels in the request as
+ * the way to hand the picture over. Feeding that to the router made "here is a screenshot of the bug" read as
+ * "this task is about images" — and pulled two image-GENERATION skills into a task about a line-clamp.
+ *
+ * Only OUR path is removed. A file the work touches is real evidence about the work and stays.
+ */
+export function routingSubject(task: string): string {
+  return task.replace(/\S*[\\/]\.horsecode[\\/]pastes[\\/]\S+/g, " ").replace(/\s{2,}/g, " ").trim();
 }
 
 /**
