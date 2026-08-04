@@ -53,3 +53,30 @@ describe("which files count as evidence", () => {
     expect(filesForTask("renderDescription", graph)).toContain("src/ui/summary.tsx");
   });
 });
+
+/**
+ * The inference is not used for routing anywhere, and the measurement is why.
+ *
+ * `evaluateFileResolution` over real commit history:
+ *
+ *   parrot (an integration project)  131 samples · answered 130 · precision  9% · right kind 69%
+ *   horse-code                       396 samples · answered 337 · precision 17% · right kind 94%
+ *
+ * On the project this runs against it produces an answer almost every time and is wrong nine times in ten.
+ * The reason is in the domain: "product", "description", "order" name symbols in every marketplace
+ * integrator there is, so a request that uses those words resolves to all of them.
+ *
+ * Confident and wrong is the worst kind of evidence. The graph is precise when it is asked a question with a
+ * SUBJECT — `graph_impact("SafeHtmlPipe")` — and that is how the agents use it, through their own tools. It
+ * is unreliable when asked to invent the subject, which is what resolving a sentence to files is.
+ */
+describe("routing never takes a guessed file as evidence", () => {
+  it("has no caller left that feeds inference into skill routing", async () => {
+    const { readFile } = await import("node:fs/promises");
+    for (const f of ["src/engine/implementer.ts", "src/engine/reviewer.ts", "src/speckit/phases.ts"]) {
+      const src = await readFile(f, "utf8");
+      const routing = src.slice(src.indexOf("routeSkills("));
+      expect(routing.slice(0, 400), f).not.toContain("filesForTask(");
+    }
+  });
+});

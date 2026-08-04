@@ -166,7 +166,18 @@ export async function runImplementer(
      *
      * A card's own file list came from a plan a person approved. It outranks a guess.
      */
-    files: task.files.length ? task.files : filesForTask(subject, loadGraphSync(cwd)),
+    /**
+     * Only files someone NAMED, never a guess.
+     *
+     * Resolving a task's words against the graph was measured over real commit history: on the integration
+     * project this runs against, 131 samples, an answer produced for 130 of them, and 9% of those files
+     * correct. The domain is the reason: "product", "description", "order" name symbols in every marketplace
+     * integrator there is, so the words that describe a task resolve to all of them.
+     *
+     * Confident and wrong is the worst kind of evidence, because it reads as knowledge. Without it the router
+     * falls back to the task's own text, which is honest about knowing less.
+     */
+    files: task.files,
     placed: placedSkills(),
   });
   // Only the borderline matches are adjudicated; the confident ones are already right and paying for a

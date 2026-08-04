@@ -63,7 +63,8 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
   // handed, because they refuse to write code, are the ones that judge it best.
   const reviewerTools = readOnlyRegistry(deps, { propose: true });
   const routed = routeSkills(task.title, deps.skillRegistry, deps.roleRegistry.skillsFor("code-reviewer"), {
-    role: "code-reviewer", files: filesForTask(task.title, loadGraphSync(cwd)), placed: placedSkills(),
+    // The card's own files, never a guess: see the implementer for the measurement that settled it.
+    role: "code-reviewer", files: task.files, placed: placedSkills(),
   });
   if (routed.length) deps.note?.(`📎 \`code-reviewer\` · ${routed.map((m) => `**${m.name}**`).join(", ")}`);
   // Handed, not hunted: a reviewer that spends its budget FINDING the change has none left to judge it.
