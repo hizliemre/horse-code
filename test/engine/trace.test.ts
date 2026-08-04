@@ -402,9 +402,11 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
   });
 
   it("still stops when a project that has been here before is missing nothing", async () => {
+    // Derived from the source list, so a file added to SHARED_DERIVED cannot silently make this pass.
+    const { sharedDerived } = await import("../../src/engine/trace.js");
+    const rules = sharedDerived().map((p) => `!${p}`).join("\n");
     await writeFile(join(cwd, ".gitignore"),
-      `graphify-out/*\n\n${GITIGNORE_MARKER}\n!graphify-out/graph.json\n!graphify-out/.graphify_labels.json\n`,
-      "utf8");
+      `graphify-out/*\n\n${GITIGNORE_MARKER}\n${rules}\n`, "utf8");
     expect(await ensureGitignore(cwd)).toBe(false);
   });
 

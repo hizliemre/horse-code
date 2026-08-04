@@ -431,6 +431,15 @@ const SHARED_DERIVED: { path: string; why: string }[] = [
    * this file says "Wallet Member & Balance", and getting that back means paying for the naming pass again.
    */
   { path: "graphify-out/.graphify_labels.json", why: "# Shared — the community names an LLM wrote; the graph stores only their numbers." },
+  /**
+   * Which commit the graph describes.
+   *
+   * Shared for the same reason the graph is: a clone that has the graph has the same answer, and without it
+   * the freshness check falls back to file timestamps — which say when git last WROTE a file, not when the
+   * graph was built. Measured: a graph that arrived in a `git pull` was reported stale, because git wrote it
+   * 13 milliseconds before the source files that sort after it.
+   */
+  { path: "graphify-out/.graph-commit.json", why: "# Shared — the commit the graph describes; without it freshness falls back to timestamps." },
 ];
 
 /**

@@ -26,6 +26,57 @@ export const GRAPH_DIR = "graphify-out";
 export const GRAPH_FILE = "graph.json";
 
 /**
+ * The commit the graph describes, written beside it.
+ *
+ * Staleness used to be the graph FILE'S mtime against every source file's — and a file's mtime is "when git
+ * last wrote it", not "when the graph was built". Measured after a routine `git pull`: git wrote
+ * `graphify-out/graph.json` and then, 9 to 14 MILLISECONDS later, the `toucan/…` files that sort after it,
+ * so a graph that had arrived in that very pull was reported out of date. Every pull, every checkout and
+ * every branch switch did this, and each false alarm asked for a rebuild of 47,000 nodes.
+ *
+ * A commit answers the question exactly: what changed between then and now is `git diff`, and no clock is
+ * involved. Shared like the graph itself, because a clone that has the graph has the same answer.
+ */
+export const STAMP_FILE = ".graph-commit.json";
+
+export function stampPath(cwd: string): string {
+  return join(cwd, GRAPH_DIR, STAMP_FILE);
+}
+
+interface GraphStamp { commit: string }
+
+/** The stamp beside the graph, or undefined when there is none / it is unreadable. */
+export async function readStamp(cwd: string): Promise<GraphStamp | undefined> {
+  try {
+    const raw = JSON.parse(await readFile(stampPath(cwd), "utf8")) as GraphStamp;
+    return typeof raw.commit === "string" && raw.commit ? raw : undefined;
+  } catch { return undefined; }
+}
+
+/** Runs a git command in `cwd`; empty output on any failure — a missing answer is never evidence of staleness. */
+function git(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+    let out = "";
+    child.stdout.on("data", (d) => { if (out.length < 4_000_000) out += d.toString(); });
+    child.on("error", () => resolve(""));
+    child.on("close", (c) => resolve(c === 0 ? out : ""));
+  });
+}
+
+/** Files that changed between the stamped commit and the working tree, committed or not. */
+export async function changedSince(cwd: string, commit: string): Promise<string[] | undefined> {
+  const known = await git(cwd, ["cat-file", "-e", `${commit}^{commit}`]);
+  if (known === undefined) return undefined;
+  const reachable = await git(cwd, ["rev-parse", "--verify", "--quiet", `${commit}^{commit}`]);
+  if (!reachable.trim()) return undefined;           // …the stamp names a commit this checkout does not have
+  const committed = await git(cwd, ["diff", "--name-only", `${commit}`, "HEAD"]);
+  const working = await git(cwd, ["status", "--porcelain", "--untracked-files=all"]);
+  const dirty = working.split("\n").map((l) => l.slice(3).trim()).filter(Boolean);
+  return [...new Set([...committed.split("\n").filter(Boolean), ...dirty])];
+}
+
+/**
  * The community names, which the graph itself does not carry.
  *
  * graphify finds the communities without an LLM, but NAMING them is the one step that needs one — step 5 of
@@ -292,6 +343,38 @@ export async function graphStatus(cwd: string): Promise<GraphStatus> {
   const [g, st] = await Promise.all([loadGraph(cwd), stat(path).catch(() => undefined)]);
   const builtAt = st?.mtimeMs;
   const staleBecause: string[] = [];
+
+  const known = new Set<string>();
+  for (const n of g?.nodes ?? []) if (n.source_file) known.add(n.source_file);
+  const counts = (f: string): boolean => !NOT_INDEXED.test(f) && (known.has(f) || CODE_EXT.test(f));
+
+  /**
+   * The stamped commit answers it exactly, and no clock is involved.
+   *
+   * What changed between the graph's commit and now is a `git diff`; a file's mtime is only when git last
+   * wrote it. Measured after a routine pull: the graph arrived IN that pull and was reported stale because
+   * git happened to write it 13 milliseconds before the source files that sort after it.
+   */
+  const stamp = await readStamp(cwd);
+  if (stamp) {
+    const changed = await changedSince(cwd, stamp.commit);
+    if (changed) {
+      for (const f of changed) {
+        if (staleBecause.length >= 3) break;
+        if (counts(f)) staleBecause.push(f);
+      }
+      return {
+        built: true,
+        nodes: g?.nodes.length ?? 0,
+        edges: g?.edges.length ?? 0,
+        ...(builtAt !== undefined && { builtAt }),
+        stale: staleBecause.length > 0,
+        staleBecause,
+      };
+    }
+  }
+
+  // No stamp (a graph built before this existed), or a commit this checkout does not have: the older check.
   if (builtAt !== undefined) {
     /**
      * The graph's own file list decides staleness — not every code-looking file in the repository.
@@ -304,8 +387,6 @@ export async function graphStatus(cwd: string): Promise<GraphStatus> {
      * A file the graph KNOWS, changed since the build, is exactly the claim being made — and it needs no
      * guessing about which directories count as source.
      */
-    const known = new Set<string>();
-    for (const n of g?.nodes ?? []) if (n.source_file) known.add(n.source_file);
     // A brand-new file the graph has never seen is the other real cause, and the one that matters most when
     // an agent adds code. It only counts when it looks like something graphify would extract.
     const listed = await gitFiles(cwd);
@@ -313,8 +394,7 @@ export async function graphStatus(cwd: string): Promise<GraphStatus> {
     // own installed state, indexed because graphify walks what it is pointed at — and a change there is never
     // a reason to tell someone their CODE graph has gone out of date. Measured: the whole staleness claim on
     // a real project was three skill documents.
-    const candidates = listed.filter((f) => !NOT_INDEXED.test(f) && (known.has(f) || CODE_EXT.test(f)))
-      .slice(0, MAX_STALE_CHECK);
+    const candidates = listed.filter(counts).slice(0, MAX_STALE_CHECK);
     for (const f of candidates) {
       if (staleBecause.length >= 3) break;
       try {
@@ -525,6 +605,13 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
     const res = pruneTooling(doc, await writtenTracePaths(cwd));
     if (res.removed) { await writeAtomic(path, JSON.stringify(doc)); pruned = res.removed; }
   } catch { /* leave the graph as graphify wrote it */ }
+
+  // The commit this graph describes. Best-effort: a graph without a stamp still works, it just falls back to
+  // the mtime check — see graphStatus.
+  try {
+    const head = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+    if (head) await writeAtomic(stampPath(cwd), `${JSON.stringify({ commit: head } satisfies GraphStamp)}\n`);
+  } catch { /* no stamp → the older, weaker check */ }
 
   const g = await loadGraph(cwd);
   return {
