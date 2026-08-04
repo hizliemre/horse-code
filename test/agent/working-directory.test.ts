@@ -19,13 +19,13 @@ function capturing(): { system: string[]; provider: Provider } {
   return { system, provider };
 }
 
-const opts = (provider: Provider, cwd?: string): RoleAgentOptions => ({
+const opts = (provider: Provider, cwd = ""): RoleAgentOptions => ({
   provider, model: "m", systemPrompt: "P-role",
   tools: new ToolRegistry(), messages: [{ role: "user", content: "do it" }],
   permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
   approve: async () => true,
   signal: new AbortController().signal,
-  ...(cwd !== undefined ? { cwd } : {}),
+  cwd,
 });
 
 const drain = async (o: RoleAgentOptions): Promise<void> => { for await (const _ of runRoleAgent(o)) { /* … */ } };

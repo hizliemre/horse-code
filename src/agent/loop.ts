@@ -1,3 +1,4 @@
+import { Recall } from "./recall.js";
 import type {
   AgentEvent, ChatRequest, Message, Provider, ToolCall,
 } from "../core/types.js";
@@ -91,6 +92,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     ...opts.messages,
   ];
   const schemas = opts.tools.schemas();
+  const recall = new Recall();
   // The blind-overwrite guard is only wired for agents whose writes are NOT individually committed.
   //
   // Its premise is that an overwrite destroys content irrecoverably. That is true for the merge-conflict
@@ -238,6 +240,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     // line so a read-only tool (grep/read/glob), which never pushes file activity, doesn't leave it stuck.
     opts.onLiveActivity?.("");
 
+    recall.nextTurn();
     if (toolCalls.length === 0) return;
 
     const results = yield* executeToolCalls(toolCalls, {
@@ -251,6 +254,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       proposeMemory: opts.proposeMemory,
       readFiles,
       onWrite: opts.onWrite,
+      recall,
     });
     for (const r of results) {
       // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.

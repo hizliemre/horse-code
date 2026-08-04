@@ -1,6 +1,7 @@
 import type { AgentEvent, PermissionDescriptor, Tool, ToolCall, ToolResult } from "../core/types.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import { Recall, recallNote } from "./recall.js";
 import { telemetry } from "../obs/telemetry.js";
 import { subjectOfArgs } from "./elide.js";
 
@@ -21,6 +22,7 @@ export interface ToolExecDeps {
   readFiles?: Set<string>; // files read this run → gates blind overwrites in write_file
   proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean; // propose_memory tool → curator queue
   onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit (sequential)
+  recall?: Recall; // what this agent has already been shown → an identical call is answered with a pointer
 }
 
 const WRITE_TOOLS = new Set(["write_file", "edit_file"]); // tools whose success should trigger a per-file commit
@@ -101,8 +103,21 @@ async function runTool(
    * that is not there. Found by using the monitor: it showed 16 re-reads that were 16 different pages.
    */
   const key = subjectOfArgs(args);
+  /**
+   * An answer the agent already has is not fetched twice.
+   *
+   * Measured over one run: 1,141 of an agent's 6,743 reads and searches were identical to one it had already
+   * made in the same conversation — the result still sitting in its own context. Each cost a full model turn.
+   */
+  const earlier = deps.recall?.saw(tool.name, key);
+  if (earlier !== undefined) {
+    tel.event("tool.recalled", { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key });
+    deps.onActivity?.({ tool: tool.name, target: subject, lines: 0, summary: `already answered on turn ${earlier}` });
+    return { content: recallNote(tool.name, subject, earlier), isError: false };
+  }
   const result = await tel.span(`tool.${tool.name}`,
     { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key }, run);
+  if (!result.isError) deps.recall?.note(tool.name, key);
   tel.event("tool.result", {
     "hc.tool": tool.name,
     "hc.tool.subject": subject,
