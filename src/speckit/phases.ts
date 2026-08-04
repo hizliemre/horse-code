@@ -204,36 +204,59 @@ export async function runPlan(p: PhaseDeps, paths: FeaturePaths, feedback?: stri
   await runRole(p, "planner", p.templates.command("plan"), msg);
 }
 
-export async function runTasks(p: PhaseDeps, paths: FeaturePaths, carryOver?: string[]): Promise<void> {
-  const rel = relative(p.workdir, paths.tasks);
-  const planRel = relative(p.workdir, paths.plan);
-  // Non-blocking notes the plan review deferred → the task list is the last place they can still be picked up.
-  const carried = carryOver?.length
-    ? `\n\nKnown non-blocking notes carried over from the earlier reviews — fold them into a task only where ` +
-      `they genuinely apply (they are context, not new requirements):\n${carryOver.map((c) => `- ${c}`).join("\n")}`
+/**
+ * What the project manager is told, given a template written for a different situation.
+ *
+ * spec-kit's tasks template is for a project being CREATED: its phases are Setup ("Configure linting and
+ * formatting tools"), Foundational ("Create base models/entities that all stories depend on"), one per user
+ * story, and Polish ("Documentation updates", "Code cleanup", "Run quickstart.md validation"). Its examples
+ * split by entity — "Create Entity1 model", "Create Entity2 model".
+ *
+ * Handed that and a one-line rendering fix in an existing repository, the planner produced exactly that
+ * shape: 27 cards, of which three verified the workspace and the lint config, five split one file by symbol,
+ * and the tail was lint, format, build and "Run quickstart.md validation" — which is in the template word for
+ * word. It was not being careless. It was being faithful to a template about a different situation.
+ *
+ * The template's FORMAT is what is wanted here. Its premise is not, and saying so is cheaper than fighting
+ * its examples one rule at a time.
+ */
+export function tasksMessage(planRel: string, tasksRel: string, template: string, carryOver: string[] = []): string {
+  const carried = carryOver.length
+    ? `\n\nKnown non-blocking notes carried over from the earlier reviews — fold them into a task only where `
+      + `they genuinely apply (they are context, not new requirements):\n${carryOver.map((c) => `- ${c}`).join("\n")}`
     : "";
-  const msg =
-    `Read the plan "${planRel}" and break it into an actionable task list.\n` +
+  return `Read the plan "${planRel}" and break it into an actionable task list.\n`
+    + `This codebase ALREADY EXISTS. The template below is written for a project being created from scratch, `
+    + `so its Setup and Foundational phases describe work that was done years ago here, and its Polish phase `
+    + `lists things that are not tasks. Take the template's FORMAT — ids, [P] markers, file paths, phases — `
+    + `and let the plan decide what is actually in it.\n`
     /**
      * Measured on a live run: one request became 27 cards whose first three were "Verify and anchor Nx
      * workspace environment", "Inspect existing dependencies" and "Verify linting config files". Each bought
      * an implementer, a code review and an acceptance gate, and each ended with the repository unchanged.
      */
-    `Every task must leave the repository DIFFERENT — code, a test, a document. Looking at something is not ` +
-    `a task: an implementer reads the code, checks the versions and finds its way around as part of doing ` +
-    `the work, so "verify X", "inspect Y", "confirm Z" belong inside the task that needs the answer, not ` +
-    `beside it. If the only thing a task would deliver is knowing something, it is not on the list.\n` +
+    + `Every task must leave the repository DIFFERENT — code, a test, a document. Looking at something is not `
+    + `a task: an implementer reads the code, checks the versions and finds its way around as part of doing `
+    + `the work, so "verify X", "inspect Y", "confirm Z" belong inside the task that needs the answer, not `
+    + `beside it. If the only thing a task would deliver is knowing something, it is not on the list.\n`
+    + `Nor is running a command: linting, formatting, building and typechecking are how a task is known to be `
+    + `FINISHED. Put them in the acceptance criteria of the tasks that changed the code — the implementer runs `
+    + `them there anyway — instead of giving each one a task of its own.\n`
     /**
-     * Same board, same measurement: five cards wrote nothing but `safe-html.pipe.ts`, four nothing but its
-     * spec, three nothing but one template — and cards on one file cannot run in parallel, so each extra one
-     * is another implementer, code review and acceptance gate in a queue for one coherent change.
+     * Same board: five cards wrote nothing but `safe-html.pipe.ts`, four nothing but its spec, three nothing
+     * but one template. Cards on one file cannot run in parallel, so each extra one is another implementer,
+     * code review and acceptance gate in a queue for one coherent change.
      */
-    `Nor is running a command: linting, formatting, building and typechecking are how a task is known to be ` +
-    `FINISHED. Put them in the acceptance criteria of the tasks that changed the code — the implementer runs ` +
-    `them there anyway — instead of giving each one a task of its own.\n` +
-    `And one file is usually one task. Tasks that write the same file cannot run at the same time, so ` +
-    `splitting a single file across several of them buys nothing and pays for a full implement-and-review ` +
-    `round each time. Split by what is genuinely independent, not by what is separately describable.\n` +
-    `Follow this template:\n\n${p.templates.template("tasks")}\n\nWrite the tasks to "${rel}".${carried}`;
+    + `And one file is usually one task. Tasks that write the same file cannot run at the same time, so `
+    + `splitting a single file across several of them buys nothing and pays for a full implement-and-review `
+    + `round each time. Split by what is genuinely independent, not by what is separately describable — the `
+    + `template's "one entity per task" examples are about creating new files, not changing existing ones.\n`
+    + `Follow this template:\n\n${template}\n\nWrite the tasks to "${tasksRel}".${carried}`;
+}
+
+export async function runTasks(p: PhaseDeps, paths: FeaturePaths, carryOver?: string[]): Promise<void> {
+  const rel = relative(p.workdir, paths.tasks);
+  const planRel = relative(p.workdir, paths.plan);
+  const msg = tasksMessage(planRel, rel, p.templates.template("tasks"), carryOver ?? []);
   await runRole(p, "project-manager", p.templates.command("tasks"), msg);
 }
