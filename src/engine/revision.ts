@@ -177,6 +177,14 @@ export async function runRevision(
   const rounds = Math.max(1, maxRounds);
 
   for (let round = 1; round <= rounds; round++) {
+    /**
+     * Said out loud, because this is the longest silent stretch in a run.
+     *
+     * The phase marker fires once, before the first round, and then a principal review and a senior rewrite
+     * happen per round with nothing on screen. Reported after a 577-minute run: "revizyon turunun surdugune
+     * dair ekranda geri bildirim yok" — and the person watching had no way to tell it from a hang.
+     */
+    deps.note?.(`🔁 PR revision, round ${round}/${rounds} — the principal reviewer is reading the merged diff.`);
     const v = await principalReview(deps, base, prDiff, round === 1 ? deferred : undefined);
     if (v.decision === "approve") {
       board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:approved" });
@@ -195,7 +203,17 @@ export async function runRevision(
       return { status: "human", rounds, answer };
     }
 
-    await postComments(v.comments);
+    deps.note?.(`🔁 Round ${round}: ${v.comments.length} change(s) requested — applying them.`);
+    /**
+     * Posting to the pull request is a courtesy; the revision is the work.
+     *
+     * A throw here used to end the whole pass — and the board showed exactly that: one `pr:changes` entry and
+     * nothing after it, on a run whose 27 tasks had all merged. The comments are already recorded in the
+     * card's history and in review-notes.md, so failing to mirror them onto the platform is worth a line, not
+     * the loss of the round they belong to.
+     */
+    try { await postComments(v.comments); }
+    catch (e) { deps.note?.(`⚠️ Could not post the review comments to the pull request (${e instanceof Error ? e.message : String(e)}) — applying them anyway.`); }
     const beforeRevise = await worktreeState(deps, base);
     await seniorRevise(deps, base, v.comments);
     // A revision that changed nothing means the next principal review would see IDENTICAL code and repeat the
@@ -215,6 +233,7 @@ export async function runRevision(
       }
     }
     board.appendStage(REVISION_CARD, { role: "senior-coder", action: "pr:revised" });
+    deps.note?.(`🔁 Round ${round}: revised and committed.`);
     /**
      * A revision round writes straight into the base worktree, so it never passes the merge that refreshes
      * traces — and this is the LAST code to enter the pull request. Left alone, the files a reviewer just had
@@ -265,4 +284,28 @@ async function refreshAfterRevision(deps: RevisionDeps, base: string, headBefore
     const { traceRootRel } = await import("./trace.js");
     await commitRefreshed(gitOf(deps), base, traceRootRel());
   } catch { /* never the reason a revised pull request is reported as failed */ }
+}
+
+/**
+ * Closes the revision row, whatever became of the pass.
+ *
+ * Nothing did. The pass writes its rounds into the card's HISTORY and never touches its column, so a finished
+ * run reported "1 task(s) were not finished. The board is kept — say continue to pick them up" about a row
+ * that was never work. Measured at the end of a 577-minute run with all 27 real tasks merged and the pull
+ * request open.
+ *
+ * Telling someone to continue work that is done is worse than saying nothing, because continuing is exactly
+ * what would re-open it.
+ *
+ * Closed on FAILURE too, and that is the case the report was misreading: a revision that could not run is a
+ * revision that will not run by being asked again from the board.
+ */
+export function closeRevision(board: Board, result?: RevisionResult, failure?: string): void {
+  if (!board.get(REVISION_CARD)) return;
+  board.appendStage(REVISION_CARD, {
+    role: "principal-coder",
+    action: failure ? "pr:failed" : `pr:${result?.status ?? "done"}`,
+    ...(failure ? { note: failure } : {}),
+  });
+  board.move(REVISION_CARD, "DONE", "principal-coder");
 }

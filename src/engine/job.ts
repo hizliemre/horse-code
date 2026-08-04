@@ -14,7 +14,7 @@ import { runProjectManager } from "./project-manager.js";
 import { auditBreakdown, repairRequest } from "./task-audit.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
-import { REVISION_CARD, runRevision, type RevisionResult } from "./revision.js";
+import { REVISION_CARD, runRevision, closeRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
 import { describeInherited, describeTopUp } from "../worktree/inherit.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
@@ -448,11 +448,20 @@ export async function runJob(
           opts.askUser, opts.revisionRounds ?? 3, prDiff, deferred,
         );
         emit({ kind: "phase", phase: "revision-done", detail: revision.status });
+        closeRevision(board, revision);
       } catch (e) {
         if (deps.signal.aborted) throw e; // a real cancel still ends the job
         emit({ kind: "note", text:
           `⚠️ The PR revision pass could not run (${e instanceof Error ? e.message : String(e)}). ` +
           `The merged work is unaffected — it is delivered below, and the deferred notes are in review-notes.md.` });
+        /**
+         * Closed even here.
+         *
+         * The row is bookkeeping, and a revision that could not run will not run by being asked again from
+         * the board. Left in TODO it made a finished run report "1 task(s) were not finished — say continue",
+         * about the one row that was never work.
+         */
+        closeRevision(board, undefined, e instanceof Error ? e.message : String(e));
       }
     }
 
