@@ -115,19 +115,29 @@ describe("what a person asks to be remembered", () => {
  * deliberate act — `/graph` — not something a finished job decides on the user's behalf.
  */
 describe("the graph the project checkout holds", () => {
-  it("is reported stale, not rebuilt, when a job ends", async () => {
+  it("is brought up to date at startup, not after a job", async () => {
     const { readFile: rf } = await import("node:fs/promises");
     const src = await rf("src/tui/app.tsx", "utf8");
-    const after = src.slice(src.indexOf("controller.endRun("), src.indexOf("controller.endRun(") + 300);
-    expect(after).toContain("reportStaleGraph()");
-    expect(after).not.toContain("refreshGraphIfStale");
-    // …and the reporter itself must not build anything.
-    const fn = src.slice(src.indexOf("const reportStaleGraph"), src.indexOf("const reportStaleGraph") + 500);
-    expect(fn).not.toContain("buildProjectGraph");
-    expect(fn).toMatch(/\/graph/);
+    const afterRun = src.slice(src.indexOf("controller.endRun("), src.indexOf("controller.endRun(") + 300);
+    expect(afterRun).not.toContain("refreshGraphIfStale");
+    // …and the startup path is where it happens, once, before anything asks the graph a question.
+    const startup = src.slice(src.indexOf("startupExtra.graph ="), src.indexOf("startupExtra.graph =") + 500);
+    expect(startup).toContain("refreshGraphIfStale()");
   });
 
-  /** Rebuilding is still available — as something asked for, in both entry points. */
+  /**
+   * Rebuilding the checkout's graph is only safe because it is no longer committed.
+   *
+   * It used to be shared, so every rebuild left the checkout modified and the next merge tripped over it —
+   * on PR 677 that was the whole conflict. Now the graph is local per checkout and a build drops the
+   * `Community <n>` placeholders instead of adding them to the shared names file.
+   */
+  it("is rebuildable without leaving anything for git to see", async () => {
+    const { localOnly, sharedDerived } = await import("../../src/engine/trace.js");
+    expect(localOnly()).toContain("graphify-out/graph.json");
+    expect(sharedDerived()).not.toContain("graphify-out/graph.json");
+  });
+
   it("is still rebuildable on request", async () => {
     const { readFile: rf } = await import("node:fs/promises");
     expect(await rf("src/cli.ts", "utf8")).toContain("buildProjectGraph(cwd)");

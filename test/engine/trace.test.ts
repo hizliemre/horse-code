@@ -284,12 +284,21 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
    * re-buy understanding it already paid for. Measured on a real project, `graphify-out/` was ignored
    * WHOLESALE — so the graph was never shared, and horse-code said nothing about it.
    */
-  it("re-includes the graph when the project ignores its whole directory", async () => {
+  /**
+   * The NAMES are re-included; the graph is not.
+   *
+   * `graph.json` is one line of JSON — 33.7 MB on a real project — so two branches that both rebuilt it have
+   * nothing for git to reconcile. Measured on PR 677: twelve files in the merge, eleven auto-merged, and the
+   * graph and the labels beside it blocked the pull request outright. The graph costs CPU to rebuild and a
+   * session gets its copy through INHERITED_ASSETS; the names cost an LLM pass and cannot be re-derived.
+   */
+  it("re-includes the community names, and leaves the graph itself local", async () => {
     await writeFile(join(cwd, ".gitignore"), "graphify-out/\n", "utf8");
     expect(await ensureGitignore(cwd)).toBe(true);
     const gi = await readFile(join(cwd, ".gitignore"), "utf8");
-    expect(gi).toContain("graphify-out/*");            // opened, so a negation can reach inside
-    expect(gi).toContain("!graphify-out/graph.json");  // …and the graph itself is kept
+    expect(gi).toContain("graphify-out/*");                        // opened, so a negation can reach inside
+    expect(gi).toContain("!graphify-out/.graphify_labels.json");   // …the names an LLM wrote are kept
+    expect(gi).not.toContain("!graphify-out/graph.json");          // …the graph is not
     expect(gi).not.toMatch(/^graphify-out\/$/m);
   });
 
@@ -321,8 +330,9 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
 
   it("says nothing about a directory the project already excludes deliberately", async () => {
     // graphify-out/ open and its derived files already named → nothing missing, nothing to add.
-    await writeFile(join(cwd, ".gitignore"),
-      "graphify-out/manifest.json\ngraphify-out/graph.html\ngraphify-out/.graphify_root\n", "utf8");
+    // Derived from the source list, so a file added to LOCAL_ONLY cannot silently make this pass.
+    const { localOnly } = await import("../../src/engine/trace.js");
+    await writeFile(join(cwd, ".gitignore"), `${localOnly().join("\n")}\n`, "utf8");
     expect(await ensureGitignore(cwd)).toBe(false);
   });
 

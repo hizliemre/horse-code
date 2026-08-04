@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { graphStatus, changedSince, readStamp, stampPath, GRAPH_DIR } from "../../src/engine/project-graph.js";
-import { sharedDerived } from "../../src/engine/trace.js";
+import { sharedDerived, localOnly } from "../../src/engine/trace.js";
 
 let cwd: string;
 const git = (...args: string[]): string =>
@@ -103,8 +103,17 @@ describe("the stamp itself", () => {
     expect(await readStamp(cwd)).toBeUndefined();
   });
 
-  /** It ships with the graph: a clone without it falls back to timestamps, which is the bug. */
-  it("is shared, like the graph it describes", () => {
-    expect(sharedDerived()).toContain("graphify-out/.graph-commit.json");
+  /**
+   * It stays with the graph it describes, and the graph is local.
+   *
+   * `graph.json` is one 33.7 MB line and cannot be merged, so it is rebuilt per checkout rather than
+   * committed. A stamp naming a commit for someone else's graph would be worse than none.
+   */
+  it("is local, like the graph it describes", () => {
+    expect(localOnly()).toContain("graphify-out/.graph-commit.json");
+    expect(localOnly()).toContain("graphify-out/graph.json");
+    expect(sharedDerived()).not.toContain("graphify-out/graph.json");
+    // …while the names an LLM wrote are still shared: they cannot be re-derived from anything.
+    expect(sharedDerived()).toContain("graphify-out/.graphify_labels.json");
   });
 });

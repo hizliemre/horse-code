@@ -420,26 +420,28 @@ export const GITIGNORE_MARKER = "# horse-code project knowledge";
  * every clone paying to rebuild it.
  */
 const SHARED_DERIVED: { path: string; why: string }[] = [
-  { path: "graphify-out/graph.json", why: "# Shared — the code graph is minutes of parsing that no clone should have to repeat." },
   /**
-   * The community names, which the graph does NOT carry.
+   * The community names, and NOT the graph they name.
    *
-   * graphify's clustering finds the communities on its own, but naming them is step 5 of its runbook and the
-   * step an LLM performs: "look at its node labels and write a 2-5 word plain-language name". `graph.json`
-   * stores each node's community NUMBER and nothing else — measured on a real project, not one of its 6283
-   * names appears anywhere in the graph file. So a clone that has the graph still has "community 47" where
-   * this file says "Wallet Member & Balance", and getting that back means paying for the naming pass again.
+   * The graph used to be here too, and it is the one thing in this list that cannot survive a merge. It is a
+   * single line of JSON — 33.7 MB of it on a real project — and git merges by line, so two branches that
+   * both rebuilt it have nothing to reconcile. Measured on PR 677: of twelve files touched by the merge,
+   * every one auto-merged except `graphify-out/graph.json` and the labels beside it, and those two blocked
+   * the pull request outright. Rebuilding it costs CPU and nothing else, `graphify update` is incremental,
+   * and a session gets its copy through INHERITED_ASSETS without git being involved at all.
+   *
+   * The names are the opposite on every count. graphify's clustering finds the communities on its own, but
+   * naming them is step 5 of its runbook and the step an LLM performs: "look at its node labels and write a
+   * 2-5 word plain-language name". `graph.json` stores each node's community NUMBER and nothing else —
+   * measured on a real project, not one of its 6,283 names appears anywhere in the graph file. So a clone
+   * that has the graph still reads "community 47" where this file says "Wallet Member & Balance", and
+   * getting that back means paying an LLM for the naming pass again.
+   *
+   * It merges, too: `pruneAreaNames` writes one key per line in numeric order precisely so that a change to
+   * one name is a change to one line. Two branches adding different names merge cleanly; only two branches
+   * naming the SAME community differently conflict, in 136 KB rather than 33.7 MB.
    */
   { path: "graphify-out/.graphify_labels.json", why: "# Shared — the community names an LLM wrote; the graph stores only their numbers." },
-  /**
-   * Which commit the graph describes.
-   *
-   * Shared for the same reason the graph is: a clone that has the graph has the same answer, and without it
-   * the freshness check falls back to file timestamps — which say when git last WROTE a file, not when the
-   * graph was built. Measured: a graph that arrived in a `git pull` was reported stale, because git wrote it
-   * 13 milliseconds before the source files that sort after it.
-   */
-  { path: "graphify-out/.graph-commit.json", why: "# Shared — the commit the graph describes; without it freshness falls back to timestamps." },
 ];
 
 /**
@@ -448,12 +450,23 @@ const SHARED_DERIVED: { path: string; why: string }[] = [
  * Read from the same list the `.gitignore` rules come from on purpose: a path un-ignored but never committed,
  * or committed but still ignored, is the kind of split that survives a test suite and fails in a real run.
  */
+/** The derived files that stay in this checkout — named here so tests and rules cannot drift apart. */
+export function localOnly(): string[] {
+  return [...LOCAL_ONLY];
+}
+
 export function sharedDerived(): string[] {
   return SHARED_DERIVED.map((s) => s.path);
 }
 
 /** Regenerated on every build, or keyed to one machine's paths — these genuinely do not belong in git. */
-const LOCAL_ONLY = ["graphify-out/manifest.json", "graphify-out/graph.html", "graphify-out/.graphify_root"];
+const LOCAL_ONLY = [
+  "graphify-out/manifest.json", "graphify-out/graph.html", "graphify-out/.graphify_root",
+  // The graph itself: rebuilt per checkout, inherited by copy, and unmergeable by construction — see above.
+  "graphify-out/graph.json",
+  // …and the commit it was built at, which describes that local copy and travels with it.
+  "graphify-out/.graph-commit.json",
+];
 
 /**
  * Nested checkouts, which must never reach a remote whoever created them.

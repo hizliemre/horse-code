@@ -152,6 +152,13 @@ describe("describeRefresh", () => {
   });
 });
 
+/** The rule ensureGitignore writes for a real project, committed so it is not itself loose. */
+async function ignoreGraph(repo: string): Promise<void> {
+  await writeFile(join(repo, ".gitignore"), "graphify-out/graph.json\n", "utf8");
+  await defaultGitRunner(["add", ".gitignore"], repo);
+  await defaultGitRunner(["commit", "-m", "chore: ignore the local graph"], repo);
+}
+
 describe("a refreshed trace is committed, not left loose", () => {
   /**
    * git refuses to merge a branch that would overwrite a MODIFIED working file, and a trace sits at exactly
@@ -170,10 +177,11 @@ describe("a refreshed trace is committed, not left loose", () => {
       await mkdir(traces, { recursive: true });
       await writeFile(join(traces, "a.ts.md"), "# a trace", "utf8");
 
-      // A refresh rebuilds the graph before writing, so that file is dirty too — and one loose file is
-      // enough to stop the next merge, whichever file it is.
+      // A refresh rebuilds the graph before writing, so that file is dirty too. It is not committed — one
+      // 33.7 MB line cannot be merged — so the project ignores it, exactly as ensureGitignore writes it.
       await mkdir(join(repo, "graphify-out"), { recursive: true });
       await writeFile(join(repo, "graphify-out", "graph.json"), '{"nodes":[]}', "utf8");
+      await ignoreGraph(repo);
 
       expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(true);
       const st = await defaultGitRunner(["status", "--porcelain"], repo);
@@ -202,6 +210,7 @@ describe("a refreshed trace is committed, not left loose", () => {
       await writeFile(join(traces, "a.ts.md"), "# a trace", "utf8");
       await mkdir(join(repo, "graphify-out"), { recursive: true });
       await writeFile(join(repo, "graphify-out", "graph.json"), '{"nodes":[]}', "utf8");
+      await ignoreGraph(repo);
       // …and no .graphify_labels.json: this project has never been labelled.
 
       expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(true);
@@ -209,17 +218,26 @@ describe("a refreshed trace is committed, not left loose", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
-  /** And when the project DOES have the names, they ship with the work rather than sitting untracked. */
-  it("carries the community names along with the graph", async () => {
+  /**
+   * The names ship with the work; the graph they name does not.
+   *
+   * `graph.json` is a single line of JSON — 33.7 MB on a real project — so two branches that both rebuilt it
+   * have nothing for git to reconcile. Measured on PR 677: eleven of twelve files auto-merged and these two
+   * blocked the pull request. The names are 136 KB, written one key per line, and cost an LLM pass to
+   * recreate; the graph costs CPU and reaches a session by copy, not through git.
+   */
+  it("carries the community names, and leaves the graph out", async () => {
     const repo = await initTmpRepo();
     try {
       await mkdir(join(repo, "graphify-out"), { recursive: true });
       await writeFile(join(repo, "graphify-out", "graph.json"), '{"nodes":[]}', "utf8");
       await writeFile(join(repo, "graphify-out", ".graphify_labels.json"), '{"0":"Billing"}', "utf8");
+      await ignoreGraph(repo);
 
       expect(await commitRefreshed(defaultGitRunner, repo, ".horsecode/traces")).toBe(true);
       const tracked = await defaultGitRunner(["ls-files", "graphify-out"], repo);
       expect(tracked.stdout).toContain(".graphify_labels.json");
+      expect(tracked.stdout).not.toContain("graph.json\n");
       expect((await defaultGitRunner(["status", "--porcelain"], repo)).stdout.trim()).toBe("");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });

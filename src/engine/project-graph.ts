@@ -613,6 +613,29 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
     if (head) await writeAtomic(stampPath(cwd), `${JSON.stringify({ commit: head } satisfies GraphStamp)}\n`);
   } catch { /* no stamp → the older, weaker check */ }
 
+  /**
+   * The placeholders graphify writes are not names, and this file is shared.
+   *
+   * A rebuild that finds new communities seeds each one "Community <n>". `parseAreas` already refuses those
+   * — an area nobody named has to read as unnamed — so they carry no information, and every rebuild adds
+   * more of them. Measured on a real checkout: `.graphify_labels.json` had grown to 6,334 entries of which
+   * 2,896 were bare placeholders, and the file is committed, so each rebuild left it modified for the next
+   * merge to trip over. Dropping them keeps a shared file stable and loses nothing.
+   */
+  let seeded = 0;
+  try {
+    const lp = labelsPath(cwd);
+    const doc = JSON.parse(await readFile(lp, "utf8")) as Record<string, unknown>;
+    const named = Object.fromEntries(Object.entries(doc)
+      .filter(([, v]) => !(typeof v === "string" && UNNAMED.test(v.trim()))));
+    seeded = Object.keys(doc).length - Object.keys(named).length;
+    if (seeded) {
+      const ordered: Record<string, unknown> = {};
+      for (const k of Object.keys(named).sort((a, b) => Number(a) - Number(b))) ordered[k] = named[k];
+      await writeAtomic(lp, `${JSON.stringify(ordered, null, 2)}\n`);
+    }
+  } catch { /* no labels file, or unreadable → nothing to tidy */ }
+
   const g = await loadGraph(cwd);
   return {
     ok: true,
