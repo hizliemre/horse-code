@@ -41,7 +41,7 @@ import { startupSummary, type StartupFacts } from "./startup-summary.js";
 import { traceRootRel } from "../engine/trace.js";
 import { existsSync } from "node:fs";
 import { RoleFitness } from "../engine/role-fitness.js";
-import { restoreTerminal, restoreOnExit } from "./restore-terminal.js";
+import { restoreTerminal, restoreOnExit, sttySane } from "./restore-terminal.js";
 
 export interface RunTuiOpts {
   buildDeps: (read: LineReader) => Promise<JobDeps>;
@@ -720,7 +720,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
      * call it. Reported after a real session: quitting left the shell echoing `^M` for Enter and `^C` for
      * interrupt, with commands typed as `clear^M^C^C^C…` and never executed.
      */
-    restoreTerminal({ stdin: process.stdin, write: (x) => origWrite(x) });
+    restoreTerminal({ stdin: process.stdin, write: (x) => origWrite(x), sane: sttySane });
     unhook();
   };
   /**
@@ -742,7 +742,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    * keystroke does. A second one within the double-tap window is the escape hatch and does exit.
    */
   let lastSignalInt = 0;
-  const unhook = restoreOnExit({ stdin: process.stdin, write: (x) => origWrite(x) }, process, () => {
+  const unhook = restoreOnExit({ stdin: process.stdin, write: (x) => origWrite(x), sane: sttySane }, process, () => {
     const now = Date.now();
     const doubled = now - lastSignalInt < 400;
     lastSignalInt = now;

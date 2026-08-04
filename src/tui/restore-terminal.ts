@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+
 /**
  * Puts the terminal back the way it was found.
  *
@@ -20,6 +22,18 @@ export interface TerminalHandles {
   /** Structural, not `NodeJS.ReadStream`: the only thing that matters is whether it can leave raw mode. */
   stdin: { isTTY?: boolean; setRawMode?: (raw: boolean) => unknown };
   write: (s: string) => unknown;
+  /**
+   * The last resort: ask the SYSTEM to sanitise the terminal, rather than the cache.
+   *
+   * Injected so it can be tested and so a caller with no terminal can leave it out.
+   */
+  sane?: () => unknown;
+}
+
+/** `stty sane`, run against the controlling terminal. Synchronous, because an exit handler cannot await. */
+export function sttySane(): void {
+  if (process.platform === "win32") return;
+  spawnSync("stty", ["sane"], { stdio: ["inherit", "ignore", "ignore"] });
 }
 
 /**
@@ -38,6 +52,20 @@ export function restoreTerminal(h: TerminalHandles): void {
     h.write(RESET_SEQUENCE);
   } catch {
     // Same.
+  }
+  /**
+   * …and then ask the system, because the cache can be wrong.
+   *
+   * `setRawMode(false)` restores the termios Node captured when it first took the terminal, which is the
+   * right answer only if nothing else has touched it since. A run spends much of its time inside subprocesses
+   * that hold the foreground tty — `docker exec`, `psql`, a dev server — and any of them can leave it in a
+   * state that cache knows nothing about. Reported twice now, the second time after the explicit raw-mode
+   * restore was already in place: quitting left the shell echoing `^M`, with `hcode^M` sitting at the prompt.
+   *
+   * Last, so it can only ever add to what the specific steps already did.
+   */
+  if (h.stdin.isTTY && h.sane) {
+    try { h.sane(); } catch { /* no stty, or no terminal left to sanitise */ }
   }
 }
 

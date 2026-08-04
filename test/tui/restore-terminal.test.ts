@@ -160,3 +160,43 @@ describe("an interrupt is negotiable; a termination is not", () => {
     expect(f.killed).toEqual(["SIGINT"]);
   });
 });
+
+/**
+ * The `^M` came back.
+ *
+ * Reported once, fixed by restoring raw mode explicitly, and reported again: after quitting, Enter echoed as
+ * `^M` and `hcode^M` sat at the prompt unexecuted.
+ *
+ * `setRawMode(false)` puts back the termios Node captured when IT first took the terminal — which is the
+ * right answer only if nothing else touched the terminal since. A run spends much of its time inside
+ * subprocesses that hold the foreground tty (`docker exec`, `psql`, a dev server), and any of them can leave
+ * it in a state Node's cached copy knows nothing about.
+ *
+ * So the last thing on the way out asks the system, not the cache. `stty sane` is exactly what the user had
+ * to type to get their shell back, and it costs one spawn on a path that is already ending.
+ */
+describe("the last resort on the way out", () => {
+  it("asks the system to sanitise the terminal, after doing everything else", () => {
+    const order: string[] = [];
+    restoreTerminal({
+      stdin: { isTTY: true, setRawMode: () => order.push("rawMode(false)") },
+      write: () => order.push("escape-sequences"),
+      sane: () => order.push("stty sane"),
+    });
+    expect(order).toEqual(["rawMode(false)", "escape-sequences", "stty sane"]);
+  });
+
+  it("does nothing of the sort when there is no terminal to sanitise", () => {
+    const order: string[] = [];
+    restoreTerminal({ stdin: { isTTY: false }, write: () => order.push("w"), sane: () => order.push("stty sane") });
+    expect(order).not.toContain("stty sane");
+  });
+
+  it("survives a sane that fails — a terminal already gone needs nothing put back", () => {
+    expect(() => restoreTerminal({
+      stdin: { isTTY: true, setRawMode: () => {} },
+      write: () => {},
+      sane: () => { throw new Error("no stty here"); },
+    })).not.toThrow();
+  });
+});
