@@ -1,6 +1,6 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, dirname, basename } from "node:path";
 import { inheritFromRoot, topUpInherited, type Inherited } from "./inherit.js";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
@@ -35,12 +35,44 @@ export interface PRAdapter {
   createPR(input: { branch: string } & PRInput): Promise<{ url: string; number?: number }>;
 }
 
+/**
+ * The repository's main checkout, seen from anywhere inside it.
+ *
+ * A linked worktree shares the repository but is not the repository, and `--git-common-dir` is what points
+ * back: from `/main` and from `/anything-linked` alike it names `/main/.git`, whose parent is the checkout
+ * that owns the place other checkouts belong under.
+ *
+ * Falls back to the given directory whenever there is no answer — a bare repository has no working tree to
+ * host anything, and a plain directory is not a repository yet.
+ */
+export async function mainWorktreeRoot(git: GitRunner, cwd: string): Promise<string> {
+  const abs = await git(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd);
+  // `--path-format` needs git 2.31; without it the answer can be relative, so it is resolved against cwd.
+  const r = abs.code === 0 ? abs : await git(["rev-parse", "--git-common-dir"], cwd);
+  if (r.code !== 0 || !r.stdout.trim()) return cwd;
+  const common = resolve(cwd, r.stdout.trim());
+  return basename(common) === ".git" ? dirname(common) : cwd;
+}
+
 export class WorktreeManager {
   private readonly repoRoot: string;
+  /**
+   * Where sessions are kept, which is the REPOSITORY's business and not the caller's checkout.
+   *
+   * Measured from a live run: started inside another tool's worktree, horse-code opened its session at
+   * `…/.claude/worktrees/product-create-wizard/.horsecode/worktrees/…/base` — its own worktree nested inside
+   * someone else's, inside the repository. That works and is a place nobody will look: `/clean-worktrees` at
+   * the repository root cannot see it, and removing the outer checkout takes it with it.
+   *
+   * Distinct from `repoRoot` on purpose. What a session INHERITS — the code graph, the memory, the project
+   * config — is whatever the user is standing in, and that is frequently not the main checkout.
+   */
+  private readonly worktreeHome: string;
   private readonly git: GitRunner;
 
-  constructor(deps: { repoRoot: string; runGit?: GitRunner }) {
+  constructor(deps: { repoRoot: string; worktreeHome?: string; runGit?: GitRunner }) {
     this.repoRoot = deps.repoRoot;
+    this.worktreeHome = deps.worktreeHome ?? deps.repoRoot;
     this.git = deps.runGit ?? defaultGitRunner;
   }
 
@@ -92,7 +124,7 @@ export class WorktreeManager {
   async openSession(fromBranch: string, jobName: string): Promise<WorktreeSession> {
     await this.ensureBaseCommit();
     const base = await this.resolveBase(fromBranch);
-    const worktreesDir = join(this.repoRoot, ".horsecode", "worktrees");
+    const worktreesDir = join(this.worktreeHome, ".horsecode", "worktrees");
     await mkdir(worktreesDir, { recursive: true });
     await writeFile(join(worktreesDir, ".gitignore"), "*\n", "utf8");
 
@@ -142,7 +174,7 @@ export class WorktreeManager {
    * `rawPrompt` (case/space-tolerant). Returns null when there is nothing to resume.
    */
   async findResumable(rawPrompt: string): Promise<WorktreeSession | null> {
-    const worktreesDir = join(this.repoRoot, ".horsecode", "worktrees");
+    const worktreesDir = join(this.worktreeHome, ".horsecode", "worktrees");
     if (!existsSync(worktreesDir)) return null;
     // ensureRepo would be needed for the git call below, but if there's a worktrees dir there's already a repo.
     const inside = await this.git(["rev-parse", "--is-inside-work-tree"], this.repoRoot);

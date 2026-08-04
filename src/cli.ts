@@ -16,7 +16,7 @@ import { briefStatus } from "./engine/project-brief.js";
 import { setTraceRoot, discoverTraceRoot } from "./engine/trace.js";
 import { planFor, runTraces, describePlan, buildBrief } from "./engine/trace-run.js";
 import { traceable } from "./engine/trace.js";
-import { WorktreeManager } from "./worktree/manager.js";
+import { WorktreeManager, mainWorktreeRoot } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
 import { buildJobDeps } from "./wiring.js";
@@ -261,7 +261,22 @@ export async function main(argv: string[]): Promise<void> {
   await skillRegistry.loadFromDir(externalSkillsDir(home));
   const skillsDir = join(cwd, ".horsecode", "skills");
   if (existsSync(skillsDir)) await skillRegistry.loadFromDir(skillsDir);
-  const manager = new WorktreeManager({ repoRoot: cwd });
+  /**
+   * Sessions live in the REPOSITORY's `.horsecode`, wherever you started from.
+   *
+   * Started inside another tool's worktree, horse-code used to open its session under that worktree —
+   * measured live: `…/.claude/worktrees/product-create-wizard/.horsecode/worktrees/…/base`, its own worktree
+   * nested inside someone else's, inside the repository. It works and it is a place nobody will look:
+   * `/clean-worktrees` at the repository root cannot see it, and removing the outer checkout takes it along.
+   *
+   * `repoRoot` stays the directory the user is in, because that is where the state a session INHERITS lives —
+   * their code graph, their memory, their project config are in the checkout they are standing in.
+   */
+  const worktreeHome = await mainWorktreeRoot(defaultGitRunner, cwd);
+  if (worktreeHome !== cwd) {
+    console.log(`ℹ️  Sessions will be opened in ${worktreeHome} — the repository's main checkout.`);
+  }
+  const manager = new WorktreeManager({ repoRoot: cwd, worktreeHome });
   const remoteUrl = (await defaultGitRunner(["remote", "get-url", "origin"], cwd)).stdout.trim();
   const prAdapter = makePRAdapter({ platform: detectPlatform(remoteUrl), run: defaultCmdRunner, cwd, log: (s) => console.log(s) });
   const fromBranch = args.fromBranch ?? (await currentBranch(cwd));
