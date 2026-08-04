@@ -15,6 +15,7 @@ import type { SkillRegistry } from "./skills/registry.js";
 import type { WorktreeManager, PRAdapter } from "./worktree/manager.js";
 import type { AskHuman } from "./engine/escalation.js";
 import type { JobDeps } from "./engine/job.js";
+import { reviewThreadBody } from "./adapters/pr.js";
 import type { RevisionPRAdapter } from "./adapters/pr.js";
 import { loadSpecKit } from "./speckit/templates.js";
 import type { SpecKitTemplates } from "./speckit/templates.js";
@@ -163,8 +164,9 @@ export function logPRAdapter(log: (s: string) => void): RevisionPRAdapter {
       log(`PR would have been opened: ${input.branch} → ${input.base} — "${input.title}"`);
       return { url: "(pending: G — real MCP)" };
     },
-    async postComments(comments) {
-      if (comments.length) log(`PR comments: ${comments.join("; ")}`);
+    async postComments(comments, outcome) {
+      if (comments.length || outcome === "approved") log(`PR review: ${reviewThreadBody(comments, outcome)}`);
     },
+    async resolveOwnThreads() { /* nothing was opened */ },
   };
 }

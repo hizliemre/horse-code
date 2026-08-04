@@ -107,8 +107,10 @@ function jobProvider(opts: { intent?: string; judge?: string[]; principal?: stri
 function fakeAdapter(): RevisionPRAdapter & { calls: number; comments: string[][] } {
   const a = {
     calls: 0,
+    resolved: 0,
     comments: [] as string[][],
     async createPR() { a.calls++; return { url: "http://pr/1", number: 1 }; },
+    async resolveOwnThreads() { a.resolved++; },
     async postComments(c: string[]) { a.comments.push(c); },
   };
   return a;
@@ -240,7 +242,9 @@ describe("runJob", () => {
       const res = await runJob(jdeps(p, mgr, adapter), { prompt: "X", fromBranch: "main", jobName: "job", askUser: async () => "x", maxRounds: 2, revisionRounds: 3 });
       expect(res.kind).toBe("done");
       if (res.kind === "done") expect(res.revision?.status).toBe("approved");
-      expect(adapter.comments).toEqual([["no tests"]]);
+      // …the round that asked for changes, and then the approval, which is said on the pull request too.
+    expect(adapter.comments[0]).toEqual(["no tests"]);
+    expect(adapter.comments.length).toBe(2);
     } finally {
       await rm(repo, { recursive: true, force: true });
       await rm(bare, { recursive: true, force: true });

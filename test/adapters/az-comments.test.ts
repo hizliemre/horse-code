@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFile } from "node:fs/promises";
-import { azAdapter, reviewThreadBody, isMachineTitle, type CmdRunner } from "../../src/adapters/pr.js";
+import { azAdapter, reviewThreadBody, isMachineTitle, ownOpenThreads, RESOLVED_STATUS, type CmdRunner } from "../../src/adapters/pr.js";
 
 const CREATED = JSON.stringify({
   pullRequestId: 765,
@@ -165,5 +165,98 @@ describe("which titles count as the machine's own", () => {
   it("does not claim a conventional title, however it was produced", () => {
     expect(isMachineTitle("fix(products): açıklama artık güvenli HTML")).toBe(false);
     expect(isMachineTitle("hcode: something")).toBe(false);
+  });
+});
+
+/**
+ * "No comment" cannot be the record of both a review that passed and a review that never ran.
+ *
+ * Measured on PR #765: the principal read the merged diff and approved it, and the pull request showed only
+ * the two threads from the earlier rounds that had asked for changes. Nothing said the review had happened.
+ */
+describe("an approval is said out loud", () => {
+  it("opens a thread even though there is nothing to fix", async () => {
+    const { calls, run } = recorder();
+    const az = azAdapter(run, "/repo", () => {});
+    await az.createPR({ branch: "b", base: "development", title: "t", body: "b" });
+    await az.postComments([], "approved");
+    const thread = calls.find((c) => c.args.includes("pullRequestThreads"));
+    expect(thread, "the approval was silent").toBeDefined();
+    const sent = JSON.parse(thread!.body!) as { comments: { content: string }[]; status: string };
+    expect(sent.comments[0].content).toMatch(/approved/i);
+    expect(sent.status).toBe("closed");   // …nothing to act on, so it opens resolved
+  });
+
+  it("reads as an approval, not as a change request with zero changes", () => {
+    const body = reviewThreadBody([], "approved");
+    expect(body).toMatch(/approved/i);
+    expect(body).not.toMatch(/change\(s\) requested/);
+  });
+
+  it("still says nothing when there is neither an outcome nor a comment", async () => {
+    const { calls, run } = recorder();
+    const az = azAdapter(run, "/repo", () => {});
+    await az.createPR({ branch: "b", base: "development", title: "t", body: "b" });
+    await az.postComments([]);
+    expect(calls.some((c) => c.args.includes("pullRequestThreads"))).toBe(false);
+  });
+});
+
+const THREADS = JSON.stringify({ value: [
+  { id: 5809, status: "active", comments: [{ commentType: "system", content: "The reference refs/heads/x was updated." }] },
+  { id: 5810, status: "active", comments: [{ content: "**horse-code review** — 7 change(s) requested:\n1. x" }] },
+  { id: 5811, status: "fixed",  comments: [{ content: "**horse-code review** — 2 change(s) requested:\n1. y" }] },
+  { id: 5812, status: "active", comments: [{ content: "Bunu ben elle yazdım, lütfen bakar mısın?" }] },
+]});
+
+/**
+ * An approval left beside its own still-open objections tells the reader nothing about which ones stand.
+ *
+ * Measured on PR #765: two `Active` threads, every finding of the first demonstrably fixed on the branch —
+ * no scratch files tracked, lockfile back in sync, the regression tests written — and the review had since
+ * approved the result. Nothing ever went back to close them.
+ */
+describe("resolving what the review itself opened", () => {
+  it("picks its own open threads, and no one else's", () => {
+    expect(ownOpenThreads(JSON.parse(THREADS))).toEqual(["5810"]);
+  });
+
+  it("leaves a person's comment alone, whatever it says", () => {
+    const ids = ownOpenThreads(JSON.parse(THREADS));
+    expect(ids).not.toContain("5812");   // …written by hand
+    expect(ids).not.toContain("5809");   // …azure's own notice
+    expect(ids).not.toContain("5811");   // …already resolved
+  });
+
+  it("patches each one to the state the UI calls Resolved", async () => {
+    const seen: { args: string[]; body?: string }[] = [];
+    const run: CmdRunner = async (_cmd, args) => {
+      const i = args.indexOf("--in-file");
+      seen.push({ args, ...(i >= 0 ? { body: await readFile(args[i + 1], "utf8") } : {}) });
+      if (args.includes("create")) return { stdout: CREATED, stderr: "", code: 0 };
+      if (args.includes("pullRequestThreads") && !args.includes("PATCH")) return { stdout: THREADS, stderr: "", code: 0 };
+      return { stdout: "{}", stderr: "", code: 0 };
+    };
+    const az = azAdapter(run, "/repo", () => {});
+    await az.createPR({ branch: "b", base: "development", title: "t", body: "b" });
+    await az.resolveOwnThreads();
+    const patch = seen.find((c) => c.args.includes("PATCH"));
+    expect(patch, "nothing was resolved").toBeDefined();
+    expect(patch!.args).toContain("threadId=5810");
+    expect(JSON.parse(patch!.body!)).toEqual({ status: RESOLVED_STATUS });
+  });
+
+  /** An unresolved thread is untidy; it is never a reason to fail a pull request that was reviewed. */
+  it("says so and carries on when the platform refuses", async () => {
+    const logged: string[] = [];
+    const run: CmdRunner = async (_cmd, args) => {
+      if (args.includes("create")) return { stdout: CREATED, stderr: "", code: 0 };
+      if (args.includes("PATCH")) return { stdout: "", stderr: "TF401019", code: 1 };
+      return { stdout: THREADS, stderr: "", code: 0 };
+    };
+    const az = azAdapter(run, "/repo", (s) => logged.push(s));
+    await az.createPR({ branch: "b", base: "development", title: "t", body: "b" });
+    await expect(az.resolveOwnThreads()).resolves.toBeUndefined();
+    expect(logged.join("\n")).toContain("5810");
   });
 });

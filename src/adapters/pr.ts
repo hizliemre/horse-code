@@ -20,8 +20,21 @@ export const defaultCmdRunner: CmdRunner = (cmd, args, cwd) =>
     child.on("close", (code) => resolve({ stdout, stderr, code: code ?? -1 }));
   });
 
+export type ReviewOutcome = "changes" | "approved";
+
 export interface RevisionPRAdapter extends PRAdapter {
-  postComments(comments: string[]): Promise<void>;
+  postComments(comments: string[], outcome?: ReviewOutcome): Promise<void>;
+  /**
+   * Resolves the threads horse-code itself opened — called when the review APPROVES.
+   *
+   * Every thread it opened stayed `Active` forever. Measured on PR #765: two outstanding threads while all
+   * seven findings of the first were demonstrably fixed on the branch — no scratch files tracked, lockfile
+   * back in sync, the regression tests written — and the review had since approved the result. Approving
+   * while your own objections still read as open leaves the reader to work out which ones still stand.
+   *
+   * Scoped to threads carrying horse-code's own marker: a person's comment is theirs to close.
+   */
+  resolveOwnThreads(): Promise<void>;
 }
 
 export function parsePRNumber(url: string): number | undefined {
@@ -59,11 +72,12 @@ export function ghAdapter(run: CmdRunner, cwd: string): RevisionPRAdapter {
       prNumber = parsePRNumber(url);
       return { url, number: prNumber };
     },
-    async postComments(comments) {
-      if (prNumber === undefined || comments.length === 0) return;
-      const r = await run("gh", ["pr", "comment", String(prNumber), "--body", joinComments(comments)], cwd);
+    async postComments(comments, outcome) {
+      if (prNumber === undefined || (comments.length === 0 && outcome !== "approved")) return;
+      const r = await run("gh", ["pr", "comment", String(prNumber), "--body", reviewThreadBody(comments, outcome)], cwd);
       if (r.code !== 0) throw new Error(`gh pr comment failed (${r.code}): ${r.stderr.trim()}`);
     },
+    async resolveOwnThreads() { /* github issue comments carry no resolved state */ },
   };
 }
 
@@ -77,6 +91,23 @@ export function isMachineTitle(title: string): boolean {
   return /^hc:\s/.test(title.trim());
 }
 
+/** Azure's word for what its UI shows as "Resolved". */
+export const RESOLVED_STATUS = "fixed";
+
+/** How horse-code recognises its own comments among everyone else's. */
+export const REVIEW_MARKER = "**horse-code review**";
+
+interface ThreadList { value?: { id?: number; status?: string; comments?: { content?: string }[] }[] }
+
+/** The still-open threads horse-code opened. A person's comment is theirs to close, whatever it says. */
+export function ownOpenThreads(list: ThreadList): string[] {
+  return (list.value ?? [])
+    .filter((t) => (t.status ?? "").toLowerCase() === "active")
+    .filter((t) => (t.comments ?? []).some((c) => (c.content ?? "").includes(REVIEW_MARKER)))
+    .map((t) => String(t.id ?? ""))
+    .filter(Boolean);
+}
+
 interface AzurePR {
   title?: string;
   pullRequestId?: number;
@@ -84,9 +115,20 @@ interface AzurePR {
   repository?: { id?: string; project?: { name?: string } };
 }
 
-/** What the review says about itself when it opens a thread, so the round is readable as a round. */
-export function reviewThreadBody(comments: string[]): string {
-  return `**horse-code review** — ${comments.length} change(s) requested:\n\n${joinComments(comments)}`;
+/**
+ * What the review says about itself when it opens a thread.
+ *
+ * An approval used to say nothing at all: `postComments` is only called when changes are requested, so a
+ * review that read the whole merged diff and passed it left the pull request exactly as silent as one that
+ * never ran. Measured live — the review approved, and the only threads on PR #765 were from the rounds that
+ * had asked for changes. "No comment" cannot be the record of both outcomes.
+ */
+export function reviewThreadBody(comments: string[], outcome: ReviewOutcome = "changes"): string {
+  if (outcome === "approved") {
+    return `${REVIEW_MARKER} — approved. The merged diff was reviewed and no changes are requested.`
+      + (comments.length ? `\n\n${joinComments(comments)}` : "");
+  }
+  return `${REVIEW_MARKER} — ${comments.length} change(s) requested:\n\n${joinComments(comments)}`;
 }
 
 /**
@@ -102,6 +144,7 @@ export function reviewThreadBody(comments: string[]): string {
  * they are known without asking the remote again.
  */
 export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void): RevisionPRAdapter {
+  let threadSeq = 0;
   let prNumber: number | undefined;
   let project: string | undefined;
   let repositoryId: string | undefined;
@@ -134,15 +177,16 @@ export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void)
       catch { url = r.stdout.trim() || "(azure PR)"; }
       return { url, number: prNumber };
     },
-    async postComments(comments) {
-      if (comments.length === 0) return;
+    async postComments(comments, outcome) {
+      if (comments.length === 0 && outcome !== "approved") return;
       if (prNumber === undefined || !project || !repositoryId) {
         // Nothing to post against — say so rather than pretending, and keep the findings readable.
         log(`Azure PR comments could not be addressed (no pull request identity):\n${joinComments(comments)}`);
         return;
       }
-      const file = join(tmpdir(), `hc-pr-thread-${prNumber}-${process.pid}.json`);
-      const body = { comments: [{ parentCommentId: 0, content: reviewThreadBody(comments), commentType: "text" }], status: "active" };
+      const file = join(tmpdir(), `hc-pr-thread-${prNumber}-${process.pid}-${threadSeq++}.json`);
+      const body = { comments: [{ parentCommentId: 0, content: reviewThreadBody(comments, outcome), commentType: "text" }],
+        status: outcome === "approved" ? "closed" : "active" };
       await writeFile(file, JSON.stringify(body), "utf8");
       try {
         const r = await run("az", ["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads",
@@ -151,6 +195,29 @@ export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void)
         if (r.code !== 0) throw new Error(`az devops invoke pullRequestThreads failed (${r.code}): ${r.stderr.trim()}`);
       } finally {
         await rm(file, { force: true });
+      }
+    },
+    async resolveOwnThreads() {
+      if (prNumber === undefined || !project || !repositoryId) return;
+      const route = ["--route-parameters", `project=${project}`, `repositoryId=${repositoryId}`, `pullRequestId=${prNumber}`];
+      const list = await run("az", ["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads",
+        ...route, "--api-version", "7.1", "-o", "json"], cwd);
+      if (list.code !== 0) { log(`Could not read the pull request threads to resolve them: ${list.stderr.trim()}`); return; }
+      let ids: string[] = [];
+      try { ids = ownOpenThreads(JSON.parse(list.stdout) as ThreadList); }
+      catch { log("The pull request thread list could not be read."); return; }
+      for (const id of ids) {
+        const file = join(tmpdir(), `hc-pr-resolve-${prNumber}-${process.pid}-${threadSeq++}.json`);
+        await writeFile(file, JSON.stringify({ status: RESOLVED_STATUS }), "utf8");
+        try {
+          const r = await run("az", ["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads",
+            ...route, `threadId=${id}`,
+            "--http-method", "PATCH", "--in-file", file, "--api-version", "7.1", "-o", "none"], cwd);
+          // Best-effort: an unresolved thread is untidy, never a reason to fail a reviewed pull request.
+          if (r.code !== 0) log(`Could not resolve pull request thread ${id}: ${r.stderr.trim()}`);
+        } finally {
+          await rm(file, { force: true });
+        }
       }
     },
   };
@@ -171,8 +238,9 @@ export function makePRAdapter(opts: { platform: "github" | "azure" | "unknown"; 
       opts.log(`PR (local — no remote/platform): ${input.branch} → ${input.base} — "${input.title}"`);
       return { url: `(local: ${input.branch})` };
     },
-    async postComments(comments) {
-      if (comments.length) opts.log(`PR comments: ${comments.join("; ")}`);
+    async postComments(comments, outcome) {
+      if (comments.length || outcome === "approved") opts.log(`PR review: ${reviewThreadBody(comments, outcome)}`);
     },
+    async resolveOwnThreads() { /* nothing was opened */ },
   };
 }

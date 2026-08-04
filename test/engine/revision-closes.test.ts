@@ -44,3 +44,29 @@ describe("the revision row is closed when the pass ends", () => {
     expect(() => closeRevision(b, { status: "approved", rounds: 0 })).not.toThrow();
   });
 });
+
+/**
+ * Moving the row out of TODO was not enough, and the screen said so.
+ *
+ * The end-of-run check counts everything that is not MERGED, and the row closes to DONE — honestly, because
+ * it was never merged. Measured after the first fix, on a run whose 27 tasks had all merged and whose review
+ * had APPROVED: the report still read "1 task(s) were not finished. The board is kept — say continue".
+ */
+describe("the closed row is not counted as unfinished work", () => {
+  it("is excluded from the end-of-run tally by identity, not by column", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/engine/job.ts", "utf8");
+    const tally = src.slice(src.indexOf("const unfinished ="), src.indexOf("const unfinished =") + 200);
+    expect(tally).toContain("REVISION_CARD");
+  });
+
+  /** …and writing the outcome twice reads as two reviews rather than one. */
+  it("does not repeat an outcome the pass already recorded", () => {
+    const b = new Board();
+    b.addCard({ id: REVISION_CARD, title: "PR revision" });
+    b.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:approved" });
+    closeRevision(b, { status: "approved", rounds: 0 });
+    const approvals = (b.get(REVISION_CARD)?.stageHistory ?? []).filter((h) => h.action === "pr:approved");
+    expect(approvals.length).toBe(1);
+  });
+});

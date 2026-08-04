@@ -18,7 +18,8 @@ export interface RevisionDeps extends TaskCycleDeps {
   /** Injectable git runner (tests); defaults to the real one. Used to detect a revision that changed nothing. */
   git?: GitRunner;
 }
-export type PostComments = (comments: string[]) => Promise<void>;
+/** The outcome travels with the comments: an approval must be sayable, and it has no comments to carry it. */
+export type PostComments = (comments: string[], outcome?: "changes" | "approved") => Promise<void>;
 
 /**
  * The board row that records the PR revision rounds. It is BOOKKEEPING, not work.
@@ -182,6 +183,7 @@ export async function runRevision(
   maxRounds: number,
   prDiff?: string,
   deferred?: string[], // non-blocking findings carried over from the per-task code reviews
+  resolveThreads?: () => Promise<void>, // closes the threads this review opened, once it approves
 ): Promise<RevisionResult> {
   /**
    * The revision pass keeps its own card, and a RESUMED board already has it.
@@ -210,6 +212,18 @@ export async function runRevision(
     const v = await principalReview(deps, base, prDiff, round === 1 ? deferred : undefined);
     if (v.decision === "approve") {
       board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:approved" });
+      deps.note?.(`✅ PR revision: the merged diff was reviewed and approved.`);
+      /**
+       * Said on the pull request, and the objections it raised earlier are closed with it.
+       *
+       * Silence is what a review that never ran looks like, and an approval left beside its own still-open
+       * threads leaves the reader to work out which of them still stand. Measured on PR #765: two `Active`
+       * threads, every finding of the first one demonstrably fixed on the branch, and the review approved.
+       */
+      try { await postComments(v.comments, "approved"); }
+      catch (e) { deps.note?.(`⚠️ Could not post the approval to the pull request (${e instanceof Error ? e.message : String(e)}).`); }
+      try { await resolveThreads?.(); }
+      catch (e) { deps.note?.(`⚠️ Could not resolve the review threads (${e instanceof Error ? e.message : String(e)}).`); }
       return { status: "approved", rounds: round - 1 };
     }
     board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:changes", note: v.comments.join("; ") });
@@ -324,10 +338,11 @@ async function refreshAfterRevision(deps: RevisionDeps, base: string, headBefore
  */
 export function closeRevision(board: Board, result?: RevisionResult, failure?: string): void {
   if (!board.get(REVISION_CARD)) return;
-  board.appendStage(REVISION_CARD, {
-    role: "principal-coder",
-    action: failure ? "pr:failed" : `pr:${result?.status ?? "done"}`,
-    ...(failure ? { note: failure } : {}),
-  });
+  /**
+   * Only a FAILURE needs recording here: every path that returns has already written its own outcome —
+   * `pr:approved`, `pr:final:accept`, `pr:human`. Writing it again produced two identical `pr:approved`
+   * entries in a row on the first run this closed, which reads as two reviews rather than one.
+   */
+  if (failure) board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:failed", note: failure });
   board.move(REVISION_CARD, "DONE", "principal-coder");
 }

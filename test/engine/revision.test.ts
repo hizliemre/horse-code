@@ -76,15 +76,23 @@ function rdeps(provider: Provider, manager: RevisionDeps["manager"], signal?: Ab
 const session = (d: string): WorktreeSession => ({ jobSlug: "j", root: "/x", baseWorktree: d, baseBranch: "hc/j/base" });
 
 describe("runRevision", () => {
-  it("approval on the first round → approved(0); senior/postComments/commit not called", async () => {
+  /**
+   * The approval is SAID on the pull request, and it did not used to be.
+   *
+   * `postComments` only ran when changes were requested, so a review that read the whole merged diff and
+   * passed it left the pull request as silent as one that never ran — measured on PR #765, where the review
+   * approved and the only threads were from the earlier rounds that had asked for changes.
+   */
+  it("approval on the first round → approved(0); no senior, no commit, but the pull request is told", async () => {
     const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
     const mgr = fakeManager();
-    let posted = 0;
+    const outcomes: (string | undefined)[] = [];
     const board = new Board();
-    const res = await runRevision(rdeps(p, mgr), session(dir), board, async () => { posted++; }, async () => "x", 3);
+    const res = await runRevision(rdeps(p, mgr), session(dir), board,
+      async (_c, outcome) => { outcomes.push(outcome); }, async () => "x", 3);
     expect(res.status).toBe("approved");
     if (res.status === "approved") expect(res.rounds).toBe(0);
-    expect(posted).toBe(0);
+    expect(outcomes).toEqual(["approved"]);
     expect(mgr.commits).toBe(0);
     expect(board.get("__revision__")!.stageHistory.some((s) => s.action === "pr:approved")).toBe(true);
   });
@@ -96,7 +104,8 @@ describe("runRevision", () => {
     const res = await runRevision(rdeps(p, mgr), session(dir), new Board(), async (c) => { posted.push(c); }, async () => "x", 3);
     expect(res.status).toBe("approved");
     if (res.status === "approved") expect(res.rounds).toBe(1);
-    expect(posted).toEqual([["testsiz"]]);
+    expect(posted[0]).toEqual(["testsiz"]);   // …the round that asked for changes
+    expect(posted[1]).toEqual([]);            // …and the round that approved, which says so too
     expect(mgr.commits).toBe(1);
     expect(mgr.pushes).toBe(1);
     expect(existsSync(join(dir, "fix.txt"))).toBe(true);
@@ -250,5 +259,40 @@ describe("a resumed board already has the revision card", () => {
     board.appendStage("__revision__", { role: "principal-coder", action: "revise", note: "round 1" });
     await runRevision(rdeps(p, mgr), session(dir), board, async () => {}, async () => "x", 3);
     expect(board.get("__revision__")!.stageHistory.some((h) => h.note === "round 1")).toBe(true);
+  });
+});
+
+/**
+ * Approving while your own objections still read as open leaves the reader to work out which ones stand.
+ *
+ * Measured on PR #765: two `Active` threads, every finding of the first demonstrably fixed on the branch,
+ * and the review had since approved the result.
+ */
+describe("an approval closes the threads the review opened", () => {
+  it("resolves them when it approves", async () => {
+    const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
+    let resolved = 0;
+    await runRevision(rdeps(p, fakeManager()), session(dir), new Board(),
+      async () => {}, async () => "x", 3, undefined, undefined, async () => { resolved++; });
+    expect(resolved).toBe(1);
+  });
+
+  it("leaves them open when the pass ends without approving", async () => {
+    const p = revisionProvider({ reviews: ['{"decision":"request-changes","comments":["a"]}'],
+      final: '{"decision":"ask-human","question":"X?"}' });
+    let resolved = 0;
+    const res = await runRevision(rdeps(p, fakeManager()), session(dir), new Board(),
+      async () => {}, async () => "okay", 1, undefined, undefined, async () => { resolved++; });
+    expect(res.status).toBe("human");
+    expect(resolved).toBe(0);
+  });
+
+  /** A platform that will not resolve them is untidy, never a reason to fail a reviewed pull request. */
+  it("still reports the approval when resolving fails", async () => {
+    const p = revisionProvider({ reviews: ['{"decision":"approve","comments":[]}'] });
+    const res = await runRevision(rdeps(p, fakeManager()), session(dir), new Board(),
+      async () => {}, async () => "x", 3, undefined, undefined,
+      async () => { throw new Error("TF401019"); });
+    expect(res.status).toBe("approved");
   });
 });

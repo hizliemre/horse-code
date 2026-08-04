@@ -444,8 +444,9 @@ export async function runJob(
       try {
         revision = await runRevision(
           deps, session, board,
-          (c) => deps.prAdapter.postComments(c),
+          (c, outcome) => deps.prAdapter.postComments(c, outcome),
           opts.askUser, opts.revisionRounds ?? 3, prDiff, deferred,
+          () => deps.prAdapter.resolveOwnThreads(),
         );
         emit({ kind: "phase", phase: "revision-done", detail: revision.status });
         closeRevision(board, revision);
@@ -501,7 +502,16 @@ export async function runJob(
      */
     // Every mutation above saved fire-and-forget; settle them before reading the board's fate off disk.
     await flushBoard(boardPath);
-    const unfinished = board.list().filter((c) => c.column !== "MERGED");
+    /**
+     * The revision row is not a task, and counting it made every finished run look unfinished.
+     *
+     * Moving it out of TODO was not enough: this counts anything that is not MERGED, and the row is closed to
+     * DONE — which is honest, because it was never merged. Measured after the fix, on a run whose 27 tasks had
+     * all merged and whose review had APPROVED: the report still said "1 task(s) were not finished — say
+     * continue". It also meant `clearCheckpoint` never ran, so every completed run left resumable state behind
+     * it forever.
+     */
+    const unfinished = board.list().filter((c) => c.id !== REVISION_CARD && c.column !== "MERGED");
     if (!unfinished.length) {
       clearCheckpoint(session.root); // nothing left — the state is what makes a resume possible, not clutter
       await rm(join(session.root, "board.json"), { force: true }).catch(() => { /* best-effort */ });
