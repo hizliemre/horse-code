@@ -33,13 +33,28 @@ function joinComments(comments: string[]): string {
   return comments.map((c, i) => `${i + 1}. ${c}`).join("\n");
 }
 
-/** GitHub: gh pr create / gh pr comment. Stateful (stores the PR number). */
+/**
+ * A pull request that is ALREADY open for this branch is the one to use, not a reason to fail.
+ *
+ * A resumed run pushes and opens its pull request again, because the board does not record that it did.
+ * Measured on PR #765: a resume would call `az repos pr create` for a source/target pair that already has an
+ * active pull request, the platform would refuse it, and the job would die before reaching the review it was
+ * resumed FOR. Adopting the open one also gives `postComments` the identity it needs — without it the review
+ * has nowhere to post even when everything else works.
+ */
 export function ghAdapter(run: CmdRunner, cwd: string): RevisionPRAdapter {
   let prNumber: number | undefined;
   return {
     async createPR(input) {
       const r = await run("gh", ["pr", "create", "--base", input.base, "--head", input.branch, "--title", input.title, "--body", input.body], cwd);
-      if (r.code !== 0) throw new Error(`gh pr create failed (${r.code}): ${r.stderr.trim()}`);
+      if (r.code !== 0) {
+        const open = await run("gh", ["pr", "list", "--head", input.branch, "--base", input.base, "--state", "open", "--json", "number,url"], cwd);
+        try {
+          const [first] = JSON.parse(open.stdout) as { number?: number; url?: string }[];
+          if (first?.number !== undefined) { prNumber = first.number; return { url: first.url ?? "", number: prNumber }; }
+        } catch { /* no usable list → report the original failure */ }
+        throw new Error(`gh pr create failed (${r.code}): ${r.stderr.trim()}`);
+      }
       const url = r.stdout.trim();
       prNumber = parsePRNumber(url);
       return { url, number: prNumber };
@@ -50,6 +65,23 @@ export function ghAdapter(run: CmdRunner, cwd: string): RevisionPRAdapter {
       if (r.code !== 0) throw new Error(`gh pr comment failed (${r.code}): ${r.stderr.trim()}`);
     },
   };
+}
+
+/**
+ * Whether an adopted pull request still carries a title nobody has touched.
+ *
+ * `hc: <job-slug>` is what a run used to open with, so refreshing it is restoring what the summary should
+ * have written in the first place. Anything else is a title a person chose, and a resume must not overwrite it.
+ */
+export function isMachineTitle(title: string): boolean {
+  return /^hc:\s/.test(title.trim());
+}
+
+interface AzurePR {
+  title?: string;
+  pullRequestId?: number;
+  url?: string;
+  repository?: { id?: string; project?: { name?: string } };
 }
 
 /** What the review says about itself when it opens a thread, so the round is readable as a round. */
@@ -75,19 +107,31 @@ export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void)
   let repositoryId: string | undefined;
   return {
     async createPR(input) {
-      const r = await run("az", ["repos", "pr", "create", "--source-branch", input.branch, "--target-branch", input.base, "--title", input.title, "--description", input.body, "-o", "json"], cwd);
-      if (r.code !== 0) throw new Error(`az repos pr create failed (${r.code}): ${r.stderr.trim()}`);
-      let url = "";
-      try {
-        const j = JSON.parse(r.stdout) as {
-          pullRequestId?: number; url?: string;
-          repository?: { id?: string; project?: { name?: string } };
-        };
-        prNumber = typeof j.pullRequestId === "number" ? j.pullRequestId : undefined;
+      const adopt = (j: AzurePR | undefined): string | undefined => {
+        if (typeof j?.pullRequestId !== "number") return undefined;
+        prNumber = j.pullRequestId;
         repositoryId = j.repository?.id;
         project = j.repository?.project?.name;
-        url = j.url ?? `(azure PR #${prNumber ?? "?"})`;
-      } catch { url = r.stdout.trim() || "(azure PR)"; }
+        return j.url ?? `(azure PR #${prNumber})`;
+      };
+      const r = await run("az", ["repos", "pr", "create", "--source-branch", input.branch, "--target-branch", input.base, "--title", input.title, "--description", input.body, "-o", "json"], cwd);
+      if (r.code !== 0) {
+        const open = await run("az", ["repos", "pr", "list", "--source-branch", input.branch, "--target-branch", input.base, "--status", "active", "-o", "json"], cwd);
+        try {
+          const existing = (JSON.parse(open.stdout) as AzurePR[])[0];
+          const url = adopt(existing);
+          if (url !== undefined) {
+            if (isMachineTitle(existing?.title ?? "")) {
+              await run("az", ["repos", "pr", "update", "--id", String(prNumber), "--title", input.title, "--description", input.body, "-o", "none"], cwd);
+            }
+            return { url, number: prNumber };
+          }
+        } catch { /* no usable list → report the original failure */ }
+        throw new Error(`az repos pr create failed (${r.code}): ${r.stderr.trim()}`);
+      }
+      let url = "";
+      try { url = adopt(JSON.parse(r.stdout) as AzurePR) ?? r.stdout.trim(); }
+      catch { url = r.stdout.trim() || "(azure PR)"; }
       return { url, number: prNumber };
     },
     async postComments(comments) {
