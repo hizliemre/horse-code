@@ -208,10 +208,20 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
   return [header, ...body, []]; // trailing blank so blocks don't render flush together
 }
 
-/** Converts a message into hanging-indent styled lines (bullet on the first line, continuation indented). */
-export function flattenMessage(role: "user" | "assistant", text: string, cols: number): StyledLine[] {
+/**
+ * Converts a message into hanging-indent styled lines (bullet on the first line, continuation indented).
+ *
+ * `continued` suppresses the bullet: an agent narrating its way through a task says five or six things in a
+ * row, and a bullet on each turned one answer into six of them. From where the user sits it is ONE reply —
+ * how many calls it took to produce is not the shape of it. One bullet, then the paragraphs under it.
+ */
+export function flattenMessage(
+  role: "user" | "assistant", text: string, cols: number, continued = false,
+): StyledLine[] {
   const width = Math.max(20, cols - 2);
-  const bullet: StyledSeg = role === "user" ? { text: `${GLYPHS.userBullet} `, color: "gray" } : { text: `${GLYPHS.msgBullet} `, color: "green" };
+  const bullet: StyledSeg = continued
+    ? { text: "  " }
+    : role === "user" ? { text: `${GLYPHS.userBullet} `, color: "gray" } : { text: `${GLYPHS.msgBullet} `, color: "green" };
   const body =
     role === "user"
       ? wrapSegs([{ text, color: "gray" }], width)

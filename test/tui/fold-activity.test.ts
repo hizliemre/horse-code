@@ -144,3 +144,38 @@ describe("a run of calls to one tool becomes one row", () => {
     expect(rows(c)[0].summary).toBe("new");
   });
 });
+
+/**
+ * From where the user sits, a run is ONE reply — how many calls it took is not the shape of it.
+ *
+ * An agent narrating its way through a task says five or six things in a row, each arriving as its own
+ * assistant message. Every one got its own green bullet, so one answer rendered as six of them. Measured on
+ * one turn: five bullets for a single "here is what I am doing and why".
+ */
+describe("a stretch of prose from one speaker", () => {
+  it("carries one bullet, with the rest indented under it", async () => {
+    const { flattenMessage } = await import("../../src/tui/lines.js");
+    const first = flattenMessage("assistant", "PR 677'yi bulmak icin projeleri listeleyecegim.", 100);
+    const next = flattenMessage("assistant", "Tek proje var: mirket.", 100, true);
+    expect(first[0][0].text.trim()).not.toBe("");     // …a bullet
+    expect(first[0][0].color).toBe("green");
+    expect(next[0][0].text).toBe("  ");               // …and nothing but indent after it
+    expect(next[0][0].color).toBeUndefined();
+  });
+
+  it("starts a new bullet when the speaker changes", async () => {
+    const { flattenMessage } = await import("../../src/tui/lines.js");
+    const user = flattenMessage("user", "devam", 100);
+    expect(user[0][0].color).toBe("gray");
+  });
+
+  /** The renderer decides it from the item before, so nothing has to be tracked while messages arrive. */
+  it("is decided by the previous transcript item", async () => {
+    const src = await (await import("node:fs/promises")).readFile("src/tui/components.tsx", "utf8");
+    const at = src.indexOf("state.transcript.flatMap((m, i)");
+    expect(at).toBeGreaterThan(-1);
+    const block = src.slice(at, at + 400);
+    expect(block).toContain("prev.role === m.role");
+    expect(block).toContain("flattenMessage(m.role, m.text, fullscreenChatW, same)");
+  });
+});

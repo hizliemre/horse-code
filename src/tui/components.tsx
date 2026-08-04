@@ -1958,7 +1958,13 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   const fullscreenChatW = size.cols - 2;
   const fullscreenLines = useMemo<StyledLine[]>(() => [
     ...flattenSplash(fullscreenChatW, size.rows),
-    ...state.transcript.flatMap((m) => ("kind" in m ? flattenTool(m.activity, fullscreenChatW) : flattenMessage(m.role, m.text, fullscreenChatW))),
+    // A stretch of prose from the same speaker is ONE bullet: see flattenMessage's `continued`.
+    ...state.transcript.flatMap((m, i) => {
+      if ("kind" in m) return flattenTool(m.activity, fullscreenChatW);
+      const prev = state.transcript[i - 1];
+      const same = prev !== undefined && !("kind" in prev) && prev.role === m.role;
+      return flattenMessage(m.role, m.text, fullscreenChatW, same);
+    }),
   ], [state.transcript, fullscreenChatW, size.rows]);
 
   if (fullscreen) {
