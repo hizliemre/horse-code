@@ -122,21 +122,36 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
     const total = a.runs?.reduce((n, r) => n + r.count, 0) ?? 1;
     if (a.runs && total > 1) {
       /**
-       * A folded run: the tool, how many calls, and WHICH targets — with the busiest first.
+       * A run of calls is ONE row: while it goes, the count and the call in flight; afterwards, the count.
        *
-       * The per-call summary is dropped here on purpose. For a run of reads it was the first line of
-       * whatever happened to be at that offset ("---", "<!--"), which said nothing about the run and
-       * crowded out the one thing that does: what was being read, and how much.
+       * It used to be a row per call, and a failure broke the fold so it could have a row of its own. That
+       * was right about what matters and wrong about what it cost: eight searches became eight rows, each
+       * carrying its arguments and a slice of its output, and the model's answer — the thing being read —
+       * was pushed off the screen by the work that produced it. The failures are not lost; they are counted
+       * on the row, which says the same thing in the space of one line.
        */
-      const busiest = [...a.runs].sort((x, y) => y.count - x.count);
-      const shown = busiest.slice(0, 3)
-        .map((r) => (r.count > 1 ? `${short(r.target, 34)} ×${r.count}` : short(r.target, 34)));
-      const rest = busiest.length > 3 ? `, +${busiest.length - 3} more` : "";
-      return [[
-        { text: `${GLYPHS.msgBullet} `, color: "#1a9fd8" },
-        { text: `${a.tool} ×${total}`, bold: true },
-        { text: `  ${shown.join(", ")}${rest}`, dim: true },
-      ]];
+      const failed = a.failed ?? 0;
+      const noun = a.tool === "shell" ? "shell commands" : `${a.tool} calls`;
+      const tail = failed ? ` · ${failed} failed` : "";
+      if (a.settled) {
+        return [[
+          { text: `${GLYPHS.msgBullet} `, color: failed ? "red" : "#1a9fd8" },
+          { text: `Ran ${total} ${noun}`, dim: true },
+          ...(tail ? [{ text: tail, dim: true }] : []),
+        ]];
+      }
+      // Still running: the call in flight is the only detail worth the second line.
+      return [
+        [
+          { text: `${GLYPHS.msgBullet} `, color: "#1a9fd8" },
+          { text: `Running ${total} ${noun}…`, bold: true },
+          ...(tail ? [{ text: tail, dim: true }] : []),
+        ],
+        [
+          { text: "   └ ", dim: true },
+          { text: short(a.target, Math.max(20, width - 6)), dim: true },
+        ],
+      ];
     }
     const head = `${a.tool}(${a.target})`;
     const avail = Math.max(10, width - head.length - 6);

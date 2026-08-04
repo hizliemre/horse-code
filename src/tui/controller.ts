@@ -126,7 +126,21 @@ export class TuiController {
    * Done in one place rather than at each append site so no path can silently lose a turn — including
    * `streamNote`, which mutates an item in place as deltas arrive and has no completion event to hook.
    */
-  private cap(t: TranscriptItem[]): TranscriptItem[] {
+  /**
+   * A run of tool calls is over the moment anything else is said.
+   *
+   * Settled here rather than at each of the nine places that append to the transcript: one of them would be
+   * missed, and a row left saying "Running 6 shell commands…" forever is worse than never having said it.
+   */
+  private settleTools(t: TranscriptItem[]): TranscriptItem[] {
+    return t.map((m, i) => {
+      if (i === t.length - 1 || !("kind" in m) || m.kind !== "tool" || m.activity.settled) return m;
+      return { kind: "tool" as const, activity: { ...m.activity, settled: true } };
+    });
+  }
+
+  private cap(items: TranscriptItem[]): TranscriptItem[] {
+    const t = this.settleTools(items);
     if (t.length <= MAX_TRANSCRIPT_ITEMS) return t;
     const cut = t.length - MAX_TRANSCRIPT_ITEMS;
     for (const m of t.slice(0, cut)) if (!("kind" in m)) this.archived.push(m);
@@ -301,17 +315,19 @@ export class TuiController {
     if (a.agent !== undefined && this.recordAgentCall(a)) return;
     const t = [...this.state.transcript];
     const last = t[t.length - 1];
-    const foldable = (x: ToolActivity): boolean => x.summary !== undefined && x.ok !== false;
+    // A row with a diff (a write or an edit) is never folded: its content is the point.
+    const foldable = (x: ToolActivity): boolean => x.summary !== undefined;
     if (last && "kind" in last && last.kind === "tool" && foldable(last.activity) && foldable(a)
       && last.activity.tool === a.tool) {
       const runs = last.activity.runs ?? [{ target: last.activity.target, count: 1 }];
       const hit = runs.find((r) => r.target === a.target);
       if (hit) hit.count++;
       else runs.push({ target: a.target, count: 1 });
+      const failed = (last.activity.failed ?? (last.activity.ok === false ? 1 : 0)) + (a.ok === false ? 1 : 0);
       // The newest outcome replaces the old one: a summary of the run's last call beats a stale first one.
-      t[t.length - 1] = { kind: "tool", activity: { ...a, runs } };
+      t[t.length - 1] = { kind: "tool", activity: { ...a, runs, failed, settled: false } };
     } else {
-      t.push({ kind: "tool", activity: a });
+      t.push({ kind: "tool", activity: { ...a, ...(a.ok === false ? { failed: 1 } : {}) } });
     }
     // The tool actually ran → its inline block replaces the transient "writing…" progress line.
     this.state = { ...this.state, liveActivity: undefined, transcript: this.cap(t) };

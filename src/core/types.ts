@@ -60,6 +60,19 @@ export interface ToolActivity {
    * A run of calls to the same tool becomes one row.
    */
   runs?: { target: string; count: number }[];
+  /**
+   * How many of those calls FAILED, and whether the run is over.
+   *
+   * A run used to be broken by any failure so the failed call could have its own row. That was right about
+   * what matters and wrong about what it cost: eight calls became eight rows, and the model's answer — the
+   * thing being read — was pushed off the screen by the work that produced it. The failure is kept as a
+   * COUNT on the folded row instead, which says the same thing in one line.
+   *
+   * `settled` is false while the run is still going: the row then reads "Running N …" and shows the call in
+   * flight. Once anything else is said, it becomes "Ran N …" and the detail goes away.
+   */
+  failed?: number;
+  settled?: boolean;
   preview?: string[]; // first lines of the written / changed content (shown under the header; for an edit, the ADDED lines)
   startLine?: number; // 1-based line number the preview begins at (write → 1; edit → where the change starts)
   removed?: string[]; // edit only: the REPLACED (old) lines → rendered as a - / + diff against `preview`
