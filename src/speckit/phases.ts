@@ -223,6 +223,17 @@ export async function runTasks(p: PhaseDeps, paths: FeaturePaths, carryOver?: st
     `a task: an implementer reads the code, checks the versions and finds its way around as part of doing ` +
     `the work, so "verify X", "inspect Y", "confirm Z" belong inside the task that needs the answer, not ` +
     `beside it. If the only thing a task would deliver is knowing something, it is not on the list.\n` +
+    /**
+     * Same board, same measurement: five cards wrote nothing but `safe-html.pipe.ts`, four nothing but its
+     * spec, three nothing but one template — and cards on one file cannot run in parallel, so each extra one
+     * is another implementer, code review and acceptance gate in a queue for one coherent change.
+     */
+    `Nor is running a command: linting, formatting, building and typechecking are how a task is known to be ` +
+    `FINISHED. Put them in the acceptance criteria of the tasks that changed the code — the implementer runs ` +
+    `them there anyway — instead of giving each one a task of its own.\n` +
+    `And one file is usually one task. Tasks that write the same file cannot run at the same time, so ` +
+    `splitting a single file across several of them buys nothing and pays for a full implement-and-review ` +
+    `round each time. Split by what is genuinely independent, not by what is separately describable.\n` +
     `Follow this template:\n\n${p.templates.template("tasks")}\n\nWrite the tasks to "${rel}".${carried}`;
   await runRole(p, "project-manager", p.templates.command("tasks"), msg);
 }

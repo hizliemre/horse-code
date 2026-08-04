@@ -86,6 +86,36 @@ export function isInvestigation(title: string): boolean {
   return INVESTIGATION.test(title);
 }
 
+/**
+ * A card whose whole content is running a command.
+ *
+ * Measured on the same 27-card board: "Lint @toucan/utils", "Lint @beempa/products", "Format both projects",
+ * "Build Beempa production target", "Run quickstart validation" — five cards, each buying an implementer, a
+ * code review and an acceptance gate in order to run one command and leave the repository as it was.
+ *
+ * Linting, formatting and building are how a task is known to be FINISHED. They belong in the acceptance
+ * criteria of the cards that changed the code, which is where an implementer already runs them.
+ *
+ * "Build" is the awkward one, because it is also a word for authoring. It counts as a chore only when what
+ * follows names a project or target rather than a thing being made — `Build the SafeHtmlProfile type` is work.
+ */
+const CHORE = /^\s*(lint|format|prettier|typecheck|type-check|compile|run|validate|execute)\w*\b/i;
+const BUILD_CHORE = /^\s*build\s+(the\s+)?[\w@/.-]+\s+(project|target|app|workspace|bundle|production|package)\b/i;
+
+export function isChore(title: string): boolean {
+  return CHORE.test(title) || BUILD_CHORE.test(title);
+}
+
+/**
+ * How many cards may write the same single file before the split is the problem.
+ *
+ * Two is a judgement — a file can hold two genuinely separate changes. Measured at five, four and three on
+ * one board, it is a pattern: cards on one file cannot run in parallel (the wave engine already treats two
+ * tasks writing the same file as dependent), so each extra card is another implementer, another code review
+ * and another acceptance gate, in a queue, for what is one coherent change to one file.
+ */
+export const MAX_CARDS_PER_FILE = 2;
+
 export function structuralFindings(board: Board): TaskFinding[] {
   const out: TaskFinding[] = [];
   const cards = board.list();
@@ -105,10 +135,36 @@ export function structuralFindings(board: Board): TaskFinding[] {
     if (c.files.length === 0) {
       out.push({ task: c.id, issue: "names no files — nothing can tell whether it collides with another task" });
     }
+    if (isChore(c.title)) {
+      out.push({ task: c.id, issue:
+        `runs a command and changes nothing — "${c.title.slice(0, 60)}". Linting, formatting and building are `
+        + `how a task is known to be finished: put them in the acceptance criteria of the cards that changed `
+        + `the code, where the implementer already runs them.` });
+    }
     if (isInvestigation(c.title)) {
       out.push({ task: c.id, issue:
         `produces no change — "${c.title.slice(0, 60)}" delivers an answer, not a difference. Fold the `
         + `looking into the task that needs the answer, or drop it: an implementer reads the code anyway.` });
+    }
+  }
+  /**
+   * One file, split across too many cards.
+   *
+   * Counted on cards whose file list is exactly that one file: a card touching three files is doing something
+   * broader and is not what this is about.
+   */
+  const soleFile = new Map<string, Card[]>();
+  for (const c of cards) {
+    if (c.files.length !== 1) continue;
+    const f = c.files[0];
+    soleFile.set(f, [...(soleFile.get(f) ?? []), c]);
+  }
+  for (const [file, group] of soleFile) {
+    if (group.length > MAX_CARDS_PER_FILE) {
+      out.push({ issue:
+        `${group.length} tasks write nothing but the same file (${file}) — ${group.map((c) => c.id).join(", ")}. `
+        + `Tasks on one file cannot run in parallel, so each is another implementer, code review and acceptance `
+        + `gate in a queue for one coherent change. Make it one task unless they are genuinely independent.` });
     }
   }
   for (const [, group] of byTitle) {
