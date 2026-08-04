@@ -406,7 +406,7 @@ export async function runJob(
     board.onMove = (card, _from, to, actor) => emit({ kind: "note", text: moveNote(card, to, actor) });
 
     emit({ kind: "phase", phase: "waves" });
-    const wave = await runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle });
+    const wave = await runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle, request: opts.prompt });
     emit({ kind: "phase", phase: "waves-done", detail: wave.status });
 
     let revision: RevisionResult | undefined;

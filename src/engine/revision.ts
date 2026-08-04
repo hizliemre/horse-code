@@ -111,6 +111,9 @@ export const REVISE_TURNS_PER_COMMENT = 8;
 export const REVISE_TURNS_MIN = 30;
 export const REVISE_TURNS_MAX = 200;
 
+/** Same rule the structured-role runner uses: a spent budget means "still working", not "broken". */
+const TURN_LIMIT_RE = /maximum turn count exceeded/i;
+
 export function reviseTurnBudget(commentCount: number): number {
   return Math.min(REVISE_TURNS_MAX, Math.max(REVISE_TURNS_MIN, commentCount * REVISE_TURNS_PER_COMMENT));
 }
@@ -141,6 +144,25 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
      * either way — the per-write auto-commit sees to that — so what is missing is the account of them.
      */
     const why = e instanceof Error ? e.message : String(e);
+    /**
+     * Running out of turns is not a failure — it is a reviser that was still working.
+     *
+     * Measured on a 577-minute run. The principal review produced five substantial comments; the reviser
+     * spent its whole budget on them — exactly 40 calls against `reviseTurnBudget(5) === 40` — and had
+     * already reverted the dependency churn and hardened the length guard when the ceiling hit. Rethrowing
+     * threw that away: the round died, `commitMerge` never ran, the pass never reached round 2, no question
+     * reached the human, and the run simply ended. The edits were still sitting UNCOMMITTED in the base
+     * worktree hours later — while this very message told the user they were "committed on the branch".
+     *
+     * Returning instead lets the round finish the way it always does: the changes are committed and pushed,
+     * and the NEXT principal review reads the improved branch and asks for whatever is still missing. That
+     * is what the rounds are for.
+     */
+    if (TURN_LIMIT_RE.test(why)) {
+      deps.note?.(`⚠️ The reviser used its whole turn budget on ${comments.length} comment(s). What it changed `
+        + `is kept and committed with this round; the next review round reads the result and asks for the rest.`);
+      return;
+    }
     deps.note?.(`⚠️ The revision pass stopped: ${why}. It had ${comments.length} comment(s) to address and its `
       + `work up to that point is committed on the branch — re-run to continue from there.`);
     throw e;

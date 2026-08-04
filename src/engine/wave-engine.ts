@@ -1,4 +1,5 @@
 import type { Board } from "../board/board.js";
+import { prSummary } from "./pr-summary.js";
 import { REVISION_CARD } from "./revision.js";
 import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult, PRAdapter } from "../worktree/manager.js";
 import type { EscalationDeps } from "./escalation.js";
@@ -479,7 +480,7 @@ export async function runWaves(
   deps: WaveEngineDeps,
   session: WorktreeSession,
   board: Board,
-  opts: { base: string; prTitle?: string },
+  opts: { base: string; prTitle?: string; request?: string },
 ): Promise<WaveEngineResult> {
   /**
    * Said before it happens, not after.
@@ -547,11 +548,22 @@ export async function runWaves(
     await deps.manager.push(session);
     // A pull request is delivery when there is a remote to open it against; when there is not, the merge is.
     if (await deps.manager.hasRemote(session)) {
-      const body = "Completed tasks:\n" + board.list().map((c) => `- ${c.title}`).join("\n");
+      /**
+       * The pull request describes the OUTCOME, in the repository's own voice.
+       *
+       * It used to be `hc: <job-slug>` over a bulleted dump of every internal task card. Measured on PR #765:
+       * the title was `hc: product-description-rendering-bug` and the description was 27 lines beginning
+       * "Extend SafeHtmlFallbackRecord interface with failureKind union in safe-html.pipe.ts" — the job's own
+       * bookkeeping, published to the people who have to review it.
+       */
+      const summary = await prSummary(deps, {
+        request: opts.request ?? session.jobSlug,
+        cards: board.list(), cwd: session.baseWorktree, base: opts.base, jobSlug: session.jobSlug,
+      });
       const pr = await deps.manager.openPR(session, deps.prAdapter, {
         base: opts.base,
-        title: opts.prTitle ?? `hc: ${session.jobSlug}`,
-        body,
+        title: opts.prTitle ?? summary.title,
+        body: summary.body,
       });
       return { status: "completed", session, pr, delivery, waves };
     }
