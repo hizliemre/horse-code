@@ -227,6 +227,18 @@ export const NOTE_ROWS = 3;
  *
  * Deliberately NOT switchable by icon style: a marker you cannot see is not decoration, it is the control.
  */
+/**
+ * What the marker costs the label.
+ *
+ * `> ` then `(*) ` — six columns before the first word. The label was wrapped to the column width WITHOUT
+ * them, so its first line was two columns too wide however much room the column had.
+ */
+export const MARKER_W = 6;
+/** A box's own border (2) plus its horizontal padding (2) — subtract before laying anything out inside it. */
+export const BOX_CHROME = 4;
+/** The gap between the list and the preview beside it. */
+export const PREVIEW_GAP = 2;
+
 export const RADIO_ON = "(*)";
 export const RADIO_OFF = "( )";
 export const CURSOR = ">";
@@ -394,12 +406,24 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
   }, [stdin, setRawMode, isRawModeSupported]);
 
   const w = Math.max(24, cols - 2);
+  /**
+   * The width the columns actually get, which is not the box's width.
+   *
+   * The outer box has a border and a horizontal padding, and the preview box inside it has its own — none of
+   * which was subtracted. The row therefore asked for `w + 3` columns inside a `w - 4` content area: seven
+   * too many, every time a preview was shown. The terminal resolves that by re-wrapping, which is what took
+   * the marker off the line its label starts on and left a list with nothing to say which row was selected.
+   *
+   * Reported with a screenshot from a live run: four approach options, no marker on any of them.
+   */
+  const inner = w - BOX_CHROME;
   const preview = choices[cursor]?.preview;
   // Side-by-side only when there is room; a narrow terminal stacks the preview under the list instead of
   // squeezing both into unreadable columns.
-  const sideBySide = !!preview && w >= 80;
-  const listW = sideBySide ? Math.floor(w * 0.4) : w;
-  const previewW = w - listW - 3;
+  const sideBySide = !!preview && inner >= 80;
+  const listW = sideBySide ? Math.floor(inner * 0.4) : inner;
+  // The preview BOX, chrome included — its own border and padding come out of the text width below.
+  const previewW = inner - listW - PREVIEW_GAP;
   const hint = (multiSelect ? "↑/↓ move · space toggle · Enter submit" : "↑/↓ move · space/Enter select")
     + " · n to add notes · Esc to type";
 
@@ -420,7 +444,7 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
               * the one structural difference between the line that vanishes and the lines that do not, and
               * it buys nothing here — the whole line shares one style.
               */}
-            {wrapPlain(oneLine(c.label), listW - 4).map((line, k) => (
+            {wrapPlain(oneLine(c.label), listW - MARKER_W).map((line, k) => (
               <Text key={k} color={isSel ? "cyan" : undefined} bold={isSel}>
                 {k === 0 ? `${isSel ? `${CURSOR} ` : "  "}${mark}${line}` : `      ${line}`}
               </Text>
@@ -441,7 +465,7 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
       {sideBySide ? (
         <Box flexDirection="row">
           {list}
-          <Box flexDirection="column" width={previewW} marginLeft={2} borderStyle="round" borderColor="gray" paddingX={1}>
+          <Box flexDirection="column" width={previewW} marginLeft={PREVIEW_GAP} borderStyle="round" borderColor="gray" paddingX={1}>
             {(preview ?? "").split("\n").map((line, i) => <Text key={i} dimColor wrap="truncate-end">{line}</Text>)}
           </Box>
         </Box>
