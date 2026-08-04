@@ -3,7 +3,7 @@ import { writeAtomic } from "../session/atomic.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { stateRoot } from "./session-scope.js";
+import { stateRoot, writableStateRoot } from "./session-scope.js";
 
 /**
  * The project's code graph: every file, class and function, and what calls, imports and contains what.
@@ -622,6 +622,26 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
    * 2,896 were bare placeholders, and the file is committed, so each rebuild left it modified for the next
    * merge to trip over. Dropping them keeps a shared file stable and loses nothing.
    */
+  /**
+   * The names file is SHARED, so a build outside a session must leave it exactly as it found it.
+   *
+   * graphify seeds every new community "Community <n>" as it builds, straight into a committed file, so a
+   * build in the project checkout dirties it whatever we do afterwards. Measured after one startup build:
+   * 586 lines changed in a file the next merge has to reconcile. Restoring it is the only honest end — the
+   * root is a reference, and tidying it is not this build's business.
+   */
+  if (writableStateRoot(cwd) === undefined) {
+    await git(cwd, ["checkout", "--", "graphify-out/.graphify_labels.json"]);
+    const g0 = await loadGraph(cwd);
+    return {
+      ok: true,
+      message: `Graph built: ${g0?.nodes.length ?? 0} nodes, ${g0?.edges.length ?? 0} edges.`
+        + (pruned ? ` (${pruned.toLocaleString("en-US")} tooling node(s) left out — skills and agent state are not the project.)` : ""),
+      nodes: g0?.nodes.length ?? 0,
+      edges: g0?.edges.length ?? 0,
+    };
+  }
+
   let seeded = 0;
   try {
     const lp = labelsPath(cwd);

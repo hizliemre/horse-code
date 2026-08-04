@@ -654,7 +654,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         const after = await graphStatus(process.cwd());
         startupExtra.graph = { built: after.built, nodes: after.nodes, stale: after.stale };
       }
-      const { loadTraceIndex, saveTraceIndex } = await import("../engine/trace.js");
+      const { loadTraceIndex } = await import("../engine/trace.js");
       let index = await loadTraceIndex(process.cwd());
       /**
        * Adopt whatever the project already documents, before counting.
@@ -674,7 +674,14 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         const r = await indexAdoption(process.cwd(), index, adoption,
           async (f) => readFile(join(process.cwd(), f), "utf8").catch(() => undefined));
         if (r.added) {
-          await saveTraceIndex(process.cwd(), r.index);
+          /**
+           * Counted, said — and NOT written, because this is the project checkout.
+           *
+           * `index.json` is committed, and writing it here left the checkout modified for the next merge to
+           * trip over: measured after one start-up, six lines changed in a shared file by a pass nobody
+           * asked for. The count the user reads is the truth either way, because it is computed here rather
+           * than read back from the file. A session that needs the index persisted writes it itself.
+           */
           index = r.index;
           controller.note(describeAdoption(adoption, r.added));
         }

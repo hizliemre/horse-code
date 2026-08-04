@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { inLinkedWorktree } from "./session-scope.js";
 import { existsSync } from "node:fs";
 import { relative, dirname } from "node:path";
 import type { Message } from "../core/types.js";
@@ -33,6 +35,35 @@ export type UpstreamResult =
  * spec AND plan. The brainstorm decides the APPROACH with the user; everything after it runs autonomously.
  * On approval returns {specPath, planPath, tasksPath}; if rejected, {rejected, stage}.
  */
+/**
+ * A run works in a worktree, unless it is already standing in one.
+ *
+ * `verify` and `govern` produce documents rather than code, so they used to run wherever the user was —
+ * which meant the project checkout. Measured after one verify: `specs/004-product-upload-testing/`
+ * untracked in the repository root, beside two shared files a start-up pass had modified. The rule is the
+ * same as for code: what a run produces belongs on a branch, not in the reference copy.
+ *
+ * Already inside a linked worktree is the exception, and the important one. A worktree cut from a worktree
+ * is a checkout nobody asked for nested inside one someone did — so a run that starts there stays there.
+ * Saying so explicitly still branches: the phrase is the only thing that can distinguish "I am working in
+ * this worktree" from "give this its own".
+ */
+const WANTS_WORKTREE = /\bworktree\b/i;
+
+function gitSync(cwd: string): (args: string[]) => string | undefined {
+  return (args) => {
+    try { return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); }
+    catch { return undefined; }
+  };
+}
+
+async function documentWorkdir(
+  cwd: string, prompt: string, ensureWorktree: (nameHint?: string) => Promise<string>, nameHint?: string,
+): Promise<string> {
+  if (inLinkedWorktree(cwd, gitSync(cwd)) && !WANTS_WORKTREE.test(prompt)) return cwd;
+  return ensureWorktree(nameHint);
+}
+
 export async function runUpstream(
   deps: ReviewDeps,
   ensureWorktree: (nameHint?: string) => Promise<string>,
@@ -121,15 +152,10 @@ export async function runUpstream(
     return { intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "undone", report: describeUndo(res) };
   }
 
-  /**
-   * Verify → in place, like govern, and for the same reason: the output is a document about work that already
-   * exists, so there is nothing to cut a branch for. It also has to be in place — the developer runs the
-   * environment and looks at the screen, and a report growing anywhere but their own working tree is one they
-   * cannot watch.
-   */
+  /** Verify writes a report; a report is work, and work belongs on a branch. See documentWorkdir. */
   if (!resume && routeIntent(r.intent) === "verify") {
     emitPhase("verify");
-    const cwd = process.cwd();
+    const cwd = await documentWorkdir(process.cwd(), prompt, ensureWorktree, r.title);
     const { runVerify, describeVerify, currentBranchOf } = await import("./verify.js");
     const branch = await currentBranchOf(cwd);
     const res = await runVerify({
@@ -145,8 +171,8 @@ export async function runUpstream(
   if (!resume && routeIntent(r.intent) === "govern") {
     emitPhase("constitution");
     const templates = await deps.specKit();
-    // The project the user is standing in — the same place the coach reads from on a chat turn.
-    const cwd = process.cwd();
+    // A constitution is a committed document, so it is written on a branch like anything else.
+    const cwd = await documentWorkdir(process.cwd(), prompt, ensureWorktree, r.title);
     const p: PhaseDeps = { deps, templates, workdir: cwd, askUser };
     // Taken BEFORE the phase runs — the only moment the previous version still exists.
     const rel = relative(cwd, constitutionPath(cwd));

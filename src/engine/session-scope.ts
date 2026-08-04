@@ -61,6 +61,24 @@ export function writableStateRoot(cwd: string): string | undefined {
   return sessionBase(cwd);
 }
 
+/**
+ * Whether this directory is ALREADY a linked worktree rather than the repository's main checkout.
+ *
+ * A linked worktree has its own `.git` file pointing into the main repository's `worktrees/` directory, so
+ * `--git-dir` and `--git-common-dir` differ. horse-code's own session bases are one case; a person working
+ * in `.claude/worktrees/<feature>` is another, and it is the one that matters — branching a worktree off a
+ * worktree gives a checkout nobody asked for, nested inside one someone did.
+ *
+ * Answered by git rather than by the path, because a worktree can live anywhere.
+ */
+export function inLinkedWorktree(cwd: string, run: (args: string[]) => string | undefined): boolean {
+  if (sessionBase(cwd) !== undefined) return true;
+  const dir = run(["rev-parse", "--absolute-git-dir"])?.trim();
+  const common = run(["rev-parse", "--path-format=absolute", "--git-common-dir"])?.trim();
+  if (!dir || !common) return false;
+  return resolve(dir) !== resolve(common);
+}
+
 /** True when this directory IS a session base — the one place a run may write project state. */
 export function isSessionBase(cwd: string): boolean {
   const abs = resolve(cwd);

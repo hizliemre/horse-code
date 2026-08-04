@@ -152,11 +152,15 @@ describe("runUpstream", () => {
   });
 
   /**
-   * Establishing a constitution is neither a conversation nor a change to the software. Classified as a
-   * feature it bought the whole pipeline — a branch, a worktree cut from it, a spec, a plan, a task board —
-   * to produce one document, which then sat in a branch instead of in the project.
+   * Establishing a constitution is neither a conversation nor a change to the software: classified as a
+   * feature it bought the whole pipeline — a spec, a plan, a task board — to produce one document. It still
+   * skips all of that. What it no longer skips is the WORKTREE.
+   *
+   * Measured after one document-producing run in a project checkout: `specs/004-product-upload-testing/`
+   * left untracked in the repository root. A document is work, and work belongs on a branch — the reference
+   * copy is read, never written.
    */
-  it("govern intent → writes in place, opening no worktree", async () => {
+  it("govern intent → skips the pipeline, but still works on a branch", async () => {
     const p = upstreamProvider({ intent: "govern" });
     let opened = 0;
     const cwd = process.cwd();
@@ -164,7 +168,7 @@ describe("runUpstream", () => {
       process.chdir(dir);
       const res = await runUpstream(udeps(p), () => { opened++; return Promise.resolve(dir); }, "write the project constitution", async () => "x", 3);
       expect(res.kind).toBe("governed");
-      expect(opened).toBe(0); // the whole point
+      expect(opened).toBe(1); // a worktree, and only one — no spec, no plan, no board
       if (res.kind === "governed") {
         expect(res.written).toBe(true);
         expect(res.path).toContain("constitution.md");
