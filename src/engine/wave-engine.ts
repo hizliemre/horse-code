@@ -322,7 +322,22 @@ export async function runReady(
             }
           };
           const res = await runWaveTask({ ...deps, serialize: ser, resolveConflict, baseRef: session.baseBranch }, session, board, id, slot);
-          if (res.status === "merged") { merged.push(id); done.add(id); }
+          if (res.status === "merged") {
+            merged.push(id); done.add(id);
+            /**
+             * A task that merged has nothing left to hold: its work is in the base branch.
+             *
+             * `removeTask` was written for this and never called — the contract note in wave-task.ts even
+             * says so ("No branch cleans up the task worktree/branch"). Measured on one project: 53 git
+             * worktrees, 47 of them fully merged, each a full checkout with its own `node_modules`; removing
+             * them took minutes of disk work. They also slow every `git worktree list` and every status the
+             * user runs, and they hide the two or three that DO still hold something.
+             *
+             * Best-effort: a worktree that will not go is untidy, never a reason to fail a merged task.
+             */
+            try { await deps.manager.removeTask(session, res.task); }
+            catch { /* the work is merged; the directory is only a directory */ }
+          }
           else if (res.status === "conflict" && restartOn.has(id)) {
             /**
              * Rewrite rather than park.
