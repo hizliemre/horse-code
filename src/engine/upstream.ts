@@ -177,7 +177,9 @@ export async function runUpstream(
     // Taken BEFORE the phase runs — the only moment the previous version still exists.
     const rel = relative(cwd, constitutionPath(cwd));
     const before = await snapshot(cwd, rel);
-    await runConstitution(p);
+    // The request travels with the phase: without it the analyst is asked to establish a constitution the
+    // project already has, and has to ask the user what they wanted. See runConstitution.
+    await runConstitution(p, r.refinedPrompt);
     const path = constitutionPath(cwd);
     const written = existsSync(path);
     if (written) {

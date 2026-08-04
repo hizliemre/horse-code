@@ -73,6 +73,15 @@ export interface ToolActivity {
    */
   failed?: number;
   settled?: boolean;
+  /**
+   * Which tools the run was made of, and how many of each.
+   *
+   * A run used to be broken whenever the tool changed, so a lone `grep` between two runs of reads got its
+   * own row — with its regex and a slice of its output. Measured on one turn: four folded rows and two bare
+   * greps, for eleven calls that said one thing between them. What matters is that the agent was looking,
+   * how much, and whether anything failed; WHICH tool is a detail that fits on the same line.
+   */
+  tools?: { tool: string; count: number }[];
   preview?: string[]; // first lines of the written / changed content (shown under the header; for an edit, the ADDED lines)
   startLine?: number; // 1-based line number the preview begins at (write → 1; edit → where the change starts)
   removed?: string[]; // edit only: the REPLACED (old) lines → rendered as a - / + diff against `preview`

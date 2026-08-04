@@ -52,12 +52,24 @@ describe("a run of calls to one tool becomes one row", () => {
     expect(render(rows(c)[0])).toContain("Ran 2 grep calls");
   });
 
-  it("starts a new row when the tool changes", () => {
+  /**
+   * The tool changing does NOT break the run.
+   *
+   * It used to, so a lone `grep` between two runs of reads got its own row — with its regex and a slice of
+   * its output. Measured on one turn: four folded rows and two bare greps, for eleven calls that said one
+   * thing between them. What matters is that the agent was looking, how much, and whether anything failed.
+   */
+  it("keeps one row across a mix of tools, and names the mix", () => {
     const c = new TuiController();
     c.pushActivity(act("read_file", "a.md"));
     c.pushActivity(act("grep", "foo"));
     c.pushActivity(act("read_file", "b.md"));
-    expect(rows(c)).toHaveLength(3);
+    c.note("done");
+    expect(rows(c)).toHaveLength(1);
+    const line = render(rows(c)[0]);
+    expect(line).toContain("Ran 3 calls");
+    expect(line).toContain("read_file ×2");
+    expect(line).toContain("grep ×1");
   });
 
   /**

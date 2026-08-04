@@ -131,12 +131,20 @@ export function flattenTool(a: import("../core/types.js").ToolActivity, cols: nu
        * on the row, which says the same thing in the space of one line.
        */
       const failed = a.failed ?? 0;
-      const noun = a.tool === "shell" ? "shell commands" : `${a.tool} calls`;
+      const kinds = a.tools ?? [{ tool: a.tool, count: total }];
+      // One tool → say which. Several → "calls", with the breakdown after it: the mix is a detail, not a row.
+      const noun = kinds.length === 1
+        ? (kinds[0].tool === "shell" ? "shell commands" : `${kinds[0].tool} calls`)
+        : "calls";
+      const mix = kinds.length > 1
+        ? ` · ${[...kinds].sort((x, y) => y.count - x.count).map((k) => `${k.tool} ×${k.count}`).join(", ")}`
+        : "";
       const tail = failed ? ` · ${failed} failed` : "";
       if (a.settled) {
         return [[
           { text: `${GLYPHS.msgBullet} `, color: failed ? "red" : "#1a9fd8" },
           { text: `Ran ${total} ${noun}`, dim: true },
+          ...(mix ? [{ text: mix, dim: true }] : []),
           ...(tail ? [{ text: tail, dim: true }] : []),
         ]];
       }

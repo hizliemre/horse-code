@@ -1856,7 +1856,15 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
      * waiting for it stops.
      */
     if (isInterrupt(s) && (state.mode ?? "running") === "running") {
-      if (cancelArmed) { setCancelArmed(false); controller.note("⛔ Cancelled."); cancelJob?.(); return; }
+      if (cancelArmed) {
+        setCancelArmed(false);
+        controller.note("⛔ Cancelled.");
+        // The question first: an agent parked on `ask` is not released by aborting the signal, and the run
+        // cannot end while it waits. See TuiController.cancelPending.
+        controller.cancelPending();
+        cancelJob?.();
+        return;
+      }
       setCancelArmed(true);
       controller.note(state.pending
         ? "Press Ctrl+C again to cancel the run — the question goes unanswered and the agent waiting for it stops."

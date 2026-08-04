@@ -125,12 +125,36 @@ async function runRole(
   await runToCompletion(opts);
 }
 
-export async function runConstitution(p: PhaseDeps): Promise<void> {
+/**
+ * Establish a constitution, or AMEND the one that is already there.
+ *
+ * The message used to be the same either way, and it never carried the request. Its whole content was
+ * "Establish the project constitution", the blank template, and where to write it — so the sentence the user
+ * typed reached nobody. Measured live on "make all agent replies to the user Turkish": the analyst read the
+ * existing 543-line document twelve times, globbed for `**\/speckit*`, grepped for placeholder tokens, and
+ * then said so itself — "There is nothing to fill in and no conflict to reconcile. So the useful question is
+ * what you actually want changed" — before asking the user what they wanted. It was not wandering. It had
+ * not been told.
+ *
+ * A document that exists is amended: smallest change that satisfies the request, version bumped, done. The
+ * template and its placeholder ceremony belong to the case it was written for — a project that has none.
+ */
+export async function runConstitution(p: PhaseDeps, request?: string): Promise<void> {
   const rel = relative(p.workdir, constitutionPath(p.workdir));
-  const msg =
-    `Establish the project constitution. Ask the user about core principles with ask_user if needed.\n` +
-    `Follow this template:\n\n${p.templates.template("constitution")}\n\nWrite it to "${rel}".`;
-  await runRole(p, "analyst", p.templates.command("constitution"), msg, true);
+  const asked = request?.trim()
+    ? `What the user asked for:\n"${request.trim()}"\n\n`
+    : "";
+  const exists = existsSync(constitutionPath(p.workdir));
+  const msg = exists
+    ? `${asked}The project already has a constitution at "${rel}". AMEND it: make the smallest change that `
+      + `satisfies the request, in the document's own language and style, and leave everything else exactly `
+      + `as it is. Bump the version and its amendment record the way the document itself prescribes. Do not `
+      + `reshape it to a template, do not re-derive principles it already ratified, and do not ask what to `
+      + `change when the request already says. If the request genuinely cannot be expressed as an amendment, `
+      + `say why in one sentence and stop.`
+    : `${asked}Establish the project constitution. Ask the user about core principles with ask_user if needed.\n`
+      + `Follow this template:\n\n${p.templates.template("constitution")}\n\nWrite it to "${rel}".`;
+  await runRole(p, "analyst", p.templates.command("constitution"), msg, true, request);
 }
 
 /**

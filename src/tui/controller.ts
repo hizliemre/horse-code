@@ -317,15 +317,19 @@ export class TuiController {
     const last = t[t.length - 1];
     // A row with a diff (a write or an edit) is never folded: its content is the point.
     const foldable = (x: ToolActivity): boolean => x.summary !== undefined;
-    if (last && "kind" in last && last.kind === "tool" && foldable(last.activity) && foldable(a)
-      && last.activity.tool === a.tool) {
+    if (last && "kind" in last && last.kind === "tool" && foldable(last.activity) && foldable(a)) {
       const runs = last.activity.runs ?? [{ target: last.activity.target, count: 1 }];
       const hit = runs.find((r) => r.target === a.target);
       if (hit) hit.count++;
       else runs.push({ target: a.target, count: 1 });
+      // Which tools, and how many of each: the tool changing no longer breaks the run.
+      const tools = last.activity.tools ?? [{ tool: last.activity.tool, count: 1 }];
+      const seen = tools.find((x) => x.tool === a.tool);
+      if (seen) seen.count++;
+      else tools.push({ tool: a.tool, count: 1 });
       const failed = (last.activity.failed ?? (last.activity.ok === false ? 1 : 0)) + (a.ok === false ? 1 : 0);
       // The newest outcome replaces the old one: a summary of the run's last call beats a stale first one.
-      t[t.length - 1] = { kind: "tool", activity: { ...a, runs, failed, settled: false } };
+      t[t.length - 1] = { kind: "tool", activity: { ...a, runs, tools, failed, settled: false } };
     } else {
       t.push({ kind: "tool", activity: { ...a, ...(a.ok === false ? { failed: 1 } : {}) } });
     }
@@ -348,6 +352,26 @@ export class TuiController {
       this.state = { ...this.state, pending: { question, options: opts?.options, multiSelect: opts?.multiSelect } };
       this.notify();
     });
+
+  /**
+   * Releases an agent that is blocked on a question, so a cancel can actually take.
+   *
+   * `ask()` hands out a promise that only `answer()` resolves. Cancelling aborted the job's signal and left
+   * that promise pending for ever — the agent stayed parked on a question nobody could withdraw, and the
+   * screen kept the answer box open. Reported as "Ctrl+C does not cancel a question", and it was exactly
+   * true: the keystroke was handled, the signal was aborted, and nothing moved.
+   *
+   * Answered with an empty string rather than rejected: every caller of `ask` already handles an empty
+   * answer (it is what someone pressing Enter gives), and a rejection would surface as a crash in whichever
+   * phase happened to be asking.
+   */
+  cancelPending(): void {
+    const resolve = this.pendingResolve;
+    this.pendingResolve = undefined;
+    if (this.state.pending !== undefined) this.state = { ...this.state, pending: undefined };
+    resolve?.("");
+    this.notify();
+  }
 
   answer(text: string): void {
     const resolve = this.pendingResolve;
