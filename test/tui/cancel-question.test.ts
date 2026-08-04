@@ -87,3 +87,36 @@ describe("where a written document says it landed", () => {
     expect(said).toMatch(/no branch/i);
   });
 });
+
+/**
+ * Cancelling answered the question — and the agent, handed an empty answer, asked another one.
+ *
+ * Reported live: a choice question was cancelled, a free-text question took its place immediately, and
+ * Ctrl+C on THAT one produced a third. The abort fired every time; the run never reached a point where it
+ * looks at the signal, because it was busy asking.
+ */
+describe("a run that has been cancelled", () => {
+  it("answers the next question instantly instead of showing it", async () => {
+    const c = new TuiController();
+    c.cancelPending();
+    const asked = c.ask("Is the environment ready?");
+    expect(c.getState().pending).toBeUndefined();   // …nothing on screen to answer
+    await expect(asked).resolves.toBe("");
+  });
+
+  it("keeps doing so, however many the phase asks", async () => {
+    const c = new TuiController();
+    c.cancelPending();
+    for (const q of ["one?", "two?", "three?"]) await expect(c.ask(q)).resolves.toBe("");
+    expect(c.getState().pending).toBeUndefined();
+  });
+
+  /** …and the next run may ask again: a cancel ends a run, not the session. */
+  it("asks normally once a new run begins", async () => {
+    const c = new TuiController();
+    c.cancelPending();
+    c.beginRun();
+    void c.ask("Which one?");
+    expect(c.getState().pending?.question).toBe("Which one?");
+  });
+});

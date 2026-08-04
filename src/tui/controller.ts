@@ -346,8 +346,21 @@ export class TuiController {
 
   // arrow-bound: passed as LineReader → reused with makeAskUser/makeApprove/makeAskHuman.
   // opts.options → the UI renders a checkbox/radio selector instead of the free-text input.
+  /**
+   * Set by a cancel, cleared when the next run begins.
+   *
+   * Cancelling answered the question with an empty string — and the agent, handed an empty answer, simply
+   * asked another one. Reported live: a choice question was cancelled, a free-text question took its place
+   * immediately, and Ctrl+C on THAT one produced a third. The abort had fired every time; the run just never
+   * reached a point where it looks at the signal, because it was busy asking.
+   *
+   * A cancelled run therefore answers instantly and shows nothing: the phase unwinds through empty answers
+   * to the next place that checks `signal.aborted`, which is where the cancel actually lands.
+   */
+  private cancelled = false;
+
   ask = (question: string, opts?: AskOpts): Promise<string> =>
-    new Promise<string>((resolve) => {
+    this.cancelled ? Promise.resolve("") : new Promise<string>((resolve) => {
       this.pendingResolve = resolve;
       this.state = { ...this.state, pending: { question, options: opts?.options, multiSelect: opts?.multiSelect } };
       this.notify();
@@ -366,6 +379,7 @@ export class TuiController {
    * phase happened to be asking.
    */
   cancelPending(): void {
+    this.cancelled = true;
     const resolve = this.pendingResolve;
     this.pendingResolve = undefined;
     if (this.state.pending !== undefined) this.state = { ...this.state, pending: undefined };
@@ -528,6 +542,7 @@ export class TuiController {
   }
 
   beginRun(): void {
+    this.cancelled = false;   // …a new run may ask again
     this.agentStarts.clear();
     this.lastNarrated = undefined; // re-narrate phases for the new turn
     this.state = {

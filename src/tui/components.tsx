@@ -239,6 +239,29 @@ export const BOX_CHROME = 4;
 /** The gap between the list and the preview beside it. */
 export const PREVIEW_GAP = 2;
 
+/**
+ * How many rows of preview are shown before it is cut.
+ *
+ * The preview sits beside the option list, so a long one would push the list — and the hint line telling the
+ * user which keys move it — off the bottom of the terminal. Twelve rows is deeper than any list this renders.
+ */
+export const PREVIEW_ROWS = 12;
+
+/**
+ * The preview, wrapped to the box it sits in.
+ *
+ * It used to be rendered with `wrap="truncate-end"`, so a preview wider than its column lost everything past
+ * the first line's worth of characters — reported with the description ending in a bare `…` while two thirds
+ * of the box sat empty beneath it. The point of the panel is the explanation; cutting it at one line makes
+ * the panel decoration.
+ */
+export function previewLines(preview: string, width: number): string[] {
+  const w = Math.max(8, width);
+  const out = preview.split("\n").flatMap((line) => (line ? wrapPlain(line, w) : [""]));
+  if (out.length <= PREVIEW_ROWS) return out;
+  return [...out.slice(0, PREVIEW_ROWS - 1), "…"];
+}
+
 export const RADIO_ON = "(*)";
 export const RADIO_OFF = "( )";
 export const CURSOR = ">";
@@ -466,7 +489,7 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
         <Box flexDirection="row">
           {list}
           <Box flexDirection="column" width={previewW} marginLeft={PREVIEW_GAP} borderStyle="round" borderColor="gray" paddingX={1}>
-            {(preview ?? "").split("\n").map((line, i) => <Text key={i} dimColor wrap="truncate-end">{line}</Text>)}
+            {previewLines(preview ?? "", previewW - BOX_CHROME).map((line, i) => <Text key={i} dimColor>{line}</Text>)}
           </Box>
         </Box>
       ) : (
