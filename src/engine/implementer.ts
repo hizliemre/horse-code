@@ -11,6 +11,7 @@ import { placedSkills } from "../prompts.js";
 import { loadGraphSync } from "./project-graph.js";
 import { applySkills } from "../skills/apply.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
+import { attachedImages } from "../agent/attach.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 import { telemetry } from "../obs/telemetry.js";
 
@@ -224,7 +225,19 @@ export async function runImplementer(
     ...(chain.length ? { model: chain[0], fallbacks: chain.slice(1) } : {}),
     tools,
     maxTurns: IMPLEMENTER_MAX_TURNS,
-    messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content }] : [{ role: "user", content }],
+    /**
+     * A screenshot named in the task comes with it.
+     *
+     * A card built from a small request or from a finding carries the user's own words, and those words can
+     * name the picture that shows the problem. Without this the implementer gets a path and the only thing it
+     * can do with one is `read_file`, which cannot read a PNG.
+     */
+    messages: (hints.message ? [{ role: "user" as const, content: hints.message }] : []).concat([
+      { role: "user" as const, content, ...(() => {
+        const images = attachedImages(content, cwd);
+        return images.length ? { images } : {};
+      })() },
+    ]),
     onUsage: (u) => {
       tok.promptTokens += u.promptTokens;
       tok.completionTokens += u.completionTokens;

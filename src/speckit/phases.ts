@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { relative } from "node:path";
 import { runToCompletion } from "../agent/loop.js";
+import { attachedImages } from "../agent/attach.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "../engine/task-types.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
@@ -69,7 +71,19 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
     tools,
     maxTurns: PHASE_MAX_TURNS,
     // Project memory (conventions/decisions/lessons) reaches the authoring roles too, not just the coach.
-    messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content: message }] : [{ role: "user", content: message }],
+    /**
+     * A screenshot named in the request comes with it, here as everywhere else.
+     *
+     * Measured from a live run: the request carried the path of a pasted screenshot, no image was attached,
+     * and the analyst did the only thing left to it — `read_file` on a PNG, which cannot read one. The
+     * evidence the user handed over never reached the model that needed it.
+     */
+    messages: (hints.message ? [{ role: "user" as const, content: hints.message }] : []).concat([
+      { role: "user" as const, content: message, ...(() => {
+        const images = attachedImages(message, p.workdir);
+        return images.length ? { images } : {};
+      })() },
+    ]),
     permission: p.deps.permission,
     approve: p.deps.approve,
     cwd: p.workdir,
@@ -122,17 +136,41 @@ export async function runBrainstorm(p: PhaseDeps, paths: FeaturePaths, prompt: s
   await runRole(p, "brainstormer", BRAINSTORM_COMMAND, msg, true);
 }
 
+/**
+ * What the analyst is told, given whether a design brief actually exists.
+ *
+ * Separated out because the two facts had drifted apart: the brief is OPTIONAL in the pipeline — a brainstorm
+ * that failed to write one is explicitly allowed to continue — while this prompt made it mandatory. Measured
+ * from a live run, the analyst refused exactly as instructed ("Since you specified that the spec must honor
+ * the decisions in that file, I need the file to proceed") and the run died with "specify did not produce
+ * spec.md".
+ *
+ * The absence is stated rather than left silent: an analyst told nothing about a missing brief will look for
+ * one anyway, which is what the whole search in that run was.
+ */
+export function specifyMessage(
+  prompt: string, specRel: string, briefRel: string, hasBrief: boolean, template: string, feedback?: string[],
+): string {
+  if (feedback?.length) {
+    return `Revise the spec at "${specRel}" with these reviewer notes:\n`
+      + `${feedback.map((f) => `- ${f}`).join("\n")}\nOriginal request: ${prompt}`;
+  }
+  // The design was already decided WITH the user in the brainstorm; the spec states what that design must
+  // deliver, it does not re-open the choice.
+  const source = hasBrief
+    ? `Read "${briefRel}" FIRST — the approach was already decided with the user there, and the spec must `
+      + `honor it (do not re-litigate the choice or reintroduce a rejected alternative).\n`
+    : `There is no design brief for this work — none was written, and there is nothing to look for. Work from `
+      + `the request itself and from the code, and decide what the spec needs by reading the repository.\n`;
+  return `Feature request: "${prompt}". ${source}`
+    + `Ask clarifying questions with ask_user only if strictly necessary.\n`
+    + `Follow this template:\n\n${template}\n\nWrite the spec to "${specRel}".`;
+}
+
 export async function runSpecify(p: PhaseDeps, paths: FeaturePaths, prompt: string, feedback?: string[]): Promise<void> {
   const rel = relative(p.workdir, paths.spec);
   const brief = relative(p.workdir, paths.brainstorm);
-  const msg = feedback?.length
-    ? `Revise the spec at "${rel}" with these reviewer notes:\n${feedback.map((f) => `- ${f}`).join("\n")}\nOriginal request: ${prompt}`
-    // The design was already decided WITH the user in the brainstorm; the spec states what that design must
-    // deliver, it does not re-open the choice.
-    : `Feature request: "${prompt}". Read "${brief}" FIRST — the approach was already decided with the user ` +
-      `there, and the spec must honor it (do not re-litigate the choice or reintroduce a rejected alternative).\n` +
-      `Ask clarifying questions with ask_user only if strictly necessary.\n` +
-      `Follow this template:\n\n${p.templates.template("spec")}\n\nWrite the spec to "${rel}".`;
+  const msg = specifyMessage(prompt, rel, brief, existsSync(paths.brainstorm), p.templates.template("spec"), feedback);
   await runRole(p, "analyst", p.templates.command("specify"), msg, true);
 }
 
