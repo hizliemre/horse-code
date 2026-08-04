@@ -68,6 +68,13 @@ export interface TaskCycleDeps {
    */
   onSession?: (baseWorktree: string | undefined) => void;
   /**
+   * The session a run opened, handed back so the NEXT request in the same sitting continues in it.
+   *
+   * `onSession` carries only the path, which is what the memory store needs; reopening the same session
+   * needs the whole handle — the branch, the root, what it inherited.
+   */
+  onSessionOpened?: (session: import("../worktree/manager.js").WorktreeSession) => void;
+  /**
    * Queue a memory PROPOSAL from a review agent. Nothing is written here — the curator rules on the queue once
    * the job ends. Returns whether it was queued (false = duplicate or queue full).
    */

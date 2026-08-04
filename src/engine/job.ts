@@ -209,6 +209,18 @@ export async function runJob(
      * passed separately: `prompt` is what the pipeline builds from, `resumeKey` is what it reopens.
      */
     resumeKey?: string;
+    /**
+     * The session this hcode session is already working in, if any.
+     *
+     * A run used to open its own worktree from `fromBranch`, every time. Measured live: three sessions in
+     * eleven minutes, and the second — smoke tests for a change the FIRST run had just made to the
+     * constitution — cut from `development` at exactly the commit the first run had branched away from. It
+     * could not see the work it was testing, and nothing said so.
+     *
+     * Consecutive requests in one sitting are consecutive WORK. The first opens a worktree; the rest
+     * continue in it, the way a person does not re-clone the repository between two edits.
+     */
+    continueIn?: WorktreeSession;
   },
 ): Promise<JobResult> {
   // don't let onEvent errors crash the engine: the observer is called synchronously (deep inside board mutations).
@@ -231,10 +243,23 @@ export async function runJob(
     session = s;
     // From here the session owns the project's state: what the run learns has to land in what ships.
     deps.onSession?.(s.baseWorktree);
+    deps.onSessionOpened?.(s);   // …so the next request in this sitting continues here
     return s;
   };
 
   const ensureWorktree = async (nameHint?: string): Promise<string> => {
+    /**
+     * Already working somewhere → keep working there.
+     *
+     * Checked against the filesystem rather than trusted: a worktree the user removed between two requests
+     * would otherwise be adopted as if it were still there, and every write would fail somewhere that no
+     * longer exists.
+     */
+    if (!session && opts.continueIn && existsSync(opts.continueIn.baseWorktree)) {
+      adopt(opts.continueIn);
+      emit({ kind: "note", text: `↪️ Continuing in \`${opts.continueIn.baseBranch}\` — the work from this `
+        + `session so far is already there.` });
+    }
     if (!session) {
       /**
        * Opening the session is WORK, and it was narrated as something else.

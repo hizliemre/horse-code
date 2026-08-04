@@ -1,3 +1,4 @@
+import type { WorktreeSession } from "../worktree/manager.js";
 import React from "react";
 import type { Provider } from "../core/types.js";
 import { render } from "ink";
@@ -167,6 +168,9 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
 
   // Meter every LLM call → per-turn tokens + active model surface in the metrics line under the input.
   // onActivity → the write/edit tools stream file activity into the live strip.
+  /** The worktree this sitting is working in — the first request opens it, the rest continue in it. */
+  const openSession: { current: WorktreeSession | undefined } = { current: undefined };
+
   const deps: JobDeps = {
     ...deps0,
     provider: firewallProvider(meterProvider(deps0.provider, controller.onUsage)), // redact secrets from every outgoing prompt
@@ -193,6 +197,14 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
      * again after it was copied, while the project's gained 26 uses and 85 injections in the same hour.
      */
     onSession: (base) => memStore.retarget(base ?? process.cwd()),
+    /**
+     * One sitting, one worktree.
+     *
+     * Every request used to cut its own from `fromBranch`. Measured live: three sessions in eleven minutes,
+     * and the second — smoke tests for a change the FIRST had just made to the constitution — branched from
+     * `development` at exactly the commit the first had left. It could not see the work it was testing.
+     */
+    onSessionOpened: (s) => { openSession.current = s; },
     rechainRole: (role, reason) => health.handleChainFailure(role, reason), // dead chain → quarantine + reassign
     // Memory used to work invisibly, so "no memory applied" and "memory is broken" looked identical. Every
     // injection, citation and extraction now surfaces as one compact chat line.
@@ -918,6 +930,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         const res = await runJob(deps, {
           ...opts.jobBase,
           fromBranch: baseRef.current, // …which `/continue-from-claude` may have repointed at adopted work
+          // One sitting, one worktree: the first request opens it, the rest continue in it.
+          ...(openSession.current ? { continueIn: openSession.current } : {}),
           prompt: task,
           ...(resumeKey !== undefined ? { resumeKey } : {}),
           jobName: toSlug(task) || "hcode-job",
