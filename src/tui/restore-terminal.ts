@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { openSync, closeSync } from "node:fs";
 
 /**
  * Puts the terminal back the way it was found.
@@ -30,10 +31,27 @@ export interface TerminalHandles {
   sane?: () => unknown;
 }
 
-/** `stty sane`, run against the controlling terminal. Synchronous, because an exit handler cannot await. */
+/**
+ * `stty sane`, run against the CONTROLLING terminal.
+ *
+ * `/dev/tty` rather than the inherited stdin, deliberately. By the time an exit handler runs, stdin has been
+ * paused and handed back by the TUI, and `stty` given a stream in that state answers "stdin isn't a terminal"
+ * and changes nothing — which is a fix that reports success and does not happen. `/dev/tty` is the terminal
+ * this process is attached to, whatever became of its streams.
+ *
+ * Synchronous, because an exit handler cannot await.
+ */
 export function sttySane(): void {
   if (process.platform === "win32") return;
-  spawnSync("stty", ["sane"], { stdio: ["inherit", "ignore", "ignore"] });
+  let fd: number | undefined;
+  try {
+    fd = openSync("/dev/tty", "r+");
+    spawnSync("stty", ["sane"], { stdio: [fd, "ignore", "ignore"] });
+  } catch {
+    // No controlling terminal (a pipe, a CI runner) — there is nothing to sanitise.
+  } finally {
+    if (fd !== undefined) { try { closeSync(fd); } catch { /* already gone */ } }
+  }
 }
 
 /**
@@ -64,9 +82,15 @@ export function restoreTerminal(h: TerminalHandles): void {
    *
    * Last, so it can only ever add to what the specific steps already did.
    */
-  if (h.stdin.isTTY && h.sane) {
-    try { h.sane(); } catch { /* no stty, or no terminal left to sanitise */ }
-  }
+  /**
+   * Not gated on `stdin.isTTY`.
+   *
+   * That flag is a belief about a stream, and by exit time the stream has been paused and handed back; a
+   * belief that is wrong here means the one step that would have worked is skipped silently. `sttySane`
+   * opens `/dev/tty` itself and fails harmlessly when there is no controlling terminal, which is the same
+   * question asked of the system instead of of a cached property.
+   */
+  try { h.sane?.(); } catch { /* no stty, or no terminal left to sanitise */ }
 }
 
 /**

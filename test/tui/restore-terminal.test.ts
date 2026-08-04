@@ -186,10 +186,15 @@ describe("the last resort on the way out", () => {
     expect(order).toEqual(["rawMode(false)", "escape-sequences", "stty sane"]);
   });
 
-  it("does nothing of the sort when there is no terminal to sanitise", () => {
+  /**
+   * Deliberately NOT gated on `stdin.isTTY`: that flag is a belief about a stream, and by exit time the
+   * stream has been paused and handed back. A belief that is wrong here skips the one step that works.
+   * `sttySane` asks the system — it opens `/dev/tty` and fails harmlessly when there is none.
+   */
+  it("still asks, even when the stream no longer claims to be a terminal", () => {
     const order: string[] = [];
     restoreTerminal({ stdin: { isTTY: false }, write: () => order.push("w"), sane: () => order.push("stty sane") });
-    expect(order).not.toContain("stty sane");
+    expect(order).toContain("stty sane");
   });
 
   it("survives a sane that fails — a terminal already gone needs nothing put back", () => {
