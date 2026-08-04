@@ -5,7 +5,7 @@ import { attachedImages } from "./attach.js";
 import { stripThinking } from "../tui/format.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { executeToolCalls } from "./tool-exec.js";
+import { executeToolCalls, capToolResult } from "./tool-exec.js";
 import { shieldToolOutput } from "../core/prompt-guard.js";
 import { elideInPlace } from "./elide.js";
 
@@ -235,7 +235,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     });
     for (const r of results) {
       // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.
-      working.push({ role: "tool", toolCallId: r.id, name: r.name, content: shieldToolOutput(r.result.content) });
+      working.push({ role: "tool", toolCallId: r.id, name: r.name, content: shieldToolOutput(capToolResult(r.result.content, r.name)) });
       /**
        * An answer that names a screenshot brings it along.
        *

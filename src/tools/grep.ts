@@ -7,6 +7,40 @@ import { walkFiles } from "./walk.js";
 const params = z.object({ pattern: z.string(), flags: z.string().optional() });
 const MAX_MATCHES = 200;
 
+/**
+ * A cap on the number of MATCHES is not a cap on the amount of TEXT.
+ *
+ * A match is a line and a line has no length limit. Measured on a real project: `graphify-out/graph.json` is
+ * a single line of 35,272,070 characters — a file horse-code itself commits — so one match returned
+ * thirty-five megabytes. In a live run a brainstormer's prompt reached 3,397,616 characters in one call, and
+ * after that nothing it did could work.
+ *
+ * Long enough to read a line of real source with its context; short enough that a minified bundle, a lockfile
+ * or a serialised graph cannot become the conversation.
+ */
+export const MAX_GREP_LINE = 400;
+/** …and a ceiling on the whole answer, because many medium lines add up to the same problem. */
+export const MAX_GREP_CHARS = 60_000;
+
+/**
+ * A long line, cut AROUND its match.
+ *
+ * Cutting from the start would keep the length under control and lose the thing being looked for: in a
+ * 35-megabyte line the match is nowhere near the beginning, and a grep result without the match in it is
+ * worse than no result — it looks like an answer.
+ */
+export function clipLine(line: string, re: RegExp): string {
+  if (line.length <= MAX_GREP_LINE) return line;
+  // `re` is used with `.test` elsewhere; `search` needs it unanchored to state, so a fresh copy is used.
+  const at = line.search(new RegExp(re.source, re.flags.replace("g", "")));
+  const half = Math.floor(MAX_GREP_LINE / 2);
+  const start = Math.max(0, (at < 0 ? 0 : at) - half);
+  const end = Math.min(line.length, start + MAX_GREP_LINE);
+  const head = start > 0 ? "…" : "";
+  const tail = end < line.length ? "…" : "";
+  return `${head}${line.slice(start, end)}${tail} (line cut at ${MAX_GREP_LINE} of ${line.length} chars)`;
+}
+
 export const grepTool: Tool = {
   name: "grep",
   description: "Performs a line-based regex search in files under cwd.",
@@ -51,6 +85,7 @@ export const grepTool: Tool = {
       };
     }
     const out: string[] = [];
+    let size = 0;
     for await (const abs of walkFiles(ctx.cwd)) {
       let text: string;
       try {
@@ -63,9 +98,15 @@ export const grepTool: Tool = {
       const lines = text.split("\n");
       for (let i = 0; i < lines.length; i++) {
         if (re.test(lines[i])) {
-          out.push(`${rel}:${i + 1}:${lines[i]}`);
+          const line = clipLine(lines[i], re);
+          out.push(`${rel}:${i + 1}:${line}`);
+          size += line.length + rel.length + 8;
           if (out.length >= MAX_MATCHES) {
             out.push(`… (${MAX_MATCHES}+ matches, truncated)`);
+            return { content: out.join("\n"), isError: false };
+          }
+          if (size >= MAX_GREP_CHARS) {
+            out.push(`… (result truncated at ${MAX_GREP_CHARS} characters — narrow the pattern or the path)`);
             return { content: out.join("\n"), isError: false };
           }
         }

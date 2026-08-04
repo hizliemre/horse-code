@@ -243,3 +243,31 @@ describe("a successful read leaves no second column", () => {
     expect((await activityFor("grep", "src/a.ts:12: const x = 1;"))?.summary).toBe("src/a.ts:12: const x = 1;");
   });
 });
+
+/**
+ * No tool result may become the conversation.
+ *
+ * Each tool bounds its own output, and each bound was a count rather than a size: `grep` capped MATCHES, and
+ * a match is a line with no length limit. Measured on a real project, one line of `graphify-out/graph.json`
+ * is 35,272,070 characters, and a live brainstormer's prompt reached 3,397,616 in a single call.
+ *
+ * That particular hole is closed where it was made. This is the floor under all of them: a tool added later,
+ * or an MCP server nobody here wrote, cannot do the same thing again.
+ */
+describe("the ceiling under every tool result", () => {
+  it("cuts an oversized result and says so", async () => {
+    const { capToolResult, MAX_TOOL_RESULT_CHARS } = await import("../../src/agent/tool-exec.js");
+    const huge = "x".repeat(MAX_TOOL_RESULT_CHARS * 3);
+    const out = capToolResult(huge, "some_tool");
+    expect(out.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CHARS + 300);
+    expect(out).toMatch(/some_tool/);
+    expect(out).toMatch(/truncated|cut/i);
+    expect(out.startsWith("x")).toBe(true);   // …the beginning, which is the part a reader wants
+  });
+
+  it("leaves an ordinary result exactly as it was", async () => {
+    const { capToolResult } = await import("../../src/agent/tool-exec.js");
+    expect(capToolResult("just a line of output", "t")).toBe("just a line of output");
+    expect(capToolResult("", "t")).toBe("");
+  });
+});

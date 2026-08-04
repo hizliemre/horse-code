@@ -337,3 +337,26 @@ export async function* executeToolCalls(
 
   return results;
 }
+
+/**
+ * The ceiling under every tool result, whoever wrote the tool.
+ *
+ * Each tool bounds its own output and each bound was a COUNT rather than a size — `grep` capped matches, and
+ * a match is a line with no length limit. Measured on a real project: one line of `graphify-out/graph.json`
+ * is 35,272,070 characters, and a live run's brainstormer reached a 3,397,616-character prompt in a single
+ * call, after which nothing it did could work.
+ *
+ * That hole is closed where it was made. This is the floor under all of them, including tools added later
+ * and MCP servers nobody here wrote: whatever comes back, it cannot become the conversation.
+ *
+ * The BEGINNING is kept. A result is written most-important-first — the matches, the listing, the error —
+ * and a reader who needs more can ask a narrower question.
+ */
+export const MAX_TOOL_RESULT_CHARS = 120_000;
+
+export function capToolResult(content: string, tool: string): string {
+  if (content.length <= MAX_TOOL_RESULT_CHARS) return content;
+  return `${content.slice(0, MAX_TOOL_RESULT_CHARS)}\n\n`
+    + `… [${tool} returned ${content.length} characters; truncated at ${MAX_TOOL_RESULT_CHARS}. `
+    + `Ask a narrower question — a smaller path, a tighter pattern, a specific file.]`;
+}
