@@ -40,8 +40,16 @@ describe("a lockfile conflict is regenerated, not merged", () => {
     const asked = { n: 0 };
     const res = await resolveMergeConflict(deps(["toucan/package-lock.json"], resolved, asked), session, board, "t1", TASK);
     expect(res.status).toBe("resolved");
-    expect(resolved).toEqual(["toucan/package-lock.json"]);
-    expect(asked.n).toBe(0); // no model was asked to hand-merge generated JSON
+    /**
+     * The file was taken from the base — asserted by containment, not by call count.
+     *
+     * It is staged twice on purpose: once to take the base's copy, and again after the regeneration, to
+     * stage whatever that wrote. Whether the second one happens depends on whether the package manager is
+     * reachable at all, which is a property of the machine and not of this behaviour — an exact-equality
+     * assertion turned that into a test that passes or fails depending on `PATH`.
+     */
+    expect(resolved).toContain("toucan/package-lock.json");
+    expect(asked.n).toBe(0); // no model was asked to hand-merge generated JSON — this is the actual claim
   });
 
   it("covers the other package managers' lockfiles too", async () => {
@@ -69,7 +77,9 @@ describe("a lockfile conflict is regenerated, not merged", () => {
     await expect(
       resolveMergeConflict(deps(["src/app.ts", "package-lock.json"], resolved, asked), session, board, "t1", TASK),
     ).rejects.toThrow(); // …it went on to the resolver rather than returning "resolved"
-    expect(resolved).toEqual(["package-lock.json"]);
+    // The lockfile was settled from the base; the source file was NOT, which is the distinction being made.
+    expect(resolved).toContain("package-lock.json");
+    expect(resolved).not.toContain("src/app.ts");
   });
 });
 

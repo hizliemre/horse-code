@@ -22,7 +22,7 @@ import { applyKey } from "./input-edit.js";
 import { atToken, listProjectFiles, rankFiles } from "./file-search.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { shouldCollapsePaste, pasteToken, expandPasteTokens, imageToken, expandImageTokens, tokenBefore } from "./paste.js";
+import { shouldCollapsePaste, pasteToken, expandPasteTokens, imageToken, expandImageTokens, tokenBefore, typedAsCommand } from "./paste.js";
 import type { AskChoice } from "../engine/review.js";
 import { asChoice } from "../engine/review.js";
 import { readTelemetry, summarize, describeReport, type RunReport as MonitorReport } from "../obs/report.js";
@@ -2173,7 +2173,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (atOpen) { const p = atMatches[atIdx]; if (p) { insertAtFile(p); return; } }
               // Slash palette open → Enter runs the highlighted command instead of submitting a prompt.
               if (slashOpen) { const c = slashCmds[slashIdx]; if (c) { runSlash(c); return; } }
-              const trimmed = t.trim();
+              /**
+               * What the PERSON typed decides whether this is a command — not what it expanded to.
+               *
+               * The expansion above is a display device unwound, and it can CREATE a leading slash: an image
+               * placeholder becomes an absolute path, so a sentence that opens with a pasted screenshot
+               * begins with `/` afterwards. Measured from a live run — eighty minutes of verification, and
+               * the message carrying the evidence was answered with "Unknown command:
+               * /Users/…/paste-86711-2.png A1 doldurdu ibaresi gelmiş ama…".
+               *
+               * A placeholder never begins with a slash, so the raw input is the honest thing to ask.
+               */
+              const trimmed = typedAsCommand(raw) ? t.trim() : "";
               const cmd = trimmed.toLowerCase();
               // A fully-typed known command (palette closed) → run it.
               const known = COMMANDS.find((c) => c.name === cmd);
@@ -2202,7 +2213,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               // /mode <value> (argument form) — case-sensitive value (acceptEdits), so slice off the raw text.
               if (cmd.startsWith("/mode ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMode(trimmed.slice("/mode".length).trim()); return; }
               // Any other slash input is an unknown command → warn, NEVER send it to the LLM.
-              if (trimmed.startsWith("/")) {
+              if (typedAsCommand(raw) && trimmed.startsWith("/")) {
                 setScroll(0); setDraft(""); setDraftCursor(0);
                 controller.note(`Unknown command: \`${trimmed}\` — type \`/\` to see the available commands.`);
                 return;

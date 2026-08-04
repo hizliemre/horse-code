@@ -176,3 +176,39 @@ describe("a placeholder is deleted whole", () => {
     expect(tokenBefore(v, v.length)).toEqual({ start: 17, end: 34, kind: "image", id: 2 });
   });
 });
+
+/**
+ * Expanding a placeholder must never turn a sentence into a command.
+ *
+ * The composer's shorthand is a display device, and the code already knew that in one direction: nothing
+ * downstream may see a placeholder. The other direction was missed. `[Pasted Image #1]` expands to an
+ * absolute path, so a message that STARTS with a pasted screenshot begins with `/` after expansion — and the
+ * whole thing was parsed as a slash command.
+ *
+ * Measured from a live run: "Unknown command: /Users/hizliemre/.horsecode/pastes/paste-86711-2.png A1
+ * doldurdu ibaresi gelmiş ama…" — eighty minutes of verification, and the sentence carrying the evidence was
+ * answered with "type / to see the available commands".
+ *
+ * What decides is what the PERSON typed. A placeholder never starts with a slash, so a sentence that begins
+ * with one is a sentence.
+ */
+describe("what counts as a command", () => {
+  it("asks what was typed, not what it expanded to", async () => {
+    const { typedAsCommand } = await import("../../src/tui/paste.js");
+    expect(typedAsCommand("/mode auto")).toBe(true);
+    expect(typedAsCommand("   /help")).toBe(true);
+    expect(typedAsCommand("[Pasted Image #1] the label is missing")).toBe(false);
+    expect(typedAsCommand("look at [Pasted Image #1]")).toBe(false);
+    expect(typedAsCommand("just words")).toBe(false);
+    expect(typedAsCommand("")).toBe(false);
+  });
+
+  /** …and the path it expands to is not a command either, however it is written. */
+  it("is not fooled by the expansion itself", async () => {
+    const { typedAsCommand, expandImageTokens } = await import("../../src/tui/paste.js");
+    const raw = "[Pasted Image #1] açıklama hala raw html render oluyor";
+    const expanded = expandImageTokens(raw, new Map([[1, "/Users/x/.horsecode/pastes/paste-1.png"]]));
+    expect(expanded.startsWith("/")).toBe(true);   // …which is exactly the trap
+    expect(typedAsCommand(raw)).toBe(false);
+  });
+});

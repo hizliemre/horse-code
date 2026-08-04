@@ -71,3 +71,17 @@ export function tokenBefore(value: string, cursor: number): TokenSpan | undefine
   if (text) return { start: cursor - text[0].length, end: cursor, kind: "text", id: Number(text[1]) };
   return undefined;
 }
+
+/**
+ * Whether the person typed a command.
+ *
+ * Asked of the RAW input, before any placeholder is expanded. The code already knew a placeholder must never
+ * reach anything downstream; the inverse was missed — expanding one can CREATE a leading slash, because an
+ * image placeholder becomes an absolute path. A message that opened with a pasted screenshot was therefore
+ * parsed as a slash command and answered with "type / to see the available commands".
+ *
+ * A placeholder never begins with a slash, so what the person typed is the honest thing to ask.
+ */
+export function typedAsCommand(raw: string): boolean {
+  return raw.trimStart().startsWith("/");
+}
