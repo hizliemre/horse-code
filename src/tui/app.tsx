@@ -862,6 +862,14 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       // Fresh abort controller per job → Ctrl+C aborts THIS job's signal; the next job gets a clean one.
       jobAbort = new AbortController();
       deps.signal = jobAbort.signal;
+      /**
+       * From here until the session opens, nothing this job learns may touch the project checkout.
+       *
+       * Refining, sizing and triage all run before the worktree exists. What they wrote landed in the root's
+       * `memory.jsonl`, which is committed and shared — so it sat there modified, and every later merge into
+       * that checkout refused to apply. `onSession` below releases it into the session, where it ships.
+       */
+      memStore.deferUntilSession();
       try {
         const res = await runJob(deps, {
           ...opts.jobBase,

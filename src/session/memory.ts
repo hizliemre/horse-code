@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { writeAtomic } from "./atomic.js";
-import { stateRoot } from "../engine/session-scope.js";
+import { stateRoot, writableStateRoot } from "../engine/session-scope.js";
 import { dedupeMemories, applyMerges } from "../engine/memory-dedupe.js";
 import type { Provider } from "../core/types.js";
 import { readFileSync, statSync } from "node:fs";
@@ -40,6 +40,21 @@ export class MemoryStore {
 
   private readonly cwd: string;
   private lastVerify = 0;
+  /**
+   * Set while a JOB is running and its session has not opened yet — the window in which the root must not be
+   * touched. Not derived from the directory: a person typing `/remember` in chat is writing to the project on
+   * purpose, and that is the feature. This is only about what a run does as a SIDE EFFECT.
+   */
+  private deferred = false;
+  /**
+   * Entries learned before a session existed, held until one does.
+   *
+   * The store is built when the process starts, and the only directory it can be given then is the PROJECT.
+   * Refining, sizing and triage all run in that window and all can learn something. Writing it at the root
+   * is what left `memory.jsonl` modified there for every later merge to trip over; dropping it would lose
+   * the lessons those phases paid for. So it waits, and lands in the session the moment one opens.
+   */
+  private pending: MemoryEntry[] = [];
   private candidates: string[] = []; // ids the last hygiene run put up for review
 
   constructor(opts: MemoryStoreOpts) {
@@ -54,6 +69,18 @@ export class MemoryStore {
      * lesson a task learned is delivered with the work rather than left in a directory nobody reads.
      */
     this.file = join(stateRoot(opts.cwd), ".horsecode", "memory.jsonl");
+  }
+
+  /**
+   * Hold everything learned from here until a session exists.
+   *
+   * Called when a job starts, because refining, sizing and triage all run before the worktree is opened and
+   * all can learn something. Writing it at the root left `memory.jsonl` modified in the project checkout —
+   * one of four files (with `graphify-out/` and the traces) that both sides of a merge regenerate, so every
+   * later pull refused to apply. Dropping it instead would lose what those phases paid for.
+   */
+  deferUntilSession(): void {
+    this.deferred = writableStateRoot(this.cwd) === undefined;
   }
 
   /**
@@ -76,6 +103,7 @@ export class MemoryStore {
     const next = join(stateRoot(cwd), ".horsecode", "memory.jsonl");
     if (next === this.file) return;
     this.file = next;
+    if (writableStateRoot(cwd) !== undefined) this.deferred = false;  // …the session is here; the wait is over
     this.cache = undefined;
   }
 
@@ -126,6 +154,17 @@ export class MemoryStore {
       /* no memory file yet */
     }
     this.cache = out;
+    /**
+     * What was learned before the session existed lands here, once, the first time the session's file is read.
+     *
+     * Ids are re-minted against what the session already holds: the two files were written independently, so
+     * a timestamp id from the project window can collide with one the session inherited.
+     */
+    if (!this.deferred && this.pending.length) {
+      for (const e of this.pending) out.push({ ...e, id: this.mintId() });
+      this.pending = [];
+      await this.persist();
+    }
     // An already-written file is repaired once, on the way in. Both repairs are pure re-derivations, so a
     // healthy file is left byte-for-byte alone.
     const repaired = this.dedupeIds(out);
@@ -290,6 +329,8 @@ export class MemoryStore {
   }
 
   private async persist(): Promise<void> {
+    // Mid-job, before the session opens: the root is read, never written. It waits in `pending`.
+    if (this.deferred) return;
     const dir = dirname(this.file);
     await mkdir(dir, { recursive: true });
     /**
@@ -361,6 +402,7 @@ export class MemoryStore {
       const superseded = this.cache!.filter((e) => sameKind(e) && supersedes(entry, e)).map((e) => e.text);
       this.cache = this.cache!.filter((e) => !(sameKind(e) && supersedes(entry, e)));
       this.cache.push(entry);
+      if (this.deferred) this.pending.push(entry);  // …no session yet: it waits rather than dirtying the root
       await this.persist();
       return { ok: true as const, entry, superseded };
     });

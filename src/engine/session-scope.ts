@@ -43,6 +43,24 @@ export function stateRoot(cwd: string): string {
   return sessionBase(cwd) ?? resolve(cwd);
 }
 
+/**
+ * Where a run may write SHARED project state — or undefined when it is not in a session.
+ *
+ * `stateRoot` falls back to the cwd when there is no session, and that fallback is how the root got written
+ * to. Measured on a real project checkout: `.horsecode/memory.jsonl`, `graphify-out/graph.json`,
+ * `graphify-out/.graphify_labels.json` and `docs/architecture/index.json` all left modified and uncommitted
+ * — four files that both sides of every merge regenerate, so every pull afterwards refused to apply.
+ *
+ * The rule was already written down, on `isSessionBase` below: "the one place a run may write project
+ * state". It had no callers. A rule nobody calls is a comment.
+ *
+ * Machine-local state (`last-turn.json`, `config.json`) still belongs at the root and still uses
+ * `stateRoot` — it is git-ignored there, so it never reaches a merge.
+ */
+export function writableStateRoot(cwd: string): string | undefined {
+  return sessionBase(cwd);
+}
+
 /** True when this directory IS a session base — the one place a run may write project state. */
 export function isSessionBase(cwd: string): boolean {
   const abs = resolve(cwd);
