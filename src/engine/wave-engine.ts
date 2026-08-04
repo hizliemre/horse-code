@@ -558,7 +558,10 @@ export async function runWaves(
        */
       const summary = await prSummary(deps, {
         request: opts.request ?? session.jobSlug,
-        cards: board.list(), cwd: session.baseWorktree, base: opts.base, jobSlug: session.jobSlug,
+        // …every card EXCEPT the revision row: it is bookkeeping, and it was published as work. Measured on
+        // PR #765, where the task list ended "- PR revision" among the 27 things that were actually built.
+        cards: board.list().filter((c) => c.id !== REVISION_CARD),
+        cwd: session.baseWorktree, base: opts.base, jobSlug: session.jobSlug,
       });
       const pr = await deps.manager.openPR(session, deps.prAdapter, {
         base: opts.base,

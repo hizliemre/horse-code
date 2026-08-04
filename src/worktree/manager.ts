@@ -5,9 +5,36 @@ import { inheritFromRoot, topUpInherited, type Inherited } from "./inherit.js";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
 import { readCheckpoint, checkpointKey, isContinuePrompt, checkpointMtime } from "../engine/checkpoint.js";
+import { traceRootRel } from "../engine/trace.js";
 
-/** Don't let the PR diff bloat the revision prompt: anything above this char limit is truncated. */
-const MAX_DIFF_CHARS = 60_000;
+/**
+ * How much of the diff a reviewer is given.
+ *
+ * It was 60,000, and that could not hold one medium feature's source: measured on PR #765, the changed
+ * `.ts`/`.json` came to 66,913 characters with every document already excluded. A ceiling that cannot fit
+ * the code is not a bloat guard, it is a guarantee the code goes unreviewed.
+ */
+export const MAX_DIFF_CHARS = 120_000;
+
+/** Prose the run produced ABOUT the work — read after the work, never instead of it. */
+const DOC_SPECS = ["*.md", "*.txt"];
+
+/**
+ * horse-code's own state, kept OUT of the diff it asks a reviewer to review.
+ *
+ * These files are committed on purpose — memory and the code graph are shared with the project — but they
+ * are horse-code's bookkeeping, not the work. Measured on PR #765: the diff was 70,673,949 characters, and
+ * the 60,000 a reviewer is given held exactly two files, `.gitignore` and `.horsecode/memory.jsonl`. All 36
+ * source files fell outside it. The round that trusted what it was handed spent itself writing seven
+ * findings about memory-entry ID suffixes and counter drift, and told the author the pull request "cannot be
+ * holistically reviewed" — which was true, and was our doing.
+ *
+ * `.horsecode/` sorts almost first alphabetically, so this is not bad luck; it is where the file always is.
+ */
+export function excludeOwnState(): string[] {
+  const roots = [".horsecode", "graphify-out", traceRootRel()].filter(Boolean);
+  return [...new Set(roots)].map((r) => `:(exclude)${r}/**`);
+}
 
 export interface WorktreeSession {
   jobSlug: string;
@@ -310,11 +337,30 @@ export class WorktreeManager {
   }
 
   /** Unified diff of changes in the base worktree against the base branch (the PR diff). */
+  /**
+   * The code first, then what was written about it.
+   *
+   * Git orders a diff by path, so on a run whose work lives under `toucan/` every specification, plan,
+   * checklist and brainstorm sorts ahead of the source. Measured on PR #765 with horse-code's own state
+   * already excluded: the first 60,000 characters held nine files, all of them markdown, and not one line of
+   * the code the review existed to read. Ordering is the fix — a budget spent on prose is a budget the
+   * source never sees, however large it is.
+   */
   async diff(session: WorktreeSession, base: string): Promise<string> {
-    const r = await this.git(["diff", `${base}...${session.baseBranch}`], session.baseWorktree);
-    const out = r.stdout;
+    const range = `${base}...${session.baseBranch}`;
+    const notDocs = DOC_SPECS.map((d) => `:(exclude)${d}`);
+    const code = await this.git(["diff", range, "--", ".", ...excludeOwnState(), ...notDocs], session.baseWorktree);
+    const docs = await this.git(["diff", range, "--", ...DOC_SPECS, ...excludeOwnState()], session.baseWorktree);
+    const out = code.stdout + docs.stdout;
     if (out.length <= MAX_DIFF_CHARS) return out;
-    return out.slice(0, MAX_DIFF_CHARS) + `\n… (diff truncated: ${out.length - MAX_DIFF_CHARS} characters omitted)`;
+    /**
+     * Said at the TOP, because a reviewer reads from the top and stops where the text stops.
+     *
+     * The note used to be appended, where the reader never reaches it — so a truncated diff looked like a
+     * complete one, and a round's findings were written about the only files that fitted.
+     */
+    return `… (diff truncated to the first ${MAX_DIFF_CHARS} characters of ${out.length}; `
+      + `use the read tools to inspect anything not shown here)\n${out.slice(0, MAX_DIFF_CHARS)}`;
   }
 
   /**

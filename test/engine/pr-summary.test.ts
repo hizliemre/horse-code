@@ -130,3 +130,21 @@ describe("a summary that cannot be written", () => {
     expect(res.body).toContain("<details>");
   });
 });
+
+/**
+ * The revision row is bookkeeping, and it was published as work.
+ *
+ * Measured on PR #765 after the summary landed: the task list ran to 28 entries and ended "- PR revision",
+ * beside the 27 things that were actually built.
+ */
+describe("what counts as a completed task", () => {
+  it("leaves the revision row out of what the pull request lists", async () => {
+    const { runWaves } = await import("../../src/engine/wave-engine.js");
+    const { REVISION_CARD } = await import("../../src/engine/revision.js");
+    const src = await (await import("node:fs/promises")).readFile("src/engine/wave-engine.ts", "utf8");
+    const call = src.slice(src.indexOf("prSummary(deps"), src.indexOf("prSummary(deps") + 600);
+    expect(typeof runWaves).toBe("function");
+    expect(call).toContain(`c.id !== ${"REVISION_CARD"}`);
+    expect(REVISION_CARD).toBe("__revision__");
+  });
+});
