@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Recall, recallNote, RECALLABLE, INVALIDATING } from "../../src/agent/recall.js";
+import { Recall, recallNote, shellReadOnly, RECALLABLE } from "../../src/agent/recall.js";
 import { executeToolCalls } from "../../src/agent/tool-exec.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
@@ -59,12 +59,34 @@ describe("what an agent has already been shown", () => {
     expect(r.saw("grep", "pattern:x")).toBeUndefined();
   });
 
-  it("counts shell as a write, because it can be one", () => {
-    expect(INVALIDATING.has("shell")).toBe(true);
+  it("treats a shell command that could write as a write", () => {
     const r = new Recall();
     r.nextTurn(); r.note("glob", "pattern:**/*.ts");
     r.note("shell", "rm -rf x");
     expect(r.saw("glob", "pattern:**/*.ts")).toBeUndefined();
+  });
+
+  /**
+   * …but a shell command that only LOOKS must not, or the memo would be cancelled constantly: 298 of one
+   * run's 1,216 shell commands were git, and 320 of the 356 verbs in them read nothing.
+   */
+  it("keeps the memo through a shell command that only looks", () => {
+    const r = new Recall();
+    r.nextTurn(); r.note("read_file", "path:a.ts");
+    r.note("shell", "git status --short");
+    r.note("shell", "ls && pwd");
+    expect(r.saw("read_file", "path:a.ts")).toBe(1);
+  });
+
+  it("judges each segment, and disqualifies anything that could hide a write", () => {
+    expect(shellReadOnly("git status")).toBe(true);
+    expect(shellReadOnly("git -C toucan diff --stat")).toBe(true);
+    expect(shellReadOnly("git status && git log -5")).toBe(true);
+    expect(shellReadOnly("git status && npm ci")).toBe(false);       // …one bad segment is enough
+    expect(shellReadOnly("git checkout package-lock.json")).toBe(false);
+    expect(shellReadOnly("cat a.ts > b.ts")).toBe(false);            // …a redirection is a write
+    expect(shellReadOnly("echo $(rm -rf x)")).toBe(false);           // …so is a substitution
+    expect(shellReadOnly("nx build beempa")).toBe(false);            // …unrecognised means write
   });
 
   it("holds nothing for a tool whose answer is not the tree", () => {

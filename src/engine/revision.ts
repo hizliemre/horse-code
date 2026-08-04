@@ -8,6 +8,7 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
 import { runStructuredRole } from "../agent/structured.js";
 import { readOnlyRegistry } from "./reviewer.js";
+import { contextTools } from "./task-types.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
@@ -123,6 +124,14 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
   const resolved = deps.roleRegistry.resolve("senior-coder");
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
+  /**
+   * The reviser writes the LAST code to enter the pull request, and it was the worst-equipped agent in the run.
+   *
+   * `principalReview` reads through `readOnlyRegistry`, which carries git, the code graph and the project's
+   * read-only MCP tools. The reviser had none of them — the default registry and a skill tool — so it could
+   * not ask what calls the function it was about to change, and every git question it had went through shell.
+   */
+  for (const t of contextTools(deps)) tools.register(t);
   const hints = memoryHints(deps, comments.join(" "), { role: "senior-coder" });
   /**
    * "the main worktree" pointed AWAY from where the agent already was.
