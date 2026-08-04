@@ -49,14 +49,14 @@ describe("where a run may write", () => {
  */
 describe("what a job learns before its session exists", () => {
   it("does not reach the project checkout", async () => {
-    const store = new MemoryStore({ cwd: project });
+    const store = new MemoryStore({ home: dir, cwd: project });
     store.deferUntilSession();
     await store.add("the refiner learned this", "fact");
     expect(existsSync(rootFile()), "the run wrote into the project checkout").toBe(false);
   });
 
   it("lands in the session the moment one opens", async () => {
-    const store = new MemoryStore({ cwd: project });
+    const store = new MemoryStore({ home: dir, cwd: project });
     store.deferUntilSession();
     await store.add("the refiner learned this", "fact");
     store.retarget(base);
@@ -70,7 +70,7 @@ describe("what a job learns before its session exists", () => {
     await mkdir(join(base, ".horsecode"), { recursive: true });
     await writeFile(sessionFile(),
       JSON.stringify({ id: "m1", text: "inherited from the project", kind: "fact" }) + "\n", "utf8");
-    const store = new MemoryStore({ cwd: project });
+    const store = new MemoryStore({ home: dir, cwd: project });
     store.deferUntilSession();
     await store.add("learned while sizing", "fact");
     store.retarget(base);
@@ -81,12 +81,12 @@ describe("what a job learns before its session exists", () => {
 
   /** …and only once: a second read must not append it again. */
   it("releases the held entries exactly once", async () => {
-    const store = new MemoryStore({ cwd: project });
+    const store = new MemoryStore({ home: dir, cwd: project });
     store.deferUntilSession();
     await store.add("said once", "fact");
     store.retarget(base);
     await store.load();
-    const again = await new MemoryStore({ cwd: base }).load();
+    const again = await new MemoryStore({ home: dir, cwd: base }).load();
     expect(again.filter((e) => e.text === "said once").length).toBe(1);
   });
 });
@@ -97,8 +97,39 @@ describe("what a job learns before its session exists", () => {
  */
 describe("what a person asks to be remembered", () => {
   it("still reaches the project, because that is what was asked", async () => {
-    const store = new MemoryStore({ cwd: project });
+    const store = new MemoryStore({ home: dir, cwd: project });
     await store.add("prefer pnpm", "fact");
     expect(await readFile(rootFile(), "utf8")).toContain("prefer pnpm");
+  });
+});
+
+/**
+ * The second half of the leak: the graph was rebuilt in the project checkout after every finished job.
+ *
+ * `refreshGraphIfStale` called `buildProjectGraph(process.cwd())` — the root — from the line right after
+ * `endRun`. Measured on a real checkout: `graphify-out/graph.json` and `.graphify_labels.json` left modified
+ * and uncommitted, the labels file grown to 6,334 entries of which 2,896 were bare `Community <n>`
+ * placeholders. A rebuild had found new communities and nothing had named them.
+ *
+ * The graph that ships is refreshed inside the session by the trace pass. Rebuilding the root's is a
+ * deliberate act — `/graph` — not something a finished job decides on the user's behalf.
+ */
+describe("the graph the project checkout holds", () => {
+  it("is reported stale, not rebuilt, when a job ends", async () => {
+    const { readFile: rf } = await import("node:fs/promises");
+    const src = await rf("src/tui/app.tsx", "utf8");
+    const after = src.slice(src.indexOf("controller.endRun("), src.indexOf("controller.endRun(") + 300);
+    expect(after).toContain("reportStaleGraph()");
+    expect(after).not.toContain("refreshGraphIfStale");
+    // …and the reporter itself must not build anything.
+    const fn = src.slice(src.indexOf("const reportStaleGraph"), src.indexOf("const reportStaleGraph") + 500);
+    expect(fn).not.toContain("buildProjectGraph");
+    expect(fn).toMatch(/\/graph/);
+  });
+
+  /** Rebuilding is still available — as something asked for, in both entry points. */
+  it("is still rebuildable on request", async () => {
+    const { readFile: rf } = await import("node:fs/promises");
+    expect(await rf("src/cli.ts", "utf8")).toContain("buildProjectGraph(cwd)");
   });
 });
