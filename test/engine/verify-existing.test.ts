@@ -90,6 +90,22 @@ describe("a new document goes in the run's folder, not where the old ones live",
     expect(msg).toContain("docs/superpowers/test-plans");
   });
 
+  /**
+   * A request that names the check does not need a plan written for it.
+   *
+   * Measured live: "Confirm from the screenshot that the description renders raw HTML instead of three
+   * lines" — the tester searched, found no document, refused to invent one, and asked the user for the file.
+   * Six calls, one minute, "nothing was verified", for a question that could have been answered.
+   */
+  it("says that a named check is its own plan", async () => {
+    const { planMessageFor } = await import("../../src/engine/verify.js");
+    const msg = planMessageFor("confirm X renders as Y", "specs/002-x/test-plan.md", "specs/002-x/test-report.md",
+      "specs/002-x", ["docs/superpowers/test-plans"]);
+    expect(msg).toMatch(/that IS the plan/i);
+    expect(msg).toMatch(/write nothing/i);
+    expect(msg).toMatch(/ONLY IF NEITHER/);   // …and the plan is still written when neither applies
+  });
+
   it("still names the run's folder when the project keeps no test documents at all", async () => {
     const { planMessageFor } = await import("../../src/engine/verify.js");
     const msg = planMessageFor("verify it", "specs/001-x/test-plan.md", "specs/001-x/test-report.md", "specs/001-x", []);

@@ -196,7 +196,11 @@ export function planMessageFor(
     + `and record it by writing "${pointerRel}" containing one line:\n\n`
     + `    ${POINTER_HINT.replace("PATH", "the path you found")}\n\n`
     + `…plus a sentence for a human saying which document this run continues. Then STOP.\n\n`
-    + `ONLY IF THERE IS NONE: write a new plan to "${planRel}" — that exact path, and nowhere else. `
+    + `IF THERE IS NONE, look at what you were asked. When the request already names what to check and what `
+    + `the right answer looks like — "confirm from the screenshot that X renders as Y" — that IS the plan: `
+    + `write nothing, and say so in one line. A plan document is for "run the tests for this pull request", `
+    + `where what to check has to be worked out first.\n\n`
+    + `ONLY IF NEITHER: write a new plan to "${planRel}" — that exact path, and nowhere else. `
     + `The directories above are where you LOOK for something that already exists; they are not where a new `
     + `document goes. Everything a run produces belongs in its own folder, so that one piece of work has one `
     + `account of itself instead of pieces in two places.\n\n`
@@ -208,7 +212,36 @@ export function planMessageFor(
     + `whose evidence source you cannot name is a row you cannot verify, so name it or drop the row.\n\n`
     + `Also list, before the table: what the developer must have running, and the exact commands for it. You `
     + `do not run them.\n\n`
-    + `Either way, write the one file and stop. Do not run any scenario yet.`;
+    + `Write at most one file, then stop. Do not run any scenario yet.`;
+}
+
+/**
+ * What the tester is told when the request itself is the thing to verify.
+ *
+ * No plan, because there is nothing a plan would add: the request already names the check and what the right
+ * answer looks like. The report is still written, because a result without a record is a result nobody has.
+ */
+function directMessage(prompt: string, reportRel: string): string {
+  return `${prompt}\n\n`
+    + `There is no test plan for this, and none is needed — what you have been asked to check is stated above. `
+    + `Verify exactly that, and nothing more.\n\n`
+    + `Record the result in "${reportRel}" with its evidence: what you did, what you observed, and where the `
+    + `evidence came from. Create the file if it is not there; if it is, append rather than replacing what is `
+    + `already recorded.\n\n`
+    + `If you cannot run the check — the environment is not up, the data does not exist — say which command `
+    + `the developer should run and ask them, then wait. Never start it yourself.\n\n`
+    + `When it needs an eye on the screen, describe exactly what to look at and ask what they see. Their `
+    + `answer is the evidence; record it as theirs.\n\n`
+    + `If what you find is wrong but is NOT what you were asked to check, use \`report_finding\` — do not fix `
+    + `anything yourself.`;
+}
+
+/** …and when a fix has landed and it should look again. */
+function directResumeMessage(prompt: string, reportRel: string, done: string[]): string {
+  return `The findings you reported have been dealt with:\n${done.map((d) => `- ${d}`).join("\n")}\n\n`
+    + `Anything marked FIXED is in the working tree and committed. Check the original request again against `
+    + `the corrected product, with fresh evidence, and record the result.\n\n`
+    + directMessage(prompt, reportRel);
 }
 
 /** The run itself: execute, observe, record — in that order, one scenario at a time. */
@@ -359,13 +392,21 @@ export async function runVerify(opts: {
     active = settled();
   }
 
-  // Nothing found and nothing written means there is nothing to run against, and running anyway would produce
-  // a report of scenarios the tester made up on the spot.
-  if (!active) {
-    return { dir: dirRel, planPath: planRel, reportPath: reportRel, planWritten: false, reportWritten: false };
-  }
+  /**
+   * No document, and none needed: the request IS the scenario.
+   *
+   * "Confirm from the screenshot that the description renders raw HTML instead of three lines" already says
+   * what to check and what the answer should look like. Demanding a plan document first was a ceremony
+   * around work that was fully specified — and the tester, correctly, refused to invent one and asked for
+   * the file instead. Measured live: six calls, a minute, and "No test plan was found or written — nothing
+   * was verified" for a question that could have been answered.
+   *
+   * A plan is for "run the tests for this pull request". A named check is its own plan.
+   */
+  const direct = !active;
+  if (direct) opts.note?.(`🧪 No test document, and none needed — the request names what to check. Verifying it directly.`);
 
-  const inPlace = active !== planRel;
+  const inPlace = !!active && active !== planRel;
   opts.note?.(inPlace
     ? `🧪 Continuing \`${active}\` in place — it already holds results, and a second document beside it would disagree with it.`
     : `🧪 Verifying against \`${active}\`.`);
@@ -379,7 +420,7 @@ export async function runVerify(opts: {
    * Bounded, because a fix that keeps producing findings is a conversation, not a loop.
    */
   let round = 0;
-  let message = runMessage(prompt, active, reportRel, inPlace);
+  let message = direct ? directMessage(prompt, reportRel) : runMessage(prompt, active!, reportRel, inPlace);
   for (;;) {
     await runTester(deps, workdir, tools, message);
     const found = findings.drain();
@@ -389,13 +430,13 @@ export async function runVerify(opts: {
     }
     round++;
     const done = await handleFindings(opts, found);
-    message = resumeMessage(active, reportRel, inPlace, done);
+    message = direct ? directResumeMessage(prompt, reportRel, done) : resumeMessage(active!, reportRel, inPlace, done);
   }
   return {
     dir: dirRel,
-    planPath: active,
+    planPath: active ?? reportRel,
     // In-place: the results are in the document itself, and the folder holds the pointer to it.
-    reportPath: inPlace ? active : reportRel,
+    reportPath: inPlace ? active! : reportRel,
     planWritten: true,
     reportWritten: inPlace || existsSync(paths.report),
   };
