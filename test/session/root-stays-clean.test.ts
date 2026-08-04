@@ -123,6 +123,24 @@ describe("the graph the project checkout holds", () => {
     // …and the startup path is where it happens, once, before anything asks the graph a question.
     const startup = src.slice(src.indexOf("startupExtra.graph ="), src.indexOf("startupExtra.graph =") + 500);
     expect(startup).toContain("refreshGraphIfStale()");
+    expect(startup).toContain("!g.built || g.stale");   // …the first build too, not only a refresh
+  });
+
+  /**
+   * The prompt is held while it builds, with the shimmer running.
+   *
+   * Every question an agent asks the graph is answered from the file being written; a task started against a
+   * half-built graph gets wrong answers and nothing on screen says why. Anything typed meanwhile is queued.
+   */
+  it("says it is working, and holds the prompt until it is ready", async () => {
+    const { readFile: rf } = await import("node:fs/promises");
+    const src = await rf("src/tui/app.tsx", "utf8");
+    const fn = src.slice(src.indexOf("const refreshGraphIfStale"), src.indexOf("const refreshGraphIfStale") + 2000);
+    expect(fn).toContain("controller.startBusy(");     // …shimmer + held prompt
+    expect(fn).toContain("controller.endBusy()");      // …released when it finishes
+    expect(fn).toMatch(/Code graph ready/);            // …and it says so
+    // A failure must release the prompt too, or the session is stuck for good.
+    expect(fn.slice(fn.indexOf("} catch {"))).toContain("controller.endBusy()");
   });
 
   /**

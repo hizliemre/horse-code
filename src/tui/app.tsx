@@ -456,20 +456,37 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    * git to see, keeping the graph current is free, and forgetting to is what actually costs: a stale graph
    * answers "what calls this" with yesterday's code.
    *
-   * At startup rather than after a job, so the run that needs it has it. The FIRST build is still a
-   * deliberate act — minutes of parsing is not something to spring on someone opening a terminal.
+   * At startup rather than after a job, so the run that needs it has it — including the FIRST build.
+   *
+   * That build reads the whole project and takes minutes, which is exactly why it kept not happening: a
+   * message saying "run `/graph build`" is a message to be scrolled past, and the cost of skipping it is
+   * silent. An agent with no graph does not say so; it just answers "what calls this" from a grep.
    */
   const refreshGraphIfStale = async (): Promise<void> => {
     try {
       const before = await graphStatus(process.cwd());
-      if (!before.built) return;   // …the FIRST build is a deliberate act, not a startup surprise
-      if (!before.stale) return;
-      controller.note(`🔄 The code graph is out of date — updating it…`);
+      if (before.built && !before.stale) return;
+      const first = !before.built;
+      controller.note(first
+        ? `🧠 Building the code graph for the first time — this reads the whole project, so it takes a few minutes. It runs once; after this, start-up only updates what changed.`
+        : `🔄 The code graph is out of date — updating it.`);
+      /**
+       * Shimmering, and holding the prompt, rather than running quietly underneath.
+       *
+       * Every question an agent asks the graph — what calls this, how far does a change reach — is answered
+       * from the file being written right now. Letting a task start against a half-built graph is worse than
+       * making someone wait for it: the answers would be wrong, and nothing on screen would say why. Anything
+       * typed meanwhile is queued and runs the moment it is ready.
+       */
+      controller.startBusy(first ? "building the code graph" : "updating the code graph");
       const r = await buildProjectGraph(process.cwd());
+      controller.endBusy();
       controller.note(r.ok
-        ? `🔄 Code graph updated — ${(r.nodes ?? 0).toLocaleString("en-US")} symbols, ${(r.edges ?? 0).toLocaleString("en-US")} relationships.`
-        : `⚠️ The code graph could not be updated: ${r.message}`);
-    } catch { /* the graph is an aid, never a reason to fail anything */ }
+        ? `✅ Code graph ready — ${(r.nodes ?? 0).toLocaleString("en-US")} symbols, ${(r.edges ?? 0).toLocaleString("en-US")} relationships.`
+        : `⚠️ The code graph could not be built: ${r.message}`);
+    } catch {
+      controller.endBusy();   // …never leave the prompt held by a failure
+    }
   };
   /**
    * Second half of `/roles adjust`: which SKILLS each role should carry, for THIS project.
@@ -631,7 +648,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const g = await graphStatus(process.cwd());
       startupExtra.graph = { built: g.built, nodes: g.nodes, stale: g.stale };
       // Brought up to date here, once, so the run that needs it has it. See refreshGraphIfStale.
-      if (g.built && g.stale) {
+      if (!g.built || g.stale) {
         paintSummary();
         await refreshGraphIfStale();
         const after = await graphStatus(process.cwd());
