@@ -80,8 +80,18 @@ export function tokenBefore(value: string, cursor: number): TokenSpan | undefine
  * image placeholder becomes an absolute path. A message that opened with a pasted screenshot was therefore
  * parsed as a slash command and answered with "type / to see the available commands".
  *
- * A placeholder never begins with a slash, so what the person typed is the honest thing to ask.
+ * Asking the raw input closed the placeholder route and left every other one open, because the test was
+ * `startsWith("/")` — which cannot tell `/help` from `/Users/me/shot.png`. The path reappears in the composer
+ * by ordinary means: history stores the EXPANDED text, so recalling an earlier screenshot message with ↑ puts
+ * a real leading slash in `raw`, and the same message is refused a second time. Reported from a live run,
+ * eighty minutes in, on a message whose whole point was the screenshot it carried.
+ *
+ * So the question is not WHERE the slash came from but WHAT SHAPE follows it. A command is a slash and a
+ * name: letters, digits, hyphen, underscore, then whitespace or the end. A path has separators and dots in
+ * the first token and is therefore never a command, whoever put it there.
  */
+const COMMAND_HEAD = /^\/[A-Za-z][A-Za-z0-9_-]*(\s|$)/;
+
 export function typedAsCommand(raw: string): boolean {
-  return raw.trimStart().startsWith("/");
+  return COMMAND_HEAD.test(raw.trimStart());
 }

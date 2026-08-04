@@ -138,7 +138,15 @@ export async function runSmallChange(
   let res: FixResult;
   try {
     const board = new Board();
-    board.addCard({ id: "small-1", title: prompt, acceptance: spec.acceptance, files: spec.files });
+    /**
+     * A floor under the acceptance criteria.
+     *
+     * The sizing produces them, but a request the developer themselves called small — after being asked —
+     * can arrive without any. The gate can only check what it was given, so the request itself becomes the
+     * criterion: weak, but honest, and the code review still runs over the change.
+     */
+    const acceptance = spec.acceptance.length ? spec.acceptance : [`The request is satisfied: ${prompt}`];
+    board.addCard({ id: "small-1", title: prompt, acceptance, files: spec.files });
     const verdict = await runTaskCycle(deps, board, "small-1", workdir);
     res = {
       title,

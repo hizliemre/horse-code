@@ -194,7 +194,18 @@ This project has a code graph — what calls what, across every file.
 
 ` +
       `Before you change code you did not write, check what depends on it. Grep answers "where does this ` +
-      `name appear"; it does not answer "what breaks", and that is the question a change has to survive.`,
+      `name appear"; it does not answer "what breaks", and that is the question a change has to survive.
+
+` +
+      /**
+       * Measured on a live run: 765 `read_file` calls against 21 `graph_find` and 44 `graph_trace`, in a
+       * project with 46,901 indexed symbols and 2,465 per-file notes. Reading files to FIND something is the
+       * single largest thing a run spends on, and it is the one thing the graph answers in a call.
+       */
+      `Use them to FIND things, before opening files. \`graph_find\` locates a symbol in one call where a ` +
+      `search reads dozens of files; \`graph_trace\` says what a file is for in about 150 words where reading ` +
+      `it costs thousands of tokens. Open a file when you are going to change it or need its exact text — ` +
+      `not to work out where something lives.`,
     );
   }
 

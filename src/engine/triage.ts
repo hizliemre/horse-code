@@ -141,7 +141,21 @@ export function describeEscalation(f: Finding, t: Triage): string {
  * needs one simply belongs in the pipeline.
  */
 export interface RequestSize {
-  small: boolean;
+  /**
+   * `unsure` is a real answer, not a failure to give one.
+   *
+   * Measured end to end: a run took 94 minutes, 507 model calls and 48.4 million prompt characters for what
+   * the developer called a simple UI fix — all of it bought at the 114th second, when the sizing said "not
+   * small" and the pipeline began.
+   *
+   * The old rule was "when in doubt, say it is not small", because a task too big for the small path gets
+   * written and reviewed as though it were understood. Right about the danger, wrong about the cost: a
+   * mistake on the SMALL path is cheap — the change is reviewed, checked against acceptance criteria, and
+   * made in front of a developer who is watching — while a mistake on the large path is an hour and a half.
+   *
+   * So doubt asks the person who is already there.
+   */
+  verdict: "small" | "large" | "unsure";
   /** One sentence — shown when the small path is taken, so the user can see the judgement that was made. */
   reason: string;
   /**
@@ -155,29 +169,43 @@ export interface RequestSize {
 }
 
 export const RequestSizeSchema = z.object({
-  small: z.boolean(),
-  reason: z.string().describe("One sentence: what about this request makes it small, or what makes it not."),
-  acceptance: z.array(z.string()).default([]).describe("If small: what must be true when it is done. One checkable statement each."),
-  files: z.array(z.string()).default([]).describe("If small: the repo-relative files it touches."),
+  verdict: z.enum(["small", "large", "unsure"]),
+  reason: z.string().describe("One sentence: what makes it that size, or what you are unsure about."),
+  acceptance: z.array(z.string()).default([]).describe("If small or unsure: what must be true when it is done. One checkable statement each."),
+  files: z.array(z.string()).default([]).describe("If small or unsure: the repo-relative files it touches."),
 });
 
 const SIZE_PROMPT =
   "You size a change request, to decide how much process it deserves. You are not doing the work and you are "
   + "not designing it.\n\n"
   + "Read the code first. The same sentence describes a one-line style change and a rework of a component, "
-  + "and only the code says which this is.\n\n"
-  + "You are sizing, not implementing: stop as soon as you can tell which side of the line it falls on.\n\n"
-  + "SMALL means: the work is already known from the request itself, it is contained to a file or two, and "
-  + "there is nothing to decide. Centre an icon. Change a colour. Fix a typo. Rename a label. Correct a "
-  + "format string. It goes straight to an implementer, is reviewed, and is checked against your acceptance "
-  + "criteria — no spec, no plan, no branch.\n\n"
-  + "NOT SMALL means anything else: a new capability, a change whose approach is worth deciding with the "
-  + "user, something touching several parts of the system, or anything where you had to guess what was "
-  + "wanted. Those get the full pipeline, which exists to work out WHAT to build.\n\n"
-  + "When in doubt, say it is not small. A request that is too big for the small path is written and reviewed "
-  + "as though it were understood, which is the more expensive mistake.\n\n"
-  + "If it IS small, give the acceptance criteria and the files. Those are what the change will be judged "
-  + "against, so they must be checkable by looking at the result — not \"the icon looks better\".";
+  + "and only the code says which this is. You are sizing, not implementing: stop as soon as you can tell "
+  + "which side of the line it falls on.\n\n"
+  + "`small`: the change is contained to a file or two and there is nothing to DECIDE — what to do follows "
+  + "from the request once you have seen the code. Centre an icon. Change a colour. Fix a typo. Rename a "
+  + "label. Correct a format string. Add a missing field to a screen that already has the data. Clamp a line "
+  + "count. Most requests a person types in one sentence are this.\n\n"
+  + "It is still small when it needs a test, a small refactor to make room, or touching a second file that "
+  + "the first one obviously depends on. Small means CONTAINED and DECIDED, not trivial.\n\n"
+  + "`large`: a new capability, a design that has to be settled with the user, or a change reaching across "
+  + "several parts of the system. Those get the full pipeline, which exists to work out WHAT to build.\n\n"
+  + "`unsure`: you cannot tell from the code which of those it is. Say so. The developer is sitting there and "
+  + "one question costs them a sentence.\n\n"
+  + "Do NOT resolve doubt by choosing `large`. A mistake on the small path is cheap — the change is written, "
+  + "reviewed by a code reviewer, and checked against the acceptance criteria you give below, all in front of "
+  + "someone watching. A mistake the other way costs an hour and a half of spec, plan, board and review "
+  + "panels. Measured: one request called `large` produced 507 model calls over 94 minutes for a fix the "
+  + "developer described as a simple UI change.\n\n"
+  + "For `small` or `unsure`, give the acceptance criteria and the files. Those are what the change will be "
+  + "judged against, so they must be checkable by looking at the result — not \"the icon looks better\".";
+
+/** The question the user is asked when the size is genuinely not obvious. */
+export function describeSizeDoubt(prompt: string, reason: string): string {
+  return `**${prompt}**\n\nI cannot tell how big this is from the code — ${reason}\n\n`
+    + `As a small change it goes straight to an implementer, is reviewed, and is checked against acceptance `
+    + `criteria: no branch, no spec, no plan. As a full piece of work it gets a spec, a plan and a task board `
+    + `first, which is right when the approach has to be worked out and expensive when it does not.`;
+}
 
 /** Sizes a request before any worktree exists. Never throws: a sizing that fails takes the pipeline. */
 export async function sizeRequest(deps: TaskCycleDeps, workdir: string, prompt: string): Promise<RequestSize> {
@@ -207,12 +235,25 @@ export async function sizeRequest(deps: TaskCycleDeps, workdir: string, prompt: 
   };
   try {
     const r = await runStructuredRole(opts, RequestSizeSchema);
-    // A "small" verdict with nothing to check is not usable: the gate would pass anything attempted.
-    if (r.small && !r.acceptance.length) return { ...r, small: false, reason: `${r.reason} (no acceptance criteria given)` };
+    /**
+     * A confident `small` with nothing to check is not usable — the acceptance gate would pass anything that
+     * was attempted. That is doubt, so it is reported as doubt rather than converted into the expensive
+     * answer: the developer decides, and the small path falls back to the request itself as its criterion.
+     */
+    if (r.verdict === "small" && !r.acceptance.length) {
+      return { ...r, verdict: "unsure", reason: `${r.reason} — but no checkable criteria came out of it` };
+    }
     return r;
   } catch {
     // Including the timeout. Falling through to the pipeline is the same thing that would have happened
     // without sizing at all, so a slow answer costs the wait and nothing else.
-    return { small: false, reason: "the request could not be sized in time", acceptance: [], files: [] };
+    /**
+     * A timeout is doubt, not a verdict.
+     *
+     * It used to fall through to the pipeline, which is the same mistake as resolving doubt by spending:
+     * measured, one request that could not be sized in 180 seconds went on to cost 94 minutes. Not knowing is
+     * exactly the moment to ask the person who is sitting there.
+     */
+    return { verdict: "unsure", reason: "I could not work out its size from the code in the time allowed", acceptance: [], files: [] };
   }
 }
