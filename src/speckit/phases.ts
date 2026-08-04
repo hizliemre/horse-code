@@ -214,6 +214,15 @@ export async function runTasks(p: PhaseDeps, paths: FeaturePaths, carryOver?: st
     : "";
   const msg =
     `Read the plan "${planRel}" and break it into an actionable task list.\n` +
+    /**
+     * Measured on a live run: one request became 27 cards whose first three were "Verify and anchor Nx
+     * workspace environment", "Inspect existing dependencies" and "Verify linting config files". Each bought
+     * an implementer, a code review and an acceptance gate, and each ended with the repository unchanged.
+     */
+    `Every task must leave the repository DIFFERENT — code, a test, a document. Looking at something is not ` +
+    `a task: an implementer reads the code, checks the versions and finds its way around as part of doing ` +
+    `the work, so "verify X", "inspect Y", "confirm Z" belong inside the task that needs the answer, not ` +
+    `beside it. If the only thing a task would deliver is knowing something, it is not on the list.\n` +
     `Follow this template:\n\n${p.templates.template("tasks")}\n\nWrite the tasks to "${rel}".${carried}`;
   await runRole(p, "project-manager", p.templates.command("tasks"), msg);
 }

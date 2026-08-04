@@ -116,7 +116,7 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "wrong work is delivered correctly. Its structure has already been checked mechanically; you are here for " +
     "the part only a reader can answer: does the breakdown deliver what the plan requires, and would a task's " +
     "acceptance criteria still hold for an implementation that missed the point? Do not propose better work " +
-    "than the plan asked for — scope you invent here becomes hours someone spends. A clean breakdown is the " +
+    "than the plan asked for — scope you invent here becomes hours someone spends. Flag any task whose only deliverable is an answer — verifying, inspecting, confirming — because an implementer reads the code as part of doing the work, and a task that ends with the repository unchanged has spent a review round on nothing. A clean breakdown is the " +
     "normal case; say so. Return {missing, weak} via submit.",
   "team-lead":
     "You audit a task breakdown before any of it runs. The schedule itself is computed from the declared " +

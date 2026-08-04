@@ -62,6 +62,30 @@ export function restatesTitle(title: string, criterion: string): boolean {
 }
 
 /** Structural problems, found without a model: they are facts about the board, not judgements. */
+/**
+ * Verbs whose whole deliverable is knowing something.
+ *
+ * Matched at the START of a title only. A task called "Add a failing test that verifies the fallback path"
+ * produces a test; one called "Verify the fallback path" produces an opinion, and the difference is which
+ * word the sentence opens with.
+ */
+const INVESTIGATION = /^\s*(verify|inspect|check|confirm|review|investigate|explore|understand|analyz|analys|audit|assess|examine|survey|research|determine|identify|evaluate)\w*\b/i;
+
+/**
+ * Is this task's only output an answer?
+ *
+ * Measured on a live run: one request became 27 cards and the first three were "Verify and anchor Nx
+ * workspace environment", "Inspect existing dependencies" and "Verify linting config files". Each passed
+ * every structural check — files named, acceptance criteria present, no duplicate — and each then bought an
+ * implementer, a code review and an acceptance gate in order to find something out.
+ *
+ * Finding things out is what an implementer already does inside the task that needs the answer. As a task of
+ * its own it is a round of the machinery that ends with the board no different from before.
+ */
+export function isInvestigation(title: string): boolean {
+  return INVESTIGATION.test(title);
+}
+
 export function structuralFindings(board: Board): TaskFinding[] {
   const out: TaskFinding[] = [];
   const cards = board.list();
@@ -80,6 +104,11 @@ export function structuralFindings(board: Board): TaskFinding[] {
     }
     if (c.files.length === 0) {
       out.push({ task: c.id, issue: "names no files — nothing can tell whether it collides with another task" });
+    }
+    if (isInvestigation(c.title)) {
+      out.push({ task: c.id, issue:
+        `produces no change — "${c.title.slice(0, 60)}" delivers an answer, not a difference. Fold the `
+        + `looking into the task that needs the answer, or drop it: an implementer reads the code anyway.` });
     }
   }
   for (const [, group] of byTitle) {
