@@ -1,3 +1,4 @@
+import { sessionBase } from "./session-scope.js";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, join } from "node:path";
 import type { RoleAgentOptions } from "../agent/loop.js";
@@ -456,7 +457,16 @@ export function describeVerify(r: VerifyResult, branch: string): string {
   const where = inPlace
     ? `Continued in place, where its history already was. \`${r.dir}\` holds a pointer to it.`
     : `Everything this run produced is in \`${r.dir}\`.`;
-  return `${head}\n\n${where} On branch \`${branch}\` — uncommitted, in your working tree.`;
+  /**
+   * "in your working tree" was true when verify ran in place, and stopped being true when it moved to a
+   * branch. The path is the honest answer either way: a report in a session worktree is not somewhere the
+   * user can `git status` into.
+   */
+  const base = sessionBase(r.dir);
+  const seat = base === undefined
+    ? `On branch \`${branch}\` — uncommitted, in your working tree.`
+    : `On branch \`${branch}\`, in the worktree at \`${base}\` — review it there, then merge it in.`;
+  return `${head}\n\n${where} ${seat}`;
 }
 
 /**

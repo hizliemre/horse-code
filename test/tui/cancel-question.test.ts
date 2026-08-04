@@ -62,3 +62,28 @@ describe("what Ctrl+C does on the second press", () => {
     expect(block.indexOf("cancelPending()")).toBeLessThan(block.indexOf("cancelJob?.()"));
   });
 });
+
+/**
+ * "No branch, no worktree, nothing to merge" became false the moment these lanes started using a branch.
+ *
+ * Reported live: that sentence printed under a path reading
+ * `.horsecode/worktrees/agent-response-language/base/.specify/memory/constitution.md`. Telling someone to
+ * commit their working tree when the work is on a branch sends them looking in the wrong place.
+ */
+describe("where a written document says it landed", () => {
+  it("names the branch and the worktree when it is on one", async () => {
+    const { whereItLanded } = await import("../../src/cli.js");
+    const said = whereItLanded("/p/.horsecode/worktrees/agent-response-language/base/.specify/memory/constitution.md");
+    expect(said).toContain("/p/.horsecode/worktrees/agent-response-language/base");
+    expect(said).toMatch(/branch/i);
+    expect(said).toMatch(/merge it in/i);
+    expect(said).not.toMatch(/no branch/i);
+  });
+
+  it("keeps the old words when it really is the working tree", async () => {
+    const { whereItLanded } = await import("../../src/cli.js");
+    const said = whereItLanded("/p/.specify/memory/constitution.md");
+    expect(said).toMatch(/directly in your working tree/i);
+    expect(said).toMatch(/no branch/i);
+  });
+});

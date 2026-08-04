@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
+import { sessionBase } from "./engine/session-scope.js";
 import { readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
@@ -75,6 +77,30 @@ export function parseArgs(argv: string[]): CliArgs {
 }
 
 /**
+ * Says where a written document actually is, rather than where it used to be.
+ *
+ * Governance and verification wrote into the project the user was standing in, and this line said so. They
+ * work on a branch now — unless the user was already inside a worktree, in which case they stay there — so
+ * the same sentence became false: reported live, "no branch, no worktree, nothing to merge" printed under a
+ * path reading `.horsecode/worktrees/agent-response-language/base/…`. Telling someone to commit their
+ * working tree when the work is on a branch sends them looking in the wrong place.
+ */
+export function whereItLanded(path: string): string {
+  const base = sessionBase(dirname(path));
+  if (base === undefined) {
+    return "Written directly in your working tree: no branch, no worktree, nothing to merge. "
+      + "Review it and commit it when you are happy with it.";
+  }
+  let branch = "";
+  try {
+    branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"],
+      { cwd: base, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch { /* the path is enough on its own */ }
+  return `Written on ${branch ? `branch \`${branch}\`` : "its own branch"}, in the worktree at \`${base}\`. `
+    + "Review it there, then merge it in.";
+}
+
+/**
  * Where the work is, in every outcome.
  *
  * A run that produced twenty-one working tasks once reported only "Status: partial" — the code sat on a
@@ -107,6 +133,7 @@ export function renderResult(res: JobResult): string {
    */
   if (res.kind === "chat") return stripThinking(res.response);
   if (res.kind === "rejected") return `Not approved (stopped at the ${res.stage} stage).`;
+
   /**
    * Governance work reports the file and stops there.
    *
@@ -119,9 +146,7 @@ export function renderResult(res: JobResult): string {
   if (res.kind === "verified") return res.report;
   if (res.kind === "tweaked") return res.report;
   if (res.kind === "governed") {
-    return res.written
-      ? `**Constitution written** — \`${res.path}\`\n\n_Written directly in your working tree: no branch, `
-        + `no worktree, nothing to merge. Review it and commit it when you are happy with it._`
+    return res.written ? `**Constitution written** — \`${res.path}\`\n\n_${whereItLanded(res.path)}_`
       : `The constitution phase finished without writing \`${res.path}\` — nothing was changed.`;
   }
   const outcome =
