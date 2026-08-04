@@ -39,7 +39,11 @@ const BRAINSTORM_COMMAND =
   "named in the message. Explore the repo before proposing anything, ask only questions that change the " +
   "design, and have the user choose between real alternatives.";
 
-async function runRole(p: PhaseDeps, role: string, command: string, message: string, extraTools = false): Promise<void> {
+async function runRole(
+  p: PhaseDeps, role: string, command: string, message: string, extraTools = false,
+  /** What the routing should read: the user's request, when the caller has it. */
+  subject?: string,
+): Promise<void> {
   // fallbackOpts (not resolve): spec-kit phases drive the role with the spec-kit command prompt, so they
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
   const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts(role);
@@ -55,9 +59,18 @@ async function runRole(p: PhaseDeps, role: string, command: string, message: str
    * flow begins by interviewing the user for a product brief can only run that interview where `ask_user`
    * exists — which is here, not in a wave of parallel implementers that must not block on a human.
    */
-  const routed = routeSkills(message, p.deps.skillRegistry, [], {
-    role, files: filesForTask(message, loadGraphSync(p.workdir)), placed: placedSkills(),
-  });
+  /**
+   * Routed on the REQUEST, not on the whole phase message, and with no guessed files.
+   *
+   * The message is mostly ours: a spec template, a command prompt, instructions about where to write. Feeding
+   * that to the router is feeding it our own boilerplate — and asking a 46,901-symbol graph which files the
+   * boilerplate is "about" produced eight marketplace integrators for a request about rendering a
+   * description, whose paths then read as infrastructure work.
+   *
+   * At this stage nothing is known about which files the work touches; that is what the spec and the plan are
+   * for. Guessing it in order to route a skill is inventing evidence.
+   */
+  const routed = routeSkills(subject ?? message, p.deps.skillRegistry, [], { role, placed: placedSkills() });
   if (routed.length) p.deps.note?.(`📎 \`${role}\` · ${routed.map((m) => `**${m.name}**`).join(", ")}`);
   const opts: RoleAgentOptions = {
     provider: p.deps.provider,
@@ -133,7 +146,7 @@ export async function runBrainstorm(p: PhaseDeps, paths: FeaturePaths, prompt: s
   const msg =
     `Request: "${prompt}".\n\n` +
     `Explore this repository first, then decide the approach WITH the user, then write the decision to "${rel}".`;
-  await runRole(p, "brainstormer", BRAINSTORM_COMMAND, msg, true);
+  await runRole(p, "brainstormer", BRAINSTORM_COMMAND, msg, true, prompt);
 }
 
 /**
@@ -171,7 +184,7 @@ export async function runSpecify(p: PhaseDeps, paths: FeaturePaths, prompt: stri
   const rel = relative(p.workdir, paths.spec);
   const brief = relative(p.workdir, paths.brainstorm);
   const msg = specifyMessage(prompt, rel, brief, existsSync(paths.brainstorm), p.templates.template("spec"), feedback);
-  await runRole(p, "analyst", p.templates.command("specify"), msg, true);
+  await runRole(p, "analyst", p.templates.command("specify"), msg, true, prompt);
 }
 
 export async function runPlan(p: PhaseDeps, paths: FeaturePaths, feedback?: string[], carryOver?: string[]): Promise<void> {

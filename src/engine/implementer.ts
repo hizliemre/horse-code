@@ -153,7 +153,21 @@ export async function runImplementer(
   const attached = deps.roleRegistry.skillsFor(role);
   const subject = `${task.title} ${task.acceptance.join(" ")} ${task.reviewNotes.join(" ")}`;
   const routed = routeSkills(subject, deps.skillRegistry, attached, {
-    role, implementing: true, files: filesForTask(subject, loadGraphSync(cwd)), placed: placedSkills(),
+    role,
+    implementing: true,
+    /**
+     * The files the PLAN named, when it named any.
+     *
+     * Inference is a fallback, not the first answer: resolving a task's words against the whole graph returns
+     * whatever happens to contain those words, and those paths are then treated as evidence about what kind
+     * of work this is. Measured live — "fix product description rendering" resolved to `ShopifyService.cs`,
+     * `n11/OrderMapper.cs` and `ExcelTableRenderer.cs`, because marketplace integrators are full of symbols
+     * called product and description, and the brainstormer was handed `azure-kubernetes` for it.
+     *
+     * A card's own file list came from a plan a person approved. It outranks a guess.
+     */
+    files: task.files.length ? task.files : filesForTask(subject, loadGraphSync(cwd)),
+    placed: placedSkills(),
   });
   // Only the borderline matches are adjudicated; the confident ones are already right and paying for a
   // verdict on them would be paying for an answer we have.
