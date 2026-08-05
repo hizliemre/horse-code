@@ -22,6 +22,16 @@ export interface Checkpoint {
   /** Deferred (non-blocking) findings accumulated so far — they must survive a restart or the later stages
    *  would never see what earlier reviews chose not to block on. */
   carryOver?: string[];
+  /**
+   * Which lane wrote this, when it was not the feature pipeline.
+   *
+   * `verify` and `govern` open a worktree and return before the pipeline ever runs, so they left no
+   * checkpoint at all: a run stopped mid-verification could not be continued, and "devam" answered "no
+   * resumable worktree with a checkpoint was found in this project" while the worktree sat right there with
+   * its work in it. Recorded so a resume goes back to the lane it came from rather than falling through to
+   * a pipeline that was never started.
+   */
+  lane?: "verify" | "govern";
 }
 
 function checkpointPath(worktreeRoot: string): string {

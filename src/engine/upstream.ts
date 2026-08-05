@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { inLinkedWorktree } from "./session-scope.js";
+import { inLinkedWorktree, sessionBase } from "./session-scope.js";
 import { existsSync } from "node:fs";
 import { relative, dirname } from "node:path";
 import type { Message } from "../core/types.js";
@@ -62,6 +62,27 @@ async function documentWorkdir(
 ): Promise<string> {
   if (inLinkedWorktree(cwd, gitSync(cwd)) && !WANTS_WORKTREE.test(prompt)) return cwd;
   return ensureWorktree(nameHint);
+}
+
+/**
+ * Leaves a resumable marker for a lane that never reaches the pipeline.
+ *
+ * `verify` and `govern` open a worktree and return long before `writeCheckpoint` is called, so a run stopped
+ * halfway had nothing to come back to: "devam" answered "no resumable worktree with a checkpoint was found
+ * in this project" while the worktree stood there holding the work. Nothing is written when the lane worked
+ * in place — there is no session to reopen, and a checkpoint in the project root would claim otherwise.
+ */
+function laneCheckpoint(
+  cwd: string, lane: "verify" | "govern", resume: Checkpoint | undefined, prompt: string,
+  r: { refinedPrompt: string; title: string; language: string },
+): void {
+  const root = sessionBase(cwd);
+  if (root === undefined) return;
+  writeCheckpoint(dirname(root), {
+    rawPrompt: resume?.rawPrompt ?? prompt,
+    refinedPrompt: r.refinedPrompt, title: r.title, language: r.language,
+    featureSlug: resume?.featureSlug ?? "", done: [], lane,
+  });
 }
 
 export async function runUpstream(
@@ -153,9 +174,10 @@ export async function runUpstream(
   }
 
   /** Verify writes a report; a report is work, and work belongs on a branch. See documentWorkdir. */
-  if (!resume && routeIntent(r.intent) === "verify") {
+  if ((!resume || resume.lane === "verify") && routeIntent(r.intent) === "verify") {
     emitPhase("verify");
     const cwd = await documentWorkdir(process.cwd(), prompt, ensureWorktree, r.title);
+    laneCheckpoint(cwd, "verify", resume, prompt, r);
     const { runVerify, describeVerify, currentBranchOf } = await import("./verify.js");
     const branch = await currentBranchOf(cwd);
     const res = await runVerify({
@@ -168,11 +190,12 @@ export async function runUpstream(
     };
   }
 
-  if (!resume && routeIntent(r.intent) === "govern") {
+  if ((!resume || resume.lane === "govern") && routeIntent(r.intent) === "govern") {
     emitPhase("constitution");
     const templates = await deps.specKit();
     // A constitution is a committed document, so it is written on a branch like anything else.
     const cwd = await documentWorkdir(process.cwd(), prompt, ensureWorktree, r.title);
+    laneCheckpoint(cwd, "govern", resume, prompt, r);
     const p: PhaseDeps = { deps, templates, workdir: cwd, askUser };
     // Taken BEFORE the phase runs — the only moment the previous version still exists.
     const rel = relative(cwd, constitutionPath(cwd));
