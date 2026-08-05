@@ -113,3 +113,42 @@ describe("a new document goes in the run's folder, not where the old ones live",
     expect(msg).toMatch(/Search the repository/i);
   });
 });
+
+/**
+ * Two claims in one line, one of them wrong.
+ *
+ * The report said "On branch `hc/05-Aug-2026-WEDNESDAY_01/base` — uncommitted, in your working tree" — a
+ * branch that only exists inside a session worktree, described as if it were the checkout the user is
+ * standing in. The cause was quiet: the result's `dir` is RELATIVE (`specs/004-…`), so asking `sessionBase`
+ * about it always answered "not in a session". The wrong half sends someone looking in a directory that does
+ * not have the file.
+ */
+describe("where the report says the work is", () => {
+  const result = {
+    dir: "specs/004-wizard-smoke-test",
+    planPath: "specs/004-wizard-smoke-test/test-plan.md",
+    reportPath: "specs/004-wizard-smoke-test/test-report.md",
+    planWritten: true, reportWritten: true,
+  };
+
+  it("names the worktree when the run worked in a session", async () => {
+    const { describeVerify } = await import("../../src/engine/verify.js");
+    const said = describeVerify(result, "hc/05-Aug-2026-WEDNESDAY_01/base",
+      "/p/.horsecode/worktrees/05-Aug-2026-WEDNESDAY_01/base");
+    expect(said).toContain("/p/.horsecode/worktrees/05-Aug-2026-WEDNESDAY_01/base");
+    expect(said).toMatch(/merge it in/i);
+    expect(said).not.toMatch(/in your working tree/i);
+  });
+
+  it("keeps the old words when the run really was in the working tree", async () => {
+    const { describeVerify } = await import("../../src/engine/verify.js");
+    const said = describeVerify(result, "development", "/p");
+    expect(said).toMatch(/in your working tree/i);
+  });
+
+  /** Without a working directory there is nothing to resolve against — say the safe thing. */
+  it("does not guess when it was not told where the run was", async () => {
+    const { describeVerify } = await import("../../src/engine/verify.js");
+    expect(describeVerify(result, "development")).toMatch(/in your working tree/i);
+  });
+});

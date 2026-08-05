@@ -1,6 +1,6 @@
 import { sessionBase } from "./session-scope.js";
 import { existsSync, readFileSync } from "node:fs";
-import { relative, join } from "node:path";
+import { relative, join, resolve } from "node:path";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
 import { ToolRegistry } from "../tools/registry.js";
@@ -444,7 +444,15 @@ export async function runVerify(opts: {
 }
 
 /** What the user is told when it ends. */
-export function describeVerify(r: VerifyResult, branch: string): string {
+/**
+ * `workdir` is what makes the location honest.
+ *
+ * The result's `dir` is RELATIVE — `specs/004-…` — so asking `sessionBase` about it always answered
+ * "not in a session", and the report told the user their work was "uncommitted, in your working tree" while
+ * the branch beside it read `hc/05-Aug-2026-WEDNESDAY_01/base`. Two claims in one line, one of them wrong,
+ * and the wrong one sends someone looking in a directory that does not have the file.
+ */
+export function describeVerify(r: VerifyResult, branch: string, workdir?: string): string {
   if (!r.planWritten) {
     return `⚠️ No test plan was found or written — nothing was verified.`;
   }
@@ -462,7 +470,7 @@ export function describeVerify(r: VerifyResult, branch: string): string {
    * branch. The path is the honest answer either way: a report in a session worktree is not somewhere the
    * user can `git status` into.
    */
-  const base = sessionBase(r.dir);
+  const base = sessionBase(workdir !== undefined ? resolve(workdir, r.dir) : r.dir);
   const seat = base === undefined
     ? `On branch \`${branch}\` — uncommitted, in your working tree.`
     : `On branch \`${branch}\`, in the worktree at \`${base}\` — review it there, then merge it in.`;

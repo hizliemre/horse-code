@@ -186,7 +186,7 @@ export async function runUpstream(
     });
     return {
       intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "verified",
-      report: describeVerify(res, branch), reportPath: res.reportPath, written: res.reportWritten,
+      report: describeVerify(res, branch, cwd), reportPath: res.reportPath, written: res.reportWritten,
     };
   }
 
