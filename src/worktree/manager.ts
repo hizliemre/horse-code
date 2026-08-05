@@ -1,6 +1,7 @@
 import { rename, mkdir, writeFile, rm } from "node:fs/promises";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { join, resolve, dirname, basename } from "node:path";
+import { execFileSync } from "node:child_process";
+import { join, resolve, dirname, basename, sep } from "node:path";
 import { inheritFromRoot, topUpInherited, type Inherited } from "./inherit.js";
 import { defaultGitRunner, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
@@ -80,6 +81,40 @@ export async function mainWorktreeRoot(git: GitRunner, cwd: string): Promise<str
   const common = resolve(cwd, r.stdout.trim());
   return basename(common) === ".git" ? dirname(common) : cwd;
 }
+
+/**
+ * Whether anything is RUNNING inside a directory — a dev server, a test runner, a shell someone is sitting in.
+ *
+ * Moving a worktree out from under a running process does not fail on macOS or Linux; it succeeds, and the
+ * process keeps its handle on a path that no longer exists. A file watcher stops seeing edits, hot reload
+ * stops firing, and nothing says why — the developer is left testing a build that can no longer change.
+ * That is the exact way these worktrees are meant to be used: run the project, look at the screen, ask for a
+ * change. A better directory NAME is not worth that.
+ *
+ * `lsof -d cwd` lists every process's current directory in one pass — about 0.16s, once per request. Paths
+ * are compared as REAL paths: on macOS a worktree under `/tmp` is reported as `/private/tmp/…`, so a plain
+ * string prefix would report every session as idle.
+ *
+ * Unanswerable means busy. Without `lsof` there is no way to tell, and the safe answer is the one that
+ * changes nothing.
+ */
+export function busyInside(dir: string): boolean {
+  try {
+    const real = realpathSync(dir);
+    const out = execFileSync("lsof", ["-d", "cwd", "-Fn"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: LSOF_TIMEOUT_MS });
+    return out.split("\n").some((l) => {
+      if (!l.startsWith("n")) return false;
+      const cwd = l.slice(1);
+      return cwd === real || cwd.startsWith(real + sep);
+    });
+  } catch {
+    return true;   // …no answer is not "nothing is running"
+  }
+}
+
+/** Long enough for a machine with thousands of open files; short enough not to stall a request. */
+const LSOF_TIMEOUT_MS = 5_000;
 
 export class WorktreeManager {
   private readonly repoRoot: string;
@@ -414,6 +449,8 @@ export class WorktreeManager {
     const listed = await this.git(["for-each-ref", "--format=%(refname:short)", "refs/heads/hc/"], this.repoRoot);
     const branches = new Set(listed.stdout.split("\n").map((x) => x.trim()).filter(Boolean));
     if (existsSync(join(worktreesDir, want)) || branches.has(`hc/${want}/base`)) return session;
+    // Something is running in there — see busyInside. The name is cosmetic; what is running is not.
+    if (busyInside(session.baseWorktree)) return session;
 
     const root = join(worktreesDir, want);
     const baseWorktree = join(root, "base");

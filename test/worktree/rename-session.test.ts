@@ -99,3 +99,40 @@ describe("when the rename happens", () => {
     expect(src.slice(at, at + 1400)).toMatch(/Renamed this session to/);
   });
 });
+
+/**
+ * Moving a worktree out from under a running process does not fail — it succeeds, and the process keeps a
+ * handle on a path that no longer exists.
+ *
+ * That is the exact way these worktrees are meant to be used: run the project inside one, look at the
+ * screen, ask for a change. If the change request renamed the directory, the file watcher would stop seeing
+ * edits and hot reload would stop firing, with nothing on screen to say why. A better name is not worth it.
+ */
+describe("a worktree someone is working in", () => {
+  it("is left where it is", async () => {
+    const { busyInside } = await import("../../src/worktree/manager.js");
+    const m = mgr();
+    const s = await m.openSession("main", "before");
+    // A process whose current directory is inside the worktree — a dev server, a test runner, a shell.
+    const { spawn } = await import("node:child_process");
+    const child = spawn("sleep", ["30"], { cwd: s.baseWorktree, stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 400));
+      expect(busyInside(s.baseWorktree)).toBe(true);
+      expect(await m.renameSession(s, "after")).toEqual(s);
+    } finally { child.kill(); }
+  });
+
+  it("sees an idle one as idle", async () => {
+    const { busyInside } = await import("../../src/worktree/manager.js");
+    const m = mgr();
+    const s = await m.openSession("main", "idle session");
+    expect(busyInside(s.baseWorktree)).toBe(false);
+  });
+
+  /** Without an answer there is no way to tell, and the safe answer is the one that changes nothing. */
+  it("treats an unanswerable question as busy", async () => {
+    const { busyInside } = await import("../../src/worktree/manager.js");
+    expect(busyInside("/no/such/directory/anywhere")).toBe(true);
+  });
+});
