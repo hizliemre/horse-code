@@ -256,23 +256,8 @@ export async function runJob(
      * longer exists.
      */
     if (!session && opts.continueIn && existsSync(opts.continueIn.baseWorktree)) {
-      /**
-       * Renamed BEFORE it is adopted, because adopting publishes the path.
-       *
-       * A session is named from the first request that needed a worktree, and the first request is often the
-       * smallest: reported live, a sitting whose real work was product-upload testing sat in
-       * `hc/turkish-agent-communications/base`, named after a one-line rule asked for on the way in. Every
-       * later request renames it to what the work has become — the manager refuses once the branch has been
-       * pushed, so a published name is never pulled out from under a pull request.
-       */
-      const renamed = nameHint
-        ? await deps.manager.renameSession(opts.continueIn, nameHint)
-        : opts.continueIn;
-      if (renamed.baseBranch !== opts.continueIn.baseBranch) {
-        emit({ kind: "note", text: `🏷️ Renamed this session to \`${renamed.baseBranch}\` — it is what the work turned out to be.` });
-      }
-      adopt(renamed);
-      emit({ kind: "note", text: `↪️ Continuing in \`${renamed.baseBranch}\` — the work from this `
+      adopt(opts.continueIn);
+      emit({ kind: "note", text: `↪️ Continuing in \`${opts.continueIn.baseBranch}\` — the work from this `
         + `session so far is already there.` });
     }
     if (!session) {

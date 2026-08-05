@@ -18,39 +18,41 @@ async function branchExists(repoDir: string, branch: string): Promise<boolean> {
 }
 
 describe("WorktreeManager.openSession", () => {
-  it("creates the base worktree + hc/<slug>/base branch, writes .gitignore", async () => {
+  // The name is the DAY, not the request — see test/worktree/session-name.test.ts for why.
+  const WED = new Date(2026, 7, 5);
+  const NAME = "05-Aug-2026-WEDNESDAY_01";
+
+  it("creates the base worktree + hc/<name>/base branch, writes .gitignore", async () => {
     repo = await initTmpRepo();
-    const wm = new WorktreeManager({ repoRoot: repo });
-    // "Add Auth" → "auth": the name is the subject, and the verb is what the tool always does.
+    const wm = new WorktreeManager({ repoRoot: repo, now: () => WED });
     const s = await wm.openSession("main", "Add Auth");
-    expect(s.jobSlug).toBe("auth");
-    expect(s.baseBranch).toBe("hc/auth/base");
+    expect(s.jobSlug).toBe(NAME);
+    expect(s.baseBranch).toBe(`hc/${NAME}/base`);
     expect(existsSync(s.baseWorktree)).toBe(true);
-    expect(await branchExists(repo, "hc/auth/base")).toBe(true);
+    expect(await branchExists(repo, `hc/${NAME}/base`)).toBe(true);
     expect(existsSync(join(repo, ".horsecode/worktrees/.gitignore"))).toBe(true);
   });
 
-  it("same jobName a second time → deduped with slug -2", async () => {
+  it("a second session the same day takes the next index", async () => {
     repo = await initTmpRepo();
-    const wm = new WorktreeManager({ repoRoot: repo });
+    const wm = new WorktreeManager({ repoRoot: repo, now: () => WED });
     const a = await wm.openSession("main", "job");
-    const b = await wm.openSession("main", "job");
-    expect(a.jobSlug).toBe("job");
-    expect(b.jobSlug).toBe("job-2");
+    const b = await wm.openSession("main", "an entirely different job");
+    expect(a.jobSlug).toBe(NAME);
+    expect(b.jobSlug).toBe("05-Aug-2026-WEDNESDAY_02");
   });
 
-  it("branch lingers but the worktree dir is gone → deduped (no 'branch already exists' crash)", async () => {
+  it("branch lingers but the worktree dir is gone → next index (no 'branch already exists' crash)", async () => {
     repo = await initTmpRepo();
-    const wm = new WorktreeManager({ repoRoot: repo });
+    const wm = new WorktreeManager({ repoRoot: repo, now: () => WED });
     const a = await wm.openSession("main", "job");
-    expect(a.jobSlug).toBe("job");
     // Remove the worktree dir but KEEP the branch (simulates a cleaned .horsecode/worktrees).
     await defaultGitRunner(["worktree", "remove", "--force", a.baseWorktree], repo);
     expect(existsSync(a.baseWorktree)).toBe(false);
-    expect(await branchExists(repo, "hc/job/base")).toBe(true); // branch still lingering
+    expect(await branchExists(repo, `hc/${NAME}/base`)).toBe(true); // branch still lingering
     const b = await wm.openSession("main", "job"); // must skip the lingering branch, not crash
-    expect(b.jobSlug).toBe("job-2");
-    expect(await branchExists(repo, "hc/job-2/base")).toBe(true);
+    expect(b.jobSlug).toBe("05-Aug-2026-WEDNESDAY_02");
+    expect(await branchExists(repo, "hc/05-Aug-2026-WEDNESDAY_02/base")).toBe(true);
   });
 
   it("fresh repo, branch-name mismatch (real 'master', asked for 'main') → bootstraps + bases off HEAD", async () => {
@@ -65,11 +67,11 @@ describe("WorktreeManager.openSession", () => {
     await g(["config", "user.name", "hc test"]);
     expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).not.toBe(0); // no commits yet
 
-    const wm = new WorktreeManager({ repoRoot: repo });
+    const wm = new WorktreeManager({ repoRoot: repo, now: () => WED });
     const s = await wm.openSession("main", "login-page"); // asked for 'main' (doesn't exist)
-    expect(s.jobSlug).toBe("login-page");
+    expect(s.jobSlug).toBe(NAME);
     expect(existsSync(s.baseWorktree)).toBe(true);
-    expect(await branchExists(repo, "hc/login-page/base")).toBe(true);
+    expect(await branchExists(repo, `hc/${NAME}/base`)).toBe(true);
     expect((await g(["rev-parse", "--verify", "--quiet", "HEAD"])).code).toBe(0); // bootstrap commit landed
   });
 
@@ -82,7 +84,7 @@ describe("WorktreeManager.openSession", () => {
     const s = await wm.openSession("main", "fresh-task"); // must init + bootstrap + create the worktree
     expect((await defaultGitRunner(["rev-parse", "--is-inside-work-tree"], repo)).stdout.trim()).toBe("true"); // now a repo
     expect(existsSync(s.baseWorktree)).toBe(true);
-    expect(await branchExists(repo, "hc/fresh-task/base")).toBe(true);
+    expect(await branchExists(repo, s.baseBranch)).toBe(true);
   });
 
   it("bases off HEAD when the requested branch doesn't exist in a repo that already has commits", async () => {
@@ -90,7 +92,7 @@ describe("WorktreeManager.openSession", () => {
     const wm = new WorktreeManager({ repoRoot: repo });
     const s = await wm.openSession("nonexistent-branch", "some-task"); // falls back to HEAD
     expect(existsSync(s.baseWorktree)).toBe(true);
-    expect(await branchExists(repo, "hc/some-task/base")).toBe(true);
+    expect(await branchExists(repo, s.baseBranch)).toBe(true);
   });
 });
 
@@ -104,10 +106,10 @@ describe("WorktreeManager.preserveSession (rejection)", () => {
     const dir = await wm.preserveSession(s, "hc: rejected spec draft");
     expect(dir).toBe(s.baseWorktree);
     expect(existsSync(join(s.baseWorktree, "spec.md"))).toBe(true); // worktree dir + files KEPT for inspection
-    expect(await branchExists(repo, "hc/reject-me/base")).toBe(true); // branch survives
+    expect(await branchExists(repo, s.baseBranch)).toBe(true); // branch survives
     // the draft is also committed on the branch (nothing left uncommitted)
     expect((await defaultGitRunner(["status", "--porcelain"], s.baseWorktree)).stdout.trim()).toBe("");
-    expect((await defaultGitRunner(["show", "hc/reject-me/base:spec.md"], repo)).stdout).toContain("# rejected draft");
+    expect((await defaultGitRunner(["show", `${s.baseBranch}:spec.md`], repo)).stdout).toContain("# rejected draft");
   });
 });
 
@@ -119,7 +121,7 @@ describe("WorktreeManager.findResumable", () => {
     const s = await wm.openSession("main", "todo-app");
     writeCheckpoint(s.root, { rawPrompt: "Build a todo app", refinedPrompt: "x", title: "Todo App", language: "English", featureSlug: "001-todo-app", done: ["constitution", "spec"] });
     const found = await wm.findResumable("  build A todo APP "); // retyped, different case/spacing
-    expect(found?.jobSlug).toBe("todo-app");
+    expect(found?.jobSlug).toBe(s.jobSlug);
     expect(found?.baseWorktree).toBe(s.baseWorktree);
     expect(found?.resumed).toBe(true);
   });
@@ -134,7 +136,7 @@ describe("WorktreeManager.findResumable", () => {
     const newer = await wm.openSession("main", "recent-task");
     writeCheckpoint(newer.root, { rawPrompt: "build the new thing", refinedPrompt: "y", title: "New", language: "Turkish", featureSlug: "001-new", done: ["constitution"] });
     const found = await wm.findResumable("kaldığımız yerden devam edelim"); // matches neither prompt, but is a continue
-    expect(found?.jobSlug).toBe("recent-task"); // most recent wins — both have progress
+    expect(found?.jobSlug).toBe(newer.jobSlug); // most recent wins — both have progress
   });
 
   // Observed in the wild: a mis-resume scaffolded an empty worktree, which then outranked a spec'd, committed
@@ -148,7 +150,7 @@ describe("WorktreeManager.findResumable", () => {
     await new Promise((r) => setTimeout(r, 15));
     const empty = await wm.openSession("main", "empty-shell");
     writeCheckpoint(empty.root, { rawPrompt: "devam et", refinedPrompt: "y", title: "Empty", language: "Turkish", featureSlug: "001-empty", done: [] });
-    expect((await wm.findResumable("devam et"))?.jobSlug).toBe("real-work");
+    expect((await wm.findResumable("devam et"))?.jobSlug).toBe(real.jobSlug);
   });
 
   it("still falls back to recency when NEITHER has progress", async () => {
@@ -160,7 +162,7 @@ describe("WorktreeManager.findResumable", () => {
     await new Promise((r) => setTimeout(r, 15));
     const newer = await wm.openSession("main", "new-empty");
     writeCheckpoint(newer.root, { rawPrompt: "b", refinedPrompt: "y", title: "B", language: "English", featureSlug: "001-b", done: [] });
-    expect((await wm.findResumable("devam"))?.jobSlug).toBe("new-empty");
+    expect((await wm.findResumable("devam"))?.jobSlug).toBe(newer.jobSlug);
   });
 
   it("returns null when no checkpoint matches (fresh session)", async () => {
@@ -195,9 +197,9 @@ describe("WorktreeManager.deriveTask", () => {
     const s = await wm.openSession("main", "job");
     const t = await wm.deriveTask(s, "Create Model");
     expect(t.taskSlug).toBe("model");
-    expect(t.branch).toBe("hc/job/t/model");
+    expect(t.branch).toBe(`hc/${s.jobSlug}/t/model`);
     expect(existsSync(t.worktree)).toBe(true);
-    expect(await branchExists(repo, "hc/job/t/model")).toBe(true);
+    expect(await branchExists(repo, t.branch)).toBe(true);
   });
 });
 
@@ -234,7 +236,7 @@ describe("restartTask re-roots a task on the current base", () => {
       expect(movedTo).not.toBe(rootedAt);
 
       const retired = await mgr.restartTask(session, first);
-      expect(retired).toBe("hc/job/t/wire-the-store-stale");
+      expect(retired).toBe(`hc/${session.jobSlug}/t/wire-the-store-stale`);
       expect(await branchExists(repo, retired)).toBe(true);      // the reviewed work is KEPT, not deleted
       expect(await branchExists(repo, first.branch)).toBe(false); // …and the name is free again
       expect(existsSync(first.worktree)).toBe(false);
@@ -252,10 +254,10 @@ describe("restartTask re-roots a task on the current base", () => {
       const mgr = new WorktreeManager({ repoRoot: repo });
       const session = await mgr.openSession("main", "job");
       const a = await mgr.deriveTask(session, "Wire the store");
-      expect(await mgr.restartTask(session, a)).toBe("hc/job/t/wire-the-store-stale");
+      expect(await mgr.restartTask(session, a)).toBe(`hc/${session.jobSlug}/t/wire-the-store-stale`);
       const b = await mgr.deriveTask(session, "Wire the store");
-      expect(await mgr.restartTask(session, b)).toBe("hc/job/t/wire-the-store-stale-2");
-      expect(await branchExists(repo, "hc/job/t/wire-the-store-stale")).toBe(true);
+      expect(await mgr.restartTask(session, b)).toBe(`hc/${session.jobSlug}/t/wire-the-store-stale-2`);
+      expect(await branchExists(repo, `hc/${session.jobSlug}/t/wire-the-store-stale`)).toBe(true);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

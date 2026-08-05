@@ -50,6 +50,6 @@ describe("WorktreeManager openPR", () => {
     };
     const res = await wm.openPR(s, adapter, { base: "main", title: "T", body: "B" });
     expect(res).toEqual({ url: "https://pr/1" });
-    expect(captured).toEqual({ branch: "hc/job/base", base: "main", title: "T", body: "B" });
+    expect(captured).toEqual({ branch: s.baseBranch, base: "main", title: "T", body: "B" });
   });
 });

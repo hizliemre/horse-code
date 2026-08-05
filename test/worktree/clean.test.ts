@@ -155,11 +155,12 @@ describe("what the user is told before anything is deleted", () => {
   it("names every session, its verdict and the reason", async () => {
     const done = await session("finished");
     await g(["merge", "--no-ff", "-m", "merge", done.base]);
-    await session("ongoing");
+    // Sessions are named after the DAY they opened, not the request — see test/worktree/session-name.test.ts.
+    const open = await session("ongoing");
 
     const text = describeSurvey(await surveySessions(defaultGitRunner, repo, "main"), "main");
     expect(text).toContain(done.slug);
-    expect(text).toContain("ongoing");
+    expect(text).toContain(open.slug);
     expect(text).toMatch(/main/);                       // the branch it judged against — never left implicit
     expect(text).toMatch(/clean-worktrees go/);          // …and how to actually do it
   });

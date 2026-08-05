@@ -82,39 +82,34 @@ export async function mainWorktreeRoot(git: GitRunner, cwd: string): Promise<str
   return basename(common) === ".git" ? dirname(common) : cwd;
 }
 
-/**
- * Whether anything is RUNNING inside a directory — a dev server, a test runner, a shell someone is sitting in.
- *
- * Moving a worktree out from under a running process does not fail on macOS or Linux; it succeeds, and the
- * process keeps its handle on a path that no longer exists. A file watcher stops seeing edits, hot reload
- * stops firing, and nothing says why — the developer is left testing a build that can no longer change.
- * That is the exact way these worktrees are meant to be used: run the project, look at the screen, ask for a
- * change. A better directory NAME is not worth that.
- *
- * `lsof -d cwd` lists every process's current directory in one pass — about 0.16s, once per request. Paths
- * are compared as REAL paths: on macOS a worktree under `/tmp` is reported as `/private/tmp/…`, so a plain
- * string prefix would report every session as idle.
- *
- * Unanswerable means busy. Without `lsof` there is no way to tell, and the safe answer is the one that
- * changes nothing.
- */
-export function busyInside(dir: string): boolean {
-  try {
-    const real = realpathSync(dir);
-    const out = execFileSync("lsof", ["-d", "cwd", "-Fn"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: LSOF_TIMEOUT_MS });
-    return out.split("\n").some((l) => {
-      if (!l.startsWith("n")) return false;
-      const cwd = l.slice(1);
-      return cwd === real || cwd.startsWith(real + sep);
-    });
-  } catch {
-    return true;   // …no answer is not "nothing is running"
-  }
-}
+/** English month and day names — the name is read by people, and it must not shift with the machine's locale. */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAYS = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"];
 
-/** Long enough for a machine with thousands of open files; short enough not to stall a request. */
-const LSOF_TIMEOUT_MS = 5_000;
+/**
+ * What a session is called: the day it opened, and which one of that day it is.
+ *
+ * It used to be named after the request that first needed a worktree — and the first request is usually the
+ * smallest, so a sitting whose real work was product-upload testing sat in
+ * `hc/turkish-agent-communications/base`, named after a one-line rule asked for on the way in. Renaming it
+ * later fixed the name and bought a worse problem: these worktrees are meant to be RUN in — start the
+ * project, look at the screen, ask for a change — and moving the directory under a running process does not
+ * fail, it just silently stops the file watcher from ever seeing another edit.
+ *
+ * A name that never changes cannot do that. It says nothing about the work, and that is the point: what the
+ * work was is in the branch's commits, the board and the checkpoint, none of which move.
+ *
+ * `05-Aug-2026-WEDNESDAY_01`, then `_02` for the next one that day.
+ */
+export function sessionName(now: Date, taken: (name: string) => boolean): string {
+  const day = `${String(now.getDate()).padStart(2, "0")}-${MONTHS[now.getMonth()]}-${now.getFullYear()}`
+    + `-${DAYS[now.getDay()]}`;
+  for (let n = 1; n < 1000; n++) {
+    const name = `${day}_${String(n).padStart(2, "0")}`;
+    if (!taken(name)) return name;
+  }
+  return `${day}_${Date.now()}`;   // …a thousand sessions in one day: unreachable, but never a collision
+}
 
 export class WorktreeManager {
   private readonly repoRoot: string;
@@ -132,10 +127,14 @@ export class WorktreeManager {
   private readonly worktreeHome: string;
   private readonly git: GitRunner;
 
-  constructor(deps: { repoRoot: string; worktreeHome?: string; runGit?: GitRunner }) {
+  /** Injectable clock: a session's NAME is the day it opened, so a test has to be able to say which day. */
+  private readonly now: () => Date;
+
+  constructor(deps: { repoRoot: string; worktreeHome?: string; runGit?: GitRunner; now?: () => Date }) {
     this.repoRoot = deps.repoRoot;
     this.worktreeHome = deps.worktreeHome ?? deps.repoRoot;
     this.git = deps.runGit ?? defaultGitRunner;
+    this.now = deps.now ?? ((): Date => new Date());
   }
 
   /** Runs git; nonzero exit → throws a clear error. Returns output (stdout). */
@@ -195,7 +194,7 @@ export class WorktreeManager {
     // `git worktree add -b` fail with "a branch named … already exists".
     const listed = await this.git(["for-each-ref", "--format=%(refname:short)", "refs/heads/hc/"], this.repoRoot);
     const branches = new Set(listed.stdout.split("\n").map((s) => s.trim()).filter(Boolean));
-    const jobSlug = uniqueSlug(toSlug(jobName), (s) => existsSync(join(worktreesDir, s)) || branches.has(`hc/${s}/base`));
+    const jobSlug = sessionName(this.now(), (s) => existsSync(join(worktreesDir, s)) || branches.has(`hc/${s}/base`));
     const root = join(worktreesDir, jobSlug);
     const baseWorktree = join(root, "base");
     const baseBranch = `hc/${jobSlug}/base`;
@@ -422,58 +421,6 @@ export class WorktreeManager {
     const staged = await this.git(["diff", "--cached", "--quiet"], task.worktree);
     if (staged.code === 0) return; // no diff → no-op
     await this.run(["commit", "-m", message], task.worktree);
-  }
-
-  /**
-   * Renames a session to match the work it turned out to be.
-   *
-   * A session is named from the FIRST request that needed a worktree, and the first request is often the
-   * smallest: reported live, a sitting whose real work was product-upload testing sat in
-   * `hc/turkish-agent-communications/base`, named after a one-line rule someone asked for on the way in.
-   * The name is what a person reads in `git worktree list` a week later, so it should describe the work,
-   * not the doorway.
-   *
-   * Refused once the branch has a remote: a rename would orphan a pushed branch and any pull request cut
-   * from it. Refused too when the target is taken, and when nothing would change. Returns the session as it
-   * now stands, renamed or not — callers must use the result, because the paths inside it have moved.
-   */
-  async renameSession(session: WorktreeSession, name: string): Promise<WorktreeSession> {
-    // The INPUT decides, not the slug: `toSlug` answers "job" for anything it cannot read, and renaming a
-    // session to `hc/job/base` because the hint was blank is worse than leaving the name it had.
-    if (!name.trim()) return session;
-    const want = toSlug(name);
-    if (want === session.jobSlug) return session;
-    const pushed = await this.git(["rev-parse", "--verify", "--quiet", `${session.baseBranch}@{upstream}`], this.repoRoot);
-    if (pushed.code === 0) return session;   // …already published under its current name
-    const worktreesDir = join(this.worktreeHome, ".horsecode", "worktrees");
-    const listed = await this.git(["for-each-ref", "--format=%(refname:short)", "refs/heads/hc/"], this.repoRoot);
-    const branches = new Set(listed.stdout.split("\n").map((x) => x.trim()).filter(Boolean));
-    if (existsSync(join(worktreesDir, want)) || branches.has(`hc/${want}/base`)) return session;
-    // Something is running in there — see busyInside. The name is cosmetic; what is running is not.
-    if (busyInside(session.baseWorktree)) return session;
-
-    const root = join(worktreesDir, want);
-    const baseWorktree = join(root, "base");
-    const baseBranch = `hc/${want}/base`;
-    // `git worktree move` will not create the destination's parent, and the new session directory is one.
-    await mkdir(root, { recursive: true });
-    // The directory first: `git worktree move` rewrites git's own record of where the checkout lives, and a
-    // branch renamed before it would leave that record pointing at a path under the old name.
-    const moved = await this.git(["worktree", "move", session.baseWorktree, baseWorktree], this.repoRoot);
-    if (moved.code !== 0) await rm(root, { recursive: true, force: true }).catch(() => { /* leave nothing behind */ });
-    if (moved.code !== 0) return session;    // …in use, or git refused: the old name is not worth a broken session
-    const renamed = await this.git(["branch", "-m", session.baseBranch, baseBranch], this.repoRoot);
-    if (renamed.code !== 0) {
-      await this.git(["worktree", "move", baseWorktree, session.baseWorktree], this.repoRoot); // put it back
-      return session;
-    }
-    // The session's own directory carries the rest — the board, the checkpoint, the task worktrees' parent.
-    for (const rest of ["board.json", "checkpoint.json", "tasks"]) {
-      const from = join(session.root, rest);
-      if (existsSync(from)) await rename(from, join(root, rest)).catch(() => { /* best-effort */ });
-    }
-    await rm(session.root, { recursive: true, force: true }).catch(() => { /* the empty shell */ });
-    return { ...session, jobSlug: want, root, baseWorktree, baseBranch };
   }
 
   async abortMerge(session: WorktreeSession): Promise<void> {
