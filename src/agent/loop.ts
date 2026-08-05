@@ -7,6 +7,7 @@ import { stripThinking } from "../tui/format.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { executeToolCalls, capToolResult } from "./tool-exec.js";
+import { compact } from "./compact.js";
 import { shieldToolOutput } from "../core/prompt-guard.js";
 import { elideInPlace } from "./elide.js";
 
@@ -134,6 +135,21 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       working.push({ role: "user", content: note, ...(images.length ? { images } : {}) });
     }
     turn++;
+
+    /**
+     * Oldest tool results are put away once the conversation stops being workable.
+     *
+     * Nothing dropped anything before this: `working` only ever grew, so a run that read one document
+     * twenty-eight times re-sent all twenty-eight copies on every later call. Measured before one run was
+     * stopped: 1,033,926 characters of tool output, 200,193 characters per request, still climbing.
+     */
+    const packed = compact(working);
+    if (packed.freed > 0) {
+      working.length = 0;
+      working.push(...packed.messages);
+      opts.onSay?.(`📦 Put away ${(packed.freed / 1000).toFixed(0)}k characters of earlier tool output to keep `
+        + `this conversation workable — anything still needed can be fetched again.`, false);
+    }
 
     let assistantText = "";
     let toolCalls: ToolCall[] = [];

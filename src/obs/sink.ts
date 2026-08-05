@@ -1,3 +1,4 @@
+import { redactRecord } from "./redact.js";
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import type { Record_, TelemetrySink } from "./telemetry.js";
@@ -40,7 +41,9 @@ export class FileSink implements TelemetrySink {
     }
   }
 
+  /** Redacted here: one sink, and dozens of places that write to it. See src/obs/redact.ts. */
   write(record: Record_): void {
+    record = redactRecord(record);
     if (!this.stream) return;
     if (this.queued >= MAX_QUEUE) { this.dropped++; return; }
     this.queued++;
