@@ -41,8 +41,10 @@ describe("continuing a lane that never reaches the pipeline", () => {
    */
   it("re-enters the same lane on resume", async () => {
     const s = await src("src/engine/upstream.ts");
-    expect(s).toContain('(!resume || resume.lane === "verify") && routeIntent(r.intent) === "verify"');
-    expect(s).toContain('(!resume || resume.lane === "govern") && routeIntent(r.intent) === "govern"');
+    // Both lanes go through laneFor, which prefers the intent and falls back to the checkpoint's lane —
+    // see "which lane a request belongs to" below for why the older guard was wrong.
+    expect(s).toContain('if (laneFor(r, prompt, resume) === "verify") {');
+    expect(s).toContain('if (laneFor(r, prompt, resume) === "govern") {');
   });
 
   it("carries the lane through a round trip on disk", async () => {
@@ -60,5 +62,37 @@ describe("continuing a lane that never reaches the pipeline", () => {
     const s = await src("src/engine/upstream.ts");
     const fn = s.slice(s.indexOf("function laneCheckpoint"), s.indexOf("function laneCheckpoint") + 900);
     expect(fn).toContain("resume?.rawPrompt ?? prompt");
+  });
+});
+
+/**
+ * A session now spans several requests, so a checkpoint is almost always present — and one written by the
+ * pipeline carries no lane.
+ *
+ * Reported live: "continue the smoke tests" was refined into a verify request, the session's checkpoint said
+ * `done: ["constitution"]` with no lane, and the guard `!resume || resume.lane === "verify"` skipped the
+ * verify branch entirely. The run started BRAINSTORMING a feature nobody had asked for.
+ */
+describe("which lane a request belongs to", () => {
+  it("is decided by the intent, not by whether a checkpoint exists", async () => {
+    const s = await src("src/engine/upstream.ts");
+    const fn = s.slice(s.indexOf("function laneFor"), s.indexOf("function laneFor") + 500);
+    expect(fn).toContain("const intent = routeIntent(r.intent);");
+    expect(fn).toContain('if (intent !== "chat") return intent;');
+    // …and the branches themselves no longer consult `resume` directly: laneFor is the only place that does.
+    expect(s).not.toContain('&& routeIntent(r.intent) === "verify"');
+  });
+
+  /** A bare "devam" says nothing about what to do, and everything about wanting the last thing continued. */
+  it("falls back to the checkpoint's lane only for a bare continue", async () => {
+    const s = await src("src/engine/upstream.ts");
+    const fn = s.slice(s.indexOf("function laneFor"), s.indexOf("function laneFor") + 500);
+    expect(fn).toContain("isContinuePrompt(prompt) && resume?.lane");
+  });
+
+  it("routes both document lanes through it", async () => {
+    const s = await src("src/engine/upstream.ts");
+    expect(s).toContain('if (laneFor(r, prompt, resume) === "verify") {');
+    expect(s).toContain('if (laneFor(r, prompt, resume) === "govern") {');
   });
 });

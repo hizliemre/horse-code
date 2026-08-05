@@ -76,7 +76,7 @@ describe("asking for a worktree explicitly", () => {
     expect(fn).toContain("inLinkedWorktree");
     expect(fn).toContain("WANTS_WORKTREE.test(prompt)");
     // …and both document lanes go through it rather than reaching for process.cwd() themselves.
-    for (const lane of ['routeIntent(r.intent) === "verify"', 'routeIntent(r.intent) === "govern"']) {
+    for (const lane of ['laneFor(r, prompt, resume) === "verify"', 'laneFor(r, prompt, resume) === "govern"']) {
       const at = src.indexOf(lane);
       expect(src.slice(at, at + 400), lane).toContain("documentWorkdir(process.cwd()");
     }

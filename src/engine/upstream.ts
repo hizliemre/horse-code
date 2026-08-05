@@ -10,7 +10,7 @@ import { runCoachChat } from "./coach.js";
 import { extractListBlock } from "./next-steps.js";
 import { runReviewLoop } from "./review.js";
 import { commitStep } from "./operational.js";
-import { readCheckpoint, writeCheckpoint, type UpstreamPhase, type Checkpoint } from "./checkpoint.js";
+import { isContinuePrompt, readCheckpoint, writeCheckpoint, type UpstreamPhase, type Checkpoint } from "./checkpoint.js";
 import { appendReviewNotes } from "./review-notes.js";
 import type { ProgressEvent } from "./progress.js";
 import { constitutionPath, nextFeatureSlug, scaffoldFeature } from "../speckit/layout.js";
@@ -83,6 +83,24 @@ function laneCheckpoint(
     refinedPrompt: r.refinedPrompt, title: r.title, language: r.language,
     featureSlug: resume?.featureSlug ?? "", done: [], lane,
   });
+}
+
+/**
+ * Which lane a request belongs to, when a session already holds a checkpoint.
+ *
+ * The guard used to be `!resume || resume.lane === "…"`, and that was wrong in the case it was written for.
+ * A session now spans several requests, so a checkpoint is almost always present — and one written by the
+ * pipeline carries no lane. Reported live: "continue the smoke tests" was refined into a verify request, the
+ * session's checkpoint said `done: ["constitution"]` with no lane, the whole verify branch was skipped, and
+ * the run started BRAINSTORMING a feature nobody had asked for.
+ *
+ * The INTENT decides. The checkpoint only answers for a bare "devam", which says nothing about what to do
+ * and everything about wanting the last thing continued.
+ */
+function laneFor(r: { intent: Intent }, prompt: string, resume: Checkpoint | undefined): string {
+  const intent = routeIntent(r.intent);
+  if (intent !== "chat") return intent;
+  return isContinuePrompt(prompt) && resume?.lane ? resume.lane : intent;
 }
 
 export async function runUpstream(
@@ -174,7 +192,7 @@ export async function runUpstream(
   }
 
   /** Verify writes a report; a report is work, and work belongs on a branch. See documentWorkdir. */
-  if ((!resume || resume.lane === "verify") && routeIntent(r.intent) === "verify") {
+  if (laneFor(r, prompt, resume) === "verify") {
     emitPhase("verify");
     const cwd = await documentWorkdir(process.cwd(), prompt, ensureWorktree, r.title);
     laneCheckpoint(cwd, "verify", resume, prompt, r);
@@ -190,7 +208,7 @@ export async function runUpstream(
     };
   }
 
-  if ((!resume || resume.lane === "govern") && routeIntent(r.intent) === "govern") {
+  if (laneFor(r, prompt, resume) === "govern") {
     emitPhase("constitution");
     const templates = await deps.specKit();
     // A constitution is a committed document, so it is written on a branch like anything else.
