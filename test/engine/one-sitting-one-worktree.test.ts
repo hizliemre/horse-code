@@ -25,9 +25,10 @@ describe("one sitting, one worktree", () => {
   it("takes the session it is already working in", async () => {
     const s = await src("src/engine/job.ts");
     const at = s.indexOf("const ensureWorktree =");
-    const fn = s.slice(at, at + 900);
+    const fn = s.slice(at, at + 2000);
     expect(fn).toContain("opts.continueIn");
-    expect(fn).toContain("adopt(opts.continueIn)");
+    // Adopted after a possible rename — see test/worktree/rename-session.test.ts.
+    expect(fn).toContain("adopt(renamed)");
   });
 
   /**
@@ -42,7 +43,7 @@ describe("one sitting, one worktree", () => {
 
   it("says which branch it is continuing in", async () => {
     const s = await src("src/engine/job.ts");
-    const at = s.indexOf("adopt(opts.continueIn)");
+    const at = s.indexOf("adopt(renamed)");
     expect(s.slice(at, at + 400)).toMatch(/Continuing in/);
   });
 

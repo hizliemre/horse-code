@@ -1,4 +1,4 @@
-import { mkdir, writeFile, rm } from "node:fs/promises";
+import { rename, mkdir, writeFile, rm } from "node:fs/promises";
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
 import { inheritFromRoot, topUpInherited, type Inherited } from "./inherit.js";
@@ -387,6 +387,56 @@ export class WorktreeManager {
     const staged = await this.git(["diff", "--cached", "--quiet"], task.worktree);
     if (staged.code === 0) return; // no diff → no-op
     await this.run(["commit", "-m", message], task.worktree);
+  }
+
+  /**
+   * Renames a session to match the work it turned out to be.
+   *
+   * A session is named from the FIRST request that needed a worktree, and the first request is often the
+   * smallest: reported live, a sitting whose real work was product-upload testing sat in
+   * `hc/turkish-agent-communications/base`, named after a one-line rule someone asked for on the way in.
+   * The name is what a person reads in `git worktree list` a week later, so it should describe the work,
+   * not the doorway.
+   *
+   * Refused once the branch has a remote: a rename would orphan a pushed branch and any pull request cut
+   * from it. Refused too when the target is taken, and when nothing would change. Returns the session as it
+   * now stands, renamed or not — callers must use the result, because the paths inside it have moved.
+   */
+  async renameSession(session: WorktreeSession, name: string): Promise<WorktreeSession> {
+    // The INPUT decides, not the slug: `toSlug` answers "job" for anything it cannot read, and renaming a
+    // session to `hc/job/base` because the hint was blank is worse than leaving the name it had.
+    if (!name.trim()) return session;
+    const want = toSlug(name);
+    if (want === session.jobSlug) return session;
+    const pushed = await this.git(["rev-parse", "--verify", "--quiet", `${session.baseBranch}@{upstream}`], this.repoRoot);
+    if (pushed.code === 0) return session;   // …already published under its current name
+    const worktreesDir = join(this.worktreeHome, ".horsecode", "worktrees");
+    const listed = await this.git(["for-each-ref", "--format=%(refname:short)", "refs/heads/hc/"], this.repoRoot);
+    const branches = new Set(listed.stdout.split("\n").map((x) => x.trim()).filter(Boolean));
+    if (existsSync(join(worktreesDir, want)) || branches.has(`hc/${want}/base`)) return session;
+
+    const root = join(worktreesDir, want);
+    const baseWorktree = join(root, "base");
+    const baseBranch = `hc/${want}/base`;
+    // `git worktree move` will not create the destination's parent, and the new session directory is one.
+    await mkdir(root, { recursive: true });
+    // The directory first: `git worktree move` rewrites git's own record of where the checkout lives, and a
+    // branch renamed before it would leave that record pointing at a path under the old name.
+    const moved = await this.git(["worktree", "move", session.baseWorktree, baseWorktree], this.repoRoot);
+    if (moved.code !== 0) await rm(root, { recursive: true, force: true }).catch(() => { /* leave nothing behind */ });
+    if (moved.code !== 0) return session;    // …in use, or git refused: the old name is not worth a broken session
+    const renamed = await this.git(["branch", "-m", session.baseBranch, baseBranch], this.repoRoot);
+    if (renamed.code !== 0) {
+      await this.git(["worktree", "move", baseWorktree, session.baseWorktree], this.repoRoot); // put it back
+      return session;
+    }
+    // The session's own directory carries the rest — the board, the checkpoint, the task worktrees' parent.
+    for (const rest of ["board.json", "checkpoint.json", "tasks"]) {
+      const from = join(session.root, rest);
+      if (existsSync(from)) await rename(from, join(root, rest)).catch(() => { /* best-effort */ });
+    }
+    await rm(session.root, { recursive: true, force: true }).catch(() => { /* the empty shell */ });
+    return { ...session, jobSlug: want, root, baseWorktree, baseBranch };
   }
 
   async abortMerge(session: WorktreeSession): Promise<void> {
