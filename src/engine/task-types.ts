@@ -66,6 +66,8 @@ export interface TaskCycleDeps {
    * directory available then is the PROJECT. A session opens later, so a store that resolved its path once
    * spends the whole run writing to the reference copy instead of to what ships.
    */
+  /** horse-code's own home — where derived state that must NOT touch the project is kept. */
+  home?: string;
   onSession?: (baseWorktree: string | undefined) => void;
   /**
    * The session a run opened, handed back so the NEXT request in the same sitting continues in it.

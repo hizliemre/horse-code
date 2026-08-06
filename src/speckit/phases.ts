@@ -18,6 +18,7 @@ import type { AskUser } from "../engine/review.js";
 import type { SpecKitTemplates } from "./templates.js";
 import type { FeaturePaths } from "./layout.js";
 import { constitutionPath } from "./layout.js";
+import { constitutionNote } from "../engine/constitution-store.js";
 
 export interface PhaseDeps { deps: TaskCycleDeps; templates: SpecKitTemplates; workdir: string; askUser: AskUser }
 
@@ -45,6 +46,9 @@ async function runRole(
   /** What the routing should read: the user's request, when the caller has it. */
   subject?: string,
 ): Promise<void> {
+  const law = p.deps.home
+    ? await constitutionNote({ ...p.deps, home: p.deps.home, note: p.deps.note }, p.workdir, { role, title: subject })
+    : "";
   // fallbackOpts (not resolve): spec-kit phases drive the role with the spec-kit command prompt, so they
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
   const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts(role);
@@ -79,9 +83,10 @@ async function runRole(
     fallbacks,
     onExhausted,
     onFallback,
+    // What a specification or plan may say is constrained by the project's own stack and boundaries.
     systemPrompt: (routed.length
       ? applySkills(`${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`, routed.map((m) => m.name), p.deps.skillRegistry)
-      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)) + BATCH_TOOLS_NOTE,
+      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + law + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)) + BATCH_TOOLS_NOTE,
     tools,
     maxTurns: PHASE_MAX_TURNS,
     // Project memory (conventions/decisions/lessons) reaches the authoring roles too, not just the coach.

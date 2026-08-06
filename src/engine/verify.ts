@@ -1,5 +1,6 @@
 import { sessionBase } from "./session-scope.js";
 import { respondIn } from "./language.js";
+import { constitutionNote } from "./constitution-store.js";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, join, resolve } from "node:path";
 import type { RoleAgentOptions } from "../agent/loop.js";
@@ -91,6 +92,7 @@ function testerTools(deps: TaskCycleDeps, askUser: AskUser, findings: FindingQue
 
 async function runTester(
   deps: TaskCycleDeps, workdir: string, tools: ToolRegistry, message: string, language?: string,
+  law = "",
 ): Promise<void> {
   const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("tester");
   const opts: RoleAgentOptions = {
@@ -103,6 +105,7 @@ async function runTester(
     systemPrompt: deps.roleRegistry.resolve("tester").systemPrompt
       + projectToolsNote(tools.list(), !!loadGraphSync(workdir))
       + BATCH_TOOLS_NOTE
+      + law
       // The tester asks the developer questions and writes the report they read. See src/engine/language.ts.
       + respondIn(language),
     tools,
@@ -373,6 +376,15 @@ export async function runVerify(opts: {
   const planRel = relative(workdir, paths.plan);
   const reportRel = relative(workdir, paths.report);
   const tools = testerTools(deps, askUser, findings);
+  /**
+   * The project's rules about verification and evidence.
+   *
+   * Measured on the constitution this was built for: "evidence is mandatory — database rows and log records"
+   * and "the agent NEVER starts or stops the environment" are both principles the tester had never been shown.
+   */
+  const law = deps.home
+    ? await constitutionNote({ ...deps, home: deps.home, note: opts.note }, workdir, { role: "tester", title })
+    : "";
 
   /**
    * The locate step runs unless THIS run already settled the question.
@@ -394,7 +406,7 @@ export async function runVerify(opts: {
     opts.note?.(docDirs.length
       ? `🧪 Looking for an existing test document — this project keeps them in ${docDirs.map((d) => `\`${d}\``).join(", ")}.`
       : `🧪 Looking for an existing test document for this work.`);
-    await runTester(deps, workdir, tools, planMessageFor(prompt, planRel, reportRel, dirRel, docDirs), opts.language);
+    await runTester(deps, workdir, tools, planMessageFor(prompt, planRel, reportRel, dirRel, docDirs), opts.language, law);
     active = settled();
   }
 
@@ -428,7 +440,7 @@ export async function runVerify(opts: {
   let round = 0;
   let message = direct ? directMessage(prompt, reportRel) : runMessage(prompt, active!, reportRel, inPlace);
   for (;;) {
-    await runTester(deps, workdir, tools, message, opts.language);
+    await runTester(deps, workdir, tools, message, opts.language, law);
     const found = findings.drain();
     if (!found.length || round >= MAX_FIX_ROUNDS) {
       if (found.length) opts.note?.(`⚠️ ${found.length} finding(s) left unfixed — ${MAX_FIX_ROUNDS} rounds of fixing is the limit for one session.`);

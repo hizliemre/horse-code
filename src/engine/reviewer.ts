@@ -14,6 +14,7 @@ import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { placedSkills } from "../prompts.js";
 import { loadGraphSync } from "./project-graph.js";
+import { constitutionNote } from "./constitution-store.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import { taskDiff, describeDiff } from "./task-diff.js";
@@ -75,12 +76,18 @@ export async function runReviewer(deps: TaskCycleDeps, task: Card, cwd: string):
     `planning documents (specs/**, .specify/**, plan.md, tasks.md) — they were already reviewed and approved ` +
     `before coding began; treat them as fixed context, not as something to critique.\n` +
     `Give a verdict (pass/fail + notes).\n\n${describeDiff(diff)}` };
+  const law = deps.home
+    ? await constitutionNote({ ...deps, home: deps.home, note: deps.note }, cwd,
+      { role: "code-reviewer", files: task.files, title: task.title })
+    : "";
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     ...resolved,
+    // The reviewer gets the SAME rules the implementer was given: a gate that does not know what was
+    // required cannot tell whether it was met, and that is where a constitution stops being one.
     systemPrompt: (routed.length
       ? applySkills(resolved.systemPrompt, routed.map((m) => m.name), deps.skillRegistry)
-      : resolved.systemPrompt) + projectToolsNote(reviewerTools.list(), !!loadGraphSync(cwd)) + BATCH_TOOLS_NOTE,
+      : resolved.systemPrompt) + law + projectToolsNote(reviewerTools.list(), !!loadGraphSync(cwd)) + BATCH_TOOLS_NOTE,
     tools: reviewerTools,
     proposeMemory: (t, k) => deps.proposeMemory?.(t, k, "code-reviewer") ?? false,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],

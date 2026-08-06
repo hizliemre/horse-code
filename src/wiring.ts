@@ -136,6 +136,7 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     permission,
     approve: opts.approve,
     signal: opts.signal,
+    home: opts.home,
     specKit,
     // One injection log per session: shared by the coach and every role so a memory shown to one agent is
     // not immediately re-shown to the next.

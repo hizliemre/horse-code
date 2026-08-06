@@ -31,7 +31,7 @@ describe("telling a role which language to answer in", () => {
   it("reaches the tester, who asks the questions and writes the report", async () => {
     const s = await src("src/engine/verify.ts");
     expect(s).toContain("respondIn(language)");
-    expect(s).toContain("await runTester(deps, workdir, tools, message, opts.language)");
+    expect(s).toContain("await runTester(deps, workdir, tools, message, opts.language, law)");
     const up = await src("src/engine/upstream.ts");
     expect(up).toContain("language: r.language,");
   });
