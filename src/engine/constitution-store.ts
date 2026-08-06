@@ -82,7 +82,15 @@ export async function scopedConstitution(deps: ConstitutionDeps, cwd: string): P
    * bound to every role. That looked identical to a document that genuinely binds everyone.
    */
   const labels: { index: number; scopes: string[] }[] = [];
-  const resolved = deps.roleRegistry.resolve("analyst");
+  /**
+   * The `judge` chain, because this is judged once and lived with.
+   *
+   * Labelling is the whole mechanism: a rule sent to the wrong roles is noise in every prompt that gets it,
+   * and one sent nowhere is not a rule. The answer is computed once per constitution and cached for its
+   * lifetime, so the cheapest thing here is the most capable model available — `judge` is the strongest
+   * chain a project configures, and adjudicating is what it is for.
+   */
+  const resolved = deps.roleRegistry.resolve("judge");
   for (let start = 0; start < rules.length; start += CLASSIFY_BATCH) {
     const batch = rules.slice(start, start + CLASSIFY_BATCH);
     try {

@@ -228,6 +228,15 @@ describe("which roles are handed the constitution", () => {
     expect(s).toContain("createHash");        // …keyed by the constitution's content
   });
 
+  /**
+   * Labelling is the whole mechanism, and it is paid for once per document — so it uses the strongest chain
+   * a project configures rather than the role that happens to own the constitution.
+   */
+  it("labels with the judge, not with whoever writes the document", async () => {
+    const s = await src("src/engine/constitution-store.ts");
+    expect(s).toContain('deps.roleRegistry.resolve("judge")');
+  });
+
   /** One call per document, not per card: a wave of eight implementers must not pay it eight times. */
   it("labels once and remembers", async () => {
     const s = await src("src/engine/constitution-store.ts");
