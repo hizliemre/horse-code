@@ -1,4 +1,5 @@
 import { sessionBase } from "./session-scope.js";
+import { respondIn } from "./language.js";
 import { existsSync, readFileSync } from "node:fs";
 import { relative, join, resolve } from "node:path";
 import type { RoleAgentOptions } from "../agent/loop.js";
@@ -89,7 +90,7 @@ function testerTools(deps: TaskCycleDeps, askUser: AskUser, findings: FindingQue
 }
 
 async function runTester(
-  deps: TaskCycleDeps, workdir: string, tools: ToolRegistry, message: string,
+  deps: TaskCycleDeps, workdir: string, tools: ToolRegistry, message: string, language?: string,
 ): Promise<void> {
   const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("tester");
   const opts: RoleAgentOptions = {
@@ -101,7 +102,9 @@ async function runTester(
     systemPrompt: deps.roleRegistry.resolve("tester").systemPrompt
       + deps.roleRegistry.ruleSuffix()
       + projectToolsNote(tools.list(), !!loadGraphSync(workdir))
-      + BATCH_TOOLS_NOTE,
+      + BATCH_TOOLS_NOTE
+      // The tester asks the developer questions and writes the report they read. See src/engine/language.ts.
+      + respondIn(language),
     tools,
     maxTurns: VERIFY_MAX_TURNS,
     // A screenshot named in the request comes with it — the same way a mid-run note carries one.
@@ -348,6 +351,8 @@ export async function runVerify(opts: {
   title: string;
   askUser: AskUser;
   note?: (text: string) => void;
+  /** The user's own language — the tester asks questions and writes to them. See src/engine/language.ts. */
+  language?: string;
 }): Promise<VerifyResult> {
   const { deps, workdir, prompt, title, askUser } = opts;
   const slug = featureSlugFor(workdir, title);
@@ -389,7 +394,7 @@ export async function runVerify(opts: {
     opts.note?.(docDirs.length
       ? `🧪 Looking for an existing test document — this project keeps them in ${docDirs.map((d) => `\`${d}\``).join(", ")}.`
       : `🧪 Looking for an existing test document for this work.`);
-    await runTester(deps, workdir, tools, planMessageFor(prompt, planRel, reportRel, dirRel, docDirs));
+    await runTester(deps, workdir, tools, planMessageFor(prompt, planRel, reportRel, dirRel, docDirs), opts.language);
     active = settled();
   }
 
@@ -423,7 +428,7 @@ export async function runVerify(opts: {
   let round = 0;
   let message = direct ? directMessage(prompt, reportRel) : runMessage(prompt, active!, reportRel, inPlace);
   for (;;) {
-    await runTester(deps, workdir, tools, message);
+    await runTester(deps, workdir, tools, message, opts.language);
     const found = findings.drain();
     if (!found.length || round >= MAX_FIX_ROUNDS) {
       if (found.length) opts.note?.(`⚠️ ${found.length} finding(s) left unfixed — ${MAX_FIX_ROUNDS} rounds of fixing is the limit for one session.`);

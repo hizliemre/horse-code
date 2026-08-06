@@ -200,6 +200,8 @@ export async function runUpstream(
     const branch = await currentBranchOf(cwd);
     const res = await runVerify({
       deps, workdir: cwd, prompt: r.refinedPrompt, title: r.title, askUser,
+      // The refined prompt is English by design; without this the tester answers a Turkish session in English.
+      language: r.language,
       note: (text) => emit({ kind: "note", text }),
     });
     return {
@@ -220,7 +222,7 @@ export async function runUpstream(
     const before = await snapshot(cwd, rel);
     // The request travels with the phase: without it the analyst is asked to establish a constitution the
     // project already has, and has to ask the user what they wanted. See runConstitution.
-    await runConstitution(p, r.refinedPrompt);
+    await runConstitution(p, r.refinedPrompt, r.language);
     const path = constitutionPath(cwd);
     const written = existsSync(path);
     if (written) {

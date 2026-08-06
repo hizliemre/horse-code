@@ -1,3 +1,4 @@
+import { respondIn } from "../engine/language.js";
 import { existsSync } from "node:fs";
 import { relative } from "node:path";
 import { runToCompletion } from "../agent/loop.js";
@@ -139,7 +140,7 @@ async function runRole(
  * A document that exists is amended: smallest change that satisfies the request, version bumped, done. The
  * template and its placeholder ceremony belong to the case it was written for — a project that has none.
  */
-export async function runConstitution(p: PhaseDeps, request?: string): Promise<void> {
+export async function runConstitution(p: PhaseDeps, request?: string, language?: string): Promise<void> {
   const rel = relative(p.workdir, constitutionPath(p.workdir));
   const asked = request?.trim()
     ? `What the user asked for:\n"${request.trim()}"\n\n`
@@ -154,7 +155,8 @@ export async function runConstitution(p: PhaseDeps, request?: string): Promise<v
       + `say why in one sentence and stop.`
     : `${asked}Establish the project constitution. Ask the user about core principles with ask_user if needed.\n`
       + `Follow this template:\n\n${p.templates.template("constitution")}\n\nWrite it to "${rel}".`;
-  await runRole(p, "analyst", p.templates.command("constitution"), msg, true, request);
+  // It asks the user about principles and reports back — see src/engine/language.ts.
+  await runRole(p, "analyst", p.templates.command("constitution"), msg + respondIn(language), true, request);
 }
 
 /**
