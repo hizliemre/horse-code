@@ -151,22 +151,44 @@ describe("labelling the rules", () => {
     expect(msg).toContain("Angular Modern Pattern");
   });
 
-  it("tells it to prefer `always` when unsure, and never to rewrite", () => {
-    expect(CLASSIFY_PROMPT).toMatch(/choose\s+`always`/i);
+  it("names every scope, and never asks for a rewrite", () => {
     expect(CLASSIFY_PROMPT).toMatch(/Do not translate, summarise or rewrite/i);
     for (const s of SCOPES) expect(CLASSIFY_PROMPT).toContain(s);
   });
 
-  /** An unlabelled MUST must not become an unsent one. */
-  it("binds everyone with anything it failed to label", () => {
+  /**
+   * An unlabelled MUST must not become an unsent one — but it must not be silent either.
+   *
+   * The first run of this labelled nothing: seventy rules went out in a single call, the answer came back at
+   * half a list, and every rule it never reached defaulted to `always`. On screen that was indistinguishable
+   * from a constitution that genuinely binds everyone.
+   */
+  it("binds everyone with anything it failed to label, and counts it", () => {
     const out = applyLabels(rules, [{ index: 0, scopes: ["backend"] }]);
-    expect(out[0].scopes).toEqual(["backend"]);
-    expect(out[1].scopes).toEqual(["always"]);
+    expect(out.scoped[0].scopes).toEqual(["backend"]);
+    expect(out.scoped[1].scopes).toEqual(["always"]);
+    expect(out.unlabelled).toEqual([1, 2, 3]);
   });
 
   it("ignores a scope it does not know rather than carrying it", () => {
     const out = applyLabels(rules, [{ index: 0, scopes: ["backend", "nonsense"] }]);
-    expect(out[0].scopes).toEqual(["backend"]);
+    expect(out.scoped[0].scopes).toEqual(["backend"]);
+  });
+
+  /** A short answer is a complete answer; four calls once per constitution is not a cost worth protecting. */
+  it("asks in batches small enough to be answered in full", async () => {
+    const { CLASSIFY_BATCH } = await import("../../src/engine/constitution.js");
+    expect(CLASSIFY_BATCH).toBeLessThanOrEqual(25);
+    const msg = classifyMessage(rules.slice(1, 3), 1);
+    expect(msg).toContain("--- 1 ---");   // …numbered by their place in the whole document
+    expect(msg).toContain("--- 2 ---");
+  });
+
+  /** `always` stopped being the free answer: a cheap model took it seventy times out of seventy. */
+  it("makes `always` a considered answer rather than a safe one", () => {
+    expect(CLASSIFY_PROMPT).toMatch(/`always` is a real answer, not a safe one/i);
+    expect(CLASSIFY_PROMPT).toMatch(/NOT because you are unsure/i);
+    expect(CLASSIFY_PROMPT).toMatch(/sends it to everyone writing CSS/i);
   });
 });
 
@@ -212,9 +234,14 @@ describe("which roles are handed the constitution", () => {
     expect(s).toContain("const memo = new Map<string, ScopedRule[]>()");
   });
 
-  it("falls back to binding everyone when the labelling fails", async () => {
+  /**
+   * Failure is survivable and must be visible. One batch that will not answer leaves its rules bound to
+   * everyone and lets the next batch try; the count of what fell through is said out loud.
+   */
+  it("keeps going when a batch fails, and says how many rules fell through", async () => {
     const s = await src("src/engine/constitution-store.ts");
-    expect(s).toContain('scoped = rules.map((r) => ({ ...r, scopes: ["always" as Scope] }))');
-    expect(s).toMatch(/could not be labelled/i);   // …and it says so, rather than going quiet
+    expect(s).toContain("catch { /* this batch binds everyone; the next one may still answer */ }");
+    expect(s).toMatch(/could not be labelled/i);
+    expect(s).toContain("applyLabels(rules, labels)");
   });
 });

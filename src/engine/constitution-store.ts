@@ -6,7 +6,7 @@ import { runStructuredRole } from "../agent/structured.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { constitutionPath } from "../speckit/layout.js";
 import {
-  CLASSIFY_PROMPT, SCOPES, applyLabels, classifyMessage, parseConstitution, scopesForWork, selectRules,
+  CLASSIFY_BATCH, CLASSIFY_PROMPT, SCOPES, applyLabels, classifyMessage, parseConstitution, scopesForWork, selectRules,
   type Scope, type ScopedRule,
 } from "./constitution.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
@@ -72,22 +72,33 @@ export async function scopedConstitution(deps: ConstitutionDeps, cwd: string): P
 
   const rules = parseConstitution(text);
   if (!rules.length) return [];
-  let scoped: ScopedRule[];
-  try {
-    deps.note?.(`📜 Reading the project constitution — ${rules.length} rules, labelled once so each reaches `
-      + `the work it binds.`);
-    const resolved = deps.roleRegistry.resolve("analyst");
-    const out = await runStructuredRole({
-      provider: deps.provider, ...resolved, systemPrompt: CLASSIFY_PROMPT, tools: new ToolRegistry(),
-      messages: [{ role: "user", content: classifyMessage(rules) }],
-      permission: deps.permission, approve: deps.approve, cwd, signal: deps.signal,
-      maxTurns: CLASSIFY_MAX_TURNS,
-    }, LabelsSchema);
-    scoped = applyLabels(rules, out.labels);
-  } catch {
-    // Unlabelled binds everyone: a rule delivered too widely is noise, one delivered to nobody is not a rule.
-    scoped = rules.map((r) => ({ ...r, scopes: ["always" as Scope] }));
-    deps.note?.(`⚠️ The constitution could not be labelled — every rule goes to every role this session.`);
+  deps.note?.(`📜 Reading the project constitution — ${rules.length} rules, labelled once so each reaches `
+    + `the work it binds.`);
+  /**
+   * In batches, because one answer for all of them was not one answer.
+   *
+   * Measured on the first run: seventy rules in a single call came back at 437 output tokens — about half a
+   * list — so everything the model never reached defaulted to `always`, and the whole constitution ended up
+   * bound to every role. That looked identical to a document that genuinely binds everyone.
+   */
+  const labels: { index: number; scopes: string[] }[] = [];
+  const resolved = deps.roleRegistry.resolve("analyst");
+  for (let start = 0; start < rules.length; start += CLASSIFY_BATCH) {
+    const batch = rules.slice(start, start + CLASSIFY_BATCH);
+    try {
+      const out = await runStructuredRole({
+        provider: deps.provider, ...resolved, systemPrompt: CLASSIFY_PROMPT, tools: new ToolRegistry(),
+        messages: [{ role: "user", content: classifyMessage(batch, start) }],
+        permission: deps.permission, approve: deps.approve, cwd, signal: deps.signal,
+        maxTurns: CLASSIFY_MAX_TURNS,
+      }, LabelsSchema);
+      labels.push(...out.labels);
+    } catch { /* this batch binds everyone; the next one may still answer */ }
+  }
+  const { scoped, unlabelled } = applyLabels(rules, labels);
+  if (unlabelled.length) {
+    deps.note?.(`⚠️ ${unlabelled.length} of ${rules.length} constitution rules could not be labelled — those `
+      + `go to every role. A rule sent too widely is noise; one sent nowhere is not a rule.`);
   }
   try {
     mkdirSync(join(deps.home, ".horsecode", "constitution"), { recursive: true });

@@ -169,30 +169,53 @@ function render(used: ScopedRule[], dropped: ScopedRule[]): string {
 export const CLASSIFY_PROMPT =
   "You are labelling the rules of a software project's constitution so each one can be handed to the agents "
   + "it actually binds.\n\n"
-  + `Label every rule with one or more scopes from exactly this list: ${SCOPES.join(", ")}.\n\n`
-  + "- `always`: it binds EVERY role on EVERY task — how to work, how to talk to the user, what may never be "
-  + "done. Use it for anything that is not about a particular kind of file.\n"
-  + "- `backend`, `frontend`, `data`, `infra`: it is about code of that kind.\n"
+  + `For each rule, answer with the scopes it is ABOUT, from exactly this list: ${SCOPES.join(", ")}.\n\n`
+  + "- `backend`, `frontend`, `data`, `infra`: it names code, files or tooling of that kind — a language, a "
+  + "framework, a database, a deployment target.\n"
   + "- `spec`: it constrains what a specification or plan may say (the stack, the boundaries, the vocabulary).\n"
   + "- `review`: it is a gate a reviewer applies — what blocks a merge, how findings are reported.\n"
   + "- `test`: it is about verification and evidence.\n"
-  + "- `govern`: it is about amending the constitution itself, and binds nobody else.\n\n"
-  + "A rule may carry several scopes. When you are unsure whether something is `always` or scoped, choose "
-  + "`always`: a rule delivered too widely is noise, and a rule delivered too narrowly is a rule nobody "
-  + "follows. Do not translate, summarise or rewrite anything — you are only labelling.\n\n"
+  + "- `govern`: it is about amending the constitution itself, and binds nobody else.\n"
+  + "- `always`: it names NO particular kind of code. It is about how to work, how to talk to the user, or "
+  + "what may never be done — so it binds every role on every task.\n\n"
+  + "A rule may carry several scopes. `always` is a real answer, not a safe one: use it when the rule "
+  + "genuinely mentions no kind of code, and NOT because you are unsure. If a rule is about backend code, "
+  + "say `backend` — labelling it `always` sends it to everyone writing CSS.\n\n"
+  + "Answer for EVERY index you are given, and for no others. Do not translate, summarise or rewrite "
+  + "anything — you are only labelling.\n\n"
   + "Return {labels: [{index, scopes}]} via submit, one entry per rule, in the order given.";
 
+/**
+ * How many rules go in one call.
+ *
+ * All seventy went in one, and the answer came back at 437 output tokens — about half a list — so the rules
+ * it never reached defaulted to `always` and the whole document ended up bound to every role. A short answer
+ * is a complete answer; four calls once per constitution is not a cost worth protecting.
+ */
+export const CLASSIFY_BATCH = 20;
+
 /** What the model is shown: the rules, numbered, with the heading each sits under. */
-export function classifyMessage(rules: Rule[]): string {
-  return rules.map((r, i) => `--- ${i} --- (${r.heading})\n${r.text}`).join("\n\n");
+export function classifyMessage(rules: Rule[], offset = 0): string {
+  return rules.map((r, i) => `--- ${i + offset} --- (${r.heading})\n${r.text}`).join("\n\n");
 }
 
-/** Anything the model failed to label binds everyone: an unlabelled MUST must not become an unsent one. */
-export function applyLabels(rules: Rule[], labels: { index: number; scopes: string[] }[]): ScopedRule[] {
+/**
+ * Applies what came back, and says what did not.
+ *
+ * An unlabelled rule still binds everyone — a MUST sent too widely is noise, one sent nowhere is not a rule
+ * — but it is no longer silent. The first run of this labelled nothing and looked exactly like a run that
+ * labelled everything `always` on purpose.
+ */
+export function applyLabels(
+  rules: Rule[], labels: { index: number; scopes: string[] }[],
+): { scoped: ScopedRule[]; unlabelled: number[] } {
   const known = new Set<string>(SCOPES);
   const byIndex = new Map(labels.map((l) => [l.index, l.scopes.filter((s) => known.has(s)) as Scope[]]));
-  return rules.map((r, i) => {
+  const unlabelled: number[] = [];
+  const scoped = rules.map((r, i) => {
     const scopes = byIndex.get(i) ?? [];
-    return { ...r, scopes: scopes.length ? scopes : ["always"] };
+    if (!scopes.length) unlabelled.push(i);
+    return { ...r, scopes: scopes.length ? scopes : (["always"] as Scope[]) };
   });
+  return { scoped, unlabelled };
 }
