@@ -136,9 +136,14 @@ describe("choosing the rules that bind this work", () => {
     expect(selectRules([], scopesForWork({})).text).toBe("");
   });
 
-  it("has a budget smaller than a whole constitution and larger than a scope", () => {
-    expect(MAX_CONSTITUTION_CHARS).toBeGreaterThan(12_236);   // …a backend card, measured
-    expect(MAX_CONSTITUTION_CHARS).toBeLessThan(27_529);      // …the whole document, measured
+  /**
+   * The first guess was 14,000, and the first real labelling walked into it: a backend card selects 15,934
+   * characters and a reviewer 16,758, so every backend review would have dropped ~2,700 characters of rules
+   * that applied. A ceiling that cannot fit what a normal card needs silently edits the constitution.
+   */
+  it("fits what a card actually selects, and still refuses the whole document", () => {
+    expect(MAX_CONSTITUTION_CHARS).toBeGreaterThan(16_758);   // …a reviewer on a backend card, measured
+    expect(MAX_CONSTITUTION_CHARS).toBeLessThan(25_666);      // …the whole document, measured
   });
 });
 

@@ -111,8 +111,17 @@ export function scopesForWork(opts: { role?: string; files?: string[]; title?: s
   return out;
 }
 
-/** Longest the constitution block may get in one prompt. Bigger than a scope needs, small beside the whole. */
-export const MAX_CONSTITUTION_CHARS = 14_000;
+/**
+ * Longest the constitution block may get in one prompt.
+ *
+ * 14,000 was a guess made before anything had been labelled, and the first real labelling walked into it: on
+ * a 25,666-character constitution a backend card selects 15,934 and a reviewer 16,758, so every backend
+ * review would have dropped ~2,700 characters of rules that genuinely applied. A ceiling that cannot fit
+ * what a normal card needs is not a budget, it is a silent edit of the constitution.
+ *
+ * 20,000 clears the measured worst case with room, and still refuses to hand over a document whole.
+ */
+export const MAX_CONSTITUTION_CHARS = 20_000;
 
 export interface Selection { text: string; used: ScopedRule[]; dropped: ScopedRule[] }
 
