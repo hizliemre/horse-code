@@ -97,7 +97,8 @@ export async function triageFinding(deps: TaskCycleDeps, workdir: string, f: Fin
     fallbacks,
     onExhausted,
     onFallback,
-    systemPrompt: PROMPT,
+    // A role that DECIDES has to know the user's standing rules — see test/agent/rules-reach-roles.test.ts.
+    systemPrompt: PROMPT + deps.roleRegistry.ruleSuffix(),
     tools,
     maxTurns: SIZE_MAX_TURNS,
     perAttemptMs: SIZE_ATTEMPT_MS,
@@ -222,7 +223,7 @@ export async function sizeRequest(deps: TaskCycleDeps, workdir: string, prompt: 
     fallbacks,
     onExhausted,
     onFallback,
-    systemPrompt: SIZE_PROMPT,
+    systemPrompt: SIZE_PROMPT + deps.roleRegistry.ruleSuffix(),
     tools,
     maxTurns: SIZE_MAX_TURNS,
     perAttemptMs: SIZE_ATTEMPT_MS,

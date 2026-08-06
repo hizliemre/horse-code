@@ -99,8 +99,8 @@ async function runTester(
     fallbacks,
     onExhausted,
     onFallback,
+    // `resolve` already appends the user's rules — adding them again put all 25 in twice.
     systemPrompt: deps.roleRegistry.resolve("tester").systemPrompt
-      + deps.roleRegistry.ruleSuffix()
       + projectToolsNote(tools.list(), !!loadGraphSync(workdir))
       + BATCH_TOOLS_NOTE
       // The tester asks the developer questions and writes the report they read. See src/engine/language.ts.

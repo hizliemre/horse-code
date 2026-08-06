@@ -40,7 +40,8 @@ export async function normalizeQuestion(deps: TaskCycleDeps, raw: string): Promi
   const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("refiner");
   return runStructuredRole({
     provider: deps.provider, model, fallbacks, onExhausted, onFallback,
-    systemPrompt: PROMPT,
+    // This shapes the question the USER reads; a rule like "always ask in Turkish" belongs here.
+    systemPrompt: PROMPT + deps.roleRegistry.ruleSuffix(),
     tools: new ToolRegistry(),
     messages: [{ role: "user", content: raw }],
     permission: deps.permission, approve: deps.approve, cwd: ".", signal: deps.signal,
