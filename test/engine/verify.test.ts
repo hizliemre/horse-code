@@ -125,3 +125,47 @@ describe("the tester is a real role", () => {
     expect(DEFAULT_PROMPTS.tester).toMatch(/FAILED/);
   });
 });
+
+/**
+ * Detect → write it down → hand off → fix → come back → re-check → say so in the same entry.
+ *
+ * The loop that folds a fix back into the verification already existed; what it never did was leave a trace
+ * at the moment of detection. The queue is in memory, so a session that stopped before the fix round — the
+ * environment goes down, the budget runs out — took every finding with it, against the tester's own rule that
+ * a run stopping halfway must leave behind everything it learned. And after a fix, nothing said to update the
+ * finding's own entry: the scenario got its fresh evidence while the finding went on reading OPEN.
+ */
+describe("a finding's round trip", () => {
+  const src = async (p: string): Promise<string> =>
+    (await import("node:fs/promises")).readFile(p, "utf8");
+
+  it("is written into the report the moment it is reported, not at the end", async () => {
+    const s = await src("src/engine/finding.ts");
+    expect(s).toMatch(/Write it into the report now/);
+    expect(s).toMatch(/\*\*Findings\*\* section, as OPEN/);
+  });
+
+  it("tells the tester the fix is coming back to it, so the hand-off is not a goodbye", async () => {
+    const s = await src("src/engine/finding.ts");
+    expect(s).toMatch(/you will be told the outcome so you can re-check it/);
+    expect(s).toMatch(/do not fix it yourself/);
+  });
+
+  it("asks for that entry to be updated after the re-check, not just the scenario", async () => {
+    const s = await src("src/engine/verify.ts");
+    expect(s).toMatch(/Update each finding's OWN entry in the report/);
+    expect(s).toMatch(/FIXED and verified, with the evidence/);
+    expect(s).toMatch(/still OPEN and what you saw this time/);
+  });
+
+  it("says why a stale entry matters, so the rule is not decoration", async () => {
+    const s = await src("src/engine/verify.ts");
+    expect(s).toMatch(/as wrong as one marked fixed that was not/);
+  });
+
+  it("still re-runs the affected scenarios against the corrected product", async () => {
+    const s = await src("src/engine/verify.ts");
+    expect(s).toMatch(/against the corrected product, with fresh evidence/);
+    expect(s).toMatch(/carry on from where you were/);
+  });
+});

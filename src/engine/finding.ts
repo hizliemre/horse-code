@@ -86,10 +86,20 @@ export function buildReportFindingTool(queue: FindingQueue): Tool {
         return { content: `report_finding: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       }
       const n = queue.add(parsed.data);
+      /**
+       * Told to write it down NOW, not at the end.
+       *
+       * The queue is in memory: a session that stops before the fix round — the environment goes down, the
+       * user walks away, the budget runs out — took every finding with it, while the tester's own rule says a
+       * run that stops halfway must leave behind everything it learned. And the reader of the report is
+       * entitled to see what was noticed even when nobody got round to fixing it.
+       */
       return {
-        content: `Finding #${n} recorded: "${parsed.data.title}". It will be triaged and fixed by another role. `
-          + `Carry on with the scenario you were running — do not fix it yourself, and do not mark the `
-          + `scenario failed because of it.`,
+        content: `Finding #${n} recorded: "${parsed.data.title}". Write it into the report now, under a `
+          + `**Findings** section, as OPEN — with what you saw and where. It is queued to be triaged and `
+          + `fixed by another role, and you will be told the outcome so you can re-check it and update that `
+          + `same entry. Then carry on with the scenario you were running — do not fix it yourself, and do `
+          + `not mark the scenario failed because of it.`,
         isError: false,
       };
     },

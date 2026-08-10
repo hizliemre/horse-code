@@ -398,6 +398,9 @@ function resumeMessage(activeRel: string, reportRel: string, inPlace: boolean, d
     + `Anything marked FIXED has been changed in the working tree and committed. Re-check the scenarios those `
     + `findings affected — against the corrected product, with fresh evidence — and record the result. Then `
     + `carry on from where you were.\n\n`
+    + `Update each finding's OWN entry in the report as you re-check it: FIXED and verified, with the evidence `
+    + `you just gathered, or still OPEN and what you saw this time. A finding left reading OPEN after it was `
+    + `fixed is as wrong as one marked fixed that was not — the entry is what anyone reads later.\n\n`
     + `Anything NOT fixed stays in the report as an open finding. Do not fix it yourself, and do not fail a `
     + `scenario for it unless the scenario itself does not pass.\n\n`
     + runMessage("", activeRel, reportRel, inPlace);
