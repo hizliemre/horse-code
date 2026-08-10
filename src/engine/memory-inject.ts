@@ -3,6 +3,7 @@ import {
   type MemoryEntry, type SelectedMemory, type SelectionStats,
 } from "./memory-retrieval.js";
 import type { TaskCycleDeps } from "./task-types.js";
+import { telemetry } from "../obs/telemetry.js";
 
 /**
  * What memory did, as it happens. Injection used to be entirely invisible: there was no way to tell "no memory
@@ -45,18 +46,63 @@ export function memoryHints(
   const all: MemoryEntry[] = deps.memory?.() ?? [];
   // Rules are injected globally; selecting them here would duplicate them in every prompt.
   const selectable = all.filter((m) => (m.kind ?? "fact") !== "rule");
-  if (!selectable.length) return { message: "", ids: [], hits: [], stats: { ...EMPTY_STATS } };
+  /**
+   * A miss is recorded too, and says WHICH miss it was.
+   *
+   * There are two ways to inject nothing and they were both silent, so a log showing no injections could not
+   * distinguish "this role never consults memory" from "it consulted 721 memories and none applied" from
+   * "the store it was pointed at was empty". Measured on an 82-call run: zero injection records, a store with
+   * 746 entries on disk, and selection demonstrably returning five hits for the same role when run by hand —
+   * three incompatible facts that no amount of staring at the log could reconcile, because the log recorded
+   * only the outcome that did not happen.
+   */
+  const miss = (reason: "empty-store" | "no-match", stats: SelectionStats): MemoryHints => {
+    telemetry().event("memory.missed", {
+      "hc.role": opts.role ?? "coach",
+      "hc.memory.reason": reason,
+      "hc.memory.available": all.length,
+      "hc.memory.considered": selectable.length,
+      "hc.memory.query_chars": query.length,
+      "hc.memory.rejected": `below:${stats.belowThreshold} cooldown:${stats.cooldown} `
+        + `audience:${stats.audience} inactive:${stats.inactive} budget:${stats.budget}`,
+    });
+    return { message: "", ids: [], hits: [], stats };
+  };
+  if (!selectable.length) return miss("empty-store", { ...EMPTY_STATS });
   const { hits, stats } = selectMemoriesDetailed(selectable, query, {
     load: opts.load ?? 0,
     ...(opts.role ? { role: opts.role } : {}),
     ...(deps.injectionLog ? { log: deps.injectionLog } : {}),
   });
-  if (!hits.length) return { message: "", ids: [], hits, stats };
+  if (!hits.length) return miss("no-match", stats);
   const ids = hits.map((h) => h.entry.id);
   deps.injectionLog?.record(ids, Date.now()); // don't re-send these on the next turn
   deps.recordInjection?.(ids); // durable count → "injected ten times, never cited" becomes visible
   if (!opts.silent) deps.onMemory?.({ kind: "injected", role: opts.role ?? "coach", hits, stats });
-  return { message: renderMemoryHints(hits.map((h) => h.entry)), ids, hits, stats };
+  const message = renderMemoryHints(hits.map((h) => h.entry));
+  /**
+   * …and recorded, not only shown.
+   *
+   * The event above reaches the screen and nowhere else, so "which memories did this run actually use, and
+   * what did they cost?" was answerable only by watching it happen. Measured on a 53-call run: 2,111
+   * `process.memory` samples in the log and not one record of an injection — the mechanism was working and
+   * unmeasurable, which is the same position the constitution was in before it was labelled.
+   *
+   * The ids and the size, not the text: the text is in `memory.jsonl`, and a log that copies it grows by the
+   * size of everything it observes.
+   */
+  telemetry().event("memory.injected", {
+    "hc.role": opts.role ?? "coach",
+    "hc.memory.ids": ids.join(","),
+    "hc.memory.count": hits.length,
+    "hc.memory.chars": message.length,
+    "hc.memory.considered": stats.considered,
+    "hc.memory.top_relevance": Math.round((hits[0]?.relevance ?? 0) * 100) / 100,
+    // Why the rest did not make it — a selection that drops everything for one reason is a selection to look at.
+    "hc.memory.rejected": `below:${stats.belowThreshold} cooldown:${stats.cooldown} `
+      + `audience:${stats.audience} inactive:${stats.inactive} budget:${stats.budget}`,
+  });
+  return { message, ids, hits, stats };
 }
 
 /** Sums per-role selections into one event — used by fan-outs (a review team, the council) to report once. */
@@ -103,6 +149,25 @@ export function reinforceTouched(deps: TaskCycleDeps, ids: string[], paths: stri
   if (!used.length) return;
   if (deps.reinforceMemory) for (const e of used) deps.reinforceMemory(e.id);
   deps.onMemory?.({ kind: "used", role, texts: used.map((e) => e.text) });
+  recordUse(role, ids, used, "anchor");
+}
+
+/**
+ * Which of the injected memories actually earned their place, and how it was decided.
+ *
+ * Paired with `memory.injected` on the ids, so a reader can compute the thing that matters — how much of what
+ * was sent was used — without holding the run in their head. `via` because the two credit paths answer
+ * different questions: `anchor` means an implementer went to the file the memory is about, `cited` means a
+ * model's own words repeated it, and a mechanism that only ever credits one of them is measuring one role.
+ */
+function recordUse(role: string, injected: string[], used: MemoryEntry[], via: "anchor" | "cited"): void {
+  telemetry().event("memory.used", {
+    "hc.role": role,
+    "hc.memory.via": via,
+    "hc.memory.ids": used.map((e) => e.id).join(","),
+    "hc.memory.used": used.length,
+    "hc.memory.injected": injected.length,
+  });
 }
 
 /** Credits the memories the model actually referenced in its output (feeds retrieval ranking). */
@@ -115,6 +180,7 @@ export function reinforceUsed(deps: TaskCycleDeps, ids: string[], output: string
   if (!used.length) return;
   if (deps.reinforceMemory) for (const e of used) deps.reinforceMemory(e.id);
   deps.onMemory?.({ kind: "used", role, texts: used.map((e) => e.text) });
+  recordUse(role, ids, used, "cited");
 }
 
 const clip = (s: string, n = 64): string => {

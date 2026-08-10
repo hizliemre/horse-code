@@ -7,6 +7,7 @@ import type { ReviewDeps } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
 import { runProjectTests, describeTestRun } from "./test-runner.js";
 import { taskDiff, describeDiff } from "./task-diff.js";
+import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { telemetry } from "../obs/telemetry.js";
 
 export interface CriterionCheck { criterion: string; met: boolean; evidence: string }
@@ -87,14 +88,24 @@ export async function verifyAcceptance(
   // The gate ran out of turns before it had opened anything, repeatedly. The change is what it is judging.
   const diff = deps.baseRef ? await taskDiff(cwd, deps.baseRef) : "";
   const resolved = deps.roleRegistry.resolve("code-reviewer");
+  /**
+   * The final gate gets what earlier runs learned, exactly as the per-task reviewer does.
+   *
+   * Two gates judge the same code with the same role, and only one of them could see the store — so a lesson
+   * that stopped a defect at review had nothing to say when the same defect reached acceptance. Retrieved on
+   * the card, not on the assembled message: the criteria and the diff are the subject, the instructions
+   * around them are the same on every call.
+   */
+  const hints = memoryHints(deps, `${card.title} ${card.acceptance.join(" ")}`, { role: "code-reviewer" });
+  const ask = { role: "user" as const, content:
+    `Task: "${card.title}".\n\nAcceptance criteria:\n${card.acceptance.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\n` +
+    `Check each one against the worktree and report met/unmet with the evidence you saw.\n\n` +
+    `${describeTestRun(tests)}\n\n${describeDiff(diff)}` };
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     systemPrompt: `${PROMPT}${deps.roleRegistry.ruleSuffix()}`,
     tools: readOnlyRegistry(deps),
-    messages: [{ role: "user", content:
-      `Task: "${card.title}".\n\nAcceptance criteria:\n${card.acceptance.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n\n` +
-      `Check each one against the worktree and report met/unmet with the evidence you saw.\n\n` +
-      `${describeTestRun(tests)}\n\n${describeDiff(diff)}` }],
+    messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission, approve: deps.approve, cwd,
     signal: AbortSignal.any([deps.signal, AbortSignal.timeout(CODE_REVIEW_TIMEOUT_MS)]),
     maxTurns: CODE_REVIEW_MAX_TURNS,
@@ -102,6 +113,8 @@ export async function verifyAcceptance(
   let checks: CriterionCheck[];
   try {
     ({ checks } = await runStructuredRole(opts, AcceptanceSchema));
+    // Credit what the verdict actually leaned on, or the store only learns that memories were sent.
+    reinforceUsed(deps, hints.ids, checks.map((c) => c.evidence).join(" "), "code-reviewer");
   } catch (e) {
     if (deps.signal.aborted) throw e;
     // Fail-SAFE: an unverifiable gate must not wave the task through — that is exactly the silent-success

@@ -41,7 +41,18 @@ export interface AskChoice {
 }
 
 /** Structured choices for a question → the TUI renders a selectable checkbox/radio list. */
-export interface AskOpts { options?: (string | AskChoice)[]; multiSelect?: boolean }
+export interface AskOpts {
+  options?: (string | AskChoice)[];
+  multiSelect?: boolean;
+  /**
+   * The actions the user must carry out before they can answer.
+   *
+   * Present ⇒ the run has handed over: only a person can take the next step, and the prompt is rendered as
+   * that hand-off rather than as a question. See `ask_user`'s `steps` for why an agent must carry them here
+   * instead of pointing at a document it wrote.
+   */
+  steps?: string[];
+}
 
 /** Normalizes the mixed option form to {@link AskChoice}. */
 export function asChoice(o: string | AskChoice): AskChoice {

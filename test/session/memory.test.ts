@@ -364,3 +364,60 @@ describe("memory follows the session, because the session is what ships", () => 
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * A store that has been pointed at a session must still be readable.
+ *
+ * `all()` was `this.cache ?? []` — a snapshot of whatever had already been read — and `retarget`, the call
+ * that points the store at a session the moment one opens, ends by clearing that cache. So every retrieval
+ * after a session opened saw an empty store, for the rest of the run.
+ *
+ * It survived three runs because it is indistinguishable from a project with nothing to recall: the banner
+ * said "746 entries" (counted before the session existed), the file held all of them, and selection returned
+ * hits when run by hand against that same file. What named it was recording the MISS — `reason: empty-store,
+ * available: 0` — on a role whose store demonstrably had 721 selectable entries.
+ */
+describe("reading the store after it is pointed somewhere new", () => {
+  it("loads on demand instead of returning whatever was cached", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-mem-load-"));
+    try {
+      await mkdir(join(dir, ".horsecode"), { recursive: true });
+      const entry = { id: "a", text: "the cargo address model", kind: "fact", anchors: [], tags: ["cargo"], createdAt: 0 };
+      await writeFile(join(dir, ".horsecode", "memory.jsonl"), `${JSON.stringify(entry)}\n`, "utf8");
+
+      const store = new MemoryStore({ home: dir, cwd: dir });
+      // Nothing has awaited load() — the retrieval path never does, because it is synchronous.
+      expect(store.all().map((e) => e.id)).toEqual(["a"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-reads after retarget rather than going blind", async () => {
+    const project = await mkdtemp(join(tmpdir(), "hc-mem-proj-"));
+    try {
+      const session = join(project, ".horsecode", "worktrees", "s", "base");
+      for (const root of [project, session]) {
+        await mkdir(join(root, ".horsecode"), { recursive: true });
+        const e = { id: root === project ? "proj" : "sess", text: "x", kind: "fact", anchors: [], tags: [], createdAt: 0 };
+        await writeFile(join(root, ".horsecode", "memory.jsonl"), `${JSON.stringify(e)}\n`, "utf8");
+      }
+      const store = new MemoryStore({ home: project, cwd: project });
+      expect(store.all().map((e) => e.id)).toEqual(["proj"]);
+      store.retarget(session);                                  // …the session opens
+      expect(store.all().map((e) => e.id)).toEqual(["sess"]);    // …and the store follows it, still readable
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  /** A project with no memory file is genuinely empty — that answer must stay cheap and quiet. */
+  it("says empty when there is nothing to read", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-mem-none-"));
+    try {
+      expect(new MemoryStore({ home: dir, cwd: dir }).all()).toEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

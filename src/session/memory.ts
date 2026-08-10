@@ -219,10 +219,45 @@ export class MemoryStore {
     return changed;
   }
 
-  /** Synchronous snapshot of the loaded entries (for the retrieval injector). */
+  /**
+   * Synchronous snapshot of the entries — LOADING them if nobody has yet.
+   *
+   * It used to be `this.cache ?? []`, which is a snapshot of whatever happened to have been read already, and
+   * `retarget` — the very call that points the store at a newly opened session — ends by clearing the cache.
+   * So from the moment a session opened, every retrieval saw an empty store, for the rest of the run.
+   *
+   * It was invisible for three runs because it looks exactly like a project with nothing worth recalling: the
+   * start-up banner said "746 entries" (read before the session existed), the file on disk had all of them,
+   * selection returned five hits when run by hand against the same file, and the injector reported nothing.
+   * What finally named it was recording the MISS: `reason: empty-store, available: 0` on a role whose store
+   * demonstrably had 721 selectable entries.
+   *
+   * Synchronous because every caller is: retrieval happens while a prompt is being assembled, and an `async`
+   * load there would mean changing every role's assembly for a file read that takes under a millisecond.
+   */
   all(): MemoryEntry[] {
+    if (!this.cache) this.loadSync();
     this.verify(); // a memory whose anchored file changed must not be injected as if still true
     return this.cache ?? [];
+  }
+
+  /**
+   * The same read as {@link load}, without awaiting.
+   *
+   * Deliberately does NOT do `load`'s extra work — adopting `pending` entries and re-minting their ids writes
+   * to disk, and a read must not. Those still land through `load`, which every write path already awaits.
+   */
+  private loadSync(): void {
+    const out: MemoryEntry[] = [];
+    try {
+      for (const line of readFileSync(this.file, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try { out.push(JSON.parse(line) as MemoryEntry); } catch { /* skip a corrupt line */ }
+      }
+    } catch {
+      /* no memory file yet — an empty store is the honest answer */
+    }
+    this.cache = out;
   }
 
   /**

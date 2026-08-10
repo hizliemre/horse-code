@@ -3,7 +3,7 @@ import type { RoleAgentOptions } from "../agent/loop.js";
 import type { Message, Provider } from "../core/types.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { compactHistory, historyTokens } from "./compaction.js";
-import { selectMemories, renderMemoryHints, memoryReferenced } from "./memory-retrieval.js";
+import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { readOnlyRegistry } from "./reviewer.js";
 import type { TaskCycleDeps } from "./task-types.js";
 
@@ -78,14 +78,19 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     deps.compactionState?.value,
   );
   if (deps.compactionState) deps.compactionState.value = cache;
-  // Cross-session memory. Rules (durable behavioral directives) are appended to EVERY role's prompt by the
-  // RoleRegistry (resolve() already added them to `systemPrompt`), so here we only surface facts/lessons by relevance.
-  const memories = deps.memory?.() ?? [];
-  const selectable = memories.filter((m) => m.kind !== "rule");
+  /**
+   * Cross-session memory, through the SAME door every other role uses.
+   *
+   * Rules are appended to every role's prompt by the RoleRegistry, so only facts and lessons are selected
+   * here. This used to call `selectMemories` directly and re-implement the bookkeeping around it — badly:
+   * it recorded the injection-log cooldown and nothing else, so `recordInjection` never ran and the durable
+   * "shown N times, never cited" count that memory hygiene prunes on had no data from the role the user
+   * talks to most. The chat event and the telemetry record were missing for the same reason. A second
+   * implementation of a shared step keeps only the parts whoever wrote it remembered.
+   */
   const load = historyTokens(compacted) / COMPACT_MAX_TOKENS;
-  const hits = selectable.length ? selectMemories(selectable, prompt, { load, role: "coach", ...(deps.injectionLog ? { log: deps.injectionLog } : {}) }) : [];
-  deps.injectionLog?.record(hits.map((h) => h.id), Date.now());
-  const memoryMsg: Message[] = hits.length ? [{ role: "user", content: renderMemoryHints(hits) }] : [];
+  const hints = memoryHints(deps, prompt, { load, role: "coach" });
+  const memoryMsg: Message[] = hints.message ? [{ role: "user", content: hints.message }] : [];
   const opts: RoleAgentOptions = {
     provider: deps.provider,
     model,
@@ -93,7 +98,7 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     systemPrompt: systemPrompt + context,
     onExhausted,
     onFallback,
-    tools: readOnlyRegistry(deps, { remember: true, mcp: true }),
+    tools: readOnlyRegistry(deps, { remember: true, mcp: true, gitWrite: true }),
     remember: deps.rememberFact,
     messages: [...compacted, ...memoryMsg, { role: "user", content: prompt, ...(images?.length ? { images } : {}) }],
     permission: deps.permission,
@@ -112,7 +117,8 @@ export async function runCoachChat(deps: TaskCycleDeps, prompt: string, cwd: str
     ...(deps.note ? { onSay: (t: string, final: boolean) => { if (!final) deps.note?.(t); } } : {}),
   };
   const msg = await runToCompletion(opts);
-  // Reinforcement: bump the memories the reply actually cited so they rank higher on future ties.
-  if (deps.reinforceMemory) for (const h of hits) if (memoryReferenced(h, msg.content)) deps.reinforceMemory(h.id);
+  // Reinforcement: bump the memories the reply actually cited so they rank higher on future ties. Through
+  // the shared path, so the credit is recorded and reported the same way every other role's is.
+  reinforceUsed(deps, hints.ids, msg.content, "coach");
   return msg.content;
 }

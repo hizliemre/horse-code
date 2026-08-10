@@ -12,7 +12,7 @@ import { loadGraphSync } from "../engine/project-graph.js";
 import { writerRegistry, buildAskUserTool } from "../engine/writer-registry.js";
 import { commitFile } from "../engine/operational.js";
 import { normalizeQuestion } from "../engine/normalize-question.js";
-import { memoryHints } from "../engine/memory-inject.js";
+import { memoryHints, reinforceUsed } from "../engine/memory-inject.js";
 import type { TaskCycleDeps } from "../engine/task-types.js";
 import type { AskUser } from "../engine/review.js";
 import type { SpecKitTemplates } from "./templates.js";
@@ -20,7 +20,23 @@ import type { FeaturePaths } from "./layout.js";
 import { constitutionPath } from "./layout.js";
 import { constitutionNote } from "../engine/constitution-store.js";
 
-export interface PhaseDeps { deps: TaskCycleDeps; templates: SpecKitTemplates; workdir: string; askUser: AskUser }
+export interface PhaseDeps {
+  deps: TaskCycleDeps;
+  templates: SpecKitTemplates;
+  workdir: string;
+  askUser: AskUser;
+  /**
+   * What the user speaks, carried on the deps rather than passed per phase.
+   *
+   * Every one of these phases talks to the user: its `onSay` lines land in the chat as it works, and the
+   * spec and plan phases ask questions outright. Only `runConstitution` was ever given the language, because
+   * it was the one someone happened to be looking at — so a run driven entirely in Turkish had its spec
+   * revision narrated in English ("I'll start by reading the current spec and the referenced source files").
+   * A parameter that has to be remembered at each of six call sites is a parameter that will be forgotten at
+   * one of them; on the deps there is nothing to remember.
+   */
+  language?: string;
+}
 
 // Common framing: spec-kit command prompts assume bash scaffolding scripts; horse-code already scaffolds
 // the workspace, so the role must skip those and just write the target file with write_file.
@@ -56,7 +72,17 @@ async function runRole(
     ...(extraTools ? [buildAskUserTool(p.askUser, (q) => normalizeQuestion(p.deps, q))] : []),
     ...contextTools(p.deps), // the spec and the plan are written about a codebase — let them see it
   ]);
-  const hints = memoryHints(p.deps, message, { role });
+  /**
+   * Retrieved on the SUBJECT, not on the message that carries it.
+   *
+   * The message is mostly instructions — where to write, what shape the document takes, what to do if one
+   * already exists — and memory scoring is lexical, so those words are what it matches on. Measured against
+   * a real 746-memory store: the same 2,273-character tester message returned the same five memories
+   * (`npm install`, `npm audit`, `git branch --merged`) whether the request inside it was about a product
+   * wizard or anything else, while the bare request retrieved the wizard memory that actually applied. The
+   * boilerplate is identical on every call, so it drowns the one part that differs.
+   */
+  const hints = memoryHints(p.deps, subject ?? message, { role });
   /**
    * Skills this stage's subject needs.
    *
@@ -86,7 +112,9 @@ async function runRole(
     // What a specification or plan may say is constrained by the project's own stack and boundaries.
     systemPrompt: (routed.length
       ? applySkills(`${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`, routed.map((m) => m.name), p.deps.skillRegistry)
-      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + law + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)) + BATCH_TOOLS_NOTE,
+      : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + law + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)) + BATCH_TOOLS_NOTE
+      // Every phase narrates as it works and two of them ask outright — all of it lands in the user's chat.
+      + respondIn(p.language),
     tools,
     maxTurns: PHASE_MAX_TURNS,
     // Project memory (conventions/decisions/lessons) reaches the authoring roles too, not just the coach.
@@ -128,7 +156,18 @@ async function runRole(
      */
     ...(p.deps.note ? { onSay: p.deps.note } : {}),
   };
-  await runToCompletion(opts);
+  /**
+   * What it produced is what it is judged by.
+   *
+   * These phases inject memory and, until now, credited none of it — so every hint they were given was
+   * recorded as sent and never as used. Measured on one run: `planner` 30 injections and 0 uses,
+   * `project-manager` 36 and 0, beside a `correctness-judge` at 92% — a difference in MEASUREMENT, not in
+   * usefulness, and exactly the shape that makes hygiene prune a memory that was working.
+   *
+   * The document is the artefact here, the same way a verdict is a judge's, so it is what the credit reads.
+   */
+  const said = await runToCompletion(opts);
+  reinforceUsed(p.deps, hints.ids, said.content, role);
 }
 
 /**
@@ -145,7 +184,7 @@ async function runRole(
  * A document that exists is amended: smallest change that satisfies the request, version bumped, done. The
  * template and its placeholder ceremony belong to the case it was written for — a project that has none.
  */
-export async function runConstitution(p: PhaseDeps, request?: string, language?: string): Promise<void> {
+export async function runConstitution(p: PhaseDeps, request?: string): Promise<void> {
   const rel = relative(p.workdir, constitutionPath(p.workdir));
   const asked = request?.trim()
     ? `What the user asked for:\n"${request.trim()}"\n\n`
@@ -160,8 +199,9 @@ export async function runConstitution(p: PhaseDeps, request?: string, language?:
       + `say why in one sentence and stop.`
     : `${asked}Establish the project constitution. Ask the user about core principles with ask_user if needed.\n`
       + `Follow this template:\n\n${p.templates.template("constitution")}\n\nWrite it to "${rel}".`;
-  // It asks the user about principles and reports back — see src/engine/language.ts.
-  await runRole(p, "analyst", p.templates.command("constitution"), msg + respondIn(language), true, request);
+  // The language now rides on the deps and is applied by runRole, for this phase and every other —
+  // see PhaseDeps.language for the phase that went without it.
+  await runRole(p, "analyst", p.templates.command("constitution"), msg, true, request);
 }
 
 /**

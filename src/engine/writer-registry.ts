@@ -25,7 +25,24 @@ const askUserParams = z.object({
   ])).optional(),
   // Set true when the user may pick more than one option (checkboxes); false/omitted = pick one (radio).
   multiSelect: z.boolean().optional(),
+  /**
+   * What the user has to DO before they can answer — one action per entry.
+   *
+   * Present ⇒ this is a hand-off, not a question: the run has stopped because only a person can carry the
+   * next step, and the UI says so rather than showing a bare "? Question".
+   */
+  steps: z.array(z.string()).optional(),
 });
+
+/**
+ * A question that points at something instead of carrying it.
+ *
+ * Measured live: a tester wrote its scenario into the test-plan document, then asked "share your
+ * Network/UI observation according to the 5 items above" — and the 5 items were in a file on a branch the
+ * developer was not looking at. The reply was "the steps aren't in the chat?". The document an agent writes
+ * is not on the user's screen; the question box is.
+ */
+const POINTS_ELSEWHERE = /\b(above|below|earlier|previously|as listed|as described)\b|yukarı|aşağı|önceki|birazdan|listelenen/i;
 
 /**
  * Tool for a role to ask the user a question; returns the answer in content. `normalize` (optional) rescues
@@ -48,18 +65,39 @@ export function buildAskUserTool(
       "`description` (one sentence) and the detail in `preview`. If you have findings to report, WRITE THEM " +
       "as your message before calling this — a question that says \"the evaluation is above\" when you never " +
       "wrote one leaves the user choosing between options whose basis they cannot see. The user may attach a " +
-      "free-text note to their choice, which arrives appended to the answer.",
+      "free-text note to their choice, which arrives appended to the answer.\n\n" +
+      "When you need the user to DO something first — click through a screen, run a scenario, look at a " +
+      "network response — put each action in `steps`, one per entry, and ask in `question` for what they " +
+      "should report back. The user reads THIS BOX and the chat; a file you wrote is not on their screen, so " +
+      "\"the steps above\" points at nothing they can see. With `steps` the UI shows a hand-off — the numbered " +
+      "actions and then the question — instead of a bare question.",
     permissionLevel: "safe",
     parameters: askUserParams,
-    run: async (rawArgs) => {
+    run: async (rawArgs, ctx) => {
       const parsed = askUserParams.safeParse(rawArgs);
       if (!parsed.success) {
         return { content: `ask_user: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       }
-      const { question, options, multiSelect } = parsed.data;
+      const { question, options, multiSelect, steps } = parsed.data;
+      /**
+       * A dangling pointer is refused, not shown.
+       *
+       * Only when all three hold: the question points somewhere, it carries nothing itself, and the turn
+       * said nothing either — so there is provably nothing on the user's screen to point AT. A question
+       * that follows a message the user can read is left alone; that reference resolves.
+       */
+      if (POINTS_ELSEWHERE.test(question) && !steps?.length && !ctx.said?.trim()) {
+        return {
+          content: "ask_user: this question refers to something the user cannot see. You wrote no message "
+            + "this turn, so there is nothing above it — and a file you wrote is not on their screen. Put "
+            + "what they must do in `steps` (one action per entry), or write it out in `question`, and ask "
+            + "again.",
+          isError: true,
+        };
+      }
       // If the model didn't pass structured options but the text looks like it embeds choices, extract them
       // (via `normalize`) so the user gets a real selectable list instead of a wall of prose.
-      if ((!options || options.length === 0) && looksLikeChoices(question)) {
+      if ((!options || options.length === 0) && !steps?.length && looksLikeChoices(question)) {
         // The question already lists its choices — read them rather than paying a model to restate them.
         const found = extractChoicesFrom(question);
         if (found.choices.length >= 2) {
@@ -76,7 +114,7 @@ export function buildAskUserTool(
           } catch { /* normalizer failed → fall through to the raw question */ }
         }
       }
-      return { content: await askUser(question, { options, multiSelect }), isError: false };
+      return { content: await askUser(question, { options, multiSelect, steps }), isError: false };
     },
   };
 }

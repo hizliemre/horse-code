@@ -14,6 +14,8 @@ import { globTool } from "../tools/glob.js";
 import { shellTool } from "../tools/shell.js";
 import { createWebFetchTool } from "../tools/web.js";
 import { gitTool } from "../tools/git.js";
+import { deferMcp } from "./reviewer.js";
+import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { buildAskUserTool } from "./writer-registry.js";
 import type { AskUser } from "./review.js";
@@ -25,6 +27,7 @@ import { attachedImages } from "../agent/attach.js";
 import { FindingQueue, buildReportFindingTool, type Finding } from "./finding.js";
 import { triageFinding, describeEscalation } from "./triage.js";
 import { runFix, commitFix, describeFix, dirtyPaths } from "./fix.js";
+import { refreshAfterChange } from "./trace-refresh.js";
 import { defaultGitRunner } from "../worktree/git.js";
 import type { ReviewDeps } from "./review.js";
 
@@ -86,14 +89,41 @@ function testerTools(deps: TaskCycleDeps, askUser: AskUser, findings: FindingQue
   r.register(buildReportFindingTool(findings));
   for (const t of contextTools(deps)) r.register(t);
   // Whatever the project has connected: a work-item tracker holding the scenarios, a log or metrics server.
-  for (const t of deps.mcpTools?.() ?? []) r.register(t);
+  // Named in the system prompt, fetched on demand — the tester carried 49 schemas through every one of its
+  // turns and called none of them. See src/tools/find-tool.ts.
+  deferMcp(r, deps.mcpTools?.() ?? []);
   return r;
 }
 
+/**
+ * What earlier runs learned, handed to the role that is about to hit the same ground.
+ *
+ * The tester was the last role running blind. Measured on one run: 721 memories in the store, 551 model
+ * calls, and not one memory reaching any of them — a gap that was invisible until injection was recorded in
+ * telemetry, and which the tester is the clearest case for. "The environment needs X running", "that
+ * scenario needs the mock profile" is what a previous session paid a developer's attention to find out, and
+ * re-learning it costs another round trip through them.
+ *
+ * The fixer already had this: it runs through `runTaskCycle` → the implementer, which injects and credits by
+ * the files it touched. Only this path was missing.
+ */
 async function runTester(
   deps: TaskCycleDeps, workdir: string, tools: ToolRegistry, message: string, language?: string,
   law = "",
+  /** The user's actual request — what memory is retrieved on. See the note below for why not `message`. */
+  subject?: string,
 ): Promise<void> {
+  /**
+   * Retrieved on the SUBJECT, not on the message that carries it.
+   *
+   * The message is mostly instructions, and memory scoring is lexical, so the instructions are what it
+   * matches on. Measured against the real 746-memory store: the same 2,273-character tester message returned
+   * the same five memories — `npm install`, `npm audit`, `git branch --merged` — whichever request was
+   * embedded in it, while the bare request retrieved the one that actually applied ("product creation is a
+   * draft-first six-step wizard"). The boilerplate is identical on every call; only the request differs, and
+   * it was the part being outvoted.
+   */
+  const hints = memoryHints(deps, subject ?? message, { role: "tester" });
   const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("tester");
   const opts: RoleAgentOptions = {
     provider: deps.provider,
@@ -111,10 +141,14 @@ async function runTester(
     tools,
     maxTurns: VERIFY_MAX_TURNS,
     // A screenshot named in the request comes with it — the same way a mid-run note carries one.
-    messages: [{ role: "user", content: message, ...(() => {
-      const images = attachedImages(message, workdir);
-      return images.length ? { images } : {};
-    })() }],
+    messages: [
+      // What earlier runs learned about this area, ahead of the request — see runTester's own note.
+      ...(hints?.message ? [{ role: "user" as const, content: hints.message }] : []),
+      { role: "user", content: message, ...(() => {
+        const images = attachedImages(message, workdir);
+        return images.length ? { images } : {};
+      })() },
+    ],
     permission: deps.permission,
     approve: deps.approve,
     cwd: workdir,
@@ -134,7 +168,9 @@ async function runTester(
    * so the agent does not run and the call returns instantly having done nothing. Measured: one call in the
    * whole turn — the refiner's — and then "no test plan was written", with the tester never having spoken.
    */
-  await runToCompletion(opts);
+  const last = await runToCompletion(opts);
+  // …and credit whatever it actually used, or the store only ever learns that memories were SENT.
+  reinforceUsed(deps, hints.ids, last.content ?? "", "tester");
 }
 
 /**
@@ -239,6 +275,7 @@ function directMessage(prompt: string, reportRel: string): string {
     + `the developer should run and ask them, then wait. Never start it yourself.\n\n`
     + `When it needs an eye on the screen, describe exactly what to look at and ask what they see. Their `
     + `answer is the evidence; record it as theirs.\n\n`
+    + `${handOffRule}\n\n`
     + `If what you find is wrong but is NOT what you were asked to check, use \`report_finding\` — do not fix `
     + `anything yourself.`;
 }
@@ -269,8 +306,23 @@ function runMessage(prompt: string, planRel: string, reportRel: string, inPlace:
     + `Before the first scenario, check what the plan says must be running. If it is not up, tell the `
     + `developer which command to run and ask them to confirm — then wait. Never start it yourself.\n\n`
     + `When a scenario needs an eye on the screen, describe exactly what to look at and ask the developer what `
-    + `they see. Their answer is the evidence; record it as theirs.`;
+    + `they see. Their answer is the evidence; record it as theirs.\n\n`
+    + handOffRule;
 }
+
+/**
+ * Where the developer is actually looking.
+ *
+ * The tester writes the scenario into the document and then asks the developer to carry it out "as listed
+ * above" — but the document is a file on a branch, and the developer is at a terminal. Measured live: two
+ * rounds of "share your observation per the 5 items above", answered with "the steps aren't in the chat?".
+ * Writing the document is not telling anyone.
+ */
+const handOffRule =
+  `The developer sees the chat and nothing else. The document you are writing is NOT on their screen, so a `
+  + `request that points at it — "the steps above", "the items listed" — asks them to follow something they `
+  + `cannot see. When you need them to carry out a scenario, pass the actions to \`ask_user\` in \`steps\`, one `
+  + `action per entry, and put in \`question\` what they should report back.`;
 
 
 /** Two rounds is a loop; a third is a conversation the developer should be having instead. */
@@ -321,7 +373,18 @@ async function handleFindings(
     // a commit titled after the fix.
     const before = await dirtyPaths(defaultGitRunner, opts.workdir);
     const res = await runFix(opts.deps, opts.workdir, f, `fix-${done.length + 1}`);
-    if (res.fixed) await commitFix(opts.workdir, f, before);
+    const changed = res.fixed ? await commitFix(opts.workdir, f, before) : [];
+    /**
+     * The fix landed; its description must not still say what the code used to do.
+     *
+     * This lane changes real product code and was the one that never refreshed — measured on the project it
+     * runs against, 78 traces described code that had moved on, 24 of them committed within three days.
+     */
+    await refreshAfterChange({
+      cwd: opts.workdir, files: changed, provider: opts.deps.provider,
+      models: opts.deps.roleRegistry.chainFor("tracer", 0), signal: opts.deps.signal,
+      ...(opts.note ? { note: opts.note } : {}),
+    });
     opts.note?.(describeFix(res));
     done.push(res.fixed ? `${f.title} — FIXED` : `${f.title} — NOT fixed (${res.notes.join("; ") || "see above"})`);
   }
@@ -406,7 +469,7 @@ export async function runVerify(opts: {
     opts.note?.(docDirs.length
       ? `🧪 Looking for an existing test document — this project keeps them in ${docDirs.map((d) => `\`${d}\``).join(", ")}.`
       : `🧪 Looking for an existing test document for this work.`);
-    await runTester(deps, workdir, tools, planMessageFor(prompt, planRel, reportRel, dirRel, docDirs), opts.language, law);
+    await runTester(deps, workdir, tools, planMessageFor(prompt, planRel, reportRel, dirRel, docDirs), opts.language, law, prompt);
     active = settled();
   }
 
@@ -440,7 +503,7 @@ export async function runVerify(opts: {
   let round = 0;
   let message = direct ? directMessage(prompt, reportRel) : runMessage(prompt, active!, reportRel, inPlace);
   for (;;) {
-    await runTester(deps, workdir, tools, message, opts.language, law);
+    await runTester(deps, workdir, tools, message, opts.language, law, prompt);
     const found = findings.drain();
     if (!found.length || round >= MAX_FIX_ROUNDS) {
       if (found.length) opts.note?.(`⚠️ ${found.length} finding(s) left unfixed — ${MAX_FIX_ROUNDS} rounds of fixing is the limit for one session.`);

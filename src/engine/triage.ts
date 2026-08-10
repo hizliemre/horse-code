@@ -6,6 +6,7 @@ import { readFileTool } from "../tools/read.js";
 import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
 import { contextTools } from "./task-types.js";
+import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import type { TaskCycleDeps } from "./task-types.js";
 import type { Finding } from "./finding.js";
 
@@ -90,6 +91,15 @@ export async function triageFinding(deps: TaskCycleDeps, workdir: string, f: Fin
     + (f.files.length ? `\nFiles it appears to involve:\n${f.files.map((x) => `- ${x}`).join("\n")}\n` : "")
     + (f.acceptance.length ? `\nWhat must be true for it to be settled:\n${f.acceptance.map((x) => `- ${x}`).join("\n")}\n` : "")
     + `\nSize it.`;
+  /**
+   * What earlier runs learned about this area, before it is sized.
+   *
+   * Sizing is the decision that spends everything after it: "contained" fixes it in place, anything larger
+   * interrupts the session for a spec. That judgement is exactly where "this area is bigger than it looks"
+   * belongs, and it is precisely what a previous run pays to discover. On the finding, not the assembled
+   * message — the instructions around it are identical on every call and would be what got matched.
+   */
+  const hints = memoryHints(deps, `${f.title} ${f.detail} ${f.files.join(" ")}`, { role: "analyst" });
 
   const opts: RoleAgentOptions = {
     provider: deps.provider,
@@ -103,14 +113,17 @@ export async function triageFinding(deps: TaskCycleDeps, workdir: string, f: Fin
     maxTurns: SIZE_MAX_TURNS,
     perAttemptMs: SIZE_ATTEMPT_MS,
     totalMs: SIZE_TOTAL_MS,
-    messages: [{ role: "user", content: message }],
+    messages: hints.message ? [{ role: "user", content: hints.message }, { role: "user", content: message }]
+      : [{ role: "user", content: message }],
     permission: deps.permission,
     approve: deps.approve,
     cwd: workdir,
     signal: deps.signal,
   };
   try {
-    return await runStructuredRole(opts, TriageSchema);
+    const t = await runStructuredRole(opts, TriageSchema);
+    reinforceUsed(deps, hints.ids, t.reason, "analyst");
+    return t;
   } catch {
     /**
      * A triage that could not run sizes it as a task.

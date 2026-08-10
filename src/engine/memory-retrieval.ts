@@ -308,6 +308,26 @@ export function relatedMemories(seed: MemoryEntry, pool: MemoryEntry[]): { entry
     .sort((a, b) => b.strength - a.strength);
 }
 
+/**
+ * A match strong enough to earn a slot the ordinary budget would not give it.
+ *
+ * Scoring produces three values and no gradient: an anchor in the query is 0.96, two matching tags 0.88, one
+ * tag 0.60. So a real store answers a query with a handful of genuine matches and a long tail tied at exactly
+ * 0.60 — measured against 721 entries, "cargo provider creation flow" scored 9 at 0.88 and 59 more at 0.60.
+ * A flat budget of five cannot tell those apart: it took five and dropped four of the nine.
+ */
+export const STRONG_BAR = 0.88;
+
+/**
+ * The ceiling for strong matches, separate from the ordinary budget.
+ *
+ * Raising the ordinary budget instead would have been the wrong lever: everything it let through would come
+ * from the 0.60 tie — dozens of entries the scorer cannot rank against each other — so the prompt would grow
+ * and the answer would not improve. This only ever admits matches the scorer is confident about, and 9 of
+ * them cost about 3,600 characters against the 2,000 that 5 cost.
+ */
+export const STRONG_BUDGET = 15;
+
 /** How many memory hints to inject given context pressure (higher load → fewer/none). */
 export function hintBudget(load: number, max: number): number {
   if (load >= 0.95) return 0;
@@ -375,11 +395,20 @@ export function selectMemoriesDetailed(
   opts: { load: number; max?: number; threshold?: number; role?: string; now?: number; log?: InjectionLog },
 ): Selection {
   const stats: SelectionStats = { considered: entries.length, belowThreshold: 0, cooldown: 0, audience: 0, inactive: 0, budget: 0 };
-  const budget = hintBudget(opts.load, opts.max ?? 5);
+  const max = opts.max ?? 5;
+  const budget = hintBudget(opts.load, max);
   if (budget === 0) {
     stats.budget = entries.length;
     return { hits: [], stats };
   }
+  /**
+   * The extra room for strong matches is given only when there is room to give.
+   *
+   * `hintBudget` narrows to 3, then 1, then 0 as the conversation fills, and that gate is the whole reason a
+   * long run does not drown in hints. Expanding unconditionally would have overridden it at exactly the
+   * moment it matters most — a `Math.max(budget, 15)` under pressure is a budget of 15.
+   */
+  const strongRoom = budget < max ? budget : Math.max(budget, STRONG_BUDGET);
   const threshold = opts.threshold ?? 0.6;
   const now = opts.now ?? Date.now();
 
@@ -432,7 +461,8 @@ export function selectMemoriesDetailed(
   let graphUsed = 0;
   // Query hits first (they answered the actual question); graph hits fill any slot they left.
   for (const cand of [...direct.sort(byScore), ...expanded.sort(byScore)]) {
-    if (hits.length >= budget) { stats.budget++; continue; }
+    const room = cand.relevance >= STRONG_BAR ? strongRoom : budget;
+    if (hits.length >= room) { stats.budget++; continue; }
     if (cand.via === "graph" && graphUsed >= MAX_GRAPH_HINTS) { stats.budget++; continue; }
     const anchor = cand.entry.anchors[0];
     if (anchor !== undefined && (perAnchor.get(anchor) ?? 0) >= MAX_PER_ANCHOR) { stats.budget++; continue; }

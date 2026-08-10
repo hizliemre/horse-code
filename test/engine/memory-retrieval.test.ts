@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints, supersedes, memoryReferenced, type MemoryEntry, fileAnchors, hashAnchors, verifyAnchors, type AnchorFs, isExpired, audienceMatches, InjectionLog, contradicts, memoryState, importanceOf, freshnessOf, rankScore, unusedPenalty, relationStrength, relatedMemories, selectMemoriesDetailed, RELATION_BAR, MAX_GRAPH_HINTS } from "../../src/engine/memory-retrieval.js";
+import { deriveAnchors, deriveTags, scoreMemory, hintBudget, selectMemories, renderMemoryHints, supersedes, memoryReferenced, type MemoryEntry, fileAnchors, hashAnchors, verifyAnchors, type AnchorFs, isExpired, audienceMatches, InjectionLog, contradicts, memoryState, importanceOf, freshnessOf, rankScore, unusedPenalty, relationStrength, relatedMemories, selectMemoriesDetailed, RELATION_BAR, MAX_GRAPH_HINTS, STRONG_BUDGET } from "../../src/engine/memory-retrieval.js";
 
 const entry = (id: string, text: string, over: Partial<MemoryEntry> = {}): MemoryEntry => {
   const anchors = over.anchors ?? deriveAnchors(text);
@@ -470,5 +470,54 @@ describe("selection at scale", () => {
     const b = entry("Beta uses the cargo adapter.");
     const hits = selectMemories([a, b], "cargo question", { load: 0 });
     expect(hits.map((h) => h.text).sort()).toEqual([a.text, b.text].sort());
+  });
+});
+
+/**
+ * A budget of five could not tell a strong match from a tie.
+ *
+ * Scoring produces three values and no gradient: an anchor in the query is 0.96, two matching tags 0.88, one
+ * tag 0.60. Measured against a real 721-entry store, "cargo provider creation flow" scored 9 at 0.88 and 59
+ * more at exactly 0.60 — so the flat five took five and dropped four of the nine, while the entries it did
+ * take from the 0.60 tier were chosen by tiebreak among dozens the scorer cannot rank at all.
+ *
+ * Raising the ordinary budget was the wrong lever: everything it admits comes from that tie. The extra room
+ * is given only to matches the scorer is confident about.
+ */
+describe("how many strong matches fit", () => {
+  const strong = (n: number): MemoryEntry[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `s${i}`, text: `cargo provider ${i}`, anchors: [], tags: ["cargo", "provider"], createdAt: i,
+    }));
+  const weak = (n: number): MemoryEntry[] =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `w${i}`, text: `cargo something else ${i}`, anchors: [], tags: ["cargo", `other${i}`], createdAt: i,
+    }));
+
+  it("takes every strong match, past the ordinary budget", () => {
+    const hits = selectMemories([...strong(9), ...weak(50)], "cargo provider", { load: 0 });
+    expect(hits.filter((h) => h.id.startsWith("s"))).toHaveLength(9);
+  });
+
+  it("still stops somewhere", () => {
+    const hits = selectMemories(strong(40), "cargo provider", { load: 0 });
+    expect(hits).toHaveLength(STRONG_BUDGET);
+  });
+
+  /** The tie is what the ordinary budget is for: five of fifty, chosen by a tiebreak, is the honest ceiling. */
+  it("does not widen for the tier the scorer cannot rank", () => {
+    const hits = selectMemories(weak(50), "cargo", { load: 0 });
+    expect(hits).toHaveLength(5);
+  });
+
+  /**
+   * …and the pressure gate still governs. It narrows to 3, then 1, then 0 as the conversation fills, and
+   * that is the whole reason a long run does not drown in hints — `Math.max(budget, 15)` under pressure
+   * would have been a budget of 15 at exactly the moment it matters most.
+   */
+  it("does not override the context-pressure gate", () => {
+    expect(selectMemories(strong(9), "cargo provider", { load: 0.7 })).toHaveLength(3);
+    expect(selectMemories(strong(9), "cargo provider", { load: 0.85 })).toHaveLength(1);
+    expect(selectMemories(strong(9), "cargo provider", { load: 0.99 })).toHaveLength(0);
   });
 });

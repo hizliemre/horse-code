@@ -4,7 +4,7 @@ import { withDeadline } from "../agent/deadline.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
-import { memoryHints, reinforceTouched } from "./memory-inject.js";
+import { memoryHints, reinforceTouched, reinforceUsed } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { adjudicateSkills } from "../skills/adjudicate.js";
 import { placedSkills } from "../prompts.js";
@@ -75,6 +75,29 @@ export function deadlineWarning(elapsedMs: number, budgetMs: number): string | u
 }
 
 /** Runs the implementer role with worktree-scoped tools + a new-vs-returning message. */
+/**
+ * How much written code the credit pass reads back. Enough to see what a task did; short of re-reading a
+ * repository to score a hint.
+ */
+const MAX_WRITTEN_CHARS = 60_000;
+
+/** What the implementer actually wrote, read back from the files it touched. Never throws. */
+async function writtenText(cwd: string, touched: string[]): Promise<string> {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const parts: string[] = [];
+  let used = 0;
+  for (const p of [...new Set(touched)]) {
+    if (used >= MAX_WRITTEN_CHARS) break;
+    try {
+      const t = await readFile(join(cwd, p), "utf8");
+      parts.push(t.slice(0, MAX_WRITTEN_CHARS - used));
+      used += t.length;
+    } catch { /* deleted, or moved on since — it simply contributes nothing */ }
+  }
+  return parts.join("\n");
+}
+
 export async function runImplementer(
   deps: TaskCycleDeps,
   role: RunnableRole,
@@ -344,5 +367,17 @@ export async function runImplementer(
     // in the right file was helped by the hint that sent it there, and crediting only the attempts that
     // succeed would score memories on the model's luck rather than on their own usefulness.
     reinforceTouched(deps, hints.ids, touched, role);
+    /**
+     * …and by what it WROTE, because the file anchor can only reach a ninth of the store.
+     *
+     * `reinforceTouched` credits a memory when the implementer went to the file that memory is anchored to.
+     * Measured on the real store: 721 selectable memories, 470 with any anchor, and only 67 — 9% — with a
+     * FILE anchor. So eleven memories in twelve are outside what that path can ever credit, whatever they
+     * contributed. It showed as `coder`: 155 injections, 1 use, beside judges at 92%.
+     *
+     * The code an implementer writes is its artefact the way a verdict is a judge's, so it is read the same
+     * way: a memory whose words turn up in what was written was used.
+     */
+    reinforceUsed(deps, hints.ids, await writtenText(cwd, touched), role);
   }
 }
