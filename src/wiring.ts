@@ -167,7 +167,9 @@ export function logPRAdapter(log: (s: string) => void): RevisionPRAdapter {
     },
     async postComments(comments, outcome) {
       if (comments.length || outcome === "approved") log(`PR review: ${reviewThreadBody(comments, outcome)}`);
+      return undefined;
     },
+    async replyAndResolve(_threadId, body) { log(`PR thread reply: ${body}`); },
     async resolveOwnThreads() { /* nothing was opened */ },
   };
 }

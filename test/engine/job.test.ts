@@ -110,8 +110,9 @@ function fakeAdapter(): RevisionPRAdapter & { calls: number; comments: string[][
     resolved: 0,
     comments: [] as string[][],
     async createPR() { a.calls++; return { url: "http://pr/1", number: 1 }; },
+    async replyAndResolve() { /* the fake records threads by count, not by id */ },
     async resolveOwnThreads() { a.resolved++; },
-    async postComments(c: string[]) { a.comments.push(c); },
+    async postComments(c: string[]) { a.comments.push(c); return `t${a.comments.length}`; },
   };
   return a;
 }

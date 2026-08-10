@@ -23,7 +23,24 @@ export const defaultCmdRunner: CmdRunner = (cmd, args, cwd) =>
 export type ReviewOutcome = "changes" | "approved";
 
 export interface RevisionPRAdapter extends PRAdapter {
-  postComments(comments: string[], outcome?: ReviewOutcome): Promise<void>;
+  /**
+   * Opens a review thread and returns its id, so the round that answers it can reply IN it.
+   *
+   * The id used to be discarded. Each round then opened a fresh thread and nothing ever pointed back at the
+   * previous one: measured on PR #777, five stacked "N change(s) requested" threads, every one still Active,
+   * and no word anywhere about what had been done with any of them. A reader could not tell a finding that
+   * was fixed in the next round from one that still stood.
+   */
+  postComments(comments: string[], outcome?: ReviewOutcome): Promise<string | undefined>;
+  /**
+   * Answers a review thread with what was done about it, and resolves it.
+   *
+   * The reply is the point, not the resolving. A thread closed in silence tells the reader the objection
+   * went away; a thread that says which comment was fixed, and which was argued against and why, is the
+   * record of the exchange — and it is exactly the prose the reviser already writes and used to send only
+   * to the terminal.
+   */
+  replyAndResolve(threadId: string, body: string): Promise<void>;
   /**
    * Resolves the threads horse-code itself opened — called when the review APPROVES.
    *
@@ -73,8 +90,16 @@ export function ghAdapter(run: CmdRunner, cwd: string): RevisionPRAdapter {
       return { url, number: prNumber };
     },
     async postComments(comments, outcome) {
-      if (prNumber === undefined || (comments.length === 0 && outcome !== "approved")) return;
+      if (prNumber === undefined || (comments.length === 0 && outcome !== "approved")) return undefined;
       const r = await run("gh", ["pr", "comment", String(prNumber), "--body", reviewThreadBody(comments, outcome)], cwd);
+      if (r.code !== 0) throw new Error(`gh pr comment failed (${r.code}): ${r.stderr.trim()}`);
+      return undefined; // an issue comment has no thread to reply into — see replyAndResolve
+    },
+    async replyAndResolve(_threadId, body) {
+      // A GitHub issue comment carries no thread identity and no resolved state, so the account is posted as
+      // its own comment. Saying what was done still matters; only the resolving is unavailable here.
+      if (prNumber === undefined) return;
+      const r = await run("gh", ["pr", "comment", String(prNumber), "--body", body], cwd);
       if (r.code !== 0) throw new Error(`gh pr comment failed (${r.code}): ${r.stderr.trim()}`);
     },
     async resolveOwnThreads() { /* github issue comments carry no resolved state */ },
@@ -93,6 +118,14 @@ export function isMachineTitle(title: string): boolean {
 
 /** Azure's word for what its UI shows as "Resolved". */
 export const RESOLVED_STATUS = "fixed";
+
+/** The id of the thread a create call just returned, or nothing when the response cannot be read. */
+export function threadIdOf(stdout: string): string | undefined {
+  try {
+    const id = (JSON.parse(stdout) as { id?: number }).id;
+    return id === undefined ? undefined : String(id);
+  } catch { return undefined; }
+}
 
 /** How horse-code recognises its own comments among everyone else's. */
 export const REVIEW_MARKER = "**horse-code review**";
@@ -178,11 +211,11 @@ export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void)
       return { url, number: prNumber };
     },
     async postComments(comments, outcome) {
-      if (comments.length === 0 && outcome !== "approved") return;
+      if (comments.length === 0 && outcome !== "approved") return undefined;
       if (prNumber === undefined || !project || !repositoryId) {
         // Nothing to post against — say so rather than pretending, and keep the findings readable.
         log(`Azure PR comments could not be addressed (no pull request identity):\n${joinComments(comments)}`);
-        return;
+        return undefined;
       }
       const file = join(tmpdir(), `hc-pr-thread-${prNumber}-${process.pid}-${threadSeq++}.json`);
       const body = { comments: [{ parentCommentId: 0, content: reviewThreadBody(comments, outcome), commentType: "text" }],
@@ -193,8 +226,39 @@ export function azAdapter(run: CmdRunner, cwd: string, log: (s: string) => void)
           "--route-parameters", `project=${project}`, `repositoryId=${repositoryId}`, `pullRequestId=${prNumber}`,
           "--http-method", "POST", "--in-file", file, "--api-version", "7.1", "-o", "json"], cwd);
         if (r.code !== 0) throw new Error(`az devops invoke pullRequestThreads failed (${r.code}): ${r.stderr.trim()}`);
+        return threadIdOf(r.stdout);
       } finally {
         await rm(file, { force: true });
+      }
+    },
+    async replyAndResolve(threadId, body) {
+      if (prNumber === undefined || !project || !repositoryId || !threadId) return;
+      const route = ["--route-parameters", `project=${project}`, `repositoryId=${repositoryId}`,
+        `pullRequestId=${prNumber}`, `threadId=${threadId}`];
+      /**
+       * The reply first, then the status.
+       *
+       * In that order a failure leaves the thread open WITH the account in it, which is the readable outcome;
+       * the other order can leave a thread resolved and silent, which is the one thing this exists to prevent.
+       */
+      const replyFile = join(tmpdir(), `hc-pr-reply-${prNumber}-${process.pid}-${threadSeq++}.json`);
+      await writeFile(replyFile, JSON.stringify({ parentCommentId: 1, content: body, commentType: "text" }), "utf8");
+      try {
+        const r = await run("az", ["devops", "invoke", "--area", "git", "--resource", "pullRequestThreadComments",
+          ...route, "--http-method", "POST", "--in-file", replyFile, "--api-version", "7.1", "-o", "none"], cwd);
+        if (r.code !== 0) { log(`Could not reply to pull request thread ${threadId}: ${r.stderr.trim()}`); return; }
+      } finally {
+        await rm(replyFile, { force: true });
+      }
+      const statusFile = join(tmpdir(), `hc-pr-resolve-${prNumber}-${process.pid}-${threadSeq++}.json`);
+      await writeFile(statusFile, JSON.stringify({ status: RESOLVED_STATUS }), "utf8");
+      try {
+        const r = await run("az", ["devops", "invoke", "--area", "git", "--resource", "pullRequestThreads",
+          ...route, "--http-method", "PATCH", "--in-file", statusFile, "--api-version", "7.1", "-o", "none"], cwd);
+        // Best-effort: an unresolved thread that CARRIES ITS ANSWER is untidy, never a reason to fail a run.
+        if (r.code !== 0) log(`Could not resolve pull request thread ${threadId}: ${r.stderr.trim()}`);
+      } finally {
+        await rm(statusFile, { force: true });
       }
     },
     async resolveOwnThreads() {
@@ -240,7 +304,9 @@ export function makePRAdapter(opts: { platform: "github" | "azure" | "unknown"; 
     },
     async postComments(comments, outcome) {
       if (comments.length || outcome === "approved") opts.log(`PR review: ${reviewThreadBody(comments, outcome)}`);
+      return undefined;
     },
+    async replyAndResolve(_threadId, body) { opts.log(`PR thread reply: ${body}`); },
     async resolveOwnThreads() { /* nothing was opened */ },
   };
 }

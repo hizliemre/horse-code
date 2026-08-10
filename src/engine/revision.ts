@@ -4,6 +4,7 @@ import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 import type { WorktreeManager, WorktreeSession } from "../worktree/manager.js";
 import type { TaskCycleDeps } from "./task-types.js";
 import type { AskUser } from "./review.js";
+import { REVIEW_MARKER } from "../adapters/pr.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
 import { runStructuredRole } from "../agent/structured.js";
@@ -20,7 +21,7 @@ export interface RevisionDeps extends TaskCycleDeps {
   git?: GitRunner;
 }
 /** The outcome travels with the comments: an approval must be sayable, and it has no comments to carry it. */
-export type PostComments = (comments: string[], outcome?: "changes" | "approved") => Promise<void>;
+export type PostComments = (comments: string[], outcome?: "changes" | "approved") => Promise<string | undefined>;
 
 /**
  * The board row that records the PR revision rounds. It is BOOKKEEPING, not work.
@@ -120,7 +121,64 @@ export function reviseTurnBudget(commentCount: number): number {
   return Math.min(REVISE_TURNS_MAX, Math.max(REVISE_TURNS_MIN, commentCount * REVISE_TURNS_PER_COMMENT));
 }
 
-async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<boolean> {
+/**
+ * What the reviser did, and whether it finished.
+ *
+ * `said` is its own account of each comment — fixed it, or why the comment is wrong. That prose used to go to
+ * the terminal and nowhere else, so the pull request carried the objections and never the answers.
+ */
+export interface RevisionAccount { ok: boolean; said: string }
+
+/** How much of the reviser's account goes on the pull request. A thread is read; a transcript is not. */
+export const MAX_REPLY_CHARS = 6_000;
+
+/**
+ * The answer that goes back into the review thread.
+ *
+ * It names the commit, because that is what a reader checks, and carries the reviser's own words about each
+ * comment. When the reviser ran out of turns mid-round the reply says so — a thread resolved as though the
+ * work were complete, when the next round is what finishes it, is worse than one left open.
+ */
+/**
+ * How the revision ended, said ON the pull request.
+ *
+ * Only the approving exit ever spoke. The other two — rounds exhausted and accepted, or a question put to
+ * the user — returned in silence, so a reader saw the last round's objections standing with nothing after
+ * them and no way to know the run had finished at all. Measured on PR #777: five review threads, the newest
+ * fifty minutes before the run ended, and not one word about how it concluded.
+ */
+async function sayHowItEnded(
+  deps: RevisionDeps,
+  postComments: PostComments,
+  how: "accepted" | "human",
+  round: number,
+  question?: string,
+): Promise<void> {
+  const said = how === "accepted"
+    ? `The revision rounds are over after round ${round}. The remaining findings above were judged acceptable `
+      + `to merge as they stand — they were not silently dropped, and nothing further will be applied `
+      + `automatically.`
+    : `The revision rounds are over after round ${round} and this needs a decision that is not mine to make. `
+      + `The question put to the user was:\n\n> ${question ?? "(not recorded)"}`;
+  try { await postComments([said], "changes"); }
+  catch (e) { deps.note?.(`⚠️ Could not post how the revision ended (${e instanceof Error ? e.message : String(e)}).`); }
+}
+
+export function revisionReplyBody(round: number, account: RevisionAccount, commit: string): string {
+  const head = `${REVIEW_MARKER} — round ${round} applied in \`${commit}\`.`;
+  const rest = account.ok
+    ? ""
+    : `\n\n_The reviser reached its turn budget on this round; what it changed is in the commit above and the `
+      + `next review round picks up the remainder._`;
+  const said = account.said.length > MAX_REPLY_CHARS
+    ? `${account.said.slice(0, MAX_REPLY_CHARS)}…`
+    : account.said;
+  return said
+    ? `${head}\n\n${said}${rest}`
+    : `${head}\n\n_The reviser left no written account of the round; the commit is the record._${rest}`;
+}
+
+async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<RevisionAccount> {
   const resolved = deps.roleRegistry.resolve("senior-coder");
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
@@ -144,18 +202,20 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
   const ask = { role: "user" as const, content: `PR revision: address the following comments — fix each one, or `
     + `say plainly which is wrong and why. Start by editing; you have already been given what to change:\n`
     + `${comments.map((c) => `- ${c}`).join("\n")}` };
+  const spoken: string[] = [];
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved, tools,
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
     maxTurns: reviseTurnBudget(comments.length),
     // The last code to enter the pull request: what the reviser says about each comment — fixed it, or why
-    // it is by design — is the argument the user is being asked to accept.
-    ...(deps.note ? { onSay: deps.note } : {}),
+    // it is by design — is the argument the user is being asked to accept. Kept, not just shown: it is what
+    // gets posted back into the review thread.
+    onSay: (t: string) => { spoken.push(t); deps.note?.(t); },
   };
   try {
     await runToCompletion(opts);
-    return true;
+    return { ok: true, said: spoken.join("\n\n").trim() };
   } catch (e) {
     /**
      * A revision that ran out of turns still did work, and saying only "could not run" hides it.
@@ -182,7 +242,7 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
     if (TURN_LIMIT_RE.test(why)) {
       deps.note?.(`⚠️ The reviser used its whole turn budget on ${comments.length} comment(s). What it changed `
         + `is kept and committed with this round; the next review round reads the result and asks for the rest.`);
-      return false;   // …and that next round has to exist — see `extra` in runRevision.
+      return { ok: false, said: spoken.join("\n\n").trim() };   // …and that next round has to exist — see `extra` in runRevision.
     }
     deps.note?.(`⚠️ The revision pass stopped: ${why}. It had ${comments.length} comment(s) to address and its `
       + `work up to that point is committed on the branch — re-run to continue from there.`);
@@ -204,6 +264,14 @@ export async function runRevision(
   prDiff?: string,
   deferred?: string[], // non-blocking findings carried over from the per-task code reviews
   resolveThreads?: () => Promise<void>, // closes the threads this review opened, once it approves
+  /**
+   * Answers ONE review thread with what was done about it, and resolves it.
+   *
+   * Without this a run left its objections on the pull request and never its answers: measured on PR #777,
+   * five stacked "N change(s) requested" threads, all Active, nothing anywhere saying which findings had
+   * been fixed. The reader could see what horse-code asked for and never what it did.
+   */
+  replyAndResolve?: (threadId: string, body: string) => Promise<void>,
 ): Promise<RevisionResult> {
   /**
    * The revision pass keeps its own card, and a RESUMED board already has it.
@@ -265,10 +333,12 @@ export async function runRevision(
       const f = await principalFinal(deps, base);
       if (f.decision === "accept") {
         board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:final:accept" });
+        await sayHowItEnded(deps, postComments, "accepted", round);
         return { status: "accepted", rounds };
       }
       const answer = await askUser(f.question);
       board.appendStage(REVISION_CARD, { role: "human", action: "pr:human", note: answer });
+      await sayHowItEnded(deps, postComments, "human", round, f.question);
       return { status: "human", rounds, answer };
     }
 
@@ -281,24 +351,29 @@ export async function runRevision(
      * card's history and in review-notes.md, so failing to mirror them onto the platform is worth a line, not
      * the loss of the round they belong to.
      */
-    try { await postComments(v.comments); }
+    let threadId: string | undefined;
+    try { threadId = await postComments(v.comments); }
     catch (e) { deps.note?.(`⚠️ Could not post the review comments to the pull request (${e instanceof Error ? e.message : String(e)}) — applying them anyway.`); }
     const beforeRevise = await worktreeState(deps, base);
     // A round cut short by the turn budget buys one more, up to `cap` — see `extra`.
-    if (!(await seniorRevise(deps, base, v.comments)) && rounds + extra < cap) extra++;
+    const account = await seniorRevise(deps, base, v.comments);
+    if (!account.ok && rounds + extra < cap) extra++;
     // A revision that changed nothing means the next principal review would see IDENTICAL code and repeat the
     // same comments — burning every remaining round. Retry once with an explicit instruction, then stop.
     if (beforeRevise !== undefined && (await worktreeState(deps, base)) === beforeRevise) {
       board.appendStage(REVISION_CARD, { role: "senior-coder", action: "pr:no-changes" });
-      await seniorRevise(deps, base, [...v.comments, "Your previous attempt changed NO files. Apply the fixes with write_file/edit_file, or state clearly which comment is wrong and why."]);
+      const retry = await seniorRevise(deps, base, [...v.comments, "Your previous attempt changed NO files. Apply the fixes with write_file/edit_file, or state clearly which comment is wrong and why."]);
+      account.said = [account.said, retry.said].filter(Boolean).join("\n\n");
       if ((await worktreeState(deps, base)) === beforeRevise) {
         const f = await principalFinal(deps, base); // nothing is moving → settle it now instead of looping
         if (f.decision === "accept") {
           board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:final:accept" });
+          await sayHowItEnded(deps, postComments, "accepted", round);
           return { status: "accepted", rounds: round };
         }
         const answer = await askUser(f.question);
         board.appendStage(REVISION_CARD, { role: "human", action: "pr:human", note: answer });
+        await sayHowItEnded(deps, postComments, "human", round, f.question);
         return { status: "human", rounds: round, answer };
       }
     }
@@ -313,6 +388,18 @@ export async function runRevision(
     await deps.manager.commitMerge(session, `hc: revision ${round}`);
     await refreshAfterRevision(deps, base, headBefore);
     await deps.manager.push(session);
+    /**
+     * …and the thread that asked for all this is answered, then resolved.
+     *
+     * AFTER the push, so the reply cannot point at commits the reader has no way to see yet. The account is
+     * the reviser's own prose; when it produced none, the thread still gets the commit it was answered by
+     * rather than being closed in silence.
+     */
+    if (threadId && replyAndResolve) {
+      const body = revisionReplyBody(round, account, `hc: revision ${round}`);
+      try { await replyAndResolve(threadId, body); }
+      catch (e) { deps.note?.(`⚠️ Could not answer the review thread (${e instanceof Error ? e.message : String(e)}).`); }
+    }
   }
   // unreachable (rounds ≥ 1 → the last iteration always returns); for type safety:
   return { status: "accepted", rounds };

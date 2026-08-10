@@ -507,6 +507,7 @@ export async function runJob(
           (c, outcome) => deps.prAdapter.postComments(c, outcome),
           opts.askUser, opts.revisionRounds ?? 3, prDiff, deferred,
           () => deps.prAdapter.resolveOwnThreads(),
+          (threadId, body) => deps.prAdapter.replyAndResolve(threadId, body),
         );
         emit({ kind: "phase", phase: "revision-done", detail: revision.status });
         closeRevision(board, revision);

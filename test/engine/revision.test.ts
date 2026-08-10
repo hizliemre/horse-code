@@ -314,14 +314,15 @@ describe("what an unfinished revision round costs", () => {
 
   it("reports whether the reviser finished, rather than swallowing it", async () => {
     const s = await src();
-    expect(s).toContain("async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<boolean>");
-    // Out of turns → false, and the run buys a round back for it.
-    expect(s).toContain("return false;   // …and that next round has to exist");
+    expect(s).toContain("async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<RevisionAccount>");
+    // Out of turns → ok:false, and the run buys a round back for it.
+    expect(s).toContain("return { ok: false, said: spoken.join(\"\\n\\n\").trim() };   // …and that next round has to exist");
   });
 
   it("buys one more round when a round was cut short", async () => {
     const s = await src();
-    expect(s).toContain("if (!(await seniorRevise(deps, base, v.comments)) && rounds + extra < cap) extra++;");
+    expect(s).toContain("const account = await seniorRevise(deps, base, v.comments);");
+    expect(s).toContain("if (!account.ok && rounds + extra < cap) extra++;");
     expect(s).toContain("for (let round = 1; round <= rounds + extra; round++)");
     // …and the final-verdict branch moves with it, or the extra round would never revise either.
     expect(s).toContain("if (round === rounds + extra) {");
