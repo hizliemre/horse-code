@@ -2,10 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import {
   planTraces, tracePrompt, saveTrace, pruneTraces, loadTraceIndex, saveTraceIndex,
   readTraceSync, tracePath, hashContent, MAX_TRACE_FILE_CHARS, ensureGitignore, GITIGNORE_MARKER,
+  traceCoverage, setTraceRoot,
 } from "../../src/engine/trace.js";
 import type { TraceIndex } from "../../src/engine/trace.js";
 import { describePlan, runTraces } from "../../src/engine/trace-run.js";
@@ -616,5 +617,84 @@ describe("documents are never trace subjects", () => {
   it("never plans a trace for a trace", async () => {
     const { traceable } = await import("../../src/engine/trace.js");
     expect(traceable(["docs/architecture/src/api/orders.cs.md"])).toEqual([]);
+  });
+});
+
+/**
+ * The summary's number and the plan's work are decided by ONE rule.
+ *
+ * They were two: `planTraces` had the "is this covered?" test inline, and the start-up line had no test at
+ * all — it printed the size of the index. Two implementations of the same question drift silently and in the
+ * worst direction, so `traceState` is the only place that answers it and both callers go through it.
+ */
+describe("coverage counts exactly what a run would do", () => {
+  it("agrees with the plan, file for file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-cov-"));
+    try {
+      setTraceRoot("docs/traces");
+      await mkdir(join(dir, "src"), { recursive: true });
+      await writeFile(join(dir, "src", "a.ts"), "export const a = 1;\n", "utf8");
+      await writeFile(join(dir, "src", "b.ts"), "export const b = 2;\n", "utf8");
+      await writeFile(join(dir, "src", "c.ts"), "export const c = 3;\n", "utf8");
+      const files = ["src/a.ts", "src/b.ts", "src/c.ts"];
+
+      // a: traced and current · b: traced then changed · c: never traced
+      const index: TraceIndex = { version: 1, traces: {} };
+      for (const f of ["src/a.ts", "src/b.ts"]) {
+        const body = await readFile(join(dir, f), "utf8");
+        index.traces[f] = { hash: hashContent(body), file: f, writtenAt: Date.now() };
+        await mkdir(dirname(tracePath(dir, f)), { recursive: true });
+        await writeFile(tracePath(dir, f), "# note\n", "utf8");
+      }
+      await writeFile(join(dir, "src", "b.ts"), "export const b = 22;\n", "utf8");
+
+      const cov = await traceCoverage(dir, files, index);
+      expect(cov).toEqual({ traceable: 3, current: 1, missing: 1, stale: 1 });
+
+      // …and the plan queues exactly the two the coverage called out.
+      const plan = await planTraces(dir, files, undefined, index);
+      expect(plan.upToDate).toBe(cov.current);
+      expect(plan.jobs.length).toBe(cov.missing + cov.stale);
+      expect(plan.jobs.map((j) => j.file).sort()).toEqual(["src/b.ts", "src/c.ts"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /** A file too large to trace is not a gap — it is never work, so it must not sit in the denominator. */
+  it("leaves out what a run would never queue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-cov2-"));
+    try {
+      setTraceRoot("docs/traces");
+      await mkdir(join(dir, "src"), { recursive: true });
+      await writeFile(join(dir, "src", "huge.ts"), "x".repeat(MAX_TRACE_FILE_CHARS + 1), "utf8");
+      await writeFile(join(dir, "src", "blank.ts"), "   \n", "utf8");
+      const cov = await traceCoverage(dir, ["src/huge.ts", "src/blank.ts"], { version: 1, traces: {} });
+      expect(cov.traceable).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * The estimate the user consents to has to predict the BILL.
+ *
+ * 4 characters per token is the rule of thumb for English prose, and it was wrong here in the expensive
+ * direction: measured over 59,158 real calls across every configured model, the median is 3.13. Two reasons
+ * and both belong in the number — this project's code and documents are Turkish, which tokenises worse, and
+ * the gateway prepends a system prompt of its own (measured at ~2,000 tokens a call) that we never sent and
+ * are billed for.
+ */
+describe("what a trace run is estimated to cost", () => {
+  it("uses the measured ratio, not the English rule of thumb", async () => {
+    setTraceRoot("docs/traces");
+    await write("src/a.ts", "x".repeat(31_300));
+    const plan = await planTraces(cwd, ["src/a.ts"], undefined, { version: 1, traces: {} });
+    expect(plan.jobs).toHaveLength(1);
+    // 31,300 chars at 3.13 = 10,000 tokens, plus the per-job overhead the estimate carries.
+    expect(plan.estimatedInputTokens).toBeGreaterThan(10_000);
+    // …and comfortably above what 4.0 would have claimed (7,825 + overhead), which is the whole point.
+    expect(plan.estimatedInputTokens).toBeGreaterThan(31_300 / 4 + 500);
   });
 });

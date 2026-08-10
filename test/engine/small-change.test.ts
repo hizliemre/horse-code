@@ -24,7 +24,9 @@ describe("what an automatic commit is allowed to take", () => {
     const before = await dirtyPaths(defaultGitRunner, repo);
 
     await writeFile(join(repo, "icon.css"), ".icon { margin: auto }\n", "utf8");  // the change
-    expect(await commitOnly(defaultGitRunner, repo, before, "fix: centre the icon")).toBe(true);
+    // The paths it took, not just that it took some: the trace refresh needs them, and by the time it runs
+    // the tree is clean again. See commitOnly.
+    expect(await commitOnly(defaultGitRunner, repo, before, "fix: centre the icon")).toEqual(["icon.css"]);
 
     const log = await g(["log", "-1", "--name-only", "--format=%s"]);
     expect(log.stdout).toContain("fix: centre the icon");
@@ -44,7 +46,7 @@ describe("what an automatic commit is allowed to take", () => {
 
   it("commits nothing when the work wrote nothing — an empty commit says something happened", async () => {
     const before = await dirtyPaths(defaultGitRunner, repo);
-    expect(await commitOnly(defaultGitRunner, repo, before, "fix: nothing")).toBe(false);
+    expect(await commitOnly(defaultGitRunner, repo, before, "fix: nothing")).toEqual([]);
     expect((await g(["log", "--oneline"])).stdout.split("\n").filter(Boolean)).toHaveLength(1); // just the seed
   });
 

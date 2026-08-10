@@ -296,3 +296,46 @@ describe("an approval closes the threads the review opened", () => {
     expect(res.status).toBe("approved");
   });
 });
+
+/**
+ * A round the reviser could not finish must not cost a round.
+ *
+ * When the turn budget runs out mid-round the code says so out loud — "what it changed is kept; the next
+ * review round reads the result and asks for the rest" — and that promise holds only if a revising round is
+ * still left. The LAST round never revises: it asks the principal for a final verdict and, failing that, puts
+ * the unfinished findings to the user.
+ *
+ * Reported live: nine comments exhausted a 72-turn budget in round 1, and the run then spent its remaining
+ * rounds and asked the user whether to accept the risks — for findings its own reviser had never been given
+ * the chance to finish.
+ */
+describe("what an unfinished revision round costs", () => {
+  const src = async (): Promise<string> => (await import("node:fs/promises")).readFile("src/engine/revision.ts", "utf8");
+
+  it("reports whether the reviser finished, rather than swallowing it", async () => {
+    const s = await src();
+    expect(s).toContain("async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<boolean>");
+    // Out of turns → false, and the run buys a round back for it.
+    expect(s).toContain("return false;   // …and that next round has to exist");
+  });
+
+  it("buys one more round when a round was cut short", async () => {
+    const s = await src();
+    expect(s).toContain("if (!(await seniorRevise(deps, base, v.comments)) && rounds + extra < cap) extra++;");
+    expect(s).toContain("for (let round = 1; round <= rounds + extra; round++)");
+    // …and the final-verdict branch moves with it, or the extra round would never revise either.
+    expect(s).toContain("if (round === rounds + extra) {");
+  });
+
+  /** Bounded, or a reviser that never converges would never stop. */
+  it("still ends", async () => {
+    const s = await src();
+    expect(s).toContain("const cap = rounds * 2;");
+  });
+
+  /** The user is told the real budget, not the one it started with. */
+  it("counts the rounds it will actually run", async () => {
+    const s = await src();
+    expect(s).toContain("round ${round}/${rounds + extra}");
+  });
+});

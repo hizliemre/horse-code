@@ -3,7 +3,7 @@ import type { WorktreeManager, WorktreeSession, TaskWorktree, MergeResult } from
 import { runTaskWithEscalation, type EscalationDeps } from "./escalation.js";
 import { squashTask } from "./operational.js";
 import { telemetry } from "../obs/telemetry.js";
-import { changedByMerge, refreshTraces, describeRefresh, commitRefreshed } from "./trace-refresh.js";
+import { changedByMerge, refreshAfterChange } from "./trace-refresh.js";
 import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
 
 /** E4a only uses these three methods (a narrow interface for stub/mock injection). */
@@ -131,36 +131,10 @@ export async function runWaveTask(
 async function refreshAfterMerge(
   deps: WaveTaskDeps, session: WorktreeSession, git: GitRunner, baseBefore: string,
 ): Promise<void> {
-  try {
-    const files = await changedByMerge(git, session.baseWorktree, baseBefore);
-    if (!files.length) return;
-    const r = await refreshTraces({
-      cwd: session.baseWorktree,
-      files,
-      provider: deps.provider,
-      models: deps.roleRegistry.chainFor("tracer", 0),
-      signal: deps.signal,
-      note: (t) => deps.note?.(t),
-    });
-    const line = describeRefresh(r);
-    if (line) deps.note?.(line);
-    /**
-     * Committed straight away, or the next merge dies on it.
-     *
-     * git refuses to merge a branch that would overwrite a MODIFIED working file, and a trace sits at the
-     * same path a documentation task edits. Measured on a real run: the refresh left
-     * `docs/architecture/…/safe-html.pipe.ts.md` loose in the base worktree, and the next task's merge
-     * aborted with "Your local changes … would be overwritten by merge" — eleven tasks in.
-     *
-     * Unconditional, because the condition was wrong.
-     *
-     * A refresh rebuilds the graph BEFORE deciding whether any trace needs rewriting, so the commonest
-     * outcome — nothing to re-describe — still leaves `graphify-out/graph.json` modified. Gating the commit
-     * on "did we write a trace" left that file loose on exactly the merges where nothing else happened,
-     * which is the same failure one step along. `commitRefreshed` asks git whether anything is staged, so
-     * calling it when nothing changed costs one command and commits nothing.
-     */
-    const { traceRootRel } = await import("./trace.js");
-    await commitRefreshed(git, session.baseWorktree, traceRootRel());
-  } catch { /* documentation must never be the reason a merged task is reported as failed */ }
+  const files = await changedByMerge(git, session.baseWorktree, baseBefore);
+  await refreshAfterChange({
+    cwd: session.baseWorktree, files, provider: deps.provider,
+    models: deps.roleRegistry.chainFor("tracer", 0), signal: deps.signal, git,
+    ...(deps.note ? { note: (t: string) => deps.note?.(t) } : {}),
+  });
 }

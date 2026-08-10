@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileTool, MAX_READ_CHARS } from "../../src/tools/read.js";
@@ -88,5 +88,54 @@ describe("read_file — size cap and paging", () => {
     expect(res.isError).toBe(false);
     // Strip the display prefix → the original file, byte for byte.
     expect(res.content.split("\n").map((l) => l.replace(/^\s*\d+\t/, "")).join("\n")).toBe("hello\nworld\n");
+  });
+});
+
+/**
+ * The graph is pointed at where the decision is made, not only in the system prompt.
+ *
+ * Every agent's prompt already carries "use the graph to FIND things, before opening files". Measured on a
+ * planner that ran for an hour: 555 `read_file` against 53 graph calls — ten to one. A standing instruction
+ * competes with everything else in a 250,000-character prompt; a line at the bottom of a truncated read is
+ * in front of the agent at the moment it decides whether to page through the rest.
+ */
+describe("what a truncated read says about the graph", () => {
+  it("points at the trace when the file has one", async () => {
+    const { setTraceRoot } = await import("../../src/engine/trace.js");
+    const dir = await mkdtemp(join(tmpdir(), "hc-readhint-"));
+    try {
+      setTraceRoot("docs/traces");
+      await writeFile(join(dir, "big.ts"), Array.from({ length: 4000 }, (_, i) => `const x${i} = ${i};`).join("\n"), "utf8");
+      await mkdir(join(dir, "docs", "traces"), { recursive: true });
+      await writeFile(join(dir, "docs", "traces", "big.ts.md"), "# big.ts\n\n**Purpose** — holds numbers.\n", "utf8");
+
+      const r = await readFileTool.run({ path: "big.ts" }, { cwd: dir, signal: new AbortController().signal } as never);
+      expect(r.content).toContain("lines 1-");        // …it was truncated
+      expect(r.content).toContain("graph_trace");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  /** A hint that points at nothing is noise. */
+  it("says nothing when the file has no trace", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-readhint2-"));
+    try {
+      await writeFile(join(dir, "big.ts"), Array.from({ length: 4000 }, (_, i) => `const x${i} = ${i};`).join("\n"), "utf8");
+      const r = await readFileTool.run({ path: "big.ts" }, { cwd: dir, signal: new AbortController().signal } as never);
+      expect(r.content).not.toContain("graph_trace");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  /** …and a file that fitted in one call was never the problem. */
+  it("says nothing when the whole file came back", async () => {
+    const { setTraceRoot } = await import("../../src/engine/trace.js");
+    const dir = await mkdtemp(join(tmpdir(), "hc-readhint3-"));
+    try {
+      setTraceRoot("docs/traces");
+      await writeFile(join(dir, "small.ts"), "const a = 1;\n", "utf8");
+      await mkdir(join(dir, "docs", "traces"), { recursive: true });
+      await writeFile(join(dir, "docs", "traces", "small.ts.md"), "# small.ts\n", "utf8");
+      const r = await readFileTool.run({ path: "small.ts" }, { cwd: dir, signal: new AbortController().signal } as never);
+      expect(r.content).not.toContain("graph_trace");
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

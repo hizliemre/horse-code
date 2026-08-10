@@ -3,7 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedByMerge, refreshTraces, describeRefresh, commitRefreshed } from "../../src/engine/trace-refresh.js";
+import { changedByMerge, refreshTraces, describeRefresh, commitRefreshed , refreshAfterChange } from "../../src/engine/trace-refresh.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { planTraces, saveTrace, saveTraceIndex, loadTraceIndex, hashContent, tracePath } from "../../src/engine/trace.js";
@@ -240,5 +240,70 @@ describe("a refreshed trace is committed, not left loose", () => {
       expect(tracked.stdout).not.toContain("graph.json\n");
       expect((await defaultGitRunner(["status", "--porcelain"], repo)).stdout.trim()).toBe("");
     } finally { await rm(repo, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * Every path that changes code refreshes what the project says about it.
+ *
+ * The pipeline refreshed on merge and after a revision. The verify → finding → fix lane changes real product
+ * code and did not, and neither did the small-change lane — so a fix landed and left the file's description
+ * saying what the code used to do. Measured on the project it runs against: 78 traces describing code that
+ * had moved on, 24 of them committed within three days.
+ *
+ * A missing trace is a gap; a WRONG one is worse, because every agent that touches the file afterwards reads
+ * it and it reads as current.
+ */
+describe("which paths keep the project's account of itself true", () => {
+  const src = async (f: string): Promise<string> => (await import("node:fs/promises")).readFile(f, "utf8");
+
+  it("is all four of them", async () => {
+    for (const f of ["src/engine/wave-task.ts", "src/engine/revision.ts",
+                     "src/engine/fix.ts", "src/engine/verify.ts"]) {
+      expect(await src(f), f).toContain("refreshAfterChange(");
+    }
+  });
+
+  /** One door, not four copies: three steps repeated per site is three chances to keep two of them. */
+  it("goes through one helper rather than repeating the steps", async () => {
+    for (const f of ["src/engine/wave-task.ts", "src/engine/revision.ts",
+                     "src/engine/fix.ts", "src/engine/verify.ts"]) {
+      const s = await src(f);
+      expect(s, f).not.toContain("commitRefreshed(");
+      expect(s, f).not.toContain("describeRefresh(");
+    }
+  });
+
+  /** Nothing to refresh is not a failure, and neither is a refresh that fails. */
+  it("does nothing, quietly, when nothing changed", async () => {
+    let called = false;
+    await refreshAfterChange({
+      cwd: "/nonexistent", files: [], models: ["m"], note: () => { called = true; },
+      provider: { chat: async function* () { /* never reached */ } } as never,
+    });
+    expect(called).toBe(false);
+  });
+
+  it("never throws, whatever the refresh does", async () => {
+    await expect(refreshAfterChange({
+      cwd: "/nonexistent-path-for-this-test", files: ["a.ts"], models: ["m"],
+      provider: { chat: async function* () { throw new Error("provider is down"); } } as never,
+    })).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * …and the commit reports WHICH files it took.
+ *
+ * The paths are the one thing a caller cannot recompute afterwards — by then the tree is clean — and they are
+ * exactly what the refresh needs. Returning a boolean is why the lanes outside the pipeline had nothing to
+ * pass it.
+ */
+describe("what a fix commit reports back", () => {
+  it("returns the paths it committed", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const s = await readFile("src/engine/fix.ts", "utf8");
+    expect(s).toContain("): Promise<string[]> {");
+    expect(s).toContain("return r.code === 0 ? mine : [];");
   });
 });

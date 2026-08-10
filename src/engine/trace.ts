@@ -182,6 +182,43 @@ export async function loadTraceIndex(cwd: string): Promise<TraceIndex> {
   return { version: 1, traces: {} };
 }
 
+/**
+ * Two versions of the index, combined — which is what a conflict on this file actually asks for.
+ *
+ * The index is a map from file path to the trace of that file. When two branches both write it, they are
+ * almost always describing DIFFERENT files: each side traced what it changed. The union is then the exact
+ * answer, and there is nothing to decide. Where both describe the same file, the later `writtenAt` wins —
+ * a trace is derived from content, so the newer one was written from the newer version of that file.
+ *
+ * Measured on a real project: merging 225 commits of the main branch into a session branch produced exactly
+ * one conflict, and it was this file — 2,522 entries on one side, 2,588 on the other, 2,589 in the union.
+ * Handing that to a model means asking it to reconcile five thousand lines of machine-written JSON by hand.
+ * Taking the base's copy — what every other generated file here does — would have dropped 67 traces outright
+ * and kept 81 that the other side had already rewritten from newer code.
+ */
+export function mergeTraceIndexes(ours: TraceIndex, theirs: TraceIndex): TraceIndex {
+  const traces: Record<string, TraceRecord> = { ...ours.traces };
+  for (const [file, rec] of Object.entries(theirs.traces)) {
+    const mine = traces[file];
+    if (!mine || (rec.writtenAt ?? 0) > (mine.writtenAt ?? 0)) traces[file] = rec;
+  }
+  return { version: 1, traces };
+}
+
+/** Parses an index from raw text, or undefined when it is not one — a caller must not merge into garbage. */
+export function parseTraceIndex(text: string): TraceIndex | undefined {
+  try {
+    const raw = JSON.parse(text) as TraceIndex;
+    if (raw?.version === 1 && typeof raw.traces === "object" && raw.traces !== null) return raw;
+  } catch { /* not JSON, or not an index */ }
+  return undefined;
+}
+
+/** The on-disk form, so a hand-merged index is byte-identical to one the tracer wrote. */
+export function serializeTraceIndex(index: TraceIndex): string {
+  return `${JSON.stringify(index, null, 2)}\n`;
+}
+
 export async function saveTraceIndex(cwd: string, index: TraceIndex): Promise<void> {
   await mkdir(traceDir(cwd), { recursive: true });
   // Atomic: this file is the ONLY record that a trace was written. A torn write during a multi-hour run
@@ -259,10 +296,81 @@ export interface TracePlan {
 
 /** Files large enough that tracing them costs more than it returns; the graph still covers their structure. */
 export const MAX_TRACE_FILE_CHARS = 60_000;
-/** Roughly 4 characters per token — good enough for a cost estimate the user is deciding on. */
-const CHARS_PER_TOKEN = 4;
+/**
+ * Characters per BILLED token, measured rather than assumed.
+ *
+ * 4.0 is the usual rule of thumb for English prose and it was wrong here in the expensive direction: measured
+ * over 59,158 real calls across every configured model, the median is 3.13, so every estimate was ~28% low.
+ * Two reasons, and both belong in a number the user is deciding on: non-English text tokenises worse (this
+ * project's code and documents are Turkish), and the gateway prepends a system prompt of its own — measured
+ * at ~2,000 tokens per call — which we never sent but are billed for.
+ *
+ * So this is deliberately not a tokeniser constant. It predicts the BILL, which is the only thing the person
+ * reading the estimate is being asked about.
+ */
+const CHARS_PER_TOKEN = 3.13;
 /** What one trace is asked to be. Used for the estimate and enforced by the prompt. */
 export const TRACE_OUTPUT_TOKENS = 350;
+
+/** Where one file stands against the index. `missing` and `stale` are the two that cost a model call. */
+export type TraceState = "current" | "missing" | "stale" | "too-large" | "empty";
+
+/**
+ * Whether a file is covered, and if not, why not.
+ *
+ * Extracted so the coverage the start-up summary reports and the work `/graph trace` queues are decided by
+ * ONE rule. Two implementations of "is this traced?" drift, and the failure is silent in the worst
+ * direction: a summary that reads as complete beside a plan with 226 jobs in it.
+ *
+ * The entry has to still be BACKED by something on disk — an index that outlived its files would keep a
+ * project permanently untraced. What backs it depends on the kind: a trace we wrote is the `.md` under the
+ * trace root, while an ADOPTED entry points at one of the project's own documents, which is the only copy
+ * by design. Checking only for the `.md` meant every adopted entry failed and was queued — measured on a
+ * real project, 414 of 424 adopted files, which is precisely the re-derivation adoption exists to avoid.
+ */
+export function traceState(
+  cwd: string, file: string, content: string, index: TraceIndex, hash = hashContent(content),
+): TraceState {
+  if (content.length > MAX_TRACE_FILE_CHARS) return "too-large";
+  if (!content.trim()) return "empty";
+  const rec = index.traces[file];
+  const backing = rec?.doc ? join(cwd, rec.doc) : tracePath(cwd, file);
+  if (!rec || !existsSync(backing)) return "missing";
+  // A changed hash is the drift signal, and it is wanted: the trace describes code that has moved on.
+  return rec.hash === hash ? "current" : "stale";
+}
+
+/** How much of a project is covered — the denominator the trace count never had. */
+export interface TraceCoverage {
+  /** Files a trace run would consider at all (large and empty ones excluded — they are never work). */
+  traceable: number;
+  current: number;
+  /** Never traced. */
+  missing: number;
+  /** Traced, then the source changed. */
+  stale: number;
+}
+
+/**
+ * Counts coverage without building a plan.
+ *
+ * Reads and hashes every traceable file and keeps none of it, so a project's size costs time and not memory
+ * — measured on the largest project to hand, 2,524 files in 313 ms. `planTraces` holds the content of every
+ * QUEUED file so it can send it, which is the right trade for a run about to spend tokens and the wrong one
+ * for a line on the start-up screen.
+ */
+export async function traceCoverage(cwd: string, files: string[], index: TraceIndex): Promise<TraceCoverage> {
+  const out: TraceCoverage = { traceable: 0, current: 0, missing: 0, stale: 0 };
+  for (const file of files) {
+    let content: string;
+    try { content = await readFile(join(cwd, file), "utf8"); } catch { continue; }
+    const state = traceState(cwd, file, content, index);
+    if (state === "too-large" || state === "empty") continue;
+    out.traceable++;
+    out[state]++;
+  }
+  return out;
+}
 
 /**
  * Works out what tracing would involve, WITHOUT spending anything.
@@ -318,27 +426,14 @@ export async function planTraces(
   for (const file of files) {
     let content: string;
     try { content = await readFile(join(cwd, file), "utf8"); } catch { continue; }
-    if (content.length > MAX_TRACE_FILE_CHARS) {
+    const hash = hashContent(content);
+    const state = traceState(cwd, file, content, index, hash);
+    if (state === "too-large") {
       skipped.push({ file, why: `${Math.round(content.length / 1000)} KB — too large to trace economically` });
       continue;
     }
-    if (!content.trim()) continue;
-    const hash = hashContent(content);
-    /**
-     * Already covered?
-     *
-     * The entry has to still be BACKED by something on disk — an index that outlived its files would keep a
-     * project permanently untraced. What backs it depends on the kind: a trace we wrote is the `.md` beside
-     * the source, while an ADOPTED entry points at one of the project's own documents, which is the only
-     * copy by design.
-     *
-     * Checking only for the `.md` meant every adopted entry failed and was queued for tracing — measured on
-     * a real project, 414 of 424 adopted files, which is precisely the re-derivation adoption exists to
-     * avoid. A changed hash still queues the file either way: that is the drift signal, and it is wanted.
-     */
-    const rec = index.traces[file];
-    const backing = rec?.doc ? join(cwd, rec.doc) : tracePath(cwd, file);
-    if (rec?.hash === hash && existsSync(backing)) { upToDate++; continue; }
+    if (state === "empty") continue;
+    if (state === "current") { upToDate++; continue; }
     const rel = relatedOf(file);
     jobs.push({ file, hash, content, symbols: (symbolsOf.get(file) ?? []).slice(0, 40), ...rel });
   }

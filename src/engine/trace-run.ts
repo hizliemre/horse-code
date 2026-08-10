@@ -1,10 +1,29 @@
 import type { ChatRequest, Provider } from "../core/types.js";
 import {
   planTraces, tracePrompt, saveTrace, pruneTraces, loadTraceIndex, saveTraceIndex, ensureGitignore, traceRootRel,
+  traceable, traceCoverage,
 } from "./trace.js";
-import type { TraceJob, TracePlan } from "./trace.js";
+import type { TraceJob, TracePlan, TraceCoverage } from "./trace.js";
 import { loadGraph } from "./project-graph.js";
+import { defaultGitRunner } from "../worktree/git.js";
 import { briefForPrompt, gatherBriefInput, briefPrompt, saveBrief, briefStatus } from "./project-brief.js";
+
+/**
+ * The files a trace run considers — tracked or newly added source, never generated, vendored or tooling.
+ *
+ * One definition, because the start-up summary reports coverage over this set and `/graph trace` does its
+ * work over it. Two lists that disagree produce a summary nobody can act on: it would say a project is
+ * covered and the plan would still have hundreds of jobs in it.
+ */
+export async function traceableFiles(cwd: string, opts?: { code?: boolean }): Promise<string[]> {
+  const r = await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd);
+  return traceable(r.stdout.split("\n").filter(Boolean), opts);
+}
+
+/** Coverage over exactly the set {@link traceableFiles} defines, against the index on disk. */
+export async function coverageFor(cwd: string): Promise<TraceCoverage> {
+  return traceCoverage(cwd, await traceableFiles(cwd), await loadTraceIndex(cwd));
+}
 
 /** How many tracers run at once. Enough to finish a repo quickly, few enough not to trip provider rate limits. */
 export const TRACE_CONCURRENCY = 6;

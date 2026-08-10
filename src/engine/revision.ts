@@ -12,7 +12,7 @@ import { contextTools } from "./task-types.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildSkillTool } from "../skills/apply.js";
-import { changedByMerge, refreshTraces, describeRefresh, commitRefreshed } from "./trace-refresh.js";
+import { changedByMerge, refreshAfterChange } from "./trace-refresh.js";
 
 export interface RevisionDeps extends TaskCycleDeps {
   manager: Pick<WorktreeManager, "commitMerge" | "push">;
@@ -120,7 +120,7 @@ export function reviseTurnBudget(commentCount: number): number {
   return Math.min(REVISE_TURNS_MAX, Math.max(REVISE_TURNS_MIN, commentCount * REVISE_TURNS_PER_COMMENT));
 }
 
-async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<void> {
+async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]): Promise<boolean> {
   const resolved = deps.roleRegistry.resolve("senior-coder");
   const tools = createDefaultRegistry();
   tools.register(buildSkillTool(deps.skillRegistry));
@@ -155,6 +155,7 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
   };
   try {
     await runToCompletion(opts);
+    return true;
   } catch (e) {
     /**
      * A revision that ran out of turns still did work, and saying only "could not run" hides it.
@@ -181,7 +182,7 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
     if (TURN_LIMIT_RE.test(why)) {
       deps.note?.(`⚠️ The reviser used its whole turn budget on ${comments.length} comment(s). What it changed `
         + `is kept and committed with this round; the next review round reads the result and asks for the rest.`);
-      return;
+      return false;   // …and that next round has to exist — see `extra` in runRevision.
     }
     deps.note?.(`⚠️ The revision pass stopped: ${why}. It had ${comments.length} comment(s) to address and its `
       + `work up to that point is committed on the branch — re-run to continue from there.`);
@@ -218,8 +219,21 @@ export async function runRevision(
   if (!board.get(REVISION_CARD)) board.addCard({ id: REVISION_CARD, title: "PR revision" });
   const base = session.baseWorktree;
   const rounds = Math.max(1, maxRounds);
+  /**
+   * A round the reviser could not finish must not cost a round.
+   *
+   * When the turn budget runs out mid-round, the code says so out loud — "what it changed is kept; the next
+   * review round reads the result and asks for the rest" — and that promise is only true if a revising round
+   * is still left. The LAST round never revises: it asks the principal for a final verdict and, failing
+   * that, asks the user. Reported live: nine comments exhausted a 72-turn budget in round 1, and the run
+   * then spent its remaining rounds and put the unfinished findings to the user as a question.
+   *
+   * Bounded by the same number as the budget itself, so a reviser that never converges still ends.
+   */
+  let extra = 0;
+  const cap = rounds * 2;
 
-  for (let round = 1; round <= rounds; round++) {
+  for (let round = 1; round <= rounds + extra; round++) {
     /**
      * Said out loud, because this is the longest silent stretch in a run.
      *
@@ -227,7 +241,7 @@ export async function runRevision(
      * happen per round with nothing on screen. Reported after a 577-minute run: "revizyon turunun surdugune
      * dair ekranda geri bildirim yok" — and the person watching had no way to tell it from a hang.
      */
-    deps.note?.(`🔁 PR revision, round ${round}/${rounds} — the principal reviewer is reading the merged diff.`);
+    deps.note?.(`🔁 PR revision, round ${round}/${rounds + extra} — the principal reviewer is reading the merged diff.`);
     const v = await principalReview(deps, base, prDiff, round === 1 ? deferred : undefined);
     if (v.decision === "approve") {
       board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:approved" });
@@ -247,7 +261,7 @@ export async function runRevision(
     }
     board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:changes", note: v.comments.join("; ") });
 
-    if (round === rounds) {
+    if (round === rounds + extra) {
       const f = await principalFinal(deps, base);
       if (f.decision === "accept") {
         board.appendStage(REVISION_CARD, { role: "principal-coder", action: "pr:final:accept" });
@@ -270,7 +284,8 @@ export async function runRevision(
     try { await postComments(v.comments); }
     catch (e) { deps.note?.(`⚠️ Could not post the review comments to the pull request (${e instanceof Error ? e.message : String(e)}) — applying them anyway.`); }
     const beforeRevise = await worktreeState(deps, base);
-    await seniorRevise(deps, base, v.comments);
+    // A round cut short by the turn budget buys one more, up to `cap` — see `extra`.
+    if (!(await seniorRevise(deps, base, v.comments)) && rounds + extra < cap) extra++;
     // A revision that changed nothing means the next principal review would see IDENTICAL code and repeat the
     // same comments — burning every remaining round. Retry once with an explicit instruction, then stop.
     if (beforeRevise !== undefined && (await worktreeState(deps, base)) === beforeRevise) {
@@ -313,32 +328,11 @@ const gitOf = (deps: RevisionDeps): GitRunner => deps.git ?? defaultGitRunner;
  * not a reason to fail a pull request. The read path marks whatever stays stale.
  */
 async function refreshAfterRevision(deps: RevisionDeps, base: string, headBefore: string): Promise<void> {
-  try {
-    const files = await changedByMerge(gitOf(deps), base, headBefore);
-    if (!files.length) return;
-    const r = await refreshTraces({
-      cwd: base,
-      files,
-      provider: deps.provider,
-      models: deps.roleRegistry.chainFor("tracer", 0),
-      signal: deps.signal,
-      note: (t) => deps.note?.(t),
-    });
-    const line = describeRefresh(r);
-    if (line) deps.note?.(line);
-    // Committed here too, for the same reason: a loose trace in the base breaks whatever merges next.
-    /**
-     * Unconditional, because the condition was wrong.
-     *
-     * A refresh rebuilds the graph BEFORE deciding whether any trace needs rewriting, so the commonest
-     * outcome — nothing to re-describe — still leaves `graphify-out/graph.json` modified. Gating the commit
-     * on "did we write a trace" left that file loose on exactly the merges where nothing else happened,
-     * which is the same failure one step along. `commitRefreshed` asks git whether anything is staged, so
-     * calling it when nothing changed costs one command and commits nothing.
-     */
-    const { traceRootRel } = await import("./trace.js");
-    await commitRefreshed(gitOf(deps), base, traceRootRel());
-  } catch { /* never the reason a revised pull request is reported as failed */ }
+  const files = await changedByMerge(gitOf(deps), base, headBefore);
+  await refreshAfterChange({
+    cwd: base, files, provider: deps.provider, models: deps.roleRegistry.chainFor("tracer", 0),
+    signal: deps.signal, git: gitOf(deps), ...(deps.note ? { note: (t: string) => deps.note?.(t) } : {}),
+  });
 }
 
 /**

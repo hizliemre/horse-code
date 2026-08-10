@@ -577,6 +577,29 @@ async function writtenTracePaths(cwd: string): Promise<Set<string>> {
   return out;
 }
 
+/** How much of a community's naming a rebuild may lose before its output is treated as damage, not progress. */
+export const LABEL_LOSS_LIMIT = 0.25;
+
+/** Entries that carry a real name — the placeholders graphify seeds are not names. See UNNAMED. */
+export function namedCount(doc: Record<string, unknown>): number {
+  return Object.values(doc).filter((v) => !(typeof v === "string" && UNNAMED.test(v.trim()))).length;
+}
+
+/**
+ * Puts the shared names file back exactly as git has it.
+ *
+ * Called on the way IN as well as on the way out, which is the part that matters: the restore used to be the
+ * last statement of the build, so anything that ended the process first simply skipped it. Reported live —
+ * the user stopped a session while the start-up rebuild was running, and `.graphify_labels.json` was left
+ * modified in the project checkout with 3,183 placeholder entries where the committed version had 396. A
+ * cleanup step that only runs when nothing goes wrong protects nothing; healing on entry is what survives a
+ * kill, because the next build repairs what the last one could not.
+ */
+async function restoreSharedLabels(cwd: string): Promise<void> {
+  try { await git(cwd, ["checkout", "--", `${GRAPH_DIR}/${LABELS_FILE}`]); }
+  catch { /* not tracked, or no git — there is nothing shared to protect */ }
+}
+
 export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
   const py = await graphifyPython();
   if (!py) {
@@ -585,6 +608,24 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
       message: "graphify is not installed. `uv tool install graphifyy` (or `pipx install graphifyy`) — it is MIT, pure AST parsing, and costs no tokens.",
     };
   }
+  /**
+   * A build in the project checkout must leave the shared file as it found it — whatever happens to it.
+   *
+   * graphify seeds every new community "Community <n>" as it builds, straight into a committed file, so the
+   * build dirties it before it has finished deciding anything. The root is a reference: it is not this
+   * build's business to change it, and it is certainly not its business to leave a half-finished rebuild
+   * there when it is interrupted.
+   */
+  const shared = writableStateRoot(cwd) === undefined;
+  if (shared) await restoreSharedLabels(cwd);
+  try {
+    return await runGraphBuild(py, cwd, shared);
+  } finally {
+    if (shared) await restoreSharedLabels(cwd);
+  }
+}
+
+async function runGraphBuild(py: string, cwd: string, shared: boolean): Promise<BuildResult> {
   const script = "from graphify.watch import _rebuild_code\nfrom pathlib import Path\nimport sys\nsys.exit(0 if _rebuild_code(Path('.')) else 1)\n";
   const r = await run(py, ["-c", script], cwd);
   if (r.timedOut) {
@@ -622,45 +663,50 @@ export async function buildProjectGraph(cwd: string): Promise<BuildResult> {
    * 2,896 were bare placeholders, and the file is committed, so each rebuild left it modified for the next
    * merge to trip over. Dropping them keeps a shared file stable and loses nothing.
    */
-  /**
-   * The names file is SHARED, so a build outside a session must leave it exactly as it found it.
-   *
-   * graphify seeds every new community "Community <n>" as it builds, straight into a committed file, so a
-   * build in the project checkout dirties it whatever we do afterwards. Measured after one startup build:
-   * 586 lines changed in a file the next merge has to reconcile. Restoring it is the only honest end — the
-   * root is a reference, and tidying it is not this build's business.
-   */
-  if (writableStateRoot(cwd) === undefined) {
-    await git(cwd, ["checkout", "--", "graphify-out/.graphify_labels.json"]);
-    const g0 = await loadGraph(cwd);
-    return {
-      ok: true,
-      message: `Graph built: ${g0?.nodes.length ?? 0} nodes, ${g0?.edges.length ?? 0} edges.`
-        + (pruned ? ` (${pruned.toLocaleString("en-US")} tooling node(s) left out — skills and agent state are not the project.)` : ""),
-      nodes: g0?.nodes.length ?? 0,
-      edges: g0?.edges.length ?? 0,
-    };
+  // In the project checkout the names file is restored by the caller's `finally`, so there is nothing to tidy
+  // here — tidying it would only be undone.
+  let lost = 0;
+  if (!shared) {
+    try {
+      const lp = labelsPath(cwd);
+      const doc = JSON.parse(await readFile(lp, "utf8")) as Record<string, unknown>;
+      /**
+       * A rebuild that FORGETS names is not an improvement, and this file is committed.
+       *
+       * Measured on one interrupted rebuild: 3,139 named communities became 2,957, while placeholders went
+       * from 396 to 3,183 — a graph that had fragmented before the naming pass could keep up. Writing that
+       * over the committed version replaces knowledge with the absence of it, and the next merge carries it
+       * to everyone. Community numbers are not stable across rebuilds, so the old names cannot simply be
+       * merged back in; refusing the write is the honest answer.
+       */
+      const head = await git(cwd, ["show", `HEAD:${GRAPH_DIR}/${LABELS_FILE}`]).catch(() => "");
+      const before = head ? namedCount(JSON.parse(head) as Record<string, unknown>) : 0;
+      const after = namedCount(doc);
+      if (before && after < before * (1 - LABEL_LOSS_LIMIT)) {
+        await restoreSharedLabels(cwd);
+        lost = before - after;
+      } else {
+        // The placeholders carry no information — `parseAreas` already refuses them — and dropping them keeps
+        // a shared file stable instead of growing it by every community a rebuild happens to find.
+        const named = Object.fromEntries(Object.entries(doc)
+          .filter(([, v]) => !(typeof v === "string" && UNNAMED.test(v.trim()))));
+        if (Object.keys(doc).length !== Object.keys(named).length) {
+          const ordered: Record<string, unknown> = {};
+          for (const k of Object.keys(named).sort((a, b) => Number(a) - Number(b))) ordered[k] = named[k];
+          await writeAtomic(lp, `${JSON.stringify(ordered, null, 2)}\n`);
+        }
+      }
+    } catch { /* no labels file, or unreadable → nothing to tidy */ }
   }
-
-  let seeded = 0;
-  try {
-    const lp = labelsPath(cwd);
-    const doc = JSON.parse(await readFile(lp, "utf8")) as Record<string, unknown>;
-    const named = Object.fromEntries(Object.entries(doc)
-      .filter(([, v]) => !(typeof v === "string" && UNNAMED.test(v.trim()))));
-    seeded = Object.keys(doc).length - Object.keys(named).length;
-    if (seeded) {
-      const ordered: Record<string, unknown> = {};
-      for (const k of Object.keys(named).sort((a, b) => Number(a) - Number(b))) ordered[k] = named[k];
-      await writeAtomic(lp, `${JSON.stringify(ordered, null, 2)}\n`);
-    }
-  } catch { /* no labels file, or unreadable → nothing to tidy */ }
 
   const g = await loadGraph(cwd);
   return {
     ok: true,
     message: `Graph built: ${g?.nodes.length ?? 0} nodes, ${g?.edges.length ?? 0} edges.`
-      + (pruned ? ` (${pruned.toLocaleString("en-US")} tooling node(s) left out — skills and agent state are not the project.)` : ""),
+      + (pruned ? ` (${pruned.toLocaleString("en-US")} tooling node(s) left out — skills and agent state are not the project.)` : "")
+      + (lost ? ` (Community names kept as they were: this build named ${lost.toLocaleString("en-US")} fewer `
+        + `than the committed file, which is damage rather than progress. Re-run \`/graph build\` when the `
+        + `build can finish uninterrupted.)` : ""),
     nodes: g?.nodes.length ?? 0,
     edges: g?.edges.length ?? 0,
   };

@@ -1,6 +1,7 @@
 import { Board } from "../board/board.js";
 import { runTaskCycle } from "./task-cycle.js";
 import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
+import { refreshAfterChange } from "./trace-refresh.js";
 import type { ReviewDeps } from "./review.js";
 import type { Finding } from "./finding.js";
 
@@ -90,18 +91,25 @@ export async function dirtyPaths(git: GitRunner, cwd: string): Promise<Set<strin
  * A file that was ALREADY dirty is left out even when the work touched it too: there is no way to take the
  * work's half without taking the developer's. That one is theirs to sort out, and they can see it.
  */
+/**
+ * Returns WHAT it committed, not just whether it did.
+ *
+ * The paths are the one thing the caller cannot recompute afterwards — by then the tree is clean again — and
+ * they are exactly what the trace refresh needs. It used to return a boolean, so every path that changed code
+ * outside the pipeline had no way to say which files had moved on, and their descriptions were left behind.
+ */
 export async function commitOnly(
   git: GitRunner, cwd: string, before: Set<string>, message: string,
-): Promise<boolean> {
+): Promise<string[]> {
   const after = await dirtyPaths(git, cwd);
   const mine = [...after].filter((p) => !before.has(p));
-  if (!mine.length) return false;
+  if (!mine.length) return [];
   const add = await git(["add", "--", ...mine], cwd);
-  if (add.code !== 0) return false;
+  if (add.code !== 0) return [];
   const staged = await git(["diff", "--cached", "--quiet", "--", ...mine], cwd);
-  if (staged.code === 0) return false;
+  if (staged.code === 0) return [];
   const r = await git(["commit", "-m", message, "--", ...mine], cwd);
-  return r.code === 0;
+  return r.code === 0 ? mine : [];
 }
 
 /**
@@ -110,7 +118,7 @@ export async function commitOnly(
  * Separately from the report, because they are different things and the pull request should show them as
  * such: one commit changes the product, the other records what was observed of it.
  */
-export async function commitFix(workdir: string, f: Finding, before: Set<string>): Promise<boolean> {
+export async function commitFix(workdir: string, f: Finding, before: Set<string>): Promise<string[]> {
   return commitOnly(defaultGitRunner, workdir, before, `fix: ${f.title}`);
 }
 
@@ -156,8 +164,13 @@ export async function runSmallChange(
   } catch (e) {
     res = { title, fixed: false, notes: [e instanceof Error ? e.message : String(e)] };
   }
-  const committed = res.fixed ? await commitOnly(defaultGitRunner, workdir, before, prompt) : false;
-  return { ...res, committed };
+  const files = res.fixed ? await commitOnly(defaultGitRunner, workdir, before, prompt) : [];
+  // The change is in; its description must not still say what the code used to do. See refreshAfterChange.
+  await refreshAfterChange({
+    cwd: workdir, files, provider: deps.provider, models: deps.roleRegistry.chainFor("tracer", 0),
+    signal: deps.signal, ...(deps.note ? { note: deps.note } : {}),
+  });
+  return { ...res, committed: files.length > 0 };
 }
 
 /** What the user is told after a small change. */

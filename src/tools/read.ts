@@ -4,6 +4,7 @@ import { loadMigratedSync, isMigrated, migratedNotice } from "../migrate/migrate
 import { resolve } from "node:path";
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
+import { readTraceSync } from "../engine/trace.js";
 
 const params = z.object({
   path: z.string(),
@@ -12,6 +13,28 @@ const params = z.object({
   /** How many lines to return starting at `offset`. */
   limit: z.number().int().min(1).optional(),
 });
+
+/**
+ * Said where the decision is made, because saying it in the system prompt did not work.
+ *
+ * Every agent's prompt already carries "use the graph to FIND things, before opening files". Measured on a
+ * planner that ran for an hour: 555 `read_file` against 53 graph calls — ten to one — and `specs/spec.md`
+ * read for 1.5M characters across the run. A standing instruction competes with everything else in a 250k
+ * prompt; a line at the bottom of the truncated read is in front of the agent at the moment it decides
+ * whether to page through the rest.
+ *
+ * Only on a TRUNCATED read, and only when a trace actually exists: a hint pointing at nothing is noise, and
+ * a file that fitted in one call was never the problem.
+ */
+function traceHint(cwd: string, path: string): string {
+  // Defensive: a read must never fail because the trace root was not set or the file could not be read.
+  try {
+    return readTraceSync(cwd, path)
+      ? `\n[This file has a trace — \`graph_trace\` answers "what is it for and what breaks if it changes" in `
+        + `about 150 words. Prefer it over paging through the rest, unless you need the exact text.]`
+      : "";
+  } catch { return ""; }
+}
 
 /**
  * Cap on how much of a file one call may return (~7.5k tokens).
@@ -129,6 +152,7 @@ export const readFileTool: Tool = {
     // would reason confidently about content it never saw.
     const footer = last < all.length
       ? `\n\n[read_file: lines ${start + 1}-${last} of ${all.length}. Re-read with {"path":"${args.path}","offset":${last + 1}} for the rest.]`
+        + traceHint(ctx.cwd, args.path)
       : `\n\n[read_file: lines ${start + 1}-${last} of ${all.length}.]`;
     return { content: numbered(kept, start + 1) + footer, isError: false };
   },

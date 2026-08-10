@@ -3,7 +3,10 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pruneAreaNames } from "../../src/engine/project-graph.js";
+import { execFileSync } from "node:child_process";
+import {
+  pruneAreaNames, namedCount, LABEL_LOSS_LIMIT,
+} from "../../src/engine/project-graph.js";
 
 let cwd: string;
 beforeEach(async () => { cwd = await mkdtemp(join(tmpdir(), "hc-labels-")); });
@@ -92,5 +95,76 @@ describe("names for communities that no longer exist", () => {
     const text = await readFile(join(cwd, "graphify-out", ".graphify_labels.json"), "utf8");
     expect(text.trimEnd().split("\n").length).toBe(4);        // { , two entries, }
     expect(text.indexOf('"2"')).toBeLessThan(text.indexOf('"10"')); // numeric order, not "10" before "2"
+  });
+});
+
+/**
+ * …and what a rebuild does to those names, when the rebuild does not finish.
+ *
+ * Reported live: a session was stopped while the start-up rebuild was running, and the project checkout was
+ * left with `.graphify_labels.json` modified — 3,183 placeholder entries where the committed file had 396,
+ * and 182 real names gone. The restore existed; it was the LAST statement of the build, so being interrupted
+ * skipped it. A cleanup that only runs when nothing goes wrong protects nothing.
+ */
+describe("what counts as a name", () => {
+  it("does not count the placeholders graphify seeds", () => {
+    expect(namedCount({ "1": "Community 1", "2": "Wallet Member & Balance", "3": "community_3", "4": "Sync Log" }))
+      .toBe(2);
+  });
+
+  /**
+   * The gate is for a build that FINISHES and still forgot. The interrupted one is caught by the restore —
+   * it lost 6% of the names, well inside the limit, so a threshold would never have saved it.
+   */
+  it("measures loss against what is committed, not against the placeholders", () => {
+    const before = namedCount(Object.fromEntries(Array.from({ length: 3139 }, (_, i) => [i, `Name ${i}`])));
+    const after = namedCount({
+      ...Object.fromEntries(Array.from({ length: 2957 }, (_, i) => [i, `Name ${i}`])),
+      ...Object.fromEntries(Array.from({ length: 3183 }, (_, i) => [3000 + i, `Community ${3000 + i}`])),
+    });
+    expect([before, after]).toEqual([3139, 2957]);
+    expect(after < before * (1 - LABEL_LOSS_LIMIT)).toBe(false);
+    expect(namedCount({ "1": "Only" }) < before * (1 - LABEL_LOSS_LIMIT)).toBe(true);
+  });
+});
+
+/**
+ * The restore has to survive the build not finishing, which means it cannot be a step OF the build.
+ *
+ * Asserted on the source: a real build needs graphify installed and a repository to parse, and what is being
+ * checked here is the control flow — that the restore runs on entry and from `finally`.
+ */
+describe("when the shared names file is put back", () => {
+  it("runs on the way in and on every way out", async () => {
+    const src = await readFile("src/engine/project-graph.ts", "utf8");
+    const fn = src.slice(src.indexOf("export async function buildProjectGraph"));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+    expect(body).toContain("if (shared) await restoreSharedLabels(cwd);");
+    expect(body).toContain("} finally {");
+  });
+
+  it("restores the tracked file, not a guessed path", async () => {
+    const src = await readFile("src/engine/project-graph.ts", "utf8");
+    expect(src).toContain('["checkout", "--", `${GRAPH_DIR}/${LABELS_FILE}`]');
+  });
+
+  /** The mechanism itself: git has the committed version, whatever the working tree was left holding. */
+  it("git can undo what an interrupted build wrote", async () => {
+    const git = (...a: string[]): string =>
+      execFileSync("git", a, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const rel = join("graphify-out", ".graphify_labels.json");
+    await seed([{ id: "a", label: "a", community: 0 }], { "0": "Wallet Member & Balance", "1": "Sync Log" });
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "T");
+    git("add", "-A");
+    git("commit", "-q", "-m", "labels");
+
+    await writeFile(join(cwd, rel), JSON.stringify({ "0": "Community 0", "1": "Community 1", "2": "Community 2" }), "utf8");
+    expect(namedCount(await read())).toBe(0);
+
+    git("checkout", "--", rel);
+    expect(namedCount(await read())).toBe(2);
+    expect(git("status", "--porcelain").trim()).toBe("");
   });
 });

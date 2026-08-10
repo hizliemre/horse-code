@@ -1,10 +1,11 @@
 import type { Provider } from "../core/types.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { traceable, loadTraceIndex, saveTraceIndex, pruneTraces, sharedDerived } from "./trace.js";
+import { traceable, loadTraceIndex, saveTraceIndex, pruneTraces, sharedDerived, traceRootRel } from "./trace.js";
 import { planFor, runTraces } from "./trace-run.js";
 import { buildProjectGraph, pruneAreaNames } from "./project-graph.js";
 import type { GitRunner } from "../worktree/git.js";
+import { defaultGitRunner } from "../worktree/git.js";
 
 /**
  * Keeping the project's account of itself true after the project changes.
@@ -58,6 +59,48 @@ export async function changedByMerge(
  * documentation could not be refreshed would throw away the thing of value to protect the thing describing
  * it. Every failure is reported and swallowed.
  */
+/**
+ * Bring the traces for a set of changed files up to date, and commit them. Never throws.
+ *
+ * The same three steps every path that changes code needs — re-describe what moved, say so, commit it beside
+ * the change — collected here because they were only wired into two of the paths that change code.
+ *
+ * Measured on a real project: 78 files whose trace described code that had since moved on, 24 of them
+ * committed in the previous three days. The pipeline refreshes on merge and after a revision; the
+ * verify → finding → fix lane changes code and did not, so every fix it landed left the file's description
+ * behind. A note that is wrong is worse than one that is missing: it is read by every agent that touches the
+ * file afterwards, and it reads as current.
+ *
+ * Failure is swallowed on purpose. Documentation must never be the reason a landed change is reported as
+ * failed — the traces stay stale, which is exactly where they were a moment ago, and `graphStatus` says so.
+ */
+export async function refreshAfterChange(opts: {
+  cwd: string;
+  files: string[];
+  provider: Provider;
+  models: string[];
+  signal?: AbortSignal;
+  note?: (text: string) => void;
+  git?: GitRunner;
+}): Promise<void> {
+  if (!opts.files.length) return;
+  try {
+    const r = await refreshTraces({
+      cwd: opts.cwd,
+      files: opts.files,
+      provider: opts.provider,
+      models: opts.models,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.note ? { note: opts.note } : {}),
+    });
+    const line = describeRefresh(r);
+    if (line) opts.note?.(line);
+    // Committed straight away: a trace sits at the same path a later task may edit, and git refuses a merge
+    // that would overwrite a modified working file. See wave-task's own note for the run that proved it.
+    await commitRefreshed(opts.git ?? defaultGitRunner, opts.cwd, traceRootRel());
+  } catch { /* documentation must never be the reason a landed change is reported as failed */ }
+}
+
 export async function refreshTraces(opts: {
   cwd: string;
   files: string[];
