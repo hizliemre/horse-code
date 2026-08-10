@@ -407,6 +407,53 @@ function resumeMessage(activeRel: string, reportRel: string, inPlace: boolean, d
 }
 
 /**
+ * The fix happens at the HAND-OFF, not when the whole session is over.
+ *
+ * `handleFindings` runs after `runTester` returns — and an interactive verification does not return for a
+ * long time. Measured live: the tester reported "the upload size error shows no reason in the toast" at its
+ * 116th tool call, then handed over to the developer twice more and kept going; 181 calls later every one of
+ * them was still `tester` and no fixer had run. The finding sat in an in-memory queue while the person was
+ * asked to keep testing the product that still had it.
+ *
+ * A hand-off is the natural moment: the tester has stopped, the developer is about to go and DO something,
+ * and doing it against a version we already know is wrong wastes the one part of this that cannot be
+ * automated. So the fix runs FIRST, the question then says the product changed, and the answer comes back
+ * with the instruction to re-run that same step until it passes.
+ *
+ * Bounded by the same budget as the end-of-session rounds: a fix that keeps producing findings is a
+ * conversation, not a loop.
+ */
+export function fixBeforeHandOff(
+  askUser: AskUser,
+  findings: FindingQueue,
+  fix: (found: Finding[]) => Promise<string[]>,
+  opts: { note?: (text: string) => void; budget: { left: number } },
+): AskUser {
+  return async (question, ask) => {
+    const found = findings.drain();
+    if (!found.length || opts.budget.left <= 0) {
+      if (found.length) {
+        opts.note?.(`⚠️ ${found.length} finding(s) left for the end of the session — the in-session fix budget is spent.`);
+        found.forEach((f) => findings.add(f));   // put them back: the end-of-session round still reports them
+      }
+      return askUser(question, ask);
+    }
+    opts.budget.left--;
+    opts.note?.(`🔧 ${found.length} finding(s) reported — fixing before handing over, so you test the corrected product.`);
+    const done = await fix(found);
+    const said = done.map((d) => `- ${d}`).join("\n");
+    const answer = await askUser(
+      `Before this: the finding(s) reported during the last step were dealt with.\n${said}\n\n${question}`,
+      ask,
+    );
+    return `${answer}\n\n[The findings you reported were handled BEFORE this hand-off:\n${said}\n`
+      + `Anything marked FIXED is in the working tree now. Re-run the step you just handed over, against the `
+      + `corrected product, and do not move on until it passes — or until you can say precisely what still `
+      + `fails, with evidence. Update each finding's own entry in the report with what you saw this time.]`;
+  };
+}
+
+/**
  * Runs the verification, in place.
  *
  * Two phases, because they fail differently. Writing the plan is research — what does this work do, and how
@@ -442,7 +489,21 @@ export async function runVerify(opts: {
   const dirRel = relative(workdir, paths.dir);
   const planRel = relative(workdir, paths.plan);
   const reportRel = relative(workdir, paths.report);
-  const tools = testerTools(deps, askUser, findings);
+  /**
+   * One budget for both places a fix can happen, so the two cannot add up to more than a session should hold.
+   *
+   * The end-of-session loop counted its own rounds; a hand-off fix that counted separately would let a bad
+   * afternoon spend twice the ceiling without either side noticing.
+   */
+  const budget = { left: MAX_FIX_ROUNDS };
+  const handOff = fixBeforeHandOff(
+    askUser, findings,
+    // The RAW askUser here: handleFindings may need to ask about an escalation, and routing that back through
+    // the wrapper would be asking a question about the findings it just drained.
+    (found) => handleFindings({ deps, workdir, askUser, ...(opts.note ? { note: opts.note } : {}) }, found),
+    { ...(opts.note ? { note: opts.note } : {}), budget },
+  );
+  const tools = testerTools(deps, handOff, findings);
   /**
    * The project's rules about verification and evidence.
    *
@@ -509,10 +570,11 @@ export async function runVerify(opts: {
   for (;;) {
     await runTester(deps, workdir, tools, message, opts.language, law, prompt);
     const found = findings.drain();
-    if (!found.length || round >= MAX_FIX_ROUNDS) {
+    if (!found.length || budget.left <= 0) {
       if (found.length) opts.note?.(`⚠️ ${found.length} finding(s) left unfixed — ${MAX_FIX_ROUNDS} rounds of fixing is the limit for one session.`);
       break;
     }
+    budget.left--;
     round++;
     const done = await handleFindings(opts, found);
     message = direct ? directResumeMessage(prompt, reportRel, done) : resumeMessage(active!, reportRel, inPlace, done);
