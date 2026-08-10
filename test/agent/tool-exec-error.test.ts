@@ -22,7 +22,19 @@ describe("errorExcerpt", () => {
   it("cuts a long one and says it cut it", () => {
     const said = errorExcerpt("x".repeat(MAX_ERROR_EXCERPT + 50));
     expect(said.length).toBe(MAX_ERROR_EXCERPT + 1);
-    expect(said.endsWith("…")).toBe(true);
+    expect(said.startsWith("…")).toBe(true);
+  });
+
+  /**
+   * A shell result opens with `$ <command>`; the reason it failed is at the other end. Measured live: a
+   * failed inline python heredoc recorded 300 characters of its own source and no error at all, while the
+   * command was already in `hc.tool.key`.
+   */
+  it("keeps the END, where a tool says what went wrong", () => {
+    const command = `$ python3 - <<'PY' ${"import x ".repeat(60)}`;
+    const said = errorExcerpt(`${command}\nTraceback: ConnectionRefusedError [Errno 61]`);
+    expect(said).toContain("ConnectionRefusedError");
+    expect(said).toContain("[Errno 61]");
   });
 
   it("survives a tool that failed with nothing to say", () => {

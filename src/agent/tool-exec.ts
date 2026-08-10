@@ -44,6 +44,11 @@ export const MAX_ERROR_EXCERPT = 300;
 /**
  * What went wrong, in the record — because `hc.result_chars: 464` is not a diagnosis.
  *
+ * Taken from the END, not the beginning. A shell result opens with `$ <command>`, so cutting from the front
+ * spent the whole budget echoing the command back: measured on a live run, a failed inline python heredoc
+ * recorded 300 characters of its own source and not one word of why it failed — while the command itself was
+ * already in `hc.tool.key`, twice over. A tool says what went wrong last.
+ *
  * Telemetry recorded that a tool call failed and how many characters it said, and nothing about what it said.
  * Watching a live run, that is the difference between reading the answer and re-running the command by hand
  * to find it: measured on one run, two shell failures took a manual re-run each to establish that one was
@@ -55,7 +60,7 @@ export const MAX_ERROR_EXCERPT = 300;
  */
 export function errorExcerpt(content: string | undefined): string {
   const said = (content ?? "").replace(/\s+/g, " ").trim();
-  return said.length > MAX_ERROR_EXCERPT ? `${said.slice(0, MAX_ERROR_EXCERPT)}…` : said;
+  return said.length > MAX_ERROR_EXCERPT ? `…${said.slice(-MAX_ERROR_EXCERPT)}` : said;
 }
 
 interface Plan {
