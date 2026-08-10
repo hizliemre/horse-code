@@ -56,3 +56,39 @@ describe("per-stage review lens sets", () => {
     expect(CODE_TEAM.map((r) => r.name)).toContain("code-simplicity");
   });
 });
+
+/**
+ * The tester talks to the person watching, not only to the file.
+ *
+ * Its prompt sent every result into the report — "a living document, not something assembled at the end" —
+ * and said nothing about the chat. So it did exactly that: a run gathered live API responses, database rows
+ * and a Loki log line proving an event fired once and not twice, wrote all of it into the report, and told
+ * the user nothing. On screen there was `Ran 12 calls · shell ×5, graph_find ×3…` and to learn whether the
+ * scenario passed you had to open a file inside a worktree.
+ *
+ * Every other role that works for minutes at a time narrates: the implementer, the conflict resolver, the
+ * coach, the reviser. The tester's `onSay` was wired all along (see verify.ts) — nothing was ever asked of it.
+ */
+describe("the tester's prompt", () => {
+  const tester = DEFAULT_PROMPTS.tester ?? "";
+
+  it("asks for the verdict out loud, as it is reached", () => {
+    expect(tester).toMatch(/OUT LOUD/);
+    expect(tester).toMatch(/as you reach it/i);
+  });
+
+  it("asks for the one piece of evidence that settled it, not the whole record", () => {
+    expect(tester).toMatch(/single piece of evidence/i);
+    expect(tester).toMatch(/one or two sentences/i);
+  });
+
+  it("keeps the report as the place the full evidence lives", () => {
+    expect(tester).toMatch(/full evidence still goes in the report/i);
+    // …and the older instruction it qualifies is still there, or the report would stop being written.
+    expect(tester).toMatch(/BEFORE moving on to the next scenario/);
+  });
+
+  it("covers the results a silent run hides best — failures and the ones never run", () => {
+    expect(tester).toMatch(/NOT EXECUTED ones the same way/i);
+  });
+});

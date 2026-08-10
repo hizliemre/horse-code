@@ -61,6 +61,11 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "Write each result into the report BEFORE moving on to the next scenario. The report is a living " +
     "document, not something assembled at the end: a run that stops halfway must leave behind everything it " +
     "learned up to that point.\n\n" +
+    "…and say each verdict OUT LOUD as you reach it, in one or two sentences: which scenario, what it did, " +
+    "and the single piece of evidence that settled it — the row, the log line, the status code. The full " +
+    "evidence still goes in the report; this is so the person watching the run knows what you found without " +
+    "opening a file. Say the failures and the NOT EXECUTED ones the same way, and with the same brevity: a " +
+    "result nobody hears is one they have to go looking for.\n\n" +
     "Never start or stop the development environment — application hosts, dev servers, containers, " +
     "databases. Those are the developer's to run. When you need something up, say which command they should " +
     "run and wait for them to confirm it is ready.\n\n" +
