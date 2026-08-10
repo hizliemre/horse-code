@@ -1,10 +1,28 @@
 import { readFile } from "node:fs/promises";
-import { relative } from "node:path";
+import { relative, sep } from "node:path";
+import picomatch from "picomatch";
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import { walkFiles } from "./walk.js";
 
-const params = z.object({ pattern: z.string(), flags: z.string().optional() });
+/**
+ * The parameters say what they are, because the alternative is teaching it one failed call at a time.
+ *
+ * `flags` was declared as a bare optional string on a tool called `grep`, so a model reaching for it reached
+ * for grep's command line — measured in one live run, `flags: "-n"` and `flags: "-rn"` inside twenty-five
+ * calls, each refused, each costing a turn. The refusal is right (see the run body for why salvaging letters
+ * would be worse), but it only teaches the agent that made the mistake: the next one starts fresh and makes
+ * it again. Saying so in the schema is the only correction that arrives BEFORE the call.
+ */
+const params = z.object({
+  pattern: z.string().describe("A JavaScript regular expression, e.g. \"class\\\\s+Foo\" or \"TODO|FIXME\"."),
+  flags: z.string().optional().describe(
+    "JavaScript RegExp flags only — i, m, s, g. NOT grep's command-line options: \"-r\", \"-n\", \"-i\", "
+    + "\"-m 3\" are all refused. Search is recursive already; to limit WHICH files are searched use `include`."),
+  include: z.string().optional().describe(
+    "Glob limiting which files are searched, matched against the repo-relative path: \"*.cs\", "
+    + "\"src/**/*.ts\", \"**/*.{ts,tsx}\". Omit to search everything."),
+});
 const MAX_MATCHES = 200;
 
 /**
@@ -43,7 +61,8 @@ export function clipLine(line: string, re: RegExp): string {
 
 export const grepTool: Tool = {
   name: "grep",
-  description: "Performs a line-based regex search in files under cwd.",
+  description: "Performs a line-based regex search in files under cwd. `include` limits which files "
+    + "are searched (\"*.cs\", \"src/**/*.ts\").",
   permissionLevel: "safe",
   parameters: params,
   async run(rawArgs, ctx) {
@@ -70,8 +89,8 @@ export const grepTool: Tool = {
     if (flags && !/^[dgimsuvy]+$/.test(flags)) {
       return {
         content: `grep: "${flags}" is not a regex flag. This tool takes JavaScript regex flags (i, m, s, g), `
-          + `not grep's command-line options — for a case-insensitive search pass flags "i", and to limit the `
-          + `number of results narrow the pattern instead.`,
+          + `not grep's command-line options — for a case-insensitive search pass flags "i", and to search `
+          + `only certain files pass include "*.cs" rather than --include.`,
         isError: true,
       };
     }
@@ -84,9 +103,27 @@ export const grepTool: Tool = {
         isError: true,
       };
     }
+    /**
+     * WHICH files, as its own parameter — because the model kept asking for it through the only door open.
+     *
+     * grep searched every file under cwd and offered no way to say otherwise, so a model that wanted the C#
+     * files wrote `flags: "-rn --include=*.cs"` — a whole command line stuffed into a field for regex
+     * letters. Measured on one live run: five of twenty-eight grep calls carried command-line options, and
+     * the last of them was that exact string. It was not a slip; it was the absence of this parameter.
+     *
+     * The cost is not only the refused calls. A repository holding C# and TypeScript answers a C# question
+     * with TypeScript matches, and MAX_MATCHES fills with them — the line being looked for can be pushed out
+     * of the result by files the caller never wanted read.
+     *
+     * Matched with picomatch against the repo-relative path, exactly as `glob` does, so one pattern language
+     * covers both tools and `include: "*.cs"` means here what it means there.
+     */
+    const wanted = a.include ? picomatch(a.include) : undefined;
     const out: string[] = [];
     let size = 0;
     for await (const abs of walkFiles(ctx.cwd)) {
+      // picomatch expects POSIX separators; normalize on Windows.
+      if (wanted && !wanted(relative(ctx.cwd, abs).split(sep).join("/"))) continue;
       let text: string;
       try {
         text = await readFile(abs, "utf8");
