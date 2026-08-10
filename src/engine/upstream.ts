@@ -74,14 +74,14 @@ async function documentWorkdir(
  */
 function laneCheckpoint(
   cwd: string, lane: "verify" | "govern", resume: Checkpoint | undefined, prompt: string,
-  r: { refinedPrompt: string; title: string; language: string },
+  r: { refinedPrompt: string; title: string; language: string; intent: Intent },
 ): void {
   const root = sessionBase(cwd);
   if (root === undefined) return;
   writeCheckpoint(dirname(root), {
     rawPrompt: resume?.rawPrompt ?? prompt,
     refinedPrompt: r.refinedPrompt, title: r.title, language: r.language,
-    featureSlug: resume?.featureSlug ?? "", done: [], lane,
+    featureSlug: resume?.featureSlug ?? "", done: [], lane, intent: r.intent,
   });
 }
 
@@ -146,8 +146,19 @@ export async function runUpstream(
   const withPrior: Message[] = priorContext
     ? [{ role: "assistant", content: priorContext }, ...history]
     : history;
+  /**
+   * A resumed run keeps what it WAS, instead of being told it is a feature.
+   *
+   * The checkpoint carries everything a resume needs so the refiner can be skipped — and it used to carry
+   * everything except the field that decides what happens next. So every continued session was a `feature`:
+   * a verification resumed with "devam" answered "Writing the feature spec" and went on to produce a
+   * constitution and a brainstorm for a request whose whole output was a test report.
+   *
+   * Checkpoints written before `intent` existed have none; those still read as `feature`, which is what they
+   * did before and what they were most likely to be.
+   */
   const r = resume
-    ? { intent: "feature" as Intent, refinedPrompt: resume.refinedPrompt, title: resume.title, language: resume.language }
+    ? { intent: resume.intent ?? ("feature" as Intent), refinedPrompt: resume.refinedPrompt, title: resume.title, language: resume.language }
     : await runRefiner(deps, prompt, withPrior);
   // Surface the refined prompt as soon as it's ready → the UI can replace the raw prompt before the
   // coach/pipeline runs (the refined prompt is what actually gets handed downstream).
@@ -310,7 +321,7 @@ export async function runUpstream(
   // triggered the resume: after one "devam et", every resumed worktree would be keyed "devam et" — colliding
   // with each other and no longer matching an exact re-run of the request that actually started the work.
   const rawPrompt = prior?.rawPrompt ?? prompt;
-  const save = (): void => writeCheckpoint(root, { rawPrompt, refinedPrompt: r.refinedPrompt, title: r.title, language: r.language, featureSlug: slug, done: [...done], carryOver });
+  const save = (): void => writeCheckpoint(root, { rawPrompt, refinedPrompt: r.refinedPrompt, title: r.title, language: r.language, intent: r.intent, featureSlug: slug, done: [...done], carryOver });
   const mark = (phase: UpstreamPhase): void => { done.add(phase); save(); };
   if (done.size > 0) emit({ kind: "note", text: `⏩ Resuming — already done: ${[...done].join(", ")}. Continuing from the next phase.` });
   // Seed the checkpoint immediately so even a crash before the first phase completes leaves a resumable marker.

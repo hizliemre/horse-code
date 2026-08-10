@@ -120,3 +120,55 @@ describe("isContinuePrompt decides when resuming is unambiguous", () => {
     expect(isContinuePrompt(long)).toBe(false);
   });
 });
+
+/**
+ * A resumed session keeps what it WAS.
+ *
+ * The checkpoint exists so a resume needs no refiner — it carries the refined prompt, the title and the
+ * language. It forgot the one field that decides what happens next, so `runUpstream` hardcoded `feature` for
+ * every resume. Reported live: a verification session resumed with "devam" answered "Writing the feature
+ * spec", then produced a constitution and a brainstorm for a request whose whole output was a test report.
+ */
+describe("the checkpoint remembers what the work is", () => {
+  it("round-trips the intent", async () => {
+    dir = await mkdtemp(join(tmpdir(), "hc-cp-"));
+    writeCheckpoint(dir, { ...sample, intent: "verify" });
+    expect(readCheckpoint(dir)?.intent).toBe("verify");
+  });
+
+  it("reads as feature when the checkpoint predates the field — the old behaviour, unchanged", async () => {
+    dir = await mkdtemp(join(tmpdir(), "hc-cp-"));
+    writeCheckpoint(dir, sample);                       // no intent: written before this existed
+    const back = readCheckpoint(dir);
+    expect(back?.intent).toBeUndefined();
+    expect(back?.intent ?? "feature").toBe("feature");   // …and that is how upstream reads it
+  });
+
+  it("carries a govern session's intent too, not only verify", async () => {
+    dir = await mkdtemp(join(tmpdir(), "hc-cp-"));
+    writeCheckpoint(dir, { ...sample, intent: "govern", lane: "govern" });
+    expect(readCheckpoint(dir)?.intent).toBe("govern");
+  });
+});
+
+/**
+ * The lie that made it worse: `laneFor` trusts the intent it is given, and on the resume path that intent
+ * was a constant. With the checkpoint's own intent restored, a resumed verification routes to verify without
+ * needing the prompt to be a bare "devam".
+ */
+describe("what upstream does with a resumed intent", () => {
+  const src = async (): Promise<string> =>
+    (await import("node:fs/promises")).readFile("src/engine/upstream.ts", "utf8");
+
+  it("no longer hardcodes feature on the resume path", async () => {
+    const s = await src();
+    expect(s).not.toContain('{ intent: "feature" as Intent, refinedPrompt: resume.refinedPrompt');
+    expect(s).toContain('intent: resume.intent ?? ("feature" as Intent)');
+  });
+
+  it("writes the intent into both the lane checkpoint and the pipeline one", async () => {
+    const s = await src();
+    expect(s).toContain("done: [], lane, intent: r.intent,");
+    expect(s).toContain("language: r.language, intent: r.intent, featureSlug: slug");
+  });
+});

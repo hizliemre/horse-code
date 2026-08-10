@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { writeAtomicSync } from "../session/atomic.js";
+import type { Intent } from "./refiner.js";
 
 /** The spec-kit upstream phases a run may have completed, in order. */
 export type UpstreamPhase = "constitution" | "brainstorm" | "spec" | "clarify" | "plan" | "tasks";
@@ -18,6 +19,17 @@ export interface Checkpoint {
   title: string;
   language: string;    // the user's language (English name, e.g. "Turkish") → review/escalation localization
   featureSlug: string; // the specs/NNN-… dir to reuse (so resume doesn't create a fresh numbered feature)
+  /**
+   * What the refiner decided this work IS — carried so a resume does not have to assume.
+   *
+   * The checkpoint exists precisely so a resume needs no refiner, and it recorded the refined prompt, the
+   * title and the language while forgetting the one field that decides what happens next. Resuming therefore
+   * hardcoded `feature`, and every continued session walked into the spec pipeline whatever it actually was.
+   * Reported live: a verification session was resumed with "devam" and answered "Writing the feature spec".
+   *
+   * Optional for the checkpoints written before this existed; those still fall back to `feature`.
+   */
+  intent?: Intent;
   done: UpstreamPhase[];
   /** Deferred (non-blocking) findings accumulated so far — they must survive a restart or the later stages
    *  would never see what earlier reviews chose not to block on. */
