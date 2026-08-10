@@ -5,8 +5,21 @@ import type { PermissionRequest } from "./permission/engine.js";
 
 export type LineReader = (prompt: string, opts?: AskOpts) => Promise<string>;
 
+/**
+ * A question, or a hand-off.
+ *
+ * `steps` is what separates the two: with them the run has stopped because only a person can take the next
+ * step, and calling that a "Question" was the complaint — the user is not being consulted, they are being
+ * asked to go and do something. The actions are numbered into the body so the box carries everything the
+ * user needs, which is the other half of the same defect: they were being pointed at a document instead.
+ */
 export function makeAskUser(read: LineReader): AskUser {
-  return (question, opts) => read(`\n[question] ${question}`, opts);
+  return (question, opts) => {
+    const steps = opts?.steps ?? [];
+    if (!steps.length) return read(`\n[question] ${question}`, opts);
+    const body = steps.map((s, i) => `${i + 1}. ${s}`).join("\n");
+    return read(`\n[action] ${body}\n\n${question}`, opts);
+  };
 }
 
 export function makeApprove(read: LineReader): (req: PermissionRequest) => Promise<boolean> {

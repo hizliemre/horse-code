@@ -16,7 +16,7 @@ import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
 import { briefStatus } from "./engine/project-brief.js";
 import { setTraceRoot, discoverTraceRoot } from "./engine/trace.js";
-import { planFor, runTraces, describePlan, buildBrief } from "./engine/trace-run.js";
+import { planFor, runTraces, describePlan, buildBrief, traceableFiles as traceableSource } from "./engine/trace-run.js";
 import { traceable } from "./engine/trace.js";
 import { WorktreeManager, mainWorktreeRoot } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
@@ -36,7 +36,7 @@ import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 import { telemetryProvider } from "./providers/telemetry.js";
 import { Telemetry, setTelemetry, telemetry, sampleMemory, writeHeapSnapshot, clearPerfMarks } from "./obs/telemetry.js";
 import { FileSink, telemetryDir } from "./obs/sink.js";
-import { restoreTerminal } from "./tui/restore-terminal.js";
+import { restoreTerminal, sttySane } from "./tui/restore-terminal.js";
 
 /** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
 const HEAP_MB = 12_288;
@@ -223,6 +223,32 @@ export async function main(argv: string[]): Promise<void> {
    */
   if (!process.env.HC_HEAP_SET && !process.env.NODE_OPTIONS) {
     const { spawnSync } = await import("node:child_process");
+    /**
+     * The terminal as it was BEFORE the child borrows it, recorded now.
+     *
+     * Node restores the tty to the state libuv captured when it first opened a handle on it. The parent used
+     * to open that handle at exit — after the child had already made the terminal raw — so it captured the
+     * BROKEN state as the original and faithfully restored it on the way out. Touching stdin here, while the
+     * terminal is still cooked, makes the runtime's own restore the right one, which no later step can undo.
+     * Measured: an `stty sane` inside a node process demonstrably works and is then reverted when that
+     * process exits.
+     */
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    /**
+     * …and the parent has to still be alive to do any of it.
+     *
+     * Ctrl+C goes to the whole foreground process group, so it reaches parent and child together. The child
+     * handles it — that is its two-step cancel — and the parent had no handler at all, so the parent died
+     * instantly while the TUI carried on holding the terminal in raw mode. The shell then took its prompt
+     * back with a live raw-mode reader still on the same tty. Reported as: quitting breaks the terminal,
+     * "especially at a question", which is exactly where the child lives longest and the window is widest.
+     *
+     * Ignored rather than forwarded: the child is in the same process group and has already received the
+     * signal directly. The parent's only job is to outlive it.
+     */
+    const ignore = (): void => {};
+    const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+    for (const sig of SIGNALS) process.on(sig, ignore);
     const r = spawnSync(process.execPath, [`--max-old-space-size=${HEAP_MB}`, ...process.argv.slice(1)], {
       stdio: "inherit",
       /**
@@ -244,8 +270,21 @@ export async function main(argv: string[]): Promise<void> {
      * A hard kill (SIGKILL, a crash inside the renderer) runs none of the child's handlers, and the parent
      * shares the same tty — so it can hand it back on the child's behalf. Costs two syscalls on a path that
      * runs once per session.
+     *
+     * The snapshot taken before the spawn is what makes it work; `sttySane` is a belt, and a weak one —
+     * measured, an `stty sane` from inside a node process is reverted by that process's own exit. It stays
+     * because it costs one spawn on a path that runs once and it is the only step that asks the SYSTEM.
      */
-    restoreTerminal({ stdin: process.stdin, write: (x) => process.stdout.write(x) });
+    restoreTerminal({ stdin: process.stdin, write: (x) => process.stdout.write(x), sane: sttySane });
+    /**
+     * A child killed by a signal did not exit 0.
+     *
+     * `spawnSync` reports that as `status: null` + `signal`, and `?? 0` turned every hard kill into a
+     * success — the shell, and anything scripting `hcode`, was told the run was fine. The handlers come off
+     * first: re-raising into our own ignoring handler would report nothing and exit 0 anyway.
+     */
+    for (const sig of SIGNALS) process.removeListener(sig, ignore);
+    if (r.signal) process.kill(process.pid, r.signal);
     process.exit(r.status ?? 0);
   }
   /**
@@ -484,9 +523,9 @@ export async function main(argv: string[]): Promise<void> {
       /** Everything git tracks or would track — the pool the brief's documents are chosen from. */
       const gitFiles = async (): Promise<string[]> =>
         (await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd)).stdout.split("\n").filter(Boolean);
-      const traceableDocs = async (): Promise<string[]> => traceable(await gitFiles(), { code: false });
-      // Which files are worth a trace: tracked or newly added source, never generated, vendored or tooling.
-      const traceableFiles = async (): Promise<string[]> => traceable(await gitFiles());
+      const traceableDocs = async (): Promise<string[]> => traceableSource(cwd, { code: false });
+      // Which files are worth a trace — the same set the start-up summary reports coverage over.
+      const traceableFiles = async (): Promise<string[]> => traceableSource(cwd);
       /**
        * The model that writes the traces.
        *

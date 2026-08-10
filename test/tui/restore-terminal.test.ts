@@ -205,3 +205,74 @@ describe("the last resort on the way out", () => {
     })).not.toThrow();
   });
 });
+
+/**
+ * Every caller has to bring `sane`, and one did not.
+ *
+ * The re-exec parent is the LAST-CHANCE restore: the TUI runs in a child, and when that child dies hard its
+ * own handlers never run. That path called `restoreTerminal` without `sane` — so all it had was
+ * `setRawMode(false)`, and on the parent that is worse than nothing: the parent never touched the terminal,
+ * so reading `process.stdin` there initialises the handle and captures the CURRENT state as libuv's
+ * "original". The broken state becomes the baseline, and is faithfully restored.
+ *
+ * Reported three times, the third with the terminal measured: `-icanon -isig -icrnl`, `clear^M^C^C^C` at the
+ * prompt. Asserted on the source because the path re-execs the process and cannot be run inside a test.
+ */
+describe("every restore on the way out asks the system too", () => {
+  it("is wired that way at the re-exec parent, the one that outlives a hard kill", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/cli.ts", "utf8");
+    for (const call of src.match(/restoreTerminal\(\{[^}]*\}\)/g) ?? []) {
+      expect(call, call).toContain("sane:");
+    }
+  });
+
+  /** …and a child killed by a signal is not reported as a clean exit. */
+  it("does not turn a hard kill into a success", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/cli.ts", "utf8");
+    expect(src).toContain("if (r.signal) process.kill(process.pid, r.signal);");
+  });
+});
+
+/**
+ * The parent that hands the terminal back has to outlive the child that borrowed it.
+ *
+ * Ctrl+C reaches the whole foreground process group. The child handles it — that is its two-step cancel —
+ * and the parent had no handler, so the parent died instantly while the TUI carried on in raw mode and the
+ * shell took its prompt back with a live raw-mode reader still on the tty. Reported as "quitting breaks the
+ * terminal, especially at a question", which is where the child lives longest.
+ *
+ * And the restore the runtime does for us has to be the RIGHT one: node puts the tty back the way libuv
+ * found it, so the snapshot must be taken while the terminal is still cooked — before the child is spawned,
+ * not at exit. Measured in a pty: `stty sane` inside a node process works and is reverted when it exits.
+ */
+describe("the re-exec parent", () => {
+  const src = async (): Promise<string> => (await import("node:fs/promises")).readFile("src/cli.ts", "utf8");
+
+  it("takes the terminal snapshot before the child can make it raw", async () => {
+    const s = await src();
+    const snapshot = s.indexOf("if (process.stdin.isTTY) process.stdin.setRawMode(false);");
+    const spawn = s.indexOf("spawnSync(process.execPath");
+    expect(snapshot).toBeGreaterThan(-1);
+    expect(snapshot).toBeLessThan(spawn);
+  });
+
+  it("does not die on the interrupt the child is handling", async () => {
+    const s = await src();
+    expect(s).toContain('const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;');
+    const install = s.indexOf("for (const sig of SIGNALS) process.on(sig, ignore);");
+    const spawn = s.indexOf("spawnSync(process.execPath");
+    expect(install).toBeGreaterThan(-1);
+    expect(install).toBeLessThan(spawn);
+  });
+
+  /** …and the handlers come off before the exit code is re-raised, or it would be swallowed. */
+  it("stands the handlers down before reporting how the child died", async () => {
+    const s = await src();
+    const off = s.indexOf("for (const sig of SIGNALS) process.removeListener(sig, ignore);");
+    const raise = s.indexOf("if (r.signal) process.kill(process.pid, r.signal);");
+    expect(off).toBeGreaterThan(-1);
+    expect(off).toBeLessThan(raise);
+  });
+});
