@@ -116,6 +116,19 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
   // retryable error before output) — once we drop to a fallback we stay there for the rest of the run.
   const chain = [opts.model, ...(opts.fallbacks ?? [])];
   let chainIdx = 0;
+  /**
+   * Compaction is explained once, then it gets on with it.
+   *
+   * Past the threshold EVERY turn compacts, and every turn re-printed the same twenty-word sentence with a
+   * different number in it. Reported from a real screen: eleven of them in one view, one under each "Ran N
+   * calls" line, with nothing else between them — the account of what the agent actually DID was buried in
+   * repetitions of a housekeeping notice.
+   *
+   * The first one is worth its space: it tells a reader why output they watched arrive is no longer in the
+   * agent's view, and that asking for it again works. The tenth tells them nothing they did not learn from
+   * the first.
+   */
+  let saidCompaction = false;
 
   while (true) {
     if (opts.signal.aborted) {
@@ -155,8 +168,12 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       working.push(...packed.messages);
       // …and the memo stops claiming those answers are still there to be read. See Recall.forget.
       recall.forget(packed.forgotten);
-      opts.onSay?.(`📦 Put away ${(packed.freed / 1000).toFixed(0)}k characters of earlier tool output to keep `
-        + `this conversation workable — anything still needed can be fetched again.`, false);
+      if (!saidCompaction) {
+        saidCompaction = true;
+        opts.onSay?.(`📦 Put away ${(packed.freed / 1000).toFixed(0)}k characters of earlier tool output to keep `
+          + `this conversation workable — anything still needed can be fetched again. This continues quietly `
+          + `from here.`, false);
+      }
     }
 
     let assistantText = "";
