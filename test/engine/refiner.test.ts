@@ -88,3 +88,54 @@ describe("routeIntent — what a request costs is not a judgement call", () => {
     expect(RefinerSchema.safeParse({ refinedPrompt: "x", intent: "governance" }).success).toBe(false);
   });
 });
+
+/**
+ * The field that decides what a run costs, described where it is filled in.
+ *
+ * The enum carried no descriptions: every definition lived in one dense paragraph of the system prompt,
+ * competing with the rules for refinedPrompt, language and title. Measured live — "canlı db ve loki
+ * kanıtlarını da sorgula ve işle", which this same call refined into "Query live database and Loki logs, and
+ * document the evidence in the test report", came back `feature`. The run then went through constitution and
+ * brainstorm and opened `specs/006-db-loki-evidence` before anyone noticed that producing a test report needs
+ * no specification.
+ */
+describe("the intent field says what the choices mean", () => {
+  const said = ((RefinerSchema.shape.intent as unknown as { description?: string }).description) ?? "";
+
+  it("is described at all", () => {
+    expect(said.length).toBeGreaterThan(200);
+  });
+
+  it("draws the line by what the request PRODUCES", () => {
+    expect(said).toMatch(/PRODUCES/);
+    expect(said).toMatch(/findings rather than changed behaviour/i);
+  });
+
+  it("names the case that was measured wrong — evidence gathered into an existing report", () => {
+    expect(said).toMatch(/querying the database or logs/i);
+    expect(said).toMatch(/follow-up that only adds more evidence/i);
+  });
+
+  it("says outright that verify skips specification and planning", () => {
+    expect(said).toMatch(/never needs a specification or a plan/i);
+  });
+
+  it("still routes each intent the same way — this changed the description, not the wiring", () => {
+    expect(routeIntent("verify")).toBe("verify");
+    expect(routeIntent("feature")).toBe("pipeline");
+    expect(routeIntent("bugfix")).toBe("pipeline");
+    expect(routeIntent("govern")).toBe("govern");
+    expect(routeIntent("undo")).toBe("undo");
+    expect(routeIntent("chat")).toBe("chat");
+  });
+
+  it("accepts a verify classification of the request that was misrouted", async () => {
+    const p = new MockProvider([submit(JSON.stringify({
+      refinedPrompt: "Query live database and Loki logs, and document the evidence in the test report.",
+      intent: "verify", language: "Turkish", title: "db-loki-evidence",
+    }))]);
+    const out = await runRefiner(deps(p), "canlı db ve loki kanıtlarını da sorgula ve işle");
+    expect(out.intent).toBe("verify");
+    expect(routeIntent(out.intent)).toBe("verify");   // …and that lane writes a report, not a spec
+  });
+});

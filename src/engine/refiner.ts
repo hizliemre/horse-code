@@ -34,7 +34,28 @@ export interface RefinerOutput {
 }
 export const RefinerSchema = z.object({
   refinedPrompt: z.string().describe("The refined instruction, ALWAYS in English — translate from the user's language if needed; never output the user's original language here."),
-  intent: z.enum(["chat", "feature", "bugfix", "govern", "undo", "verify"]),
+  /**
+   * The choice that decides what a run COSTS, described where it is made.
+   *
+   * The enum carried no descriptions at all: every definition lived in one dense paragraph of the system
+   * prompt, competing with the rules for refinedPrompt, language and title. Measured live — "canlı db ve loki
+   * kanıtlarını da sorgula ve işle", refined by this same call into "Query live database and Loki logs, and
+   * document the evidence in the test report", was classified `feature`. It then ran constitution and
+   * brainstorm and opened `specs/006-db-loki-evidence` before anyone noticed that producing a test report
+   * needs no specification. The prompt's own words for `verify` describe that request exactly; they were just
+   * nowhere near the field being filled in.
+   */
+  intent: z.enum(["chat", "feature", "bugfix", "govern", "undo", "verify"]).describe(
+    "What the request PRODUCES, not what it mentions. "
+    + "`verify`: a record of what EXISTING software DID — running scenarios, querying the database or logs "
+    + "for evidence, writing or extending a test report. Anything whose output is findings rather than "
+    + "changed behaviour is verify, including a follow-up that only adds more evidence to a report already "
+    + "being written. "
+    + "`feature`: new or changed behaviour in the product. `bugfix`: existing behaviour is wrong and must be "
+    + "corrected. `govern`: the output is a governing document (constitution, conventions), no source changes. "
+    + "`undo`: reverse what the previous turn did. `chat`: a question or conversation, nothing to build. "
+    + "A verify request never needs a specification or a plan: if the answer is 'run it and write down what "
+    + "happened', it is verify."),
   // The natural language the user wrote in (English name, e.g. "Turkish") → the coach replies in it.
   language: z.string().default("English"),
   // A concise 2-5 word English kebab-case summary → used as the worktree/branch name (e.g. "add-login-page").
