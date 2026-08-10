@@ -109,6 +109,41 @@ describe("what must survive", () => {
     expect(existsSync(s.root)).toBe(true);
   });
 
+  /**
+   * horse-code's own bookkeeping is not the user's work in progress.
+   *
+   * `.horsecode/memory.jsonl` is tracked on purpose and every run rewrites it — injecting a memory bumps that
+   * memory's counters. So a finished session always ends with it modified, and that made every worktree
+   * permanently un-removable. Measured on a real project: three merged sessions, all refused with "merged,
+   * but uncommitted changes remain in base (1)", the one file being this one in every case, holding nothing
+   * but `injections: 0 → 1`.
+   */
+  it("removes a merged session whose only dirty file is horse-code's own state", async () => {
+    const s = await session("own-state");
+    await g(["merge", "--no-ff", "-m", "merge", s.base]);
+    await mkdir(join(s.root, "base", ".horsecode"), { recursive: true });
+    await writeFile(join(s.root, "base", ".horsecode", "memory.jsonl"), '{"id":"m1","injections":1}\n', "utf8");
+
+    const survey = await surveySessions(defaultGitRunner, repo, "main");
+    const row = survey.find((x) => x.slug === s.slug)!;
+    expect(row.verdict).toBe("merged");
+    // Discounted, never silent: a user reading "nothing is uncommitted" beside a file git calls modified
+    // would rightly distrust the tool.
+    expect(row.detail).toMatch(/horse-code's own state/);
+    expect((await cleanSessions(defaultGitRunner, repo, "main")).removed).toContain(s.slug);
+  });
+
+  it("still refuses when the user's own file is dirty beside horse-code's state", async () => {
+    const s = await session("both-dirty");
+    await g(["merge", "--no-ff", "-m", "merge", s.base]);
+    await mkdir(join(s.root, "base", ".horsecode"), { recursive: true });
+    await writeFile(join(s.root, "base", ".horsecode", "memory.jsonl"), '{"id":"m1"}\n', "utf8");
+    await writeFile(join(s.root, "base", "scratch.txt"), "mine\n", "utf8");
+
+    expect(await verdictOf(s.slug)).toBe("dirty");
+    expect((await cleanSessions(defaultGitRunner, repo, "main")).removed).toEqual([]);
+  });
+
   it("sees uncommitted work in a TASK worktree, not only in the base", async () => {
     const s = await mgr.openSession("main", "dirty task");
     const t = await mgr.deriveTask(s, "a task");

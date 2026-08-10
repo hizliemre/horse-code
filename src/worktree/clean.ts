@@ -86,11 +86,34 @@ export async function isMerged(
   return cherry.stdout.trim().startsWith("-");
 }
 
+/**
+ * horse-code's own state, which is not the user's work in progress.
+ *
+ * `.horsecode/memory.jsonl` is tracked on purpose — the store's own .gitignore says "memory.jsonl is
+ * shared" — and every run rewrites it, because injecting a memory bumps that memory's counters. So a
+ * finished session always ends with it modified, and the dirty check read that as a person part-way through
+ * an edit.
+ *
+ * The effect was that NO worktree could ever be cleaned. Measured on a real project: three sessions, all
+ * merged into the main branch, all refused with "merged, but uncommitted changes remain in base (1)" — and
+ * the one file was this one in every case, holding nothing but `injections: 0 → 1`. Each worktree is a full
+ * copy of the repository, and they accumulate with no way out of the guard.
+ *
+ * Narrow on purpose: only this directory. Anything the user was editing is still their work, and still
+ * stops a removal.
+ */
+const OWN_STATE = /^\.horsecode\//;
+
 /** Repo-relative paths of everything uncommitted in a worktree, or [] when it is clean or unreadable. */
 async function uncommitted(git: GitRunner, worktree: string): Promise<string[]> {
   const r = await git(["status", "--porcelain"], worktree);
   if (r.code !== 0) return [];
   return r.stdout.split("\n").map((l) => l.slice(3).trim()).filter(Boolean);
+}
+
+/** The same, minus horse-code's own bookkeeping — what a REMOVAL would actually cost the user. */
+export function usersOwn(files: string[]): string[] {
+  return files.filter((f) => !OWN_STATE.test(f.replace(/\\/g, "/")));
 }
 
 /**
@@ -141,16 +164,28 @@ export async function surveySessions(
     }
     // Merged says the COMMITS are safe. It says nothing about a file someone is part-way through editing.
     const dirty: string[] = [];
+    let ownState = 0;   // horse-code's own churn, counted so the verdict can say it was seen and discounted
     for (const w of worktrees) {
       const files = await uncommitted(git, w);
-      if (files.length) dirty.push(`${w.slice(root.length + 1) || "base"} (${files.length})`);
+      const theirs = usersOwn(files);
+      ownState += files.length - theirs.length;
+      if (theirs.length) dirty.push(`${w.slice(root.length + 1) || "base"} (${theirs.length})`);
     }
     if (dirty.length) {
       out.push({ ...row, verdict: "dirty", detail: `merged, but uncommitted changes remain in ${dirty.join(", ")}.` });
       continue;
     }
+    /**
+     * Said, not silently ignored.
+     *
+     * The state that was discounted is horse-code's own, but a removal still discards it, and a user reading
+     * "nothing is uncommitted" beside a file that git calls modified would rightly distrust the tool.
+     */
+    const aside = ownState
+      ? ` (${ownState} file(s) of horse-code's own state under \`.horsecode/\` were modified and are not counted)`
+      : "";
     out.push({ ...row, verdict: "merged",
-      detail: `every commit is in \`${target}\` and nothing is uncommitted — ${worktrees.length} worktree(s), ${branches.length} branch(es).` });
+      detail: `every commit is in \`${target}\` and nothing of yours is uncommitted${aside} — ${worktrees.length} worktree(s), ${branches.length} branch(es).` });
   }
   return out;
 }
