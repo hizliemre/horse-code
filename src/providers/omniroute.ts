@@ -1,6 +1,7 @@
 import type { ChatEvent, ChatRequest, Provider, ToolCall } from "../core/types.js";
 import { parseSSE } from "./sse.js";
 import { toOpenAIBody, mapFinishReason } from "./openai.js";
+import { sanitizeForJson } from "../core/surrogates.js";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -164,7 +165,9 @@ export class OmniRouteProvider implements Provider {
       res = await this.fetchFn(`${this.baseUrl}/api/v1/chat/completions`, {
         method: "POST",
         headers,
-        body: JSON.stringify(toOpenAIBody(req)),
+        // Sanitised at the socket, not at each of the dozens of places that build a prompt — see
+        // src/core/surrogates.ts for the four-hour run this cost.
+        body: JSON.stringify(sanitizeForJson(toOpenAIBody(req))),
         signal: combined,
       });
     } catch (e) {
