@@ -421,3 +421,66 @@ describe("reading the store after it is pointed somewhere new", () => {
     }
   });
 });
+
+/**
+ * Writing nothing when you have read nothing is not a save, it is an erase.
+ *
+ * `persist()` wrote `this.cache ?? []`, and `retarget()` sets the cache to undefined ON PURPOSE — its own
+ * comment says carrying entries across "is how a session would overwrite the project's memory with a stale
+ * snapshot of itself". So "not loaded" was a real, reachable state, and `?? []` turned it into an erase.
+ *
+ * Measured on a real project: `memory.jsonl` went from 746 entries to 1 byte after a session ended, and the
+ * next start read "Rules: 0 active · Memory: 0 entries" — every rule the user had written, gone. The same
+ * function's own comment says this file "was lost that way"; the guard it describes was for a torn write,
+ * not for an unloaded cache.
+ */
+describe("an unloaded store never overwrites the file", () => {
+  /** persist() is private; the point of this test is precisely that nothing else may reach it unloaded. */
+  const persist = (m: MemoryStore): Promise<void> =>
+    (m as unknown as { persist(): Promise<void> }).persist();
+
+  it("refuses to write when nothing has been read", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-mem-"));
+    try {
+      await mkdir(join(dir, ".horsecode"), { recursive: true });
+      const file = join(dir, ".horsecode", "memory.jsonl");
+      const kept = `${JSON.stringify({ id: "m1", text: "a rule the user wrote", kind: "rule" })}\n`;
+      await writeFile(file, kept, "utf8");
+
+      const m = new MemoryStore({ home: dir, cwd: dir });
+      await persist(m);                       // never loaded
+      expect(await readFile(file, "utf8")).toBe(kept);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("is unloaded again after retarget — the state the guard exists for", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-mem-"));
+    try {
+      await mkdir(join(dir, ".horsecode"), { recursive: true });
+      const file = join(dir, ".horsecode", "memory.jsonl");
+      await writeFile(file, `${JSON.stringify({ id: "m1", text: "kept", kind: "fact" })}\n`, "utf8");
+      const m = new MemoryStore({ home: dir, cwd: dir });
+      await m.load();
+      const other = await mkdtemp(join(tmpdir(), "hc-mem-b-"));
+      try {
+        m.retarget(other);                    // cache dropped, by design
+        m.retarget(dir);                      // …and back
+        await persist(m);                     // anything reaching here must not erase
+        expect((await readFile(file, "utf8")).trim().length).toBeGreaterThan(0);
+      } finally { await rm(other, { recursive: true, force: true }); }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("still writes normally once the store has been read", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-mem-"));
+    try {
+      await mkdir(join(dir, ".horsecode"), { recursive: true });
+      const file = join(dir, ".horsecode", "memory.jsonl");
+      await writeFile(file, `${JSON.stringify({ id: "m1", text: "kept", kind: "fact" })}\n`, "utf8");
+      const m = new MemoryStore({ home: dir, cwd: dir });
+      await m.load();
+      await m.add("something new", "fact");
+      expect((await readFile(file, "utf8")).trim().split("\n").length).toBe(2);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});

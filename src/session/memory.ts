@@ -393,8 +393,20 @@ export class MemoryStore {
     if (!existsSync(ga)) {
       await writeFile(ga, "# Append-only: keep both sides of a merge, then let the dedupe pass reconcile them.\nmemory.jsonl merge=union\n", "utf8");
     }
+    /**
+     * Never write what was never read.
+     *
+     * `this.cache ?? []` treated "not loaded yet" as "empty", so any path that reached `persist()` before a
+     * load replaced the store with a single newline. Measured: a project's `memory.jsonl` went from 746
+     * entries to 1 byte, and the next session opened with "Rules: 0 active · Memory: 0 entries" — every rule
+     * the user had written, gone, on a file the same function's own comment says "was lost that way".
+     *
+     * Writing nothing when you have read nothing is not a save, it is an erase. There is no state in which
+     * that is the right file to write, so it is refused rather than guarded at each caller.
+     */
+    if (this.cache === undefined) return;
     // Atomic: a crash mid-write must not leave an empty memory. See writeAtomic — this file was lost that way.
-    await writeAtomic(this.file, (this.cache ?? []).map((e) => JSON.stringify(e)).join("\n") + "\n");
+    await writeAtomic(this.file, this.cache.map((e) => JSON.stringify(e)).join("\n") + "\n");
   }
 
   /**
