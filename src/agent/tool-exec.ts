@@ -1,4 +1,5 @@
 import type { AgentEvent, PermissionDescriptor, Tool, ToolCall, ToolResult } from "../core/types.js";
+import { truncateSafe } from "../core/surrogates.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { Recall, recallNote } from "./recall.js";
@@ -9,6 +10,8 @@ export interface ToolExecResult {
   id: string;
   name: string;
   result: ToolResult;
+  /** The call's identity, carried onto the tool message so compaction can retract the recall memo's claim. */
+  key?: string;
 }
 
 export interface ToolExecDeps {
@@ -23,9 +26,37 @@ export interface ToolExecDeps {
   proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean; // propose_memory tool → curator queue
   onWrite?: (path: string) => Promise<void>; // after each successful write/edit → per-file auto-commit (sequential)
   recall?: Recall; // what this agent has already been shown → an identical call is answered with a pointer
+  said?: string; // the prose of the turn these calls came with → `ask_user` checks its references against it
+  role?: string; // who is calling → recorded on tool events so a repeat can be attributed to an agent
+}
+
+/** The call's identity, or nothing — see ToolExecResult.key. */
+function keyOf(args?: Record<string, unknown>): { key?: string } {
+  const key = subjectOfArgs(args ?? {});
+  return key ? { key } : {};
 }
 
 const WRITE_TOOLS = new Set(["write_file", "edit_file"]); // tools whose success should trigger a per-file commit
+
+/** How much of a failure is written to telemetry. Long enough to name the cause, short enough to stay a log. */
+export const MAX_ERROR_EXCERPT = 300;
+
+/**
+ * What went wrong, in the record — because `hc.result_chars: 464` is not a diagnosis.
+ *
+ * Telemetry recorded that a tool call failed and how many characters it said, and nothing about what it said.
+ * Watching a live run, that is the difference between reading the answer and re-running the command by hand
+ * to find it: measured on one run, two shell failures took a manual re-run each to establish that one was
+ * prettier reporting an unformatted file (exit 1, working correctly) and the other a plugin that would not
+ * resolve from the given directory. Two entirely different situations, identical in the log.
+ *
+ * Errors only. A successful result is the file, the search hits, the diff — recording those would put the
+ * user's source into a log file that exists to describe the run, not to copy it. A failure is a sentence.
+ */
+export function errorExcerpt(content: string | undefined): string {
+  const said = (content ?? "").replace(/\s+/g, " ").trim();
+  return said.length > MAX_ERROR_EXCERPT ? `${said.slice(0, MAX_ERROR_EXCERPT)}…` : said;
+}
 
 interface Plan {
   index: number;
@@ -92,7 +123,7 @@ async function runTool(
   const subject = callSubject(args);
   const run = (): Promise<import("../core/types.js").ToolResult> => tool.run(args, {
     cwd: deps.cwd, signal: deps.signal, onActivity, remember: deps.remember,
-    proposeMemory: deps.proposeMemory, readFiles: deps.readFiles,
+    proposeMemory: deps.proposeMemory, readFiles: deps.readFiles, said: deps.said,
   });
   // Every tool call, with what it was asked and what came back — the record that made "496 calls in two
   // minutes, the same three files" visible in the first place, now available without reading a screenshot.
@@ -109,11 +140,13 @@ async function runTool(
    * Measured over one run: 1,141 of an agent's 6,743 reads and searches were identical to one it had already
    * made in the same conversation — the result still sitting in its own context. Each cost a full model turn.
    */
-  const earlier = deps.recall?.saw(tool.name, key);
+  const earlier = deps.recall?.recall(tool.name, key);
   if (earlier !== undefined) {
-    tel.event("tool.recalled", { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key });
-    deps.onActivity?.({ tool: tool.name, target: subject, lines: 0, summary: `already answered on turn ${earlier}` });
-    return { content: recallNote(tool.name, subject, earlier), isError: false };
+    tel.event("tool.recalled", { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key,
+      "hc.recall.authored": earlier.authored, ...(deps.role ? { "hc.role": deps.role } : {}) });
+    deps.onActivity?.({ tool: tool.name, target: subject, lines: 0,
+      summary: earlier.authored ? "you wrote this — it is above" : `already answered on turn ${earlier.turn}` });
+    return { content: recallNote(tool.name, subject, earlier.turn, earlier.authored), isError: false };
   }
   const result = await tel.span(`tool.${tool.name}`,
     { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key }, run);
@@ -124,6 +157,8 @@ async function runTool(
     "hc.tool.key": key,
     "hc.result_chars": (result.content ?? "").length,
     "hc.status": result.isError ? "error" : "ok",
+    ...(deps.role ? { "hc.role": deps.role } : {}),
+    ...(result.isError ? { "hc.error": errorExcerpt(result.content) } : {}),
   });
   if (!reported) {
     const target = subject;
@@ -291,7 +326,9 @@ export async function* executeToolCalls(
         "hc.error": result.content.slice(0, 200),
       });
       yield { type: "tool.request", toolCall: p.call };
-      results[p.index] = { id: p.call.id, name: p.call.name, result };
+      // Omitted when empty: a key that identifies nothing cannot be forgotten by, and an absent field
+      // keeps the result exactly the shape it was.
+      results[p.index] = { id: p.call.id, name: p.call.name, result, ...keyOf(p.args) };
       yield { type: "tool.result", toolCallId: p.call.id, result };
     }
   }
@@ -304,7 +341,7 @@ export async function* executeToolCalls(
   );
   for (let k = 0; k < autoPlans.length; k++) {
     const p = autoPlans[k];
-    results[p.index] = { id: p.call.id, name: p.call.name, result: autoResults[k] };
+    results[p.index] = { id: p.call.id, name: p.call.name, result: autoResults[k], ...keyOf(p.args) };
     yield { type: "tool.result", toolCallId: p.call.id, result: autoResults[k] };
   }
 
@@ -334,7 +371,9 @@ export async function* executeToolCalls(
     const result = ok
       ? await runTool(p.tool!, p.args!, deps)
       : errResult(p.call.name, "user denied");
-    results[p.index] = { id: p.call.id, name: p.call.name, result };
+    // Omitted when empty: a key that identifies nothing cannot be forgotten by, and an absent field
+      // keeps the result exactly the shape it was.
+      results[p.index] = { id: p.call.id, name: p.call.name, result, ...keyOf(p.args) };
     yield { type: "tool.result", toolCallId: p.call.id, result };
   }
 
@@ -371,7 +410,8 @@ export const MAX_TOOL_RESULT_CHARS = 120_000;
 
 export function capToolResult(content: string, tool: string): string {
   if (content.length <= MAX_TOOL_RESULT_CHARS) return content;
-  return `${content.slice(0, MAX_TOOL_RESULT_CHARS)}\n\n`
+  // truncateSafe, not slice: cutting by code unit splits an emoji in half and the request is refused.
+  return `${truncateSafe(content, MAX_TOOL_RESULT_CHARS)}\n\n`
     + `… [${tool} returned ${content.length} characters; truncated at ${MAX_TOOL_RESULT_CHARS}. `
     + `Ask a narrower question — a smaller path, a tighter pattern, a specific file.]`;
 }

@@ -6,6 +6,16 @@ import type { SkillRegistry } from "../skills/registry.js";
 
 /** A resolved role: its primary model, the ordered fallback chain, prompt, and session-fallback hooks. */
 export interface ResolvedRole {
+  /**
+   * The role's own name, carried alongside its model and prompt.
+   *
+   * Every caller spreads a resolved role into its agent options, so putting the name here is what makes the
+   * name reach the agent — and from there the tool calls it makes. Without it, telemetry recorded WHICH tool
+   * was called and never WHO called it: `read_file` on the same path four times in one run could not be told
+   * apart as one agent repeating itself (waste that Recall should have caught) from four agents each reading
+   * it once (correct, since Recall is per-agent). Twice in one session that question could not be answered.
+   */
+  role: string;
   model: string;
   fallbacks: string[];
   systemPrompt: string;
@@ -283,7 +293,7 @@ export class RoleRegistry {
       }
     }
 
-    return { ...this.fallbackOpts(roleName), systemPrompt: systemPrompt + this.ruleSuffix() };
+    return { role: roleName, ...this.fallbackOpts(roleName), systemPrompt: systemPrompt + this.ruleSuffix() };
   }
 }
 
