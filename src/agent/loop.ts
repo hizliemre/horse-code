@@ -13,6 +13,13 @@ import { elideInPlace } from "./elide.js";
 
 export interface RoleAgentOptions {
   provider: Provider;
+  /**
+   * Who is running. Set by `RoleRegistry.resolve`, so every caller that spreads a resolved role has it.
+   *
+   * Carried only so the record can say who made a tool call — see ResolvedRole.role for the question that
+   * could not be answered without it.
+   */
+  role?: string;
   model: string;
   fallbacks?: string[]; // ordered fallback models: on a retryable error before any output, drop to the next
   /**
@@ -92,7 +99,6 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     { role: "system", content: opts.systemPrompt + (opts.cwd ? workingDirectoryNote(opts.cwd) : "") },
     ...opts.messages,
   ];
-  const schemas = opts.tools.schemas();
   const recall = new Recall();
   // The blind-overwrite guard is only wired for agents whose writes are NOT individually committed.
   //
@@ -147,6 +153,8 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     if (packed.freed > 0) {
       working.length = 0;
       working.push(...packed.messages);
+      // …and the memo stops claiming those answers are still there to be read. See Recall.forget.
+      recall.forget(packed.forgotten);
       opts.onSay?.(`📦 Put away ${(packed.freed / 1000).toFixed(0)}k characters of earlier tool output to keep `
         + `this conversation workable — anything still needed can be fetched again.`, false);
     }
@@ -172,7 +180,12 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       // long run into the heap ceiling. The provider still gets a COPY — it must never hold a reference to
       // an array that is still growing.
       elideInPlace(working);
-      const req: ChatRequest = { model: activeModel, messages: [...working], tools: schemas };
+      /**
+       * Read per TURN, not once: a tool fetched by `find_tool` has to be in the next request or it can never
+       * be called, which would make fetching it pointless. The registry caches the derivation and only
+       * rebuilds it when its contents actually change, so a run that fetches nothing pays nothing for asking.
+       */
+      const req: ChatRequest = { model: activeModel, messages: [...working], tools: opts.tools.schemas() };
 
       for await (const ev of opts.provider.chat(req, opts.signal)) {
         if (ev.type === "text-delta") {
@@ -260,6 +273,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     if (toolCalls.length === 0) return;
 
     const results = yield* executeToolCalls(toolCalls, {
+      ...(opts.role ? { role: opts.role } : {}),
       tools: opts.tools,
       permission: opts.permission,
       approve: opts.approve,
@@ -271,10 +285,13 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
       readFiles,
       onWrite: opts.onWrite,
       recall,
+      // Thinking is not shown to the user, so it cannot be what a question points at.
+      said: stripThinking(assistantText).trim(),
     });
     for (const r of results) {
       // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.
-      working.push({ role: "tool", toolCallId: r.id, name: r.name, content: shieldToolOutput(capToolResult(r.result.content, r.name)) });
+      working.push({ role: "tool", toolCallId: r.id, name: r.name, ...(r.key ? { key: r.key } : {}),
+        content: shieldToolOutput(capToolResult(r.result.content, r.name)) });
       /**
        * An answer that names a screenshot brings it along.
        *

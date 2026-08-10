@@ -16,6 +16,14 @@ export interface Message {
   toolCallId?: string; // on messages where role === "tool"
   name?: string; // tool name (role === "tool")
   images?: string[]; // user messages: base64 data URIs (data:image/png;base64,…) → sent as image parts
+  /**
+   * The call's own identity (`path:… |limit=…`), on tool results — never sent to the model.
+   *
+   * Carried so that putting a result away can also retract the recall memo's claim to still have it. Without
+   * it the two mechanisms contradict each other: compaction says "call it again if you still need what it
+   * said" and `Recall` refuses the call with "its result is above", pointing at the stub that replaced it.
+   */
+  key?: string;
 }
 
 // --- Tools ---
@@ -100,6 +108,13 @@ export interface ToolContext {
   // Queue a memory PROPOSAL (propose_memory tool). Returns whether it was queued. Writes nothing: review
   // agents propose, and a single trusted curator decides what is actually stored.
   proposeMemory?: (text: string, kind: "fact" | "lesson") => boolean;
+  /**
+   * What the agent SAID in the same turn as this call — the prose the user can actually read above it.
+   *
+   * `ask_user` needs it to tell a resolvable reference from a dangling one: "the 5 items above" is fine
+   * after a message that listed five items, and points at nothing after a turn that only called tools.
+   */
+  said?: string;
 }
 
 export interface PermissionDescriptor {

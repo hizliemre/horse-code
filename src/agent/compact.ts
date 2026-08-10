@@ -41,15 +41,30 @@ export function stub(m: Message): string {
  * Oldest first, because the oldest is the least likely to still be the subject: a document read twenty
  * reads ago has been re-read since, and the newer copy is the one that is true.
  */
-export function compact(messages: Message[], max = MAX_CONVERSATION_CHARS): { messages: Message[]; freed: number } {
+export function compact(
+  messages: Message[], max = MAX_CONVERSATION_CHARS,
+): { messages: Message[]; freed: number; forgotten: { tool: string; key: string }[] } {
   const size = (ms: Message[]): number => ms.reduce((n, m) => n + (m.content ?? "").length, 0);
   let total = size(messages);
-  if (total <= max) return { messages, freed: 0 };
+  if (total <= max) return { messages, freed: 0, forgotten: [] };
 
   const toolIdx = messages.map((m, i) => (m.role === "tool" ? i : -1)).filter((i) => i >= 0);
   const spare = new Set(toolIdx.slice(-KEEP_RECENT_RESULTS));
   const out = [...messages];
   let freed = 0;
+  /**
+   * What was put away, so the recall memo can stop claiming the agent still has it.
+   *
+   * The two mechanisms were saying opposite things about the same result. This one replaces it and tells the
+   * agent to "call it again if you still need what it said"; `Recall` then refused the call with "its result
+   * is above — read it there", pointing at the stub that had just replaced it. Neither was wrong on its own;
+   * together they left the agent unable to read the file and unable to give up.
+   *
+   * Measured on a live planner: 502 calls, 14.4M input tokens, 106 minutes, with the prompt pinned between
+   * 215k and 249k against a 250k ceiling — every turn putting away 30-150k characters and immediately
+   * refilling. A conversation at its ceiling is expected; one that never converges is this.
+   */
+  const forgotten: { tool: string; key: string }[] = [];
 
   for (const i of toolIdx) {
     if (total <= max) break;
@@ -59,9 +74,10 @@ export function compact(messages: Message[], max = MAX_CONVERSATION_CHARS): { me
     if (had < WORTH_STUBBING) continue;
     const replaced = stub(m);
     out[i] = { ...m, content: replaced };
+    if (m.name && m.key) forgotten.push({ tool: m.name, key: m.key });
     const saved = had - replaced.length;
     total -= saved;
     freed += saved;
   }
-  return { messages: out, freed };
+  return { messages: out, freed, forgotten };
 }
