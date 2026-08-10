@@ -5,7 +5,7 @@ import type { BoardCardView } from "../engine/progress.js";
 import type { Column } from "../board/board.js";
 import type { TuiController } from "./controller.js";
 import { ProgressView } from "./progress-view.js";
-import { donePhrase } from "./labels.js";
+import { donePhrase, PENDING_TAG, type PendingKind } from "./labels.js";
 import { fmtDuration, relTime, fmtTokens } from "./format.js";
 import { Markdown } from "./markdown.js";
 import type { TurnMeta, RunningAgent } from "./controller.js";
@@ -32,18 +32,26 @@ import { WatchManager, type WatchStatus } from "../obs/watch.js";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED", "PARKED", "ABANDONED"];
 
-/** Splits a pending prompt into its kind + clean body (terminal.ts tags them "[question]"/"[permission]"/"[human]"). */
-export function parsePending(raw: string): { kind: "question" | "permission" | "human"; body: string } {
+/** Splits a pending prompt into its kind + clean body (terminal.ts tags them "[question]"/"[action]"/"[permission]"/"[human]"). */
+export function parsePending(raw: string): { kind: PendingKind; body: string } {
   const t = raw.replace(/^\s+/, "");
-  const m = t.match(/^\[(question|permission|human)\]\s*/);
-  if (m) return { kind: m[1] as "question" | "permission" | "human", body: t.slice(m[0].length).trim() };
+  const m = PENDING_TAG.exec(t);
+  if (m) return { kind: m[1] as PendingKind, body: t.slice(m[0].length).trim() };
   return { kind: "question", body: t.trim() };
 }
 
-const PENDING_STYLE = {
-  question: { icon: "?", label: "Question", color: "yellow" as const },
-  permission: { icon: "⚠", label: "Permission", color: "red" as const },
-  human: { icon: "◆", label: "Review", color: "cyan" as const },
+const PENDING_STYLE: Record<PendingKind, { icon: string; label: string; color: "yellow" | "red" | "cyan" | "green" }> = {
+  question: { icon: "?", label: "Question", color: "yellow" },
+  /**
+   * Not a question: the run needs the user to go and do something, then say what happened.
+   *
+   * Reported live, on a manual test session — "sharing an observation is not a question, it is an
+   * interaction step". A "? Question" header asks the user to decide something; this one asks them to act,
+   * and the two want different things from whoever is reading.
+   */
+  action: { icon: "▶", label: "Over to you", color: "green" },
+  permission: { icon: "⚠", label: "Permission", color: "red" },
+  human: { icon: "◆", label: "Review", color: "cyan" },
 };
 
 /** Width of the pending-question box (shared by the renderer + the fullscreen height math → same wrap → same line count). */

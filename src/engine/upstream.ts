@@ -216,13 +216,13 @@ export async function runUpstream(
     // A constitution is a committed document, so it is written on a branch like anything else.
     const cwd = await documentWorkdir(process.cwd(), prompt, ensureWorktree, r.title);
     laneCheckpoint(cwd, "govern", resume, prompt, r);
-    const p: PhaseDeps = { deps, templates, workdir: cwd, askUser };
+    const p: PhaseDeps = { deps, templates, workdir: cwd, askUser, ...(r.language ? { language: r.language } : {}) };
     // Taken BEFORE the phase runs — the only moment the previous version still exists.
     const rel = relative(cwd, constitutionPath(cwd));
     const before = await snapshot(cwd, rel);
     // The request travels with the phase: without it the analyst is asked to establish a constitution the
     // project already has, and has to ask the user what they wanted. See runConstitution.
-    await runConstitution(p, r.refinedPrompt, r.language);
+    await runConstitution(p, r.refinedPrompt);
     const path = constitutionPath(cwd);
     const written = existsSync(path);
     if (written) {
@@ -291,7 +291,7 @@ export async function runUpstream(
   const workdir = await ensureWorktree(r.title);
   // Load the spec-kit templates on demand (the chat branch above never reaches here, so chat never fetches).
   const templates = await deps.specKit();
-  const p: PhaseDeps = { deps, templates, workdir, askUser };
+  const p: PhaseDeps = { deps, templates, workdir, askUser, ...(r.language ? { language: r.language } : {}) };
 
   // Resume checkpoint lives at the worktree ROOT (one level above `base/`), so it is never committed.
   // `done` = phases a prior interrupted run already finished; skip them and continue from the first gap.

@@ -6,7 +6,8 @@ import { runStructuredRole } from "../agent/structured.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { constitutionPath } from "../speckit/layout.js";
 import {
-  CLASSIFY_BATCH, CLASSIFY_PROMPT, SCOPES, applyLabels, classifyMessage, parseConstitution, scopesForWork, selectRules,
+  CLASSIFY_BATCH, CLASSIFY_RETRIES, CLASSIFY_PROMPT, SCOPES, applyLabels, classifyMessage, labellingLooksWrong,
+  parseConstitution, scopesForWork, selectRules,
   type Scope, type ScopedRule,
 } from "./constitution.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
@@ -91,27 +92,59 @@ export async function scopedConstitution(deps: ConstitutionDeps, cwd: string): P
    * chain a project configures, and adjudicating is what it is for.
    */
   const resolved = deps.roleRegistry.resolve("judge");
+  let failed = 0;
   for (let start = 0; start < rules.length; start += CLASSIFY_BATCH) {
     const batch = rules.slice(start, start + CLASSIFY_BATCH);
-    try {
-      const out = await runStructuredRole({
-        provider: deps.provider, ...resolved, systemPrompt: CLASSIFY_PROMPT, tools: new ToolRegistry(),
-        messages: [{ role: "user", content: classifyMessage(batch, start) }],
-        permission: deps.permission, approve: deps.approve, cwd, signal: deps.signal,
-        maxTurns: CLASSIFY_MAX_TURNS,
-      }, LabelsSchema);
-      labels.push(...out.labels);
-    } catch { /* this batch binds everyone; the next one may still answer */ }
+    /**
+     * Retried, because one dropped call mislabels a fifth of the document for its lifetime.
+     *
+     * Measured live: of four batches, one returned `finish_reason: null` with zero tokens in and out — a
+     * transient failure of the call, not of the answer. Its twenty rules fell through to `always`, and with
+     * a second batch lost the same way `always` went from 13 blocks to 35, which is half the constitution
+     * sent to every role on every task. A backend card then selected 20,559 characters against a 20,000
+     * ceiling, so the mechanism started dropping the very rules it exists to deliver.
+     */
+    for (let attempt = 0; attempt <= CLASSIFY_RETRIES; attempt++) {
+      try {
+        const out = await runStructuredRole({
+          provider: deps.provider, ...resolved, systemPrompt: CLASSIFY_PROMPT, tools: new ToolRegistry(),
+          messages: [{ role: "user", content: classifyMessage(batch, start) }],
+          permission: deps.permission, approve: deps.approve, cwd, signal: deps.signal,
+          maxTurns: CLASSIFY_MAX_TURNS,
+        }, LabelsSchema);
+        labels.push(...out.labels);
+        break;
+      } catch {
+        // Out of attempts: this batch binds everyone, and the caller is told rather than left to infer it.
+        if (attempt === CLASSIFY_RETRIES) failed++;
+      }
+    }
   }
   const { scoped, unlabelled } = applyLabels(rules, labels);
   if (unlabelled.length) {
     deps.note?.(`⚠️ ${unlabelled.length} of ${rules.length} constitution rules could not be labelled — those `
       + `go to every role. A rule sent too widely is noise; one sent nowhere is not a rule.`);
   }
-  try {
-    mkdirSync(join(deps.home, ".horsecode", "constitution"), { recursive: true });
-    writeFileSync(cache, JSON.stringify(scoped), "utf8");
-  } catch { /* the cache is an optimisation, never a requirement */ }
+  /**
+   * A labelling that lost a batch is NOT written to the cache.
+   *
+   * The cache is keyed on the document's content, so a bad answer stored under that key is the answer
+   * forever — the run that failed is the run that decides, and no later run ever asks again. Keeping it in
+   * memory means this session does not pay twice; leaving the file unwritten means the next session gets a
+   * fresh attempt at the batches that failed.
+   */
+  // …and the same refusal when nothing THREW but the answer is the shape a lost batch leaves behind.
+  const wrong = labellingLooksWrong(scoped);
+  if (failed || wrong) {
+    deps.note?.(`⚠️ The constitution labelling is not trustworthy — `
+      + `${failed ? `${failed} batch(es) failed` : wrong}. Not caching it, so the next session tries again `
+      + `rather than inheriting it.`);
+  } else {
+    try {
+      mkdirSync(join(deps.home, ".horsecode", "constitution"), { recursive: true });
+      writeFileSync(cache, JSON.stringify(scoped), "utf8");
+    } catch { /* the cache is an optimisation, never a requirement */ }
+  }
   memo.set(cache, scoped);
   return scoped;
 }

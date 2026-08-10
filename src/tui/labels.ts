@@ -55,3 +55,17 @@ export const DONE_PHRASES: Record<string, string> = {
 export function donePhrase(phase: string): string {
   return DONE_PHRASES[phase] ?? "done";
 }
+
+/** What a prompt waiting on the user IS: a question, a hand-off, a permission request, or a review. */
+export type PendingKind = "question" | "action" | "permission" | "human";
+
+/**
+ * The one place that knows what a pending tag looks like.
+ *
+ * There were two — the parser in `components.tsx` and the transcript's own strip in `TuiController.answer` —
+ * and adding `[action]` updated one of them. A hand-off then rendered correctly in its box and landed in the
+ * transcript reading `[action] 1. Tarayıcıda … aç`. Reported live. Two copies of the same four words is a
+ * list that goes stale, and this one did so on the first change made after it was written; it lives here
+ * because both sides already import this module and neither imports the other.
+ */
+export const PENDING_TAG = /^\s*\[(question|action|permission|human)\]\s*/;

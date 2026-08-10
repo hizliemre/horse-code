@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   parseConstitution, scopesForWork, selectRules, applyLabels, classifyMessage,
-  CLASSIFY_PROMPT, MAX_CONSTITUTION_CHARS, SCOPES, type ScopedRule,
+  CLASSIFY_PROMPT, MAX_CONSTITUTION_CHARS, SCOPES, labellingLooksWrong, MAX_ALWAYS_SHARE,
+  type ScopedRule,
 } from "../../src/engine/constitution.js";
 
 const DOC = `# Parrot Constitution
@@ -254,8 +255,74 @@ describe("which roles are handed the constitution", () => {
    */
   it("keeps going when a batch fails, and says how many rules fell through", async () => {
     const s = await src("src/engine/constitution-store.ts");
-    expect(s).toContain("catch { /* this batch binds everyone; the next one may still answer */ }");
+    // A failed batch no longer ends the loop OR ends the labelling: it is retried, then counted, and the
+    // remaining batches still run. See "noticing a labelling that did not happen" for why counting matters.
+    expect(s).toContain("if (attempt === CLASSIFY_RETRIES) failed++;");
     expect(s).toMatch(/could not be labelled/i);
     expect(s).toContain("applyLabels(rules, labels)");
+  });
+});
+
+/**
+ * A labelling that lost calls looks exactly like a document that binds everyone — except in size.
+ *
+ * Measured live, on the fourth run of the same 70-rule constitution: one classify call of four came back
+ * with `finish_reason: null` and zero tokens in and out, so its twenty rules fell through to `always`. With
+ * a second batch lost the same way, `always` went from 13 blocks to 35 — half the document sent to every
+ * role on every task — and a backend card then selected 20,559 characters against the 20,000 ceiling, so
+ * the mechanism began dropping the rules it exists to deliver. The result was cached, which would have made
+ * it permanent for that document.
+ */
+describe("noticing a labelling that did not happen", () => {
+  const rules = (n: number, scopes: string[]): ScopedRule[] =>
+    Array.from({ length: n }, (_, i) => ({
+      section: `${i}`, heading: `H${i}`, text: `rule ${i}`, scopes: scopes as ScopedRule["scopes"],
+    }));
+
+  it("accepts the shape three good runs produced", () => {
+    // 13-14 of 70 in `always` — measured, three times.
+    expect(labellingLooksWrong([...rules(13, ["always"]), ...rules(57, ["backend"])])).toBeUndefined();
+  });
+
+  it("rejects the shape the failed run produced", () => {
+    const bad = labellingLooksWrong([...rules(35, ["always"]), ...rules(35, ["backend"])]);
+    expect(bad).toContain("35 of 70");
+  });
+
+  it("says nothing about a project with no constitution", () => {
+    expect(labellingLooksWrong([])).toBeUndefined();
+  });
+
+  /** The threshold is a share, so it holds for a document of any size. */
+  it("scales with the document", () => {
+    const share = Math.floor(10 * MAX_ALWAYS_SHARE);
+    expect(labellingLooksWrong([...rules(share, ["always"]), ...rules(10 - share, ["backend"])])).toBeUndefined();
+    expect(labellingLooksWrong([...rules(share + 1, ["always"]), ...rules(9 - share, ["backend"])])).toBeDefined();
+  });
+});
+
+/**
+ * …and an untrustworthy labelling is not written to the cache.
+ *
+ * The cache is keyed on the document's content, so a bad answer stored under that key is the answer forever:
+ * the run that failed is the run that decides, and no later run asks again. Asserted on the source — the
+ * write is one branch of a function whose other branch is several model calls.
+ */
+describe("what reaches the cache", () => {
+  it("skips the write when a batch failed or the result looks wrong", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/engine/constitution-store.ts", "utf8");
+    expect(src).toContain("const wrong = labellingLooksWrong(scoped);");
+    const guard = src.indexOf("if (failed || wrong) {");
+    const write = src.indexOf("writeFileSync(cache");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(write); // the write is in the else branch
+  });
+
+  it("retries a batch before letting its rules fall through", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/engine/constitution-store.ts", "utf8");
+    expect(src).toContain("for (let attempt = 0; attempt <= CLASSIFY_RETRIES; attempt++)");
+    expect(src).toContain("if (attempt === CLASSIFY_RETRIES) failed++;");
   });
 });

@@ -203,6 +203,16 @@ export const CLASSIFY_PROMPT =
  */
 export const CLASSIFY_BATCH = 20;
 
+/**
+ * Extra attempts per batch before its rules fall through to `always`.
+ *
+ * A batch is a fifth of the document and the answer is cached for the document's lifetime, so a call that
+ * fails once decides how those twenty rules are treated forever. Measured live: one batch of four came back
+ * with `finish_reason: null` and zero tokens either way — nothing to do with the answer, the call simply did
+ * not happen. Two retries cost nothing on the path where the first attempt works, which is nearly all of them.
+ */
+export const CLASSIFY_RETRIES = 2;
+
 /** What the model is shown: the rules, numbered, with the heading each sits under. */
 export function classifyMessage(rules: Rule[], offset = 0): string {
   return rules.map((r, i) => `--- ${i + offset} --- (${r.heading})\n${r.text}`).join("\n\n");
@@ -227,4 +237,24 @@ export function applyLabels(
     return { ...r, scopes: scopes.length ? scopes : (["always"] as Scope[]) };
   });
   return { scoped, unlabelled };
+}
+
+/**
+ * Whether a labelling is worth keeping, and what is wrong with it if not.
+ *
+ * `always` is the fallback for anything unlabelled, so a labelling that lost calls is indistinguishable — by
+ * shape — from a document that genuinely binds everyone. It is distinguishable by SIZE: measured over four
+ * runs of the same 70-rule constitution, three good ones put 13-14 blocks in `always` and the failed one put
+ * 35. Half a document in `always` is not a constitution that happens to be universal, it is a labelling that
+ * did not happen, and caching it makes that permanent.
+ */
+export const MAX_ALWAYS_SHARE = 0.35;
+
+export function labellingLooksWrong(scoped: ScopedRule[]): string | undefined {
+  if (!scoped.length) return undefined;
+  const always = scoped.filter((r) => r.scopes.includes("always")).length;
+  if (always > scoped.length * MAX_ALWAYS_SHARE) {
+    return `${always} of ${scoped.length} rules came back as \`always\``;
+  }
+  return undefined;
 }

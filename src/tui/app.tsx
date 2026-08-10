@@ -40,6 +40,8 @@ import { stripThinking } from "./format.js";
 import { classifyResume } from "../engine/resume-intent.js";
 import { startupSummary, type StartupFacts } from "./startup-summary.js";
 import { traceRootRel } from "../engine/trace.js";
+import { unfinishedSessions, describeUnfinished } from "../engine/unfinished.js";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { RoleFitness } from "../engine/role-fitness.js";
 import { restoreTerminal, restoreOnExit, sttySane } from "./restore-terminal.js";
@@ -643,17 +645,50 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       skills: opts.listSkills?.().length ?? 0,
       constitution: existsSync(join(process.cwd(), ".specify", "memory", "constitution.md")),
       graph: { built: false, nodes: 0 },
-      traces: 0,
       traceRoot: traceRootRel(),
+      ...(unfinished.length ? { unfinished } : {}),
       ...startupExtra,
     };
   };
+  /**
+   * Work a previous run left behind, read once, before anything else is painted.
+   *
+   * Synchronous and local — a checkpoint file and a board file per session directory — because it is the line
+   * a person came back for, and an async refresh would show it after they had already started typing.
+   * See src/engine/unfinished.ts.
+   */
+  /** Commits a session branch has that the base does not — the work itself, counted without loading git. */
+  const sessionCommitCount = (branch: string): number => {
+    try {
+      const out = execFileSync("git", ["rev-list", "--count", `HEAD..${branch}`],
+        { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      return Number(out.trim()) || 0;
+    } catch { return 0; }   // the branch may be gone, or this may not be a repository
+  };
+  const unfinished = ((): string[] => {
+    try { return unfinishedSessions(process.cwd(), sessionCommitCount).map(describeUnfinished); }
+    catch { return []; }
+  })();
   const startupExtra: Partial<StartupFacts> = {};
   const paintSummary = (): void => summaryLine(startupSummary(summaryFacts()));
   paintSummary();
   // The graph and the trace index are read from disk; both are cheap and neither blocks the prompt.
   void (async () => {
     try {
+      /**
+       * The trace index FIRST, because it is the cheap one and it does not depend on the graph.
+       *
+       * It used to be read after the graph rebuild, and a rebuild on a real project takes minutes — during
+       * all of which the summary asserted "no per-file traces (`/graph trace` writes them under
+       * `docs/architecture`)" over a directory holding 2,500 of them. Reported live. The count was not wrong,
+       * it had not been taken: `traces: 0` was the placeholder, and a placeholder rendered as a definite
+       * absence tells the user to spend a 2,500-file trace run they do not need.
+       */
+      const { loadTraceIndex } = await import("../engine/trace.js");
+      let index = await loadTraceIndex(process.cwd());
+      startupExtra.traces = Object.keys(index.traces).length;
+      paintSummary();
+
       // The engine's own status, not `opts.graphStatus` — that one renders a sentence for `/graph`, and a
       // summary needs the numbers behind it.
       const { graphStatus } = await import("../engine/project-graph.js");
@@ -666,15 +701,16 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         const after = await graphStatus(process.cwd());
         startupExtra.graph = { built: after.built, nodes: after.nodes, stale: after.stale };
       }
-      const { loadTraceIndex } = await import("../engine/trace.js");
-      let index = await loadTraceIndex(process.cwd());
       /**
-       * Adopt whatever the project already documents, before counting.
+       * Adopt whatever the project already documents, and re-count.
        *
        * A repository that generates its own file-level documentation has already answered, for part of its
        * code, the question a trace asks. Indexing that costs no model call and is idempotent, so it runs on
        * the way in rather than waiting for someone to think of it — and the count the user reads is then the
        * truth, not "no traces" beside a directory full of them.
+       *
+       * It needs the graph (to know which files exist as code), which is why it waits for the rebuild while
+       * the raw count above does not.
        */
       const g0 = await import("../engine/project-graph.js").then((m) => m.loadGraphSync(process.cwd()));
       if (g0) {
@@ -699,6 +735,19 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
         }
       }
       startupExtra.traces = Object.keys(index.traces).length;
+      paintSummary();
+      /**
+       * …and then the denominator, which costs a pass over the files.
+       *
+       * Painted separately, after the count, because it is the slow half: it reads and hashes every traceable
+       * file (2,524 of them in 313 ms on the largest project to hand). The line is useful without it and
+       * better with it, so it appears when it is ready rather than holding up the summary.
+       */
+      const { traceableFiles } = await import("../engine/trace-run.js");
+      const { traceCoverage } = await import("../engine/trace.js");
+      // The index adopted above, not the one on disk — an adoption pass that found 396 documents must not be
+      // reported as 396 untraced files.
+      startupExtra.coverage = await traceCoverage(process.cwd(), await traceableFiles(process.cwd()), index);
       paintSummary();
     } catch { /* a missing graph or index is itself the answer — the summary already says so */ }
   })();

@@ -2,7 +2,7 @@ import type { BoardCardView, ProgressEvent } from "../engine/progress.js";
 import type { AskOpts, AskChoice } from "../engine/review.js";
 import type { ToolActivity } from "../core/types.js";
 import type { UsageSample } from "../providers/meter.js";
-import { phaseNarration } from "./labels.js";
+import { phaseNarration, PENDING_TAG } from "./labels.js";
 
 /** Per-turn metrics shown under the input (active model + accumulated tokens + duration). */
 export interface TurnMeta {
@@ -395,7 +395,8 @@ export class TuiController {
     // visible — otherwise each new question replaces the last and the Q&A is lost.
     let transcript = this.state.transcript;
     if (question !== undefined) {
-      const clean = question.replace(/^\s*\[(question|permission|human)\]\s*/, "").trim();
+      // The parser's own pattern, not a second copy of it — see PENDING_TAG for what the copy cost.
+      const clean = question.replace(PENDING_TAG, "").trim();
       transcript = [...transcript, { role: "assistant", text: clean }, { role: "user", text }];
     }
     this.state = { ...this.state, pending: undefined, transcript };
