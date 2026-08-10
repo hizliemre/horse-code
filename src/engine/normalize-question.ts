@@ -37,9 +37,9 @@ export function looksLikeChoices(text: string): boolean {
  * callers fall back to the raw question if this throws.
  */
 export async function normalizeQuestion(deps: TaskCycleDeps, raw: string): Promise<NormalizedQuestion> {
-  const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("refiner");
+  const { role: agentRole, model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("refiner");
   return runStructuredRole({
-    provider: deps.provider, model, fallbacks, onExhausted, onFallback,
+    provider: deps.provider, role: agentRole, model, fallbacks, onExhausted, onFallback,
     // This shapes the question the USER reads; a rule like "always ask in Turkish" belongs here.
     systemPrompt: PROMPT + deps.roleRegistry.ruleSuffix(),
     tools: new ToolRegistry(),

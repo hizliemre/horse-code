@@ -67,7 +67,7 @@ async function runRole(
     : "";
   // fallbackOpts (not resolve): spec-kit phases drive the role with the spec-kit command prompt, so they
   // supply their own prompt — but still want the role's model CHAIN + session-fallback on exhaustion.
-  const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts(role);
+  const { role: agentRole, model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts(role);
   const tools = writerRegistry(p.deps.skillRegistry, [
     ...(extraTools ? [buildAskUserTool(p.askUser, (q) => normalizeQuestion(p.deps, q))] : []),
     ...contextTools(p.deps), // the spec and the plan are written about a codebase — let them see it
@@ -105,6 +105,7 @@ async function runRole(
   if (routed.length) p.deps.note?.(`📎 \`${role}\` · ${routed.map((m) => `**${m.name}**`).join(", ")}`);
   const opts: RoleAgentOptions = {
     provider: p.deps.provider,
+    role: agentRole,
     model,
     fallbacks,
     onExhausted,

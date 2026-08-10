@@ -24,12 +24,13 @@ export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 
   const before = specText();
   // fallbackOpts: clarify is driven by the spec-kit clarify command prompt (own prompt), but wants the
   // analyst's model chain + session-fallback on exhaustion.
-  const { model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts("analyst");
+  const { role: agentRole, model, fallbacks, onExhausted, onFallback } = p.deps.roleRegistry.fallbackOpts("analyst");
   const qa: string[] = [];
   for (let round = 0; round < maxRounds; round++) {
     const context = qa.length ? `\n\nAnswers so far:\n${qa.join("\n")}` : "";
     const opts: RoleAgentOptions = {
       provider: p.deps.provider,
+      role: agentRole,
       model,
       fallbacks,
       onExhausted,
@@ -71,6 +72,7 @@ export async function runClarify(p: PhaseDeps, paths: FeaturePaths, maxRounds = 
   if (qa.length > 0 && specText() === before) {
     const opts: RoleAgentOptions = {
       provider: p.deps.provider,
+      role: agentRole,
       model, fallbacks, onExhausted, onFallback,
       systemPrompt: `${p.templates.command("clarify")}${p.deps.roleRegistry.ruleSuffix()}`,
       tools: writerRegistry(p.deps.skillRegistry),

@@ -37,9 +37,9 @@ export function isEnglish(language?: string): boolean {
 export async function inUserLanguage(deps: ReviewDeps, text: string, language?: string): Promise<string> {
   if (isEnglish(language)) return text;
   try {
-    const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("refiner");
+    const { role: agentRole, model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("refiner");
     const said = await runStructuredRole({
-      provider: deps.provider, model, fallbacks, onExhausted, onFallback,
+      provider: deps.provider, role: agentRole, model, fallbacks, onExhausted, onFallback,
       // The project's own rules shape what the user reads — the same reason normalizeQuestion carries them.
       systemPrompt: PROMPT + deps.roleRegistry.ruleSuffix(),
       tools: new ToolRegistry(),

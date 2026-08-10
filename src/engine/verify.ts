@@ -124,9 +124,10 @@ async function runTester(
    * it was the part being outvoted.
    */
   const hints = memoryHints(deps, subject ?? message, { role: "tester" });
-  const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("tester");
+  const { role: agentRole, model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("tester");
   const opts: RoleAgentOptions = {
     provider: deps.provider,
+    role: agentRole,
     model,
     fallbacks,
     onExhausted,

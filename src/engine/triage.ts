@@ -84,7 +84,7 @@ export async function triageFinding(deps: TaskCycleDeps, workdir: string, f: Fin
   tools.register(globTool);
   for (const t of contextTools(deps)) tools.register(t);
 
-  const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("analyst");
+  const { role: agentRole, model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("analyst");
   const message =
     `A defect was found while manually testing existing work.\n\n`
     + `Title: ${f.title}\n\nWhat was seen:\n${f.detail}\n`
@@ -103,6 +103,7 @@ export async function triageFinding(deps: TaskCycleDeps, workdir: string, f: Fin
 
   const opts: RoleAgentOptions = {
     provider: deps.provider,
+    role: agentRole,
     model,
     fallbacks,
     onExhausted,
@@ -229,9 +230,10 @@ export async function sizeRequest(deps: TaskCycleDeps, workdir: string, prompt: 
   tools.register(globTool);
   for (const t of contextTools(deps)) tools.register(t);
 
-  const { model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("analyst");
+  const { role: agentRole, model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("analyst");
   const opts: RoleAgentOptions = {
     provider: deps.provider,
+    role: agentRole,
     model,
     fallbacks,
     onExhausted,

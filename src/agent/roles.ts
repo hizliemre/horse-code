@@ -254,10 +254,19 @@ export class RoleRegistry {
    * The chain (primary + fallbacks) and session-fallback hooks for a role, WITHOUT its system prompt —
    * for callers that supply their own prompt (e.g. spec-kit phases). resolve() layers the prompt on top.
    */
-  fallbackOpts(roleName: string): Pick<ResolvedRole, "model" | "fallbacks" | "onExhausted" | "onStructuralFailure" | "onFallback"> {
+  fallbackOpts(roleName: string): Pick<ResolvedRole, "role" | "model" | "fallbacks" | "onExhausted" | "onStructuralFailure" | "onFallback"> {
     const chain = this.chain(roleName);
     const notify = this.notify;
     return {
+      /**
+       * The name belongs to the CHAIN, not to the prompt.
+       *
+       * It was put on `resolve()` alone, on the assumption that every caller spreads a resolved role. Seven
+       * do not: they take the chain from here and supply their own prompt (the spec-kit phases, the tester,
+       * the analyst, the question normalizer). Measured on the first run after the change — 19 tool calls,
+       * one of them attributed. Everything the attribution was for happens in those seven.
+       */
+      role: roleName,
       model: chain[0] ?? "",
       fallbacks: chain.slice(1),
       onExhausted: (m, reason) => this.markExhausted(m, reason ?? "unavailable"),
@@ -293,7 +302,7 @@ export class RoleRegistry {
       }
     }
 
-    return { role: roleName, ...this.fallbackOpts(roleName), systemPrompt: systemPrompt + this.ruleSuffix() };
+    return { ...this.fallbackOpts(roleName), systemPrompt: systemPrompt + this.ruleSuffix() };
   }
 }
 
