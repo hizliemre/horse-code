@@ -16,7 +16,13 @@ import type { PermissionEngine } from "../permission/engine.js";
 import type { Provider } from "../core/types.js";
 
 const LabelsSchema = z.object({
-  labels: z.array(z.object({ index: z.number().int(), scopes: z.array(z.enum(SCOPES)) })),
+  labels: z.array(z.object({
+    index: z.number().int().describe("The rule's number, exactly as given to you."),
+    scopes: z.array(z.enum(SCOPES)).describe(
+      "Which kinds of work this rule actually binds. Only the ones it really governs: a rule that reaches "
+      + "everyone is carried into every agent's prompt, so a scope added \"to be safe\" is paid for on every "
+      + "call that will never use it."),
+  })),
 });
 
 /** Enough to read a numbered list and answer with another one. It has no tools and nothing to explore. */

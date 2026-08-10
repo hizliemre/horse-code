@@ -29,9 +29,13 @@ export const LearnedSchema = z.object({
   memories: z.array(z.object({
     text: z.string(),
     kind: z.enum(["fact", "lesson"]),
-    /** Roles this is FOR, if it is genuinely role-specific. Omit for anything the whole project should know. */
-    audience: z.array(z.string()).optional(),
-    importance: z.number().min(0).max(1).optional(),
+    audience: z.array(z.string()).optional().describe(
+      "Roles this is FOR, if it is genuinely role-specific. Omit it for anything the whole project should "
+      + "know — a narrow audience on a general fact hides it from everyone else."),
+    importance: z.number().min(0).max(1).optional().describe(
+      "0 to 1. Around 0.9 for something that would cause real damage if forgotten (a hard project rule, a "
+      + "trap that has already cost a run); around 0.5 for a useful convention; below 0.3 for detail that is "
+      + "cheap to rediscover. This orders what survives when the store is trimmed."),
   })),
 });
 

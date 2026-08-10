@@ -22,16 +22,24 @@ const askUserParams = z.object({
   options: z.array(z.union([
     z.string(),
     z.object({ label: z.string(), description: z.string().optional(), preview: z.string().optional() }),
-  ])).optional(),
-  // Set true when the user may pick more than one option (checkboxes); false/omitted = pick one (radio).
-  multiSelect: z.boolean().optional(),
+  ])).optional().describe(
+    "The choices, when the question has discrete answers — the UI renders a selectable list instead of a "
+    + "free-text box. Omit for an open-ended question. A choice may be a plain string, or an object with a "
+    + "one-line `description` and a `preview` shown beside the list; use the rich form when the decision "
+    + "turns on trade-offs rather than on the name."),
+  multiSelect: z.boolean().optional().describe(
+    "True when the user may pick more than one (checkboxes); omitted means pick exactly one (radio)."),
   /**
    * What the user has to DO before they can answer — one action per entry.
    *
    * Present ⇒ this is a hand-off, not a question: the run has stopped because only a person can carry the
    * next step, and the UI says so rather than showing a bare "? Question".
    */
-  steps: z.array(z.string()).optional(),
+  steps: z.array(z.string()).optional().describe(
+    "What the user has to DO before they can answer — one action per entry. Supplying this makes it a "
+    + "HAND-OFF rather than a question: the run has stopped because only a person can carry the next step, "
+    + "and the UI says so instead of showing a bare \"? Question\". Use it whenever you are asking someone "
+    + "to go and perform something and report back; leave it out when you only want an answer."),
 });
 
 /**

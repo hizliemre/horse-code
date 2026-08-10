@@ -32,7 +32,9 @@ export const CODE_REVIEW_MAX_TURNS = 25;
 export const CODE_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
 
 export const VerdictSchema = z.object({
-  verdict: z.enum(["pass", "fail"]),
+  verdict: z.enum(["pass", "fail"]).describe(
+    "`fail` only if the code does not do what the task required, or does it wrongly. Style you would have "
+    + "written differently is a note on a `pass` — a fail sends the task back around the whole cycle."),
   notes: z.array(z.string()),
 });
 

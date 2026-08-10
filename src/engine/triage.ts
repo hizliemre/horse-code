@@ -58,7 +58,11 @@ export interface Triage {
 }
 
 export const TriageSchema = z.object({
-  depth: z.enum(["task", "brainstorm", "full"]),
+  depth: z.enum(["task", "brainstorm", "full"]).describe(
+    "How much process this finding deserves, and therefore what it costs. `task`: the fix is obvious once "
+    + "seen — go straight to it. `brainstorm`: something has to be DECIDED before anyone writes code. "
+    + "`full`: the finding reaches beyond itself and needs a specification. Prefer the smallest depth the "
+    + "evidence supports: buying a spec for a label is waste."),
   reason: z.string().describe("One sentence: what about this finding puts it at that depth."),
 });
 
@@ -184,7 +188,11 @@ export interface RequestSize {
 }
 
 export const RequestSizeSchema = z.object({
-  verdict: z.enum(["small", "large", "unsure"]),
+  verdict: z.enum(["small", "large", "unsure"]).describe(
+    "How big the change is, which decides whether the whole spec/plan pipeline runs. `small`: contained to a "
+    + "file or two with nothing to DECIDE once you have read the code. `large`: it needs designing, or it "
+    + "spreads across the system. `unsure`: the code did not tell you — say so rather than guessing, because "
+    + "a wrong `small` skips every gate and a wrong `large` buys a specification for a typo."),
   reason: z.string().describe("One sentence: what makes it that size, or what you are unsure about."),
   acceptance: z.array(z.string()).default([]).describe("If small or unsure: what must be true when it is done. One checkable statement each."),
   files: z.array(z.string()).default([]).describe("If small or unsure: the repo-relative files it touches."),

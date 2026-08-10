@@ -22,8 +22,9 @@ const AcceptanceSchema = z.object({
   checks: z.array(z.object({
     criterion: z.string(),
     met: z.boolean(),
-    /** Where you SAW it: a file path (+ what it contains), a symbol, a test name. "It looks fine" is not evidence. */
-    evidence: z.string(),
+    evidence: z.string().describe(
+      "Where you SAW it: a file path and what it contains, a symbol, a test name. \"It looks fine\" is not "
+      + "evidence."),
   })),
 });
 

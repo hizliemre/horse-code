@@ -9,7 +9,13 @@ import { routeByEvidence } from "./route-role.js";
 import { telemetry } from "../obs/telemetry.js";
 import { callSignal, SHORT_CALL_MS } from "../agent/deadline.js";
 
-const RouteSchema = z.object({ role: z.enum(["coder", "designer"]) });
+const RouteSchema = z.object({
+  role: z.enum(["coder", "designer"]).describe(
+    "Who should implement this. `designer` when the work IS how the thing looks or behaves to a person — "
+    + "layout, spacing, colour, copy, interaction. `coder` for everything else. Judge by what the work is, "
+    + "not by the file type: a component file holding a data hook is code work; a component file whose whole "
+    + "job is appearance is design work."),
+});
 
 /**
  * Picks the implementer role. Evidence first; the model only for the tasks it does not settle.

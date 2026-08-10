@@ -64,9 +64,15 @@ export type Severity = "critical" | "medium" | "low";
 export interface Finding { severity: Severity; note: string }
 export interface Assessment { name: string; findings: Finding[]; recommendation: "approve" | "revise" }
 export const AssessmentSchema = z.object({
-  // Each concern is tagged with a severity so the UI can show critical/medium/low counts per reviewer.
-  findings: z.array(z.object({ severity: z.enum(["critical", "medium", "low"]), note: z.string() })).default([]),
-  recommendation: z.enum(["approve", "revise"]),
+  findings: z.array(z.object({
+    severity: z.enum(["critical", "medium", "low"]).describe(
+      "`critical`: shipping it this way causes real harm — wrong behaviour, data loss, a security hole. "
+      + "`medium`: it should be fixed but nothing breaks if it ships. `low`: a preference or a tidy-up."),
+    note: z.string(),
+  })).default([]),
+  recommendation: z.enum(["approve", "revise"]).describe(
+    "`revise` only if at least one finding must be addressed before this can ship; otherwise `approve` and "
+    + "leave the findings as notes. Findings you would not block on do not make it a revise."),
 });
 
 /** Count a reviewer's findings by severity → the {C,M,L} shown after its model in the live panel. */
@@ -134,13 +140,19 @@ function severityTotal(assessments: Assessment[], sev: Severity): number {
 
 export interface CouncilVote { name: string; vote: "pass" | "revise"; rationale: string }
 export const CouncilVoteSchema = z.object({
-  vote: z.enum(["pass", "revise"]),
+  vote: z.enum(["pass", "revise"]).describe(
+    "`revise` only if something must change before this can ship. A concern you would not block on is a "
+    + "`pass` with the concern in the rationale."),
   rationale: z.string(),
 });
 
 export interface JudgeDecision { decision: "pass" | "revise" | "ask-human"; feedback: string[]; question: string }
 export const JudgeSchema = z.object({
-  decision: z.enum(["pass", "revise", "ask-human"]),
+  decision: z.enum(["pass", "revise", "ask-human"]).describe(
+    "`pass`: it can ship. `revise`: it can be fixed from the feedback below, without anyone being asked. "
+    + "`ask-human` ONLY when the decision is genuinely not yours — the reviewers disagree on something a "
+    + "person owns, or the answer depends on intent nobody wrote down. It stops the run and costs someone "
+    + "their attention; do not use it for a call you can make."),
   feedback: z.array(z.string()),
   question: z.string(),
 });

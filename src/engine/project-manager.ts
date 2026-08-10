@@ -12,7 +12,10 @@ const taskSchema = z.object({
    * worktree (a file exists and exports X, a command succeeds, a behavior is covered by a test). Without them
    * "done" is whatever the implementer says it is; with them, completion is verified rather than asserted.
    */
-  acceptance: z.array(z.string()).default([]),
+  acceptance: z.array(z.string()).default([]).describe(
+    "What must be OBSERVABLY true when this task is done — each one checkable against the worktree (a file "
+    + "exists and exports X, a command succeeds, a behaviour is covered by a test). Without them \"done\" is "
+    + "whatever the implementer says it is."),
   /**
    * The files this task is expected to create or modify, repo-relative.
    *
@@ -21,7 +24,11 @@ const taskSchema = z.object({
    * `deps` alone can be trusted to say — a missed dependency does not fail loudly, it surfaces hours later
    * as a merge conflict.
    */
-  files: z.array(z.string()).default([]),
+  files: z.array(z.string()).default([]).describe(
+    "Repo-relative files this task will CREATE or MODIFY, including its test file. Do not list files it only "
+    + "reads. This decides what may run in parallel: two tasks that write the same file are not independent "
+    + "whatever their `deps` say, and a miss does not fail loudly — it surfaces hours later as a merge "
+    + "conflict."),
 });
 
 // Note: superRefine validates dep INTEGRITY (duplicate id, dangling dep); ACYCLICITY is not

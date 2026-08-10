@@ -23,10 +23,11 @@ export interface TaskFinding {
 }
 
 export const CoverageSchema = z.object({
-  /** Plan requirements with no task at all. Each entry is quoted from the plan. */
-  missing: z.array(z.string()).default([]),
-  /** Tasks whose acceptance criteria do not actually establish what the task claims to deliver. */
-  weak: z.array(z.object({ task: z.string(), issue: z.string() })).default([]),
+  missing: z.array(z.string()).default([]).describe(
+    "Plan requirements that NO task covers. Quote each one from the plan, so it can be found again."),
+  weak: z.array(z.object({ task: z.string(), issue: z.string() })).default([]).describe(
+    "Tasks whose acceptance criteria do not actually establish what the task claims to deliver — the work "
+    + "could be marked done without the requirement being met."),
 });
 
 const words = (s: string): string[] => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);

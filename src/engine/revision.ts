@@ -35,11 +35,16 @@ export type PostComments = (comments: string[], outcome?: "changes" | "approved"
 export const REVISION_CARD = "__revision__";
 
 export const PrincipalReviewSchema = z.object({
-  decision: z.enum(["approve", "request-changes"]),
+  decision: z.enum(["approve", "request-changes"]).describe(
+    "`request-changes` only for what must change before merge; each comment is then applied by another "
+    + "agent and answered on the pull request. `approve` when nothing left would block the merge."),
   comments: z.array(z.string()),
 });
 export const PrincipalFinalSchema = z.object({
-  decision: z.enum(["accept", "ask-human"]),
+  decision: z.enum(["accept", "ask-human"]).describe(
+    "The rounds are over and findings remain. `accept`: they can merge as they stand. `ask-human`: only a "
+    + "person can settle it — this stops the run, so use it when the remaining finding is a real decision, "
+    + "not when it is merely unfinished."),
   question: z.string(),
 });
 

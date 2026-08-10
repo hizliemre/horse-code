@@ -3,7 +3,10 @@ import type { Tool } from "../core/types.js";
 
 const params = z.object({
   text: z.string(),
-  kind: z.enum(["fact", "lesson"]).optional(),
+  kind: z.enum(["fact", "lesson"]).optional().describe(
+    "`fact`: something true about this project that a later run would otherwise have to rediscover (where "
+    + "something lives, which command builds it). `lesson`: something learned the hard way — an approach "
+    + "that failed and what to do instead."),
 });
 
 /**
