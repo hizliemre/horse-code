@@ -51,10 +51,16 @@ describe("projectToolsNote", () => {
     expect(note).not.toContain("shell");
   });
 
-  it("caps its length however many tools are connected", () => {
-    const many = Array.from({ length: 60 }, (_, i) =>
+  /**
+   * The cap is on the LIST, which is the part that grows — measured as the difference a hundred more tools
+   * make, rather than against the whole note plus a slack figure for its prose. The slack was what failed
+   * when the note gained a sentence, and a test that a paragraph can break is measuring the wrong thing.
+   */
+  it("caps the list however many tools are connected", () => {
+    const many = (n: number): ReturnType<typeof tool>[] => Array.from({ length: n }, (_, i) =>
       tool(`mcp__server__tool_${i}`, `[MCP:server] Does a fairly long thing number ${i} with detail`));
-    expect(projectToolsNote(many).length).toBeLessThan(MAX_TOOL_NOTE_CHARS + 400);
+    const one = projectToolsNote(many(1)).length;
+    expect(projectToolsNote(many(200)).length - one).toBeLessThanOrEqual(MAX_TOOL_NOTE_CHARS);
   });
 });
 

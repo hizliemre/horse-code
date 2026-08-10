@@ -1,12 +1,15 @@
 import { z } from "zod";
 import type { Card } from "../board/board.js";
+import type { Tool } from "../core/types.js";
 import { runStructuredRole } from "../agent/structured.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { ToolRegistry } from "../tools/registry.js";
+import { buildFindToolTool } from "../tools/find-tool.js";
+import { findUnfinishedTool } from "../tools/unfinished-tool.js";
 import { readFileTool } from "../tools/read.js";
 import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
-import { gitTool } from "../tools/git.js";
+import { gitTool, gitWriteTool } from "../tools/git.js";
 import { applySkills, buildSkillTool } from "../skills/apply.js";
 import { rememberFactTool } from "../tools/remember.js";
 import { proposeMemoryTool } from "../tools/propose-memory.js";
@@ -38,7 +41,10 @@ export const VerdictSchema = z.object({
  *
  * `opts.mcp` additionally grants the tools that can MUTATE — only the coach gets those.
  */
-export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean; propose?: boolean; mcp?: boolean } = {}): ToolRegistry {
+export function readOnlyRegistry(
+  deps: TaskCycleDeps,
+  opts: { remember?: boolean; propose?: boolean; mcp?: boolean; gitWrite?: boolean } = {},
+): ToolRegistry {
   const r = new ToolRegistry();
   r.register(readFileTool);
   r.register(grepTool);
@@ -49,11 +55,41 @@ export function readOnlyRegistry(deps: TaskCycleDeps, opts: { remember?: boolean
   r.register(buildSkillTool(deps.skillRegistry));
   for (const t of contextTools(deps)) r.register(t);
   if (opts.remember) r.register(rememberFactTool);
+  /**
+   * add/commit/push, for the coach alone.
+   *
+   * A reviewer or a tester that could commit would be judging work it had just recorded, and neither was ever
+   * asked to. The coach is the role the user is TALKING to — "commit this and push it" is an instruction it
+   * receives directly, and every call still goes through the permission engine.
+   */
+  /**
+   * …and a way to find what the last run was doing, for the same role and the same reason.
+   *
+   * The coach stands in the project checkout; a session's work is on its own branch in its own worktree. It
+   * is the role the user says "continue from where we left off" to, and it was the role with no way to look.
+   */
+  if (opts.gitWrite) {
+    r.register(gitWriteTool);
+    r.register(findUnfinishedTool);
+  }
   // Review agents get a voice, not a pen: propose_memory queues a signal for the curator, it never writes.
   if (opts.propose) r.register(proposeMemoryTool);
   // The mutating ones, on top — registering a read-only tool twice is a no-op the registry absorbs.
-  if (opts.mcp) for (const t of deps.mcpTools?.() ?? []) r.register(t);
+  // Deferred: named in the system prompt, callable by name, but their schemas are fetched on demand. See
+  // src/tools/find-tool.ts for what carrying all of them was costing.
+  if (opts.mcp) deferMcp(r, deps.mcpTools?.() ?? []);
   return r;
+}
+
+/**
+ * Registers project tools with their schemas withheld, and the one tool that can fetch them.
+ *
+ * `find_tool` is only added when there is something to find — an agent with no project tools should not be
+ * offered a way to search for them, and told there are none.
+ */
+export function deferMcp(r: ToolRegistry, tools: Tool[]): void {
+  for (const t of tools) r.registerDeferred(t);
+  if (tools.length) r.register(buildFindToolTool(r));
 }
 
 /** Runs the code-reviewer role with read-only tools and returns a structured verdict. */

@@ -148,8 +148,16 @@ export function mcpReadTools(deps: { mcpTools?: () => import("../core/types.js")
   return (deps.mcpTools?.() ?? []).filter((t) => t.permissionLevel === "safe");
 }
 
-/** Longest the pointer may get: it is in every prompt this agent makes, for every task. */
-export const MAX_TOOL_NOTE_CHARS = 900;
+/**
+ * Longest the pointer may get: it is in every prompt this agent makes, for every task.
+ *
+ * Raised from 900 once the schemas stopped travelling with it. At 900 the list was a sample — 49 project
+ * tools clipped to about fifteen — which was the right trade while the full definitions were also being sent
+ * and a wrong one now: this catalogue is the ONLY thing telling an agent a tool exists, and a tool it cannot
+ * see is a tool it cannot ask for. Whole, the 49 come to roughly 3,000 characters (~750 tokens) against the
+ * 21,655 tokens their schemas cost — the catalogue is not where the money was.
+ */
+export const MAX_TOOL_NOTE_CHARS = 3_000;
 
 /**
  * A short pointer at the project-specific tools an agent has been given.
@@ -235,5 +243,8 @@ function mcpSection(mcp: import("../core/types.js").Tool[]): string {
   return `# Project tools\n\nThis project connects tools that know its actual stack and version:\n${clipped}\n\n` +
     `Use them instead of relying on what you remember. Your training is a snapshot; these answer for the ` +
     `version this project is on, and a confidently-recalled API that was renamed two releases ago costs a ` +
-    `review cycle to find.`;
+    `review cycle to find.\n\n` +
+    // The names are here; the parameters are not, and that is what `find_tool` is for. See find-tool.ts.
+    `You have their names, not their parameters — call \`find_tool\` with what you need (or with an exact ` +
+    `name) and they become callable from your next message.`;
 }
