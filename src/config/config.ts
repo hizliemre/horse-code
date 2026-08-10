@@ -57,6 +57,16 @@ export interface ResolvedConfig {
    */
   traceDir?: string;
   /**
+   * The branch this project's work comes from and goes back to — `main`, `master`, `development`, whatever
+   * the team calls it.
+   *
+   * There is no way to derive it reliably. `origin/HEAD` is the one authoritative source and it is unset in
+   * plenty of real repositories (measured: the project this was written against), and the branch that happens
+   * to be checked out is whatever the user was last looking at. So it is asked once, on the first resume that
+   * needs it, and written here — a per-project fact belongs in the project's config.
+   */
+  mainBranch?: string;
+  /**
    * How many implementation tasks may run at once.
    *
    * The right number is a property of YOUR subscriptions, not of the tool: it is bounded by how many parallel
@@ -132,6 +142,7 @@ const fileSchema = z
     specKit: z.object({ version: z.string() }).optional(),
     modelSources: z.array(z.string()).optional(),
     traceDir: z.string().optional(), // where /graph trace writes; empty = .horsecode/traces
+    mainBranch: z.string().optional(), // the branch a resumed session syncs from; asked once, then remembered
     // Bounded: below 1 nothing runs; above 32 the git merge lock, not the models, becomes the limit.
     maxParallel: z.number().int().min(1).max(32).optional(),
     telemetry: z.boolean().optional(),

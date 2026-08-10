@@ -113,6 +113,9 @@ export function sessionName(now: Date, taken: (name: string) => boolean): string
 
 export class WorktreeManager {
   private readonly repoRoot: string;
+
+  /** The project checkout this manager was built for — where per-project settings and the remote live. */
+  get projectRoot(): string { return this.repoRoot; }
   /**
    * Where sessions are kept, which is the REPOSITORY's business and not the caller's checkout.
    *
@@ -339,7 +342,18 @@ export class WorktreeManager {
   }
 
   async mergeTask(session: WorktreeSession, task: TaskWorktree): Promise<MergeResult> {
-    const r = await this.git(["merge", task.branch], session.baseWorktree);
+    return this.mergeRef(session, task.branch);
+  }
+
+  /**
+   * Merges any ref into the session base — a task branch coming home, or the project's main branch coming in.
+   *
+   * A resumed session picks up a branch that was cut days ago, and everything the team merged in the meantime
+   * is missing from it: it continues against code that no longer exists. Bringing main IN is the same
+   * operation as bringing a task in, which is why it is the same method and the same conflict path.
+   */
+  async mergeRef(session: WorktreeSession, ref: string): Promise<MergeResult> {
+    const r = await this.git(["merge", ref], session.baseWorktree);
     if (r.code === 0) return { status: "merged" };
     const diff = await this.git(
       ["diff", "--name-only", "--diff-filter=U"],
@@ -348,7 +362,32 @@ export class WorktreeManager {
     const files = diff.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
     if (files.length > 0) return { status: "conflict", files };
     // Not a conflict, some other merge error → surface it.
-    throw new Error(`git merge ${task.branch} failed (${r.code}): ${(r.stderr || r.stdout).trim()}`);
+    throw new Error(`git merge ${ref} failed (${r.code}): ${(r.stderr || r.stdout).trim()}`);
+  }
+
+  /**
+   * Brings one branch up to date from the remote. Best-effort: no remote, no network, no such branch — the
+   * merge then runs against the local copy, which is still better than not syncing at all.
+   *
+   * Returns the ref to merge: `origin/<branch>` when the fetch landed, the plain branch name otherwise.
+   */
+  async fetchBranch(branch: string): Promise<string> {
+    const r = await this.git(["fetch", "origin", branch], this.repoRoot);
+    if (r.code !== 0) return branch;
+    const remote = await this.git(["rev-parse", "--verify", `origin/${branch}`], this.repoRoot);
+    return remote.code === 0 ? `origin/${branch}` : branch;
+  }
+
+  /** Whether the session base already contains `ref` — nothing to merge, and nothing to say about it. */
+  async containsRef(session: WorktreeSession, ref: string): Promise<boolean> {
+    const r = await this.git(["merge-base", "--is-ancestor", ref, "HEAD"], session.baseWorktree);
+    return r.code === 0;
+  }
+
+  /** How many commits `ref` has that the session base does not — what a sync is about to bring in. */
+  async commitsBehind(session: WorktreeSession, ref: string): Promise<number> {
+    const r = await this.git(["rev-list", "--count", `HEAD..${ref}`], session.baseWorktree);
+    return r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
   }
 
   /** Files git marks as unmerged (conflicted) in the base worktree. */
@@ -367,6 +406,23 @@ export class WorktreeManager {
    */
   async resolveWithBase(session: WorktreeSession, file: string): Promise<void> {
     await this.git(["checkout", "--ours", "--", file], session.baseWorktree);
+    await this.git(["add", "--", file], session.baseWorktree);
+  }
+
+  /**
+   * One side of a conflicted file, as git holds it: stage 2 is the base's, stage 3 is the incoming branch's.
+   *
+   * Needed by the resolutions that COMBINE the two sides rather than choosing one — reading the working-tree
+   * copy would only give the version with the markers in it.
+   */
+  async conflictSide(session: WorktreeSession, file: string, side: "ours" | "theirs"): Promise<string | undefined> {
+    const r = await this.git(["show", `:${side === "ours" ? 2 : 3}:${file}`], session.baseWorktree);
+    return r.code === 0 ? r.stdout : undefined;
+  }
+
+  /** Stages content the caller merged itself, settling that file's conflict. */
+  async resolveWith(session: WorktreeSession, file: string, content: string): Promise<void> {
+    await writeFile(join(session.baseWorktree, file), content, "utf8");
     await this.git(["add", "--", file], session.baseWorktree);
   }
 

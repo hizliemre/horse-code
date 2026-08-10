@@ -5,7 +5,8 @@ import type { EscalationDeps } from "./escalation.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { runToCompletion } from "../agent/loop.js";
 import { runReviewer } from "./reviewer.js";
-import { traceRootRel } from "./trace.js";
+import { memoryHints, reinforceTouched } from "./memory-inject.js";
+import { traceRootRel, TRACE_INDEX, parseTraceIndex, mergeTraceIndexes, serializeTraceIndex } from "./trace.js";
 import { contextTools } from "./task-types.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { readFileTool } from "../tools/read.js";
@@ -19,7 +20,9 @@ import { readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 
 export interface ConflictDeps extends EscalationDeps {
-  manager: Pick<WorktreeManager, "unmergedFiles" | "commitMerge" | "abortMerge" | "resolveWithBase">;
+  manager: Pick<WorktreeManager, "unmergedFiles" | "commitMerge" | "abortMerge" | "resolveWithBase">
+    /** Optional: the combining resolutions need both sides. A manager without them falls back cleanly. */
+    & Partial<Pick<WorktreeManager, "conflictSide" | "resolveWith">>;
 }
 
 export type ConflictResult = { status: "resolved" } | { status: "unresolved"; task: TaskWorktree };
@@ -75,7 +78,7 @@ export function conflictHunks(text: string, maxChars = 4000): string {
 }
 
 /** Whether any of the given files still contains a conflict marker (`<<<<<<<`). */
-async function hasConflictMarkers(baseWorktree: string, files: string[]): Promise<boolean> {
+export async function hasConflictMarkers(baseWorktree: string, files: string[]): Promise<boolean> {
   for (const f of files) {
     try {
       const content = await readFile(join(baseWorktree, f), "utf8");
@@ -157,18 +160,65 @@ export async function regenerateLockfile(file: string, baseWorktree: string): Pr
       + `kept the base's copy; run it yourself before merging`;
 }
 
-export async function resolveMergeConflict(
+/**
+ * Settles the conflicts nobody has to think about, and reports what is left.
+ *
+ * Generated files are the ones a merge should never ask a person — or a model — about, and every merge into a
+ * session base meets them: a task branch coming home and the project's own main branch coming in both bring
+ * lockfiles and traces. Extracted so both callers get the same treatment; the judgement rounds below are what
+ * differs between them, not this.
+ *
+ * Returns the files that still need judgement (`conflicted`) alongside the ones it settled (`generated`), so
+ * the caller can tell "nothing left to decide" from "there was nothing generated".
+ */
+/**
+ * Combines both sides of a conflicted trace index and stages the result. Returns how many entries it holds,
+ * or undefined when either side is not an index — in which case the caller falls back to the normal path.
+ */
+async function mergeConflictedTraceIndex(
   deps: ConflictDeps,
   session: WorktreeSession,
-  board: Board,
-  taskId: string,
-  task: TaskWorktree,
-): Promise<ConflictResult> {
-  if (!board.get(taskId)) throw new Error(`resolveMergeConflict: unknown task: ${taskId}`);
-  const allConflicted = await deps.manager.unmergedFiles(session);
-  const rounds = Math.max(1, deps.rounds);
-  const base = session.baseWorktree;
+  file: string,
+): Promise<number | undefined> {
+  if (!deps.manager.conflictSide || !deps.manager.resolveWith) return undefined;
+  try {
+    const ourText = await deps.manager.conflictSide(session, file, "ours");
+    const theirText = await deps.manager.conflictSide(session, file, "theirs");
+    if (ourText === undefined || theirText === undefined) return undefined;
+    const ours = parseTraceIndex(ourText);
+    const theirs = parseTraceIndex(theirText);
+    if (!ours || !theirs) return undefined;
+    const merged = mergeTraceIndexes(ours, theirs);
+    await deps.manager.resolveWith(session, file, serializeTraceIndex(merged));
+    return Object.keys(merged.traces).length;
+  } catch {
+    return undefined; // anything unexpected → the file is still conflicted, and still resolvable the long way
+  }
+}
 
+export async function resolveGeneratedConflicts(
+  deps: ConflictDeps,
+  session: WorktreeSession,
+  conflictedFiles: string[],
+): Promise<{ conflicted: string[]; generated: string[] }> {
+  const base = session.baseWorktree;
+  /**
+   * The trace index is neither merged by hand nor taken from one side. It is combined.
+   *
+   * It is a map from file to that file's trace, so two branches conflicting on it are two branches that traced
+   * different files — the union is the answer, exactly, with no judgement involved. This runs first because
+   * the whole point is to settle it before anything else looks at it.
+   */
+  const indexPath = `${traceRootRel().replace(/\\/g, "/")}/${TRACE_INDEX}`;
+  const rest: string[] = [];
+  let allConflicted = conflictedFiles;
+  for (const f of allConflicted) {
+    if (f !== indexPath) { rest.push(f); continue; }
+    const merged = await mergeConflictedTraceIndex(deps, session, f);
+    if (merged === undefined) { rest.push(f); continue; } // not parseable → let the normal path have it
+    deps.note?.(`🗂️ \`${f}\` — trace index; combined both sides (${merged} entries).`);
+  }
+  allConflicted = rest;
   /**
    * A lockfile is not merged. It is regenerated.
    *
@@ -225,29 +275,86 @@ export async function resolveMergeConflict(
       } catch { /* the base's copy is already staged; the merge can proceed */ }
     }
   }
+  return { conflicted, generated };
+}
+
+/**
+ * The conflicted regions, read once and handed over — the resolver should not spend turns finding them.
+ *
+ * Measured live: a three-file conflict ended with "maximum turn count exceeded (50)", the merge abandoned
+ * with the task's review already passed. The same lesson as the reviewers: handed, not hunted.
+ */
+export async function handedHunks(files: string[], cwd: string): Promise<string> {
+  const parts: string[] = [];
+  for (const f of files.slice(0, 10)) {
+    try {
+      const text = await readFile(join(cwd, f), "utf8");
+      const hunks = conflictHunks(text);
+      if (hunks) parts.push(`--- ${f}\n${hunks}`);
+    } catch { /* unreadable → the resolver can still open it itself */ }
+  }
+  return parts.length ? `The conflicted regions:\n\n${parts.join("\n\n")}\n\n` : "";
+}
+
+/**
+ * One round of the operational agent over a mid-merge worktree: remove every marker, keep both intents.
+ *
+ * The agent, its toolset and its turn budget are the same wherever a merge conflicts, so they live here
+ * rather than in each caller — what a caller decides is how many rounds to allow and how to check the result.
+ */
+export async function runConflictResolver(
+  deps: ConflictDeps,
+  base: string,
+  conflicted: string[],
+  notes = "",
+): Promise<void> {
+  const op = deps.roleRegistry.resolve("operational");
+  /**
+   * What earlier runs learned about these FILES, before their two versions are merged by hand.
+   *
+   * Retrieved on the conflicted paths, which is the one query here that memory can answer well: memories
+   * carry file anchors, and an anchor appearing in the query is the strongest signal the scorer has. A
+   * file that conflicts repeatedly is exactly the file someone has already written down how to treat —
+   * "this array is generated, take theirs", "these two lists must stay in the same order".
+   */
+  const hints = memoryHints(deps, conflicted.join(" "), { role: "operational" });
+  const ask = { role: "user" as const, content:
+    `A git merge left conflicts in the base worktree. Resolve them: for EACH file, remove all conflict ` +
+    `markers (<<<<<<<, =======, >>>>>>>) and combine BOTH sides' changes so the intent of each is ` +
+    `preserved (don't just pick one side unless the changes are truly incompatible). ` +
+    `Conflicted files: ${conflicted.join(", ")}.\n\n${await handedHunks(conflicted, base)}${notes}` };
+  const resolveOpts: RoleAgentOptions = {
+    provider: deps.provider, ...op,
+    tools: resolverRegistry(),
+    messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
+    permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
+    perAttemptMs: LONG_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
+    maxTurns: resolveTurnBudget(conflicted.length),
+    // It is combining two sides of the user's own code; how it read the conflict is the thing to check.
+    ...(deps.note ? { onSay: (t: string) => deps.note?.(`  ↳ ${t}`) } : {}),
+  };
+  await runToCompletion(resolveOpts);
+  // Credited by the files it went to — the same signal the implementer is judged on.
+  reinforceTouched(deps, hints.ids, conflicted, "operational");
+}
+
+export async function resolveMergeConflict(
+  deps: ConflictDeps,
+  session: WorktreeSession,
+  board: Board,
+  taskId: string,
+  task: TaskWorktree,
+): Promise<ConflictResult> {
+  if (!board.get(taskId)) throw new Error(`resolveMergeConflict: unknown task: ${taskId}`);
+  const rounds = Math.max(1, deps.rounds);
+  const base = session.baseWorktree;
+  const { conflicted, generated } =
+    await resolveGeneratedConflicts(deps, session, await deps.manager.unmergedFiles(session));
   if (!conflicted.length && generated.length) {
     // Nothing left that needs judgement — the merge can be completed on the regenerated file alone.
     return { status: "resolved" };
   }
   deps.note?.(`🔀 Merge conflict in ${conflicted.join(", ")} — operational resolving…`);
-
-  /**
-   * The conflicted regions, read once and handed over — the resolver should not spend turns finding them.
-   *
-   * Measured live: a three-file conflict ended with "maximum turn count exceeded (50)", the merge abandoned
-   * with the task's review already passed. The same lesson as the reviewers: handed, not hunted.
-   */
-  const handedHunks = async (files: string[], cwd: string): Promise<string> => {
-    const parts: string[] = [];
-    for (const f of files.slice(0, 10)) {
-      try {
-        const text = await readFile(join(cwd, f), "utf8");
-        const hunks = conflictHunks(text);
-        if (hunks) parts.push(`--- ${f}\n${hunks}`);
-      } catch { /* unreadable → the resolver can still open it itself */ }
-    }
-    return parts.length ? `The conflicted regions:\n\n${parts.join("\n\n")}\n\n` : "";
-  };
 
   for (;;) {
     for (let i = 0; i < rounds; i++) {
@@ -257,22 +364,7 @@ export async function resolveMergeConflict(
         : "";
 
       // The operational agent diagnoses + resolves the conflict (file edits only — no shell).
-      const op = deps.roleRegistry.resolve("operational");
-      const resolveOpts: RoleAgentOptions = {
-        provider: deps.provider, ...op,
-        tools: resolverRegistry(),
-        messages: [{ role: "user", content:
-          `A git merge left conflicts in the base worktree. Resolve them: for EACH file, remove all conflict ` +
-          `markers (<<<<<<<, =======, >>>>>>>) and combine BOTH sides' changes so the intent of each is ` +
-          `preserved (don't just pick one side unless the changes are truly incompatible). ` +
-          `Conflicted files: ${conflicted.join(", ")}.\n\n${await handedHunks(conflicted, base)}${notes}` }],
-        permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
-        perAttemptMs: LONG_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions
-        maxTurns: resolveTurnBudget(conflicted.length),
-        // It is combining two sides of the user's own code; how it read the conflict is the thing to check.
-        ...(deps.note ? { onSay: (t: string) => deps.note?.(`  ↳ ${t}`) } : {}),
-      };
-      await runToCompletion(resolveOpts);
+      await runConflictResolver(deps, base, conflicted, notes);
       board.appendStage(taskId, { role: "operational", action: "conflict:resolve-attempt" });
 
       // verify: deterministic marker scan + code-reviewer

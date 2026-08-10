@@ -10,6 +10,8 @@ import type { ReviewDeps, AskUser } from "./review.js";
 import type { AskHuman } from "./escalation.js";
 import { readOnlyRegistry } from "./reviewer.js";
 import { runUpstream } from "./upstream.js";
+import { syncMainBranch } from "./sync-main.js";
+import { defaultGitRunner } from "../worktree/git.js";
 import { runProjectManager } from "./project-manager.js";
 import { auditBreakdown, repairRequest } from "./task-audit.js";
 import { runWaves } from "./wave-engine.js";
@@ -19,7 +21,7 @@ import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } fr
 import { describeInherited, describeTopUp } from "../worktree/inherit.js";
 import { snapshotBoard, type ProgressEvent } from "./progress.js";
 import { appendReviewNotes } from "./review-notes.js";
-import { memoryHints } from "./memory-inject.js";
+import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { curateMemories } from "./memory-consolidate.js";
 import { saveBoard, loadBoard, flushBoard } from "../board/persist.js";
 import { existsSync } from "node:fs";
@@ -72,10 +74,18 @@ export type JobResult =
   /** A small change, done in the working tree: no worktree, no branch, nothing to merge. */
   | { kind: "tweaked"; report: string; done: boolean; refinedPrompt?: string };
 
-function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOptions {
+/**
+ * The options AND the hint ids, because the breakdown has to be able to credit what it used.
+ *
+ * The ids used to be computed here and dropped on the floor, so this role injected memory and could never
+ * report a single use of it. Measured on one run: `project-manager` 36 injections, 0 uses — beside a
+ * `correctness-judge` at 92%. That is a difference in measurement, not in usefulness, and it is what makes
+ * hygiene mark a working memory as dead weight.
+ */
+function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): { opts: RoleAgentOptions; ids: string[] } {
   const resolved = deps.roleRegistry.resolve("project-manager");
   const hints = memoryHints(deps, `task breakdown ${tasksPath}`, { role: "project-manager" });
-  return {
+  const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps),
     messages: [...(hints.message ? [{ role: "user" as const, content: hints.message }] : []), { role: "user", content:
@@ -91,6 +101,12 @@ function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): RoleAgentOpt
       `that costs a merge conflict hours later rather than an error now. Do not list files a task only READS.` }],
     permission: deps.permission, approve: deps.approve, cwd: workdir, signal: deps.signal,
   };
+  return { opts, ids: hints.ids };
+}
+
+/** What the breakdown SAYS — the artefact a project-manager is judged by, the way a verdict judges a judge. */
+function boardText(b: Board): string {
+  return b.list().map((c) => `${c.title} ${c.acceptance.join(" ")} ${c.files.join(" ")}`).join("\n");
 }
 
 /** How much of the plan the auditor is given. Long enough for a real plan, short of paying for a whole book. */
@@ -125,7 +141,9 @@ async function gateBreakdown(
   deps: JobDeps, workdir: string, tasksPath: string, planPath: string,
   emit: (ev: ProgressEvent) => void,
 ): Promise<Board> {
-  let board = await runProjectManager(pmOpts(deps, workdir, tasksPath));
+  const pm = pmOpts(deps, workdir, tasksPath);
+  let board = await runProjectManager(pm.opts);
+  reinforceUsed(deps, pm.ids, boardText(board), "project-manager");
   let planText = "";
   try { planText = (await readFile(join(workdir, planPath), "utf8")).slice(0, MAX_PLAN_CHARS); } catch { /* the audit still runs on structure alone */ }
 
@@ -137,8 +155,9 @@ async function gateBreakdown(
     audit.findings.map((f) => `  · ${f.task ? `${f.task}: ` : ""}${f.issue}`).join("\n") });
 
   try {
-    const opts = pmOpts(deps, workdir, tasksPath);
-    board = await runProjectManager({ ...opts, messages: [...opts.messages, { role: "user", content: repairRequest(audit.findings) }] });
+    const repair = pmOpts(deps, workdir, tasksPath);
+    board = await runProjectManager({ ...repair.opts, messages: [...repair.opts.messages, { role: "user", content: repairRequest(audit.findings) }] });
+    reinforceUsed(deps, repair.ids, boardText(board), "project-manager");
   } catch (e) {
     if (deps.signal.aborted) throw e;
     emit({ kind: "note", text: `⚠️ The repaired breakdown did not come back — continuing with the original.` });
@@ -311,6 +330,22 @@ export async function runJob(
       adopt(resumable);
       resume = cp;
       emit({ kind: "note", text: `⏩ Resuming "${cp.title}" at \`${resumable.baseWorktree}\` — ${at}.` });
+      /**
+       * …but not on the code it was left with.
+       *
+       * The branch was cut when the session opened and the project has moved since. Continuing without the
+       * main branch means editing files whose current version is elsewhere, and reviewing against a base
+       * nobody shares — the divergence is real from the first turn, it is only DISCOVERED at the pull
+       * request. Merging it in first costs one merge now instead of one merge plus everything built on top
+       * of the wrong code. See src/engine/sync-main.ts for why nothing here is allowed to be fatal.
+       */
+      await syncMainBranch(
+        { ...deps, note: (text: string) => emit({ kind: "note", text }) },
+        resumable,
+        { git: defaultGitRunner, askUser: opts.askUser, language: cp.language },
+      ).catch((e: unknown) => {
+        emit({ kind: "note", text: `⚠ Branch sync skipped (${e instanceof Error ? e.message : String(e)}).` });
+      });
     } else {
       // "continue" is never a request to START something. Falling through here used to hand the word itself to
       // the refiner, which dutifully classified it as a feature and scaffolded a whole new project out of it —
