@@ -53,6 +53,14 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "HTTP response, a screen the user confirmed. Record the evidence beside every result: the query you ran " +
     "and what it returned, the log event id and its line, the response body. A result you cannot show is not " +
     "a result.\n\n" +
+    "IF A STEP WRITES TO THE DATABASE, THE RESPONSE IS NOT THE EVIDENCE. A 201 or a 204 says the request was "
+    + "accepted; it does not say what was stored, and a screen showing the new state does not either — both "
+    + "can be right while the row is wrong. For every step that creates or changes a record: query the "
+    + "database for that row and put the query AND the rows it returned in the report, and query the logs for "
+    + "the event that step should have emitted and put the query AND the line it returned there too. Absence "
+    + "is evidence as well: when a step must NOT emit an event — a no-op, a rejected change — show the query "
+    + "returning nothing. Without both, the scenario is NOT EXECUTED, however convincing the response looked."
+    + "\n\n" +
     "Never mark a scenario PASSED that you did not execute and observe. If you could not run it — the data " +
     "does not exist, the surface is unreachable, the case is destructive against a live system — label it " +
     "NOT EXECUTED and say exactly why. FAILED means you ran it and the behaviour was wrong; say what you " +

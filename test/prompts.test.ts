@@ -91,4 +91,32 @@ describe("the tester's prompt", () => {
   it("covers the results a silent run hides best — failures and the ones never run", () => {
     expect(tester).toMatch(/NOT EXECUTED ones the same way/i);
   });
+
+  /**
+   * A 201 is not evidence that anything was stored.
+   *
+   * Measured live: a step-media scenario was exercised, the HTTP statuses and the screen were reported in
+   * chat, and the report kept the scenario at PENDING with no row and no log line behind it. The same run
+   * queried Loki once — for its label list, to check it was alive — and the database not at all, while the
+   * DB and log evidence already in the report belonged to an earlier scenario from an earlier run.
+   */
+  it("refuses a stored-state claim that rests on the response alone", () => {
+    expect(tester).toMatch(/THE RESPONSE IS NOT THE EVIDENCE/);
+    expect(tester).toMatch(/query the database for that row/i);
+    expect(tester).toMatch(/query the logs for the event/i);
+  });
+
+  it("asks for the query AND what it returned, not a claim that it was checked", () => {
+    expect(tester).toMatch(/the query AND the rows it returned/i);
+    expect(tester).toMatch(/the query AND the line it returned/i);
+  });
+
+  it("treats an absent event as evidence too — the no-op case that is easiest to skip", () => {
+    expect(tester).toMatch(/Absence is evidence/i);
+    expect(tester).toMatch(/returning nothing/i);
+  });
+
+  it("says what happens without it, so the rule has a consequence", () => {
+    expect(tester).toMatch(/the scenario is NOT EXECUTED, however convincing/i);
+  });
 });
