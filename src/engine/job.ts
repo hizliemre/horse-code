@@ -87,7 +87,7 @@ function pmOpts(deps: JobDeps, workdir: string, tasksPath: string): { opts: Role
   const hints = memoryHints(deps, `task breakdown ${tasksPath}`, { role: "project-manager" });
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
-    tools: readOnlyRegistry(deps),
+    tools: readOnlyRegistry(deps, { remember: true }),
     messages: [...(hints.message ? [{ role: "user" as const, content: hints.message }] : []), { role: "user", content:
       `Read the "${tasksPath}" task list and turn it into board tasks (id, title, deps, acceptance, files).\n\n` +
       `For EACH task also write its \`acceptance\` — 2-4 concrete statements that will be OBSERVABLY true when ` +

@@ -10,6 +10,7 @@ import { traceRootRel, TRACE_INDEX, parseTraceIndex, mergeTraceIndexes, serializ
 import { contextTools } from "./task-types.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { readFileTool } from "../tools/read.js";
+import { buildRememberTool } from "../tools/remember.js";
 import { writeFileTool } from "../tools/write.js";
 import { editFileTool } from "../tools/edit.js";
 import { grepTool } from "../tools/grep.js";
@@ -36,8 +37,10 @@ export type ConflictResult = { status: "resolved" } | { status: "unresolved"; ta
  * `conflict:resolve-failed: maximum turn count exceeded (50)` — fifty turns, and the merge was abandoned with
  * the task's review already passed. Tools it does not need are turns it will spend.
  */
-function resolverRegistry(): ToolRegistry {
+function resolverRegistry(remember?: (fact: string) => void): ToolRegistry {
   const r = new ToolRegistry();
+  // A conflict is where two intentions met; what settled it is worth the next agent knowing.
+  r.register(buildRememberTool(remember));
   r.register(readFileTool);
   r.register(writeFileTool);
   r.register(editFileTool);
@@ -325,7 +328,7 @@ export async function runConflictResolver(
     `Conflicted files: ${conflicted.join(", ")}.\n\n${await handedHunks(conflicted, base)}${notes}` };
   const resolveOpts: RoleAgentOptions = {
     provider: deps.provider, ...op,
-    tools: resolverRegistry(),
+    tools: resolverRegistry(deps.rememberFact),
     messages: hints.message ? [{ role: "user", content: hints.message }, ask] : [ask],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
     perAttemptMs: LONG_CALL_MS, // each model in the chain gets its own clock — see RoleAgentOptions

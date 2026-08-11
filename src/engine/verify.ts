@@ -18,6 +18,7 @@ import { deferMcp } from "./reviewer.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { buildAskUserTool } from "./writer-registry.js";
+import { buildRememberTool } from "../tools/remember.js";
 import type { AskUser } from "./review.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
 import type { TaskCycleDeps } from "./task-types.js";
@@ -87,6 +88,14 @@ function testerTools(deps: TaskCycleDeps, askUser: AskUser, findings: FindingQue
   r.register(buildAskUserTool(askUser));
   // The one thing the tester does about a defect: say so. Fixing is another role's job, deliberately.
   r.register(buildReportFindingTool(findings));
+  /**
+   * What it worked out about the project, kept.
+   *
+   * Measured: a tester spent 110 tool calls establishing which interceptor fills the audit columns, how the
+   * tenant filter is applied and which columns exist — and had no tool with which to record any of it, so the
+   * next session began by working it out again.
+   */
+  r.register(buildRememberTool(deps.rememberFact));
   for (const t of contextTools(deps)) r.register(t);
   // Whatever the project has connected: a work-item tracker holding the scenarios, a log or metrics server.
   // Named in the system prompt, fetched on demand — the tester carried 49 schemas through every one of its

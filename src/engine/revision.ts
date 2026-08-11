@@ -96,7 +96,8 @@ async function principalFinal(deps: RevisionDeps, base: string) {
   const resolved = deps.roleRegistry.resolve("principal-coder");
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
-    tools: readOnlyRegistry(deps),
+    // The principal decides what ships; what it learns about this codebase outlives the round.
+    tools: readOnlyRegistry(deps, { remember: true }),
     messages: [{ role: "user", content: "FINAL DECISION: Revision rounds are over and findings still remain. Give accept or ask-human (a question to ask the user)." }],
     permission: deps.permission, approve: deps.approve, cwd: base, signal: deps.signal,
   };

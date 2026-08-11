@@ -2,6 +2,7 @@ import type { Card } from "../board/board.js";
 import { runToCompletion, type RoleAgentOptions } from "../agent/loop.js";
 import { withDeadline } from "../agent/deadline.js";
 import { createDefaultRegistry } from "../tools/index.js";
+import { buildRememberTool } from "../tools/remember.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
 import { memoryHints, reinforceTouched, reinforceUsed } from "./memory-inject.js";
@@ -117,6 +118,8 @@ export async function runImplementer(
   // Project knowledge (e.g. a code-graph server): what calls this, what a change here can reach. Without it
   // the implementer edits a file with no idea what depends on it.
   for (const t of contextTools(deps)) tools.register(t);
+  // …and what it learns on the way, kept for the next agent that opens this area.
+  tools.register(buildRememberTool(deps.rememberFact));
 
   const returning = task.reviewNotes.length > 0;
   /**

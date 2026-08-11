@@ -12,6 +12,7 @@ import { loadGraphSync } from "../engine/project-graph.js";
 import { writerRegistry, buildAskUserTool } from "../engine/writer-registry.js";
 import { commitFile } from "../engine/operational.js";
 import { normalizeQuestion } from "../engine/normalize-question.js";
+import { buildRememberTool } from "../tools/remember.js";
 import { memoryHints, reinforceUsed } from "../engine/memory-inject.js";
 import type { TaskCycleDeps } from "../engine/task-types.js";
 import type { AskUser } from "../engine/review.js";
@@ -71,6 +72,8 @@ async function runRole(
   const tools = writerRegistry(p.deps.skillRegistry, [
     ...(extraTools ? [buildAskUserTool(p.askUser, (q) => normalizeQuestion(p.deps, q))] : []),
     ...contextTools(p.deps), // the spec and the plan are written about a codebase — let them see it
+    // A phase that reads the codebase to write about it is exactly where durable facts are found.
+    buildRememberTool(p.deps.rememberFact),
   ]);
   /**
    * Retrieved on the SUBJECT, not on the message that carries it.

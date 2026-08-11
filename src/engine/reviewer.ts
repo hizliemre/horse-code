@@ -11,7 +11,7 @@ import { grepTool } from "../tools/grep.js";
 import { globTool } from "../tools/glob.js";
 import { gitTool, gitWriteTool } from "../tools/git.js";
 import { applySkills, buildSkillTool } from "../skills/apply.js";
-import { rememberFactTool } from "../tools/remember.js";
+import { buildRememberTool } from "../tools/remember.js";
 import { proposeMemoryTool } from "../tools/propose-memory.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
@@ -56,7 +56,15 @@ export function readOnlyRegistry(
   r.register(gitTool);
   r.register(buildSkillTool(deps.skillRegistry));
   for (const t of contextTools(deps)) r.register(t);
-  if (opts.remember) r.register(rememberFactTool);
+  /**
+   * Writing is for the roles doing the work, not for the lenses judging it.
+   *
+   * A review lens is a narrow single-angle finder on a cheap tier, and there are fifteen of them per change —
+   * exactly the agents whose unsupervised writes would poison the store. They keep `propose_memory`, which
+   * goes through the curator. What changed is that the flag is now SET for the roles that go and find things
+   * out and would otherwise have to find them out again: see the call sites.
+   */
+  if (opts.remember) r.register(buildRememberTool(deps.rememberFact));
   /**
    * add/commit/push, for the coach alone.
    *
