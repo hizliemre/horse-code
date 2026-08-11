@@ -1,5 +1,6 @@
 import type { GitRunner } from "../worktree/git.js";
 import { defaultGitRunner } from "../worktree/git.js";
+import { excludeOwnState } from "../worktree/manager.js";
 
 /**
  * How much of a task's diff a reviewer is handed.
@@ -21,13 +22,27 @@ export const MAX_DIFF_CHARS = 60_000;
  *
  * A reviewer's subject is the change. Handing it over costs one git call and removes the search entirely.
  */
+/**
+ * …and never our own bookkeeping, which is the one thing guaranteed to be in it.
+ *
+ * `excludeOwnState` was written for the PULL REQUEST diff, after PR #765 handed a reviewer 60,000 characters
+ * holding exactly two files — `.gitignore` and `.horsecode/memory.jsonl` — while all 36 source files fell
+ * outside the budget. The TASK diff, which every lens, the council and the acceptance gate read, was left
+ * asking the same question the same way.
+ *
+ * Measured, one door over, on the run that produced this: the gate reported "the diff visible in the prompt
+ * is entirely memory.jsonl metadata changes (injection counters). The actual Angular/HTML template changes
+ * that this task requires were in the truncated portion of the diff, and no source file was opened to
+ * verify." It then failed 6 of 6 criteria and 31 minutes of work was thrown away — over a file the work never
+ * touched. `.horsecode/` sorts almost first alphabetically, so this is not bad luck; it is where it always is.
+ */
 export async function taskDiff(
   cwd: string,
   baseRef: string,
   git: GitRunner = defaultGitRunner,
 ): Promise<string> {
   // Three dots: what THIS branch added since it forked, not everything that has landed on base meanwhile.
-  const out = await git(["diff", `${baseRef}...HEAD`], cwd);
+  const out = await git(["diff", `${baseRef}...HEAD`, "--", ".", ...excludeOwnState()], cwd);
   if (out.code !== 0) return "";
   const diff = out.stdout;
   if (diff.length <= MAX_DIFF_CHARS) return diff;
@@ -57,7 +72,7 @@ export async function workingTreeDiff(
   git: GitRunner = defaultGitRunner,
 ): Promise<string> {
   // `HEAD` rather than the index: staged and unstaged edits are both part of what is being reviewed.
-  const out = await git(["diff", "HEAD"], cwd);
+  const out = await git(["diff", "HEAD", "--", ".", ...excludeOwnState()], cwd);
   if (out.code !== 0) return "";
   const diff = out.stdout;
   if (diff.length <= MAX_DIFF_CHARS) return diff;
@@ -86,7 +101,7 @@ export async function diffSince(
   sinceRef: string,
   git: GitRunner = defaultGitRunner,
 ): Promise<string> {
-  const out = await git(["diff", sinceRef], cwd);
+  const out = await git(["diff", sinceRef, "--", ".", ...excludeOwnState()], cwd);
   if (out.code !== 0) return "";
   const diff = out.stdout;
   if (diff.length <= MAX_DIFF_CHARS) return diff;

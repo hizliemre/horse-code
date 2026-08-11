@@ -17,7 +17,9 @@ describe("taskDiff", () => {
     let args: string[] = [];
     const spy: GitRunner = async (a) => { args = a; return { stdout: "diff", stderr: "", code: 0 }; };
     await taskDiff("/w", "hc/job/base", spy);
-    expect(args).toEqual(["diff", "hc/job/base...HEAD"]);
+    expect(args.slice(0, 2)).toEqual(["diff", "hc/job/base...HEAD"]);
+    // …and never over our own bookkeeping, which is the one file guaranteed to be in it. See excludeOwnState.
+    expect(args.join(" ")).toContain(":(exclude).horsecode/**");
   });
 
   it("returns the diff", async () => {

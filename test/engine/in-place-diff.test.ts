@@ -22,7 +22,7 @@ describe("the diff of work done in place", () => {
   it("measures from where the task started, so the auto-commits are in it", async () => {
     const calls: string[][] = [];
     await diffSince("/w", "abc123", runner(calls));
-    expect(calls[0]).toEqual(["diff", "abc123"]);
+    expect(calls[0]!.slice(0, 2)).toEqual(["diff", "abc123"]);
   });
 
   it("uses two dots, not three — the uncommitted tree is part of the change too", async () => {
@@ -34,7 +34,7 @@ describe("the diff of work done in place", () => {
   it("is not workingTreeDiff, which asks HEAD and gets nothing once the work is committed", async () => {
     const calls: string[][] = [];
     await workingTreeDiff("/w", runner(calls));
-    expect(calls[0]).toEqual(["diff", "HEAD"]);   // …the question that came back empty
+    expect(calls[0]!.slice(0, 2)).toEqual(["diff", "HEAD"]);   // …the question that came back empty
   });
 
   it("truncates like every other diff — it rides in the prompt of every review round", async () => {
@@ -71,5 +71,49 @@ describe("who tells the review where the work started", () => {
     // …and no call site is left asking it the old way.
     expect(r).not.toContain("deps.baseRef ? await taskDiff(workdir, deps.baseRef) : await workingTreeDiff");
     expect(await src("src/engine/acceptance.ts")).toContain("diffSince(cwd, deps.inPlaceBase)");
+  });
+});
+
+/**
+ * The one file guaranteed to be in every diff is the one file that is never the work.
+ *
+ * `excludeOwnState` was written for the PULL REQUEST diff, after PR #765 handed a reviewer 60,000 characters
+ * holding exactly two files — `.gitignore` and `.horsecode/memory.jsonl` — while all 36 source files fell
+ * outside the budget. The TASK diff, which every lens, the council and the acceptance gate read, went on
+ * asking the same question the same way.
+ *
+ * Measured on the run that produced this test: the council approved the change 5/5, and then the acceptance
+ * gate failed 6 of 6 criteria with "the diff visible in the prompt is entirely memory.jsonl metadata changes
+ * (injection counters). The actual Angular/HTML template changes that this task requires were in the
+ * truncated portion of the diff, and no source file was opened to verify." 31 minutes and 270 calls, thrown
+ * away over a file the work never touched.
+ */
+describe("what a diff must never spend its budget on", () => {
+  const call = async (fn: (g: GitRunner) => Promise<string>): Promise<string[]> => {
+    const calls: string[][] = [];
+    await fn(runner(calls));
+    return calls[0]!;
+  };
+
+  it("leaves horse-code's own state out of the task diff", async () => {
+    const args = await call((g) => diffSince("/w", "abc123", g));
+    expect(args.join(" ")).toContain(":(exclude).horsecode/**");
+  });
+
+  it("…of the branch diff", async () => {
+    const { taskDiff } = await import("../../src/engine/task-diff.js");
+    const args = await call((g) => taskDiff("/w", "main", g));
+    expect(args.join(" ")).toContain(":(exclude).horsecode/**");
+    expect(args[1]).toBe("main...HEAD");   // …and still asks the same question
+  });
+
+  it("…and of the working-tree diff", async () => {
+    const args = await call((g) => workingTreeDiff("/w", g));
+    expect(args.join(" ")).toContain(":(exclude).horsecode/**");
+  });
+
+  it("excludes the generated graph and the traces too — same reason, same files", async () => {
+    const args = (await call((g) => diffSince("/w", "abc123", g))).join(" ");
+    expect(args).toContain(":(exclude)graphify-out/**");
   });
 });
