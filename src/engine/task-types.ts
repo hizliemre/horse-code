@@ -47,6 +47,14 @@ export interface TaskCycleDeps {
    * Set per task by the scheduler. Absent in chat and in the document phases, where there is no task branch.
    */
   baseRef?: string;
+  /**
+   * Where the work started when it is being done IN PLACE — the commit HEAD was on before the implementer ran.
+   *
+   * The in-place path has no branch to compare against, and comparing against HEAD is wrong: every file an
+   * implementer writes is auto-committed as a `wip(…)` checkpoint, so HEAD moves with the work and the diff
+   * against it comes back empty. See diffSince.
+   */
+  inPlaceBase?: string;
   /** "By-the-way" note source: the coach loop polls it each turn to fold in mid-run guidance. */
   inbox?: () => string | undefined;
   /** Context pins: short user facts injected into the system prompt every turn (survive compaction). */

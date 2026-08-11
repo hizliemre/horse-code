@@ -34,6 +34,17 @@ export async function runCycleWithRole(
   // The UI must name the model this worker will ACTUALLY use, which is its rotated head, not the chain's.
   board.setWorker(taskId, role, deps.roleRegistry.chainFor(role, rotation)[0] ?? "");
   const before = await worktreeState(git, cwd);
+  /**
+   * Where the work starts, for the review that has to find it later.
+   *
+   * On the in-place path there is no branch to compare against, and comparing against HEAD is wrong: every
+   * file the implementer writes is auto-committed as a `wip(…)` checkpoint, so HEAD walks forward with the
+   * work. Measured live — a fix landed in five such commits and the reviewer was handed the one line of
+   * `.horsecode/memory.jsonl` still dirty, rejected it as "does not modify the wizard", and the council sent
+   * 22 minutes of work back. `before` already holds the sha; it only had to be passed on.
+   */
+  const startedAt = before?.split("|")[0];
+  const rdeps = deps.baseRef || !startedAt ? deps : { ...deps, inPlaceBase: startedAt };
   await runImplementer(deps, role, board.get(taskId)!, cwd, rotation);
   const after = await worktreeState(git, cwd);
 
@@ -99,7 +110,7 @@ export async function runCycleWithRole(
   const card = board.get(taskId)!;
   // `attempts` drives the tiered bar: the first review of a task is the thorough pass, later attempts (the code
   // has already been revised for reviewer notes) are blocked only by CRITICAL findings.
-  const review = () => runCodeReview(deps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
+  const review = () => runCodeReview(rdeps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
   let v: Verdict;
   try {
     v = await telemetry().span("stage.code_review", { "hc.stage": "code review", "hc.task.id": taskId },
@@ -122,7 +133,7 @@ export async function runCycleWithRole(
   // The review says the code is GOOD; the gate says the code does WHAT WAS ASKED. A task that quietly
   // implemented half the requirement passes review — only the criteria catch that.
   if (v.verdict === "pass") {
-    const check = () => verifyAcceptance(deps, board.get(taskId)!, cwd, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); });
+    const check = () => verifyAcceptance(rdeps, board.get(taskId)!, cwd, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); });
     const gate = await telemetry().span("stage.acceptance_gate", { "hc.stage": "acceptance gate", "hc.task.id": taskId },
       () => (deps.timings ? deps.timings.time("acceptance gate", check) : check()));
     if (!gate.passed) {

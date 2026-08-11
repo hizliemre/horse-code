@@ -63,3 +63,32 @@ export async function workingTreeDiff(
   if (diff.length <= MAX_DIFF_CHARS) return diff;
   return `${diff.slice(0, MAX_DIFF_CHARS)}\n…diff truncated at ${MAX_DIFF_CHARS} characters — read the remaining files directly.`;
 }
+
+/**
+ * Everything that has happened here since a point in time — commits AND the tree that is not committed yet.
+ *
+ * `workingTreeDiff` was written on a premise that is false: "the small-change path never makes a commit until
+ * the work is accepted". Every file an implementer writes is auto-committed as a `wip(…)` checkpoint the
+ * moment it is written — that is what lets a killed attempt keep its work — so by the time the review runs,
+ * the change is in commits and the tree is clean.
+ *
+ * Measured live, and it cost the whole run: a coder fixed the drag preview, its five files went into
+ * `wip(chore/media): product-media-manager.html` and friends, and the reviewer was handed `git diff HEAD` —
+ * which by then held one line of `.horsecode/memory.jsonl`. `code-plan-conformance` read exactly what it was
+ * given and rejected: "the working-tree diff contains only bookkeeping changes … it does not modify the
+ * step-2 wizard". The council voted 5/5 to send it back, and 22 minutes and 148 calls ended with the run
+ * announcing "Nothing was committed" over five commits that were sitting in the log.
+ *
+ * Two dots, not three: the question is what changed here since the task started, and the tree is part of it.
+ */
+export async function diffSince(
+  cwd: string,
+  sinceRef: string,
+  git: GitRunner = defaultGitRunner,
+): Promise<string> {
+  const out = await git(["diff", sinceRef], cwd);
+  if (out.code !== 0) return "";
+  const diff = out.stdout;
+  if (diff.length <= MAX_DIFF_CHARS) return diff;
+  return `${diff.slice(0, MAX_DIFF_CHARS)}\n…diff truncated at ${MAX_DIFF_CHARS} characters — read the remaining files directly.`;
+}

@@ -9,7 +9,7 @@ import { memoryHints, emitBatchInjection, reinforceUsed } from "./memory-inject.
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
-import { workingTreeDiff, taskDiff, describeDiff } from "./task-diff.js";
+import { workingTreeDiff, taskDiff, diffSince, describeDiff } from "./task-diff.js";
 import { telemetry } from "../obs/telemetry.js";
 import { BATCH_TOOLS_NOTE } from "./task-types.js";
 
@@ -409,9 +409,7 @@ export async function runTeam(
    * Measured on one such round: `code-api-surface` made 111 tool calls and `code-simplicity` 109, against a
    * budget written for "under ten turns" — and nine of the fifteen then ran out of time.
    */
-  const diff = stage === "code"
-    ? (deps.baseRef ? await taskDiff(workdir, deps.baseRef) : await workingTreeDiff(workdir))
-    : "";
+  const diff = stage === "code" ? await changeUnderReview(deps, workdir) : "";
   const evidence = stage === "code" ? `\n\n${describeDiff(diff)}` : "";
   // What earlier runs learned, addressed to each lens by name. A lens is the narrowest audience in the system:
   // "the concurrency lens keeps missing X" is precisely the kind of lesson that must reach one agent and no other.
@@ -538,9 +536,7 @@ export async function runCouncil(
   const scope = request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : "";
   const subject = stage === "code" ? `the code for: ${target}` : `the "${target}" ${stage}`;
   // The deciders judge the same change the lenses did; making them hunt for it is the same waste.
-  const councilDiff = stage === "code"
-    ? (deps.baseRef ? await taskDiff(workdir, deps.baseRef) : await workingTreeDiff(workdir))
-    : "";
+  const councilDiff = stage === "code" ? await changeUnderReview(deps, workdir) : "";
   const councilEvidence = stage === "code" ? `\n\n${describeDiff(councilDiff)}` : "";
   // The deferral question is deliberately calibrated: without it a pile of "medium" findings always reads as
   // "revise", which is what turns the loop into endless polish. The council still holds the judgment — it can
@@ -957,6 +953,25 @@ export function lensesFor(team: ReviewerConfig[], diff: string): ReviewerConfig[
 }
 
 /**
+ * The change being judged, wherever the work happens to live.
+ *
+ * Three call sites asked this question and all three asked it the same wrong way on the in-place path:
+ * `git diff HEAD`. Every file an implementer writes is auto-committed as a `wip(…)` checkpoint, so HEAD moves
+ * with the work and that diff is empty by the time anyone reads it. Measured live — the run that produced
+ * this function: five `wip(…)` commits carrying the fix, a reviewer handed one line of
+ * `.horsecode/memory.jsonl`, a REJECT reading "does not modify the step-2 wizard", a 5/5 council vote to
+ * revise, and 22 minutes gone.
+ *
+ * `inPlaceBase` is where the work started — recorded before the implementer ran. Without one, the old
+ * behaviour is kept: better a partial diff than none.
+ */
+async function changeUnderReview(deps: ReviewDeps, workdir: string): Promise<string> {
+  if (deps.baseRef) return taskDiff(workdir, deps.baseRef);
+  if (deps.inPlaceBase) return diffSince(workdir, deps.inPlaceBase);
+  return workingTreeDiff(workdir);
+}
+
+/**
  * CODE-stage review: runs the code lens team on one task's implementation, then the same
  * team → council → judge escalation as the doc stages — but SINGLE-SHOT (no revise loop here: the task cycle's
  * escalation ladder owns retries). Returns the task-cycle Verdict, with the blocking findings as notes.
@@ -969,7 +984,7 @@ export async function runCodeReview(
   // Scaled to the change: the review a three-line config edit needs is not the review a new module needs.
   // No baseRef means the work is in the working tree, not on a branch — the small-change path. Its size is
   // knowable either way, and an unknown size is what made the cheapest path convene the whole team.
-  const diff = deps.baseRef ? await taskDiff(workdir, deps.baseRef) : await workingTreeDiff(workdir);
+  const diff = await changeUnderReview(deps, workdir);
   const team = lensesFor(deps.teams.code, diff);
   const scaled = team.length < deps.teams.code.length;
   telemetry().event("decision.review_scale", {

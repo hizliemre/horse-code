@@ -6,7 +6,7 @@ import type { Card } from "../board/board.js";
 import type { ReviewDeps } from "./review.js";
 import type { ProgressEvent } from "./progress.js";
 import { runProjectTests, describeTestRun } from "./test-runner.js";
-import { taskDiff, describeDiff } from "./task-diff.js";
+import { taskDiff, diffSince, describeDiff } from "./task-diff.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { telemetry } from "../obs/telemetry.js";
 
@@ -87,7 +87,9 @@ export async function verifyAcceptance(
   const testEvidence = { ran: !tests.skipped, passed: tests.passed, ...(tests.command ? { command: tests.command } : {}) };
   if (!card.acceptance.length) return { passed: true, unmet: [], tests: testEvidence };
   // The gate ran out of turns before it had opened anything, repeatedly. The change is what it is judging.
-  const diff = deps.baseRef ? await taskDiff(cwd, deps.baseRef) : "";
+  // …and in place, from where the work started — auto-commits move HEAD, so a diff against it is empty.
+  const diff = deps.baseRef ? await taskDiff(cwd, deps.baseRef)
+    : deps.inPlaceBase ? await diffSince(cwd, deps.inPlaceBase) : "";
   const resolved = deps.roleRegistry.resolve("code-reviewer");
   /**
    * The final gate gets what earlier runs learned, exactly as the per-task reviewer does.
