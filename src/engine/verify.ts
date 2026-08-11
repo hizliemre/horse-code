@@ -427,7 +427,7 @@ export function fixBeforeHandOff(
   askUser: AskUser,
   findings: FindingQueue,
   fix: (found: Finding[]) => Promise<string[]>,
-  opts: { note?: (text: string) => void; budget: { left: number } },
+  opts: { note?: (text: string) => void; budget: { left: number }; refill: number },
 ): AskUser {
   return async (question, ask) => {
     const found = findings.drain();
@@ -446,6 +446,22 @@ export function fixBeforeHandOff(
       `Before this: the finding(s) reported during the last step were dealt with.\n${said}\n\n${question}`,
       ask,
     );
+    /**
+     * A person answering is proof the loop is not running away, so the allowance is restored.
+     *
+     * The budget exists because "a fix that keeps producing findings is a conversation, not a loop" — and
+     * that is the right guard for rounds nobody is watching. A hand-off is the opposite: the session only
+     * advances when a human goes and looks, and each finding here is a DISTINCT defect they saw with their
+     * own eyes, not the same one refusing to converge.
+     *
+     * Measured live: an eight-hour session found three separate drag-preview defects; the second exhausted
+     * the two rounds, and the third was answered with "1 finding(s) left unfixed — 2 rounds of fixing is the
+     * limit for one session", leaving the tester waiting for someone else to fix it. Two rounds is a ceiling
+     * on machinery, and it had been applied to a person's afternoon.
+     *
+     * The end-of-session loop keeps the original bound: nobody is at the keyboard there.
+     */
+    opts.budget.left = Math.max(opts.budget.left, opts.refill);
     return `${answer}\n\n[The findings you reported were handled BEFORE this hand-off:\n${said}\n`
       + `Anything marked FIXED is in the working tree now. Re-run the step you just handed over, against the `
       + `corrected product, and do not move on until it passes — or until you can say precisely what still `
@@ -501,7 +517,7 @@ export async function runVerify(opts: {
     // The RAW askUser here: handleFindings may need to ask about an escalation, and routing that back through
     // the wrapper would be asking a question about the findings it just drained.
     (found) => handleFindings({ deps, workdir, askUser, ...(opts.note ? { note: opts.note } : {}) }, found),
-    { ...(opts.note ? { note: opts.note } : {}), budget },
+    { ...(opts.note ? { note: opts.note } : {}), budget, refill: MAX_FIX_ROUNDS },
   );
   const tools = testerTools(deps, handOff, findings);
   /**
