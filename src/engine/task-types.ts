@@ -228,6 +228,35 @@ This project has a code graph — what calls what, across every file.
 
   const mcp = tools.filter((t) => t.name.startsWith("mcp__"));
   if (mcp.length) sections.push(mcpSection(mcp));
+
+  /**
+   * The tool nobody used, asked for by name.
+   *
+   * `remember_fact` was given to every role that does substantive work, and across a whole run it was called
+   * zero times. A tool an agent is not asked to use is a tool it does not use — the same shape as `grep`'s
+   * `include` and the `intent` enum before them. Measured across consecutive runs on the same project: a
+   * tester spent 110 tool calls working out which interceptor fills the audit columns, and the next run
+   * started from nothing; `psql` needed its password taken from the container's own environment, and that was
+   * rediscovered by trial and error three runs in a row.
+   *
+   * Stated where the tools are, so it reaches every role holding one and no role that isn't.
+   */
+  if (tools.some((t) => t.name === "remember_fact")) {
+    sections.push(
+      `# What you work out, keep
+
+You have \`remember_fact\`. It writes to this project's memory immediately — a session that stops early still
+leaves what it learned behind.
+
+Call it the moment you work something out that cost you more than one attempt and would cost the next agent
+the same: which command works here and how it must be invoked, where a thing actually lives, a schema or
+config detail you had to go and check, a trap you fell into. One short sentence each, specific to THIS
+project.
+
+Do not record what you did, what the task was, or anything true of the language or framework in general —
+that is noise, and the store is read by every later run.`,
+    );
+  }
   return sections.length ? "\n\n" + sections.join("\n\n") : "";
 }
 

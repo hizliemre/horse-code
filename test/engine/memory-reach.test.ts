@@ -78,3 +78,44 @@ describe("who can write to memory", () => {
     }
   });
 });
+
+/**
+ * A tool an agent is not asked to use is a tool it does not use.
+ *
+ * `remember_fact` reached every substantive role and was called zero times across a whole run. Measured
+ * across consecutive runs on the same project: a tester spent 110 tool calls working out which interceptor
+ * fills the audit columns and the next run started from nothing; `psql` needed its password taken from the
+ * container's own environment, and that was rediscovered by trial and error three runs running.
+ *
+ * The same shape as `grep`'s `include` and the `intent` enum before it — the capability existed, nothing
+ * asked for it.
+ */
+describe("the prompt asks for what the tool offers", () => {
+  const noteFor = async (names: string[]): Promise<string> => {
+    const { projectToolsNote } = await import("../../src/engine/task-types.js");
+    return projectToolsNote(names.map((name) => ({ name })) as never, false);
+  };
+
+  it("tells a role holding remember_fact to use it", async () => {
+    const note = await noteFor(["read_file", "remember_fact"]);
+    expect(note).toMatch(/What you work out, keep/);
+    expect(note).toMatch(/writes to this project's memory immediately/);
+  });
+
+  it("names the moment — something that cost more than one attempt", async () => {
+    const note = await noteFor(["remember_fact"]);
+    expect(note).toMatch(/cost you more than one attempt/);
+    expect(note).toMatch(/which command works here and how it must be invoked/);
+  });
+
+  it("says what NOT to write, so the store does not fill with noise", async () => {
+    const note = await noteFor(["remember_fact"]);
+    expect(note).toMatch(/Do not record what you did/);
+    expect(note).toMatch(/true of the language or framework in general/);
+  });
+
+  it("says nothing to a role that cannot write — a review lens is not told to remember", async () => {
+    const note = await noteFor(["read_file", "grep", "propose_memory"]);
+    expect(note).not.toMatch(/What you work out, keep/);
+  });
+});
