@@ -2,7 +2,7 @@ import { Recall } from "./recall.js";
 import type {
   AgentEvent, ChatRequest, Message, Provider, ToolCall,
 } from "../core/types.js";
-import { attachedImages } from "./attach.js";
+import { attachedImages, handedOver, withoutPastePaths } from "./attach.js";
 import { stripThinking } from "../tui/format.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
@@ -150,8 +150,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
        * carries them — except a way to say "here". A terminal will not paste image bytes, so the file name is
        * the way, and it is what a person types anyway.
        */
-      const images = attachedImages(note, opts.cwd);
-      working.push({ role: "user", content: note, ...(images.length ? { images } : {}) });
+      working.push({ role: "user", ...handedOver(note, opts.cwd) });
     }
     turn++;
 
@@ -308,7 +307,10 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     for (const r of results) {
       // Ingress defense: fence tool output that looks like a prompt-injection attempt before the model sees it.
       working.push({ role: "tool", toolCallId: r.id, name: r.name, ...(r.key ? { key: r.key } : {}),
-        content: shieldToolOutput(capToolResult(r.result.content, r.name)) });
+        // …and a screenshot handed over in an answer is said in words, not in a path. Every result, not just
+        // ask_user's: our staging path is never information for a model, wherever it turns up, and a report
+        // that cites one points its reader at a file that only ever existed on this machine, for this run.
+        content: shieldToolOutput(withoutPastePaths(capToolResult(r.result.content, r.name))) });
       /**
        * An answer that names a screenshot brings it along.
        *

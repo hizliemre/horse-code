@@ -2,7 +2,7 @@ import { respondIn } from "../engine/language.js";
 import { existsSync } from "node:fs";
 import { relative } from "node:path";
 import { runToCompletion } from "../agent/loop.js";
-import { attachedImages } from "../agent/attach.js";
+import { handedOver } from "../agent/attach.js";
 import type { RoleAgentOptions } from "../agent/loop.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "../engine/task-types.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
@@ -130,10 +130,7 @@ async function runRole(
      * evidence the user handed over never reached the model that needed it.
      */
     messages: (hints.message ? [{ role: "user" as const, content: hints.message }] : []).concat([
-      { role: "user" as const, content: message, ...(() => {
-        const images = attachedImages(message, p.workdir);
-        return images.length ? { images } : {};
-      })() },
+      { role: "user" as const, ...handedOver(message, p.workdir) },
     ]),
     permission: p.deps.permission,
     approve: p.deps.approve,

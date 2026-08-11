@@ -25,7 +25,7 @@ import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.j
 import type { TaskCycleDeps } from "./task-types.js";
 import { verifyPaths, featureSlugFor, specsDir } from "../speckit/layout.js";
 import { loadGraphSync } from "./project-graph.js";
-import { attachedImages } from "../agent/attach.js";
+import { handedOver } from "../agent/attach.js";
 import { FindingQueue, buildReportFindingTool, type Finding } from "./finding.js";
 import { triageFinding, describeEscalation } from "./triage.js";
 import { runFix, commitFix, describeFix, dirtyPaths } from "./fix.js";
@@ -155,10 +155,7 @@ async function runTester(
     messages: [
       // What earlier runs learned about this area, ahead of the request — see runTester's own note.
       ...(hints?.message ? [{ role: "user" as const, content: hints.message }] : []),
-      { role: "user", content: message, ...(() => {
-        const images = attachedImages(message, workdir);
-        return images.length ? { images } : {};
-      })() },
+      { role: "user", ...handedOver(message, workdir) },
     ],
     permission: deps.permission,
     approve: deps.approve,

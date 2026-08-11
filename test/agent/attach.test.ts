@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
-import { attachedImages, MAX_IMAGE_BYTES } from "../../src/agent/attach.js";
+import { attachedImages, handedOver, withoutPastePaths, MAX_IMAGE_BYTES } from "../../src/agent/attach.js";
 
 let cwd: string;
 beforeEach(async () => { cwd = await mkdtemp(join(tmpdir(), "hc-att-")); });
@@ -98,5 +98,53 @@ describe("what it will not attach", () => {
     await put("shot.png");
     // A bare directory, a URL, and a word that merely ends in an extension-like string.
     expect(attachedImages(`${cwd} https://example.com/x.png version1.0.png`, cwd)).toEqual([]);
+  });
+});
+
+/**
+ * The path a pasted screenshot is staged at is this program's plumbing, not a fact about the work.
+ *
+ * Measured: a tester wrote `**Developer evidence:** /Users/…/.horsecode/pastes/paste-3050-1.png` into a test
+ * report that lives in the repository. That file is per-process and machine-local — the reader of the report
+ * cannot open it, and by the time an agent reads the sentence the picture is already attached to it.
+ */
+describe("withoutPastePaths", () => {
+  it("says who handed the picture over, instead of where we happened to put it", () => {
+    const said = withoutPastePaths(
+      `the error looks like this: ${homedir()}/.horsecode/pastes/paste-3050-1.png — see the red banner`);
+    expect(said).not.toContain(".horsecode/pastes");
+    expect(said).not.toContain("paste-3050-1.png");
+    expect(said).toContain("screenshot");
+    expect(said).toContain("see the red banner");   // the sentence around it survives
+  });
+
+  it("leaves a file the user keeps of their own alone — that one outlives the run", () => {
+    const text = `compare with ${homedir()}/Desktop/before.png`;
+    expect(withoutPastePaths(text)).toBe(text);
+  });
+
+  it("stops at the file name, not at the end of the line", () => {
+    const said = withoutPastePaths(`(${homedir()}/.horsecode/pastes/paste-7-2.png), then step 4`);
+    expect(said).toContain("), then step 4");
+  });
+
+  it("says nothing about text that names no paste", () => {
+    expect(withoutPastePaths("scenario F3 looks right")).toBe("scenario F3 looks right");
+  });
+});
+
+describe("handedOver", () => {
+  it("reads the image FROM the path, and hands on a sentence without it", async () => {
+    const dir = join(cwd, ".horsecode", "pastes");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "paste-1-1.png"), PNG);
+    const { content, images } = handedOver(`here: ${join(dir, "paste-1-1.png")}`, cwd);
+    expect(images).toHaveLength(1);                  // the picture still travels…
+    expect(images![0]).toMatch(/^data:image\/png;base64,/);
+    expect(content).not.toContain("paste-1-1.png");  // …and the path does not
+  });
+
+  it("carries a message with no picture through unchanged", () => {
+    expect(handedOver("run scenario F3", cwd)).toEqual({ content: "run scenario F3" });
   });
 });

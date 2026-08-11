@@ -70,3 +70,38 @@ export function attachedImages(text: string, cwd: string): string[] {
   }
   return out;
 }
+
+/** The staging file a pasted screenshot is written to — `~/.horsecode/pastes/paste-<pid>-<n>.png`. */
+const OWN_PASTE = /\S*[\\/]\.horsecode[\\/]pastes[\\/][^\s"'`)\]]+\.(?:png|jpe?g|gif|webp)/gi;
+
+/** How a person refers to a picture they handed over. */
+const HANDED_OVER = "[screenshot pasted by the developer]";
+
+/**
+ * Our own staging path, said the way a person would say it.
+ *
+ * A terminal cannot paste image bytes, so a pasted screenshot is written to `~/.horsecode/pastes/` and its
+ * PATH travels in the text — that is plumbing, the mechanism by which the picture got here, and by the time
+ * an agent reads the text the picture is already attached to the same message.
+ *
+ * Measured: a tester cited it in a test report as `**Developer evidence:** /Users/…/.horsecode/pastes/
+ * paste-3050-1.png`. That file is per-process, machine-local, and never in the repository — nobody who reads
+ * the report can open it, and it says nothing that "the developer showed a screenshot" does not say better.
+ *
+ * The same rule the skill router already applies to these paths (see routingSubject): only OUR path goes. A
+ * screenshot the user keeps somewhere of their own is a real file that outlives the run and stays as written.
+ */
+export function withoutPastePaths(text: string): string {
+  return text.replace(OWN_PASTE, HANDED_OVER);
+}
+
+/**
+ * A message with its pictures attached and our plumbing spelled out — the pair every caller needs.
+ *
+ * The two halves belong together: the images are read FROM the paths, and the paths are what must not survive
+ * into what the model reads. Splitting them across call sites is how one of five ended up doing only half.
+ */
+export function handedOver(text: string, cwd: string): { content: string; images?: string[] } {
+  const images = attachedImages(text, cwd);
+  return { content: withoutPastePaths(text), ...(images.length ? { images } : {}) };
+}

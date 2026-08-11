@@ -13,7 +13,7 @@ import { loadGraphSync } from "./project-graph.js";
 import { constitutionNote } from "./constitution-store.js";
 import { applySkills } from "../skills/apply.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
-import { attachedImages } from "../agent/attach.js";
+import { handedOver } from "../agent/attach.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 import { telemetry } from "../obs/telemetry.js";
 
@@ -296,10 +296,7 @@ export async function runImplementer(
      * can do with one is `read_file`, which cannot read a PNG.
      */
     messages: (hints.message ? [{ role: "user" as const, content: hints.message }] : []).concat([
-      { role: "user" as const, content, ...(() => {
-        const images = attachedImages(content, cwd);
-        return images.length ? { images } : {};
-      })() },
+      { role: "user" as const, ...handedOver(content, cwd) },
     ]),
     onUsage: (u) => {
       tok.promptTokens += u.promptTokens;
