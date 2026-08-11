@@ -69,7 +69,7 @@ describe("commitStep", () => {
     await writeFile(join(repo, "b.md"), "# B", "utf8"); // a second, unrelated change
     const p = new MockProvider([submit("docs: add a.md")]);
     const notes: string[] = [];
-    const msg = await commitFile({ ...deps(p), note: (t) => notes.push(t) }, repo, "a.md");
+    const msg = await commitFile({ ...deps(p), baseRef: "main", note: (t) => notes.push(t) }, repo, "a.md");
     expect(p.requests).toHaveLength(0); // no model call to write a commit message
     expect(msg).toBe("wip(docs): a.md");
     // Deliberately silent: `squashTask` replaces the checkpoints with one real message, and narrating each
@@ -79,6 +79,31 @@ describe("commitStep", () => {
     expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe("wip(docs): a.md");
     expect((await g(["status", "--porcelain"])).stdout).toContain("b.md");
     expect((await g(["status", "--porcelain"])).stdout).not.toContain("a.md");
+  });
+
+  /**
+   * A checkpoint belongs on a task branch, and nowhere else.
+   *
+   * These commits exist so a killed attempt keeps its work — a real risk when the work lives in a throwaway
+   * worktree on a branch nobody is standing on, and `squashTask` replaces the lot with one real message when
+   * the task lands. Neither holds in place: the work is in the developer's OWN tree, where losing it was
+   * never the risk, and nothing squashes anything, because squashing needs a base to squash to.
+   *
+   * Measured live on the project this runs against: five `wip(chore/media): …` commits landed directly on the
+   * team's shared branch, on top of a merged pull request, for a change the review then rejected. Nobody
+   * asked for a commit and nothing removed them.
+   */
+  it("writes no checkpoint when there is no task branch to write it to", async () => {
+    repo = await initTmpRepo();
+    const g = (args: string[]) => defaultGitRunner(args, repo!);
+    const head = (await g(["log", "-1", "--format=%s"])).stdout.trim();
+    await writeFile(join(repo, "a.md"), "# A", "utf8");
+    const p = new MockProvider([]);
+
+    expect(await commitFile(deps(p), repo, "a.md")).toBeUndefined();   // no baseRef ⇒ no branch of our own
+    expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe(head);
+    // …and the work is not lost: it is exactly where the developer can see it.
+    expect((await g(["status", "--porcelain"])).stdout).toContain("a.md");
   });
 
   /**

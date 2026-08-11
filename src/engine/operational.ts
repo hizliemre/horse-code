@@ -87,6 +87,22 @@ export function isScratch(path: string): boolean {
 export async function commitFile(
   deps: TaskCycleDeps, workdir: string, path: string, git: GitRunner = defaultGitRunner,
 ): Promise<string | undefined> {
+  /**
+   * A checkpoint belongs on a task branch, and nowhere else.
+   *
+   * These commits exist so a killed attempt keeps its work — which is a real problem when the work lives in a
+   * throwaway worktree on a branch nobody is standing on, and `squashTask` replaces the lot with one real
+   * message when the task lands. Neither is true in place: the work is in the developer's OWN tree, where
+   * losing it was never the risk, and nothing squashes anything, because squashing needs a base to squash to.
+   *
+   * Measured live on the project this runs against: five `wip(chore/media): …` commits landed directly on
+   * `development`, on top of a merged pull request, for a change the review then rejected. Nobody asked for a
+   * commit, nothing removed them, and the branch people share was left carrying checkpoints of rejected work.
+   *
+   * No base ⇒ no branch of our own ⇒ the tree is where the work stays. A deliberate committer — `commitFix`,
+   * or the person at the keyboard — decides what lands.
+   */
+  if (!deps.baseRef) return undefined;
   // An agent's scratchpad stays in the worktree and out of the diff the reviewer judges.
   if (isScratch(path)) return undefined;
   await git(["add", "--", path], workdir);
