@@ -9,7 +9,7 @@ import { memoryHints, emitBatchInjection, reinforceUsed } from "./memory-inject.
 import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
-import { taskDiff, describeDiff } from "./task-diff.js";
+import { workingTreeDiff, taskDiff, describeDiff } from "./task-diff.js";
 import { telemetry } from "../obs/telemetry.js";
 import { BATCH_TOOLS_NOTE } from "./task-types.js";
 
@@ -62,7 +62,18 @@ export type AskUser = (question: string, opts?: AskOpts) => Promise<string>;
 
 export type Severity = "critical" | "medium" | "low";
 export interface Finding { severity: Severity; note: string }
-export interface Assessment { name: string; findings: Finding[]; recommendation: "approve" | "revise" }
+export interface Assessment {
+  name: string; findings: Finding[]; recommendation: "approve" | "revise";
+  /**
+   * Set when the lens never delivered a verdict — it timed out, or every model in its chain failed.
+   *
+   * "I did not finish" and "I found something wrong" are different facts, and counting them as the same one
+   * threw work away. Measured live: nine of fifteen lenses ran past their 180s budget on one small change,
+   * each returned a critical "UNVERIFIED" finding, the council read nine criticals and voted to revise, and
+   * a 41-minute round ending in 8.3M tokens committed nothing. Not one of those nine had found a defect.
+   */
+  unverified?: boolean;
+}
 export const AssessmentSchema = z.object({
   findings: z.array(z.object({
     severity: z.enum(["critical", "medium", "low"]).describe(
@@ -134,8 +145,25 @@ function blockingSignatures(assessments: Assessment[]): Set<string> {
 }
 
 /** Total findings across the team at a given severity → used in the council-handoff note. */
+/** Findings from lenses that actually reached a verdict. A gap in coverage is not a defect in the code. */
 function severityTotal(assessments: Assessment[], sev: Severity): number {
-  return assessments.reduce((n, a) => n + a.findings.filter((f) => f.severity === sev).length, 0);
+  return assessments
+    .filter((a) => !a.unverified)
+    .reduce((n, a) => n + a.findings.filter((f) => f.severity === sev).length, 0);
+}
+
+/**
+ * How much of the review actually ran, and the floor below which its silence means nothing.
+ *
+ * Discounting an unfinished lens is right until most of them are unfinished: approving because nobody
+ * objected, when nobody looked, is the fail-silent outcome the UNVERIFIED finding exists to prevent. Below
+ * this share the round is handed to the council with the gap stated, rather than passed or failed by rule.
+ */
+export const TEAM_MIN_COVERAGE = 0.6;
+function coverage(assessments: Assessment[]): { verified: number; unverified: number; enough: boolean } {
+  const unverified = assessments.filter((a) => a.unverified).length;
+  const verified = assessments.length - unverified;
+  return { verified, unverified, enough: !assessments.length || verified / assessments.length >= TEAM_MIN_COVERAGE };
 }
 
 export interface CouncilVote { name: string; vote: "pass" | "revise"; rationale: string }
@@ -365,7 +393,17 @@ export async function runTeam(
    * were about the code. Every one of the other 42 sent the task back for a full re-implementation, which is
    * a twenty-minute attempt spent to answer a question the review had not managed to ask.
    */
-  const diff = stage === "code" && deps.baseRef ? await taskDiff(workdir, deps.baseRef) : "";
+  /**
+   * …and the same diff reaches the lens whether the work sits on a branch or in the working tree.
+   *
+   * "Handed, not hunted" is the rule this whole block exists for, and the small-change path was exempt from
+   * it by accident: no baseRef, so no diff, so fifteen lenses each went looking for the change themselves.
+   * Measured on one such round: `code-api-surface` made 111 tool calls and `code-simplicity` 109, against a
+   * budget written for "under ten turns" — and nine of the fifteen then ran out of time.
+   */
+  const diff = stage === "code"
+    ? (deps.baseRef ? await taskDiff(workdir, deps.baseRef) : await workingTreeDiff(workdir))
+    : "";
   const evidence = stage === "code" ? `\n\n${describeDiff(diff)}` : "";
   // What earlier runs learned, addressed to each lens by name. A lens is the narrowest audience in the system:
   // "the concurrency lens keeps missing X" is precisely the kind of lesson that must reach one agent and no other.
@@ -447,7 +485,7 @@ export async function runTeam(
             ? `did not finish within its ${Math.round((deps.reviewTimeoutMs ?? REVIEW_TIMEOUT_MS) / 1000)}s budget`
             : `every model in its chain failed — ${errText(e)}`;
           emit({ kind: "agent-result", id: `team:${c.name}`, status: timedOut ? "⚠ UNVERIFIED (timed out)" : "⚠ UNVERIFIED (no response)", ...tok });
-          return { name: c.name, recommendation: "revise", findings: [{ severity: "critical", note: `The "${c.name}" lens could not complete its review (${why}) — this dimension is UNVERIFIED and must be re-checked.` }] };
+          return { name: c.name, recommendation: "revise", unverified: true, findings: [{ severity: "critical", note: `The "${c.name}" lens could not complete its review (${why}) — this dimension is UNVERIFIED and must be re-checked.` }] };
         }
       }),
     );
@@ -492,7 +530,9 @@ export async function runCouncil(
   const scope = request ? `\n\nThe user's original request:\n"""\n${request}\n"""` : "";
   const subject = stage === "code" ? `the code for: ${target}` : `the "${target}" ${stage}`;
   // The deciders judge the same change the lenses did; making them hunt for it is the same waste.
-  const councilDiff = stage === "code" && deps.baseRef ? await taskDiff(workdir, deps.baseRef) : "";
+  const councilDiff = stage === "code"
+    ? (deps.baseRef ? await taskDiff(workdir, deps.baseRef) : await workingTreeDiff(workdir))
+    : "";
   const councilEvidence = stage === "code" ? `\n\n${describeDiff(councilDiff)}` : "";
   // The deferral question is deliberately calibrated: without it a pile of "medium" findings always reads as
   // "revise", which is what turns the loop into endless polish. The council still holds the judgment — it can
@@ -703,7 +743,15 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
       lastAssessments = assessments; // every exit path (shortcut, deferral, council) must leave this current
       // The whole team has reported → write the consolidated result to chat (per-member verdict + counts).
       if (assessments.length) emit({ kind: "note", text: teamSummaryNote(assessments, label) });
-      const approve = assessments.filter((a) => a.recommendation === "approve").length;
+      /**
+       * Counted over the lenses that reached a verdict.
+       *
+       * An unfinished lens returns "revise" because it has nothing else to say, so leaving it in the
+       * denominator turns a coverage gap into a vote against: nine unfinished out of fifteen put consensus
+       * at 6/15 before a single opinion was read. Coverage is judged separately, by `TEAM_MIN_COVERAGE`.
+       */
+      const verdicts = assessments.filter((a) => !a.unverified);
+      const approve = verdicts.filter((a) => a.recommendation === "approve").length;
       const crit = severityTotal(assessments, "critical");
       const med = severityTotal(assessments, "medium");
 
@@ -712,13 +760,18 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
       // From round 2 on, only CRITICAL blocks: "medium" findings on a doc are effectively inexhaustible — any
       // document can always be clarified further — so keeping them blocking turns the loop into endless polish
       // (observed: ~10 rounds of "clarify …" commits). Their notes are carried forward instead of re-revised.
+      const cover = coverage(assessments);
+      if (cover.unverified) {
+        emit({ kind: "note", text: `⚠️ ${cover.unverified} of ${assessments.length} lens(es) never returned a verdict — `
+          + `those dimensions are UNVERIFIED. ${cover.enough ? "The decision rests on the ones that did." : "Too few ran to decide by rule."}` });
+      }
       if (round === 0) {
-        const clean = crit === 0 && med === 0;
-        if (assessments.length && clean && approve / assessments.length >= TEAM_CONSENSUS) {
-          emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${assessments.length} approve → the ${label} is approved.` });
+        const clean = crit === 0 && med === 0 && cover.enough;
+        if (verdicts.length && clean && approve / verdicts.length >= TEAM_CONSENSUS) {
+          emit({ kind: "note", text: `✅ **Team** — clean (no critical/medium findings), ${approve}/${verdicts.length} approve → the ${label} is approved.` });
           return { approved: true };
         }
-      } else if (crit === 0) {
+      } else if (crit === 0 && cover.enough) {
         // No criticals left — but whether the remaining medium/low findings are worth another round is a
         // JUDGMENT call, and the council is what horse-code has for judgment. Ask it the calibrated deferral
         // question instead of deciding by rule; it can still promote a mislabelled finding to blocking.
@@ -906,7 +959,9 @@ export async function runCodeReview(
   attempt = 0, // how many times this task has already been reviewed+revised → drives the tiered bar
 ): Promise<Verdict> {
   // Scaled to the change: the review a three-line config edit needs is not the review a new module needs.
-  const diff = deps.baseRef ? await taskDiff(workdir, deps.baseRef) : "";
+  // No baseRef means the work is in the working tree, not on a branch — the small-change path. Its size is
+  // knowable either way, and an unknown size is what made the cheapest path convene the whole team.
+  const diff = deps.baseRef ? await taskDiff(workdir, deps.baseRef) : await workingTreeDiff(workdir);
   const team = lensesFor(deps.teams.code, diff);
   const scaled = team.length < deps.teams.code.length;
   telemetry().event("decision.review_scale", {
@@ -939,6 +994,21 @@ export async function runCodeReview(
    * adjudicates them on the MERGED result, where one pass fixes all of them at once instead of one
    * re-implementation each. That machinery already existed; it was simply unreachable on the first attempt.
    */
+  /**
+   * A dimension nobody managed to check is not a dimension that passed.
+   *
+   * Discounting an unfinished lens is right while most of them finished; below that floor the silence means
+   * nothing, and approving on it is exactly the fail-silent outcome the UNVERIFIED finding exists to prevent.
+   * Caught by an existing test the moment this was missed: a single-lens team whose one lens never produced a
+   * valid verdict went from `fail` to `pass`.
+   */
+  const cover = coverage(assessments);
+  if (!cover.enough) {
+    const why = `${cover.unverified} of ${assessments.length} lens(es) never returned a verdict — too little of `
+      + `the review ran to judge this change. Re-run it; if it keeps happening the lens's model chain is the fault.`;
+    emit({ kind: "note", text: `⚠️ **Code review** — ${why}` });
+    return { verdict: "fail", notes: [why] };
+  }
   if (crit === 0) {
     const deferred = nonBlockingNotes(assessments, "code");
     if (!deferred.length) {

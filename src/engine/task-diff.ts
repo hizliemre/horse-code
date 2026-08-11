@@ -42,3 +42,24 @@ export function describeDiff(diff: string): string {
   return `The complete diff of this task's changes follows. It is the subject of the review — read it first, ` +
     `and open a file only when the diff alone cannot answer a question.\n\n\`\`\`diff\n${diff}\n\`\`\``;
 }
+
+/**
+ * What the working tree holds that HEAD does not — the change when there is no branch to compare against.
+ *
+ * `taskDiff` compares commits, and the small-change path never makes one until the work is accepted: it edits
+ * the tree in place. So it asked for a diff, got nothing, and `lensesFor` fell back to the whole team on the
+ * grounds that an unknown size could be anything. Measured live: `hc.task.id: "small-1"`,
+ * `hc.changed_lines: 0`, `hc.lenses: 15` — the one path built to be cheap convened every reviewer there is,
+ * nine of them ran past their budget, and the round committed nothing after 41 minutes.
+ */
+export async function workingTreeDiff(
+  cwd: string,
+  git: GitRunner = defaultGitRunner,
+): Promise<string> {
+  // `HEAD` rather than the index: staged and unstaged edits are both part of what is being reviewed.
+  const out = await git(["diff", "HEAD"], cwd);
+  if (out.code !== 0) return "";
+  const diff = out.stdout;
+  if (diff.length <= MAX_DIFF_CHARS) return diff;
+  return `${diff.slice(0, MAX_DIFF_CHARS)}\n…diff truncated at ${MAX_DIFF_CHARS} characters — read the remaining files directly.`;
+}
