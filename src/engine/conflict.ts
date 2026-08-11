@@ -320,7 +320,7 @@ export async function runConflictResolver(
    * file that conflicts repeatedly is exactly the file someone has already written down how to treat —
    * "this array is generated, take theirs", "these two lists must stay in the same order".
    */
-  const hints = memoryHints(deps, conflicted.join(" "), { role: "operational" });
+  const hints = memoryHints(deps, conflicted.join(" "), { role: "operational", operations: true });
   const ask = { role: "user" as const, content:
     `A git merge left conflicts in the base worktree. Resolve them: for EACH file, remove all conflict ` +
     `markers (<<<<<<<, =======, >>>>>>>) and combine BOTH sides' changes so the intent of each is ` +

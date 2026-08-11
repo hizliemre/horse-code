@@ -161,12 +161,31 @@ export async function runImplementer(
     `Your whole diff is what the review judges. Before you finish: undo anything you changed for your OWN ` +
     `convenience — a test config narrowed to one spec, a widened timeout, a disabled lint rule — and delete ` +
     `any scratch, repro or debug file you made. Leaving them in fails the review even when the work is right.`;
+  /**
+   * Stopping is a hand-over, not a finish.
+   *
+   * Measured live: the card read `coder small-1 — Uygulama tamamlandı.` ("implementation complete"), and the
+   * next thing on the screen was four review lenses opening the same diff, two of them rejecting it, and a
+   * five-member council voting on what to do. Reported by the user watching it: "uygulama tamamlandı dedi ama
+   * sonrasında review'e başladı. review bitmeden uygulama tamamlandı dememeli."
+   *
+   * The implementer is the one participant that cannot know: whether the work is done is decided downstream,
+   * by a review and an acceptance check it has not seen. A closing line that says otherwise is a claim the
+   * run then has to walk back in front of the person reading it.
+   */
+  const handOver =
+    `When you stop you are HANDING the change over — to a review and an acceptance check that have not run ` +
+    `yet. So close with what you changed and what you ran, and leave the verdict to them: do not write that ` +
+    `the task is complete, done or finished. Whether it is, is not yours to say, and saying it is how a card ` +
+    `reads "complete" above a review that rejects it.`;
   const content = (returning
     ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
-    : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "") + `\n\n${hygiene}`;
+    : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "")
+    + `\n\n${hygiene}\n\n${handOver}`;
   // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
   // blind to them and kept re-learning the same things.
-  const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role });
+  // …plus how this project is built and tested: every implementer needs it, no task title contains it.
+  const hints = memoryHints(deps, `${task.title} ${task.reviewNotes.join(" ")}`, { role, operations: true });
   /** Every file this implementer wrote — the evidence for which injected memories it actually used. */
   const touched: string[] = [];
   /**

@@ -79,7 +79,7 @@ async function principalReview(deps: RevisionDeps, base: string, prDiff?: string
   const content = (prDiff
     ? `PR review: review the following diff:\n${prDiff}\n(use the read tools to inspect the worktree if needed.) Give approve or request-changes + concrete comments.`
     : "PR review: review all changes in the base worktree holistically. Give approve or request-changes + concrete comments.") + carried;
-  const hints = memoryHints(deps, content, { role: "principal-coder" });
+  const hints = memoryHints(deps, content, { role: "principal-coder", operations: true });
   const opts: RoleAgentOptions = {
     provider: deps.provider, ...resolved,
     tools: readOnlyRegistry(deps, { propose: true }),
@@ -196,7 +196,7 @@ async function seniorRevise(deps: RevisionDeps, base: string, comments: string[]
    * not ask what calls the function it was about to change, and every git question it had went through shell.
    */
   for (const t of contextTools(deps)) tools.register(t);
-  const hints = memoryHints(deps, comments.join(" "), { role: "senior-coder" });
+  const hints = memoryHints(deps, comments.join(" "), { role: "senior-coder", operations: true });
   /**
    * "the main worktree" pointed AWAY from where the agent already was.
    *

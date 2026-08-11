@@ -133,7 +133,7 @@ async function runTester(
    * draft-first six-step wizard"). The boilerplate is identical on every call; only the request differs, and
    * it was the part being outvoted.
    */
-  const hints = memoryHints(deps, subject ?? message, { role: "tester" });
+  const hints = memoryHints(deps, subject ?? message, { role: "tester", operations: true });
   const { role: agentRole, model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("tester");
   const opts: RoleAgentOptions = {
     provider: deps.provider,

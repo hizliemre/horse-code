@@ -291,7 +291,7 @@ describe("which roles are handed what earlier runs learned", () => {
 
   it("includes the tester, which verifies against a live environment", async () => {
     const s = await src("src/engine/verify.ts");
-    expect(s).toContain('memoryHints(deps, subject ?? message, { role: "tester" })');
+    expect(s).toContain('memoryHints(deps, subject ?? message, { role: "tester", operations: true })');
     // …ahead of the request, so what was learned frames what is about to be checked.
     expect(s).toContain("...(hints?.message ? [{ role: \"user\" as const, content: hints.message }] : []),");
   });
@@ -363,7 +363,7 @@ describe("what memory is retrieved on", () => {
   it("is the subject at both call sites that assemble a message", async () => {
     const { readFile } = await import("node:fs/promises");
     expect(await readFile("src/engine/verify.ts", "utf8"))
-      .toContain('memoryHints(deps, subject ?? message, { role: "tester" })');
+      .toContain('memoryHints(deps, subject ?? message, { role: "tester", operations: true })');
     expect(await readFile("src/speckit/phases.ts", "utf8"))
       .toContain("memoryHints(p.deps, subject ?? message, { role })");
   });
@@ -418,7 +418,7 @@ describe("the roles that decide, and what they know", () => {
   /** A file that conflicts repeatedly is the file someone already wrote down how to treat. */
   it("includes the conflict resolver, retrieved on the conflicted paths", async () => {
     const s = await src("src/engine/conflict.ts");
-    expect(s).toContain('memoryHints(deps, conflicted.join(" "), { role: "operational" })');
+    expect(s).toContain('memoryHints(deps, conflicted.join(" "), { role: "operational", operations: true })');
     expect(s).toContain('reinforceTouched(deps, hints.ids, conflicted, "operational")');
   });
 
@@ -533,5 +533,53 @@ describe("every role that injects can also credit", () => {
       if (!s.includes("memoryHints(")) continue;
       expect(s, f).toMatch(/reinforce(Used|Touched)\(/);
     }
+  });
+});
+
+/**
+ * How a project is BUILT is never what a task is about.
+ *
+ * Measured live: a card titled "Fix the issue in step 2 of the product creation wizard where the drag
+ * placeholder scales up" retrieved thirteen memories — the wizard's six steps, a table's placeholder rows,
+ * the product's typography — and the implementer then spent eight consecutive failed shell calls guessing at
+ * `nx test products`, `vitest --config …`, `prettier --check`, `dotnet build src/api/api.csproj`.
+ *
+ * An earlier session had already written the answer down: "The toucan repository uses npm, not pnpm — invoke
+ * targets as `npx nx <target> <project>`". It shares no word with a drag placeholder, so no task that needed
+ * it could ever retrieve it.
+ */
+describe("the question no task title asks", () => {
+  const store = (): MemoryEntry[] => [
+    mem({ id: "wiz", text: "product creation is a draft-first six-step wizard with a drag-and-drop photo step",
+      tags: ["wizard", "drag"] }),
+    mem({ id: "cmd", text: "this repository uses npm, not pnpm — invoke targets as `npx nx <target> <project>`",
+      tags: ["nx", "npm", "command"] }),
+    mem({ id: "far", text: "the billing adapter posts invoices nightly", tags: ["billing"] }),
+  ];
+
+  it("keeps a few slots for how the project is built and run", () => {
+    const { ids } = memoryHints(deps(store()), "fix the drag placeholder in the wizard's photo step",
+      { role: "coder", operations: true });
+    expect(ids).toContain("wiz");   // what the task is about…
+    expect(ids).toContain("cmd");   // …and how to check it, which the title cannot ask for
+    expect(ids).not.toContain("far");
+  });
+
+  it("changes nothing for a role that runs nothing", () => {
+    const { ids } = memoryHints(deps(store()), "fix the drag placeholder in the wizard's photo step",
+      { role: "coder" });
+    expect(ids).toEqual(["wiz"]);
+  });
+
+  it("does not inject the same memory twice when the task itself is about the command", () => {
+    const { ids } = memoryHints(deps(store()), "invoke the nx target with npm",
+      { role: "coder", operations: true });
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("still injects the operational lines when the subject matches nothing at all", () => {
+    const { ids } = memoryHints(deps(store()), "zzzz qqqq nothing here matches",
+      { role: "coder", operations: true });
+    expect(ids).toContain("cmd");
   });
 });

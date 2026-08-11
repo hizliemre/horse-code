@@ -38,10 +38,35 @@ const EMPTY_STATS: SelectionStats = { considered: 0, belowThreshold: 0, cooldown
  * `silent` suppresses the event for callers that fan out over many roles at once and report one aggregate
  * instead — fifteen separate notes per review round would bury the chat rather than inform it.
  */
+/**
+ * The standing question every task asks and no task text ever contains.
+ *
+ * Retrieval scores a memory against the task, and how a project is BUILT is never what a task is about.
+ * Measured live: a card titled "Fix the issue in step 2 of the product creation wizard where the drag
+ * placeholder scales up" retrieved thirteen memories — the wizard's six steps, a table's placeholder rows,
+ * the product's typography — and then the implementer spent eight consecutive failed shell calls guessing at
+ * `nx test products`, `vitest --config …`, `prettier --check`, `dotnet build src/api/api.csproj`.
+ *
+ * The store had the answer the whole time, written by an earlier session: "The toucan repository uses npm,
+ * not pnpm — invoke targets as `npx nx <target> <project>`" and "For verifying Angular changes, build the
+ * beempa app (`npx nx build beempa --skip-nx-cache`)". Neither shares a word with a drag placeholder, so
+ * neither could ever be retrieved by the task that needed them — nor by any other task, ever.
+ */
+export const OPERATIONS_QUERY =
+  "how this project is built, tested, linted and run: the command, the package manager, the workspace, the "
+  + "script, the target, how to verify a change locally";
+
+/** How many of the injected memories are reserved for it — a couple of lines, not a manual. */
+export const OPERATIONS_SLOTS = 3;
+
 export function memoryHints(
   deps: TaskCycleDeps,
   query: string,
-  opts: { load?: number; role?: string; silent?: boolean } = {},
+  opts: {
+    load?: number; role?: string; silent?: boolean;
+    /** Reserve slots for how the project is operated. Set by roles that RUN things — they all need it. */
+    operations?: boolean;
+  } = {},
 ): MemoryHints {
   const all: MemoryEntry[] = deps.memory?.() ?? [];
   // Rules are injected globally; selecting them here would duplicate them in every prompt.
@@ -69,11 +94,24 @@ export function memoryHints(
     return { message: "", ids: [], hits: [], stats };
   };
   if (!selectable.length) return miss("empty-store", { ...EMPTY_STATS });
-  const { hits, stats } = selectMemoriesDetailed(selectable, query, {
+  const common = {
     load: opts.load ?? 0,
     ...(opts.role ? { role: opts.role } : {}),
     ...(deps.injectionLog ? { log: deps.injectionLog } : {}),
-  });
+  };
+  const { hits: bySubject, stats } = selectMemoriesDetailed(selectable, query, common);
+  /**
+   * …and a few for the question the subject cannot ask. See OPERATIONS_QUERY.
+   *
+   * A second pass rather than a widened query: mixing the two into one string would let the operational words
+   * compete with the task's own, and the task's own are the ones that must win the other slots.
+   */
+  const byOperations = opts.operations
+    ? selectMemoriesDetailed(selectable, OPERATIONS_QUERY, { ...common, max: OPERATIONS_SLOTS }).hits
+    : [];
+  const already = new Set(bySubject.map((h) => h.entry.id));
+  const ops = byOperations.filter((h) => !already.has(h.entry.id)).slice(0, OPERATIONS_SLOTS);
+  const hits = [...bySubject, ...ops];
   if (!hits.length) return miss("no-match", stats);
   const ids = hits.map((h) => h.entry.id);
   deps.injectionLog?.record(ids, Date.now()); // don't re-send these on the next turn
@@ -95,6 +133,8 @@ export function memoryHints(
     "hc.role": opts.role ?? "coach",
     "hc.memory.ids": ids.join(","),
     "hc.memory.count": hits.length,
+    // Measurable on its own: "how is this built" is a different need from "what is this about".
+    "hc.memory.operations": ops.length,
     "hc.memory.chars": message.length,
     "hc.memory.considered": stats.considered,
     "hc.memory.top_relevance": Math.round((hits[0]?.relevance ?? 0) * 100) / 100,
