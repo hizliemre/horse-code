@@ -51,3 +51,59 @@ export async function inUserLanguage(deps: ReviewDeps, text: string, language?: 
     return text; // a question in the wrong language still asks; a thrown resume does not
   }
 }
+
+export interface Choice { label: string; description?: string }
+
+const Asked = z.object({
+  question: z.string().describe("The question, in the requested language."),
+  options: z.array(z.object({
+    label: z.string().describe("The choice's label, in the requested language. Keep it short — it is a name."),
+    description: z.string().optional().describe("Its one-line explanation, in the requested language."),
+  })).describe("Same choices, same order. Never add, drop or reorder them."),
+});
+
+/**
+ * A question the ENGINE asks, in the user's language — with the code's own answer left intact.
+ *
+ * The trap here is the answer. `askUser` returns the label that was chosen, and callers match on it:
+ * `/^small/i.test(answer)` decides whether a request skips the whole spec-and-plan pipeline. Translating the
+ * labels and handing the translation back would make that test silently false and take the other branch —
+ * a wrong answer to a question the user answered correctly.
+ *
+ * So the translation is what they READ, and what comes back is the ORIGINAL label, matched by position.
+ * Callers keep comparing against the English they wrote.
+ *
+ * Measured: a session running entirely in Turkish was asked "I cannot tell how big this is from the code…
+ * Which is it? (*) Small — just do it / ( ) Full piece of work" — in English, by the engine, after the user
+ * had said more than once which language they work in.
+ */
+export async function askInUserLanguage(
+  deps: ReviewDeps,
+  askUser: (q: string, o?: { options?: Choice[] }) => Promise<string>,
+  language: string | undefined,
+  question: string,
+  options?: Choice[],
+): Promise<string> {
+  if (isEnglish(language) || !options?.length) {
+    const q = isEnglish(language) ? question : await inUserLanguage(deps, question, language);
+    return askUser(q, options ? { options } : undefined);
+  }
+  try {
+    const { role: agentRole, model, fallbacks, onExhausted, onFallback } = deps.roleRegistry.fallbackOpts("refiner");
+    const said = await runStructuredRole({
+      provider: deps.provider, role: agentRole, model, fallbacks, onExhausted, onFallback,
+      systemPrompt: PROMPT + deps.roleRegistry.ruleSuffix(),
+      tools: new ToolRegistry(),
+      messages: [{ role: "user", content: `Language: ${language}\n\n${JSON.stringify({ question, options })}` }],
+      permission: deps.permission, approve: deps.approve, cwd: ".", signal: deps.signal,
+    }, Asked);
+    // A translation that lost or invented a choice cannot be mapped back safely — ask as written instead.
+    if (said.options.length !== options.length) return askUser(question, { options });
+    const answer = (await askUser(said.question, { options: said.options })).trim();
+    const at = said.options.findIndex((o) => o.label.trim() === answer);
+    // Matched by POSITION: the caller compares against the English it wrote, whatever the user was shown.
+    return at >= 0 ? options[at]!.label : answer;
+  } catch {
+    return askUser(question, { options });   // a question in the wrong language still asks
+  }
+}

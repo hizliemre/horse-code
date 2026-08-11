@@ -12,6 +12,9 @@ import { FindingQueue, type Finding } from "../../src/engine/finding.js";
  * on testing the product that still had it.
  */
 
+/** No language set → the translation path is never entered, so these test the loop, not the wording. */
+const english = {} as unknown as import("../../src/engine/review.js").ReviewDeps;
+
 const finding = (title: string): Finding =>
   ({ title, detail: "d", scenario: "F4", files: [], acceptance: [] });
 
@@ -24,7 +27,7 @@ describe("fixing at the hand-off", () => {
       async () => { order.push("asked"); return "ok"; },
       q,
       async () => { order.push("fixed"); return ["toast has no reason — FIXED"]; },
-      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS },
+      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS, deps: english },
     );
     await ask("go and click things");
     // The one part that cannot be automated must not be spent on a version we know is wrong.
@@ -39,7 +42,7 @@ describe("fixing at the hand-off", () => {
       async (question) => { seen = question; return "ok"; },
       q,
       async () => ["toast has no reason — FIXED"],
-      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS },
+      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS, deps: english },
     );
     await ask("go and click things");
     expect(seen).toMatch(/were dealt with/);
@@ -54,7 +57,7 @@ describe("fixing at the hand-off", () => {
       async () => "the toast now says the size limit",
       q,
       async () => ["toast has no reason — FIXED"],
-      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS },
+      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS, deps: english },
     );
     const back = await ask("go and click things");
     expect(back).toContain("the toast now says the size limit");   // the answer itself is not lost
@@ -69,7 +72,7 @@ describe("fixing at the hand-off", () => {
       async (q) => `answer to ${q}`,
       new FindingQueue(),
       async () => { fixes++; return []; },
-      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS },
+      { budget: { left: MAX_FIX_ROUNDS }, refill: MAX_FIX_ROUNDS, deps: english },
     );
     expect(await ask("plain question")).toBe("answer to plain question");
     expect(fixes).toBe(0);
@@ -82,7 +85,7 @@ describe("fixing at the hand-off", () => {
     const ask = fixBeforeHandOff(
       async () => "ok", q,
       async () => { fixes++; return []; },
-      { budget: { left: 0 }, refill: 0 },
+      { budget: { left: 0 }, refill: 0, deps: english },
     );
     await ask("question");
     expect(fixes).toBe(0);
@@ -103,7 +106,7 @@ describe("fixing at the hand-off", () => {
     const ask = fixBeforeHandOff(
       async () => "ok", q,
       async () => { fixes++; return ["x — FIXED"]; },
-      { budget, refill: 2 },
+      { budget, refill: 2, deps: english },
     );
     q.add(finding("first thing they saw"));
     await ask("go and look");
@@ -118,7 +121,7 @@ describe("fixing at the hand-off", () => {
 
   it("does not refill when nobody answered — an unattended round is still bounded", async () => {
     const budget = { left: 2 };
-    const ask = fixBeforeHandOff(async () => "ok", new FindingQueue(), async () => [], { budget, refill: 2 });
+    const ask = fixBeforeHandOff(async () => "ok", new FindingQueue(), async () => [], { budget, refill: 2, deps: english });
     await ask("no findings, so nothing happens");
     expect(budget.left).toBe(2);        // untouched: the refill rides on a fix actually happening
   });
@@ -126,7 +129,7 @@ describe("fixing at the hand-off", () => {
   it("spends the budget it uses, so hand-off and end-of-session cannot each have the full ceiling", async () => {
     const q = new FindingQueue();
     const budget = { left: 2 };
-    const ask = fixBeforeHandOff(async () => "ok", q, async () => [], { budget, refill: 0 });
+    const ask = fixBeforeHandOff(async () => "ok", q, async () => [], { budget, refill: 0, deps: english });
     q.add(finding("a"));
     await ask("q1");
     expect(budget.left).toBe(1);        // refill 0 → nothing restored, the spend stands

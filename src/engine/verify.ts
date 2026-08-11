@@ -19,6 +19,7 @@ import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { buildAskUserTool } from "./writer-registry.js";
 import { buildRememberTool } from "../tools/remember.js";
+import { askInUserLanguage, inUserLanguage } from "./user-language.js";
 import type { AskUser } from "./review.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
 import type { TaskCycleDeps } from "./task-types.js";
@@ -346,19 +347,20 @@ export const MAX_FIX_ROUNDS = 2;
  * session they are in the middle of. Deciding that silently is how a verification turns into an afternoon.
  */
 async function handleFindings(
-  opts: { deps: ReviewDeps; workdir: string; askUser: AskUser; note?: (text: string) => void },
+  opts: { deps: ReviewDeps; workdir: string; askUser: AskUser; note?: (text: string) => void; language?: string },
   found: Finding[],
 ): Promise<string[]> {
   const done: string[] = [];
   for (const f of found) {
     const t = await triageFinding(opts.deps, opts.workdir, f);
     if (t.depth !== "task") {
-      const answer = await opts.askUser(
+      const answer = await askInUserLanguage(
+        opts.deps, opts.askUser, opts.language,
         `${describeEscalation(f, t)}\n\nStart that now, or leave it in the report and carry on testing?`,
-        { options: [
+        [
           { label: "Leave it — carry on testing", description: "It stays as an open finding; you can start it after the session." },
           { label: "Start it now", description: "The test session pauses while it is designed and built." },
-        ] },
+        ],
       );
       if (!/start it now/i.test(answer.trim())) {
         opts.note?.(`📌 Left open: **${f.title}** — ${t.reason}`);
@@ -436,7 +438,8 @@ export function fixBeforeHandOff(
   askUser: AskUser,
   findings: FindingQueue,
   fix: (found: Finding[]) => Promise<string[]>,
-  opts: { note?: (text: string) => void; budget: { left: number }; refill: number },
+  opts: { note?: (text: string) => void; budget: { left: number }; refill: number;
+    deps: ReviewDeps; language?: string },
 ): AskUser {
   return async (question, ask) => {
     const found = findings.drain();
@@ -451,10 +454,9 @@ export function fixBeforeHandOff(
     opts.note?.(`🔧 ${found.length} finding(s) reported — fixing before handing over, so you test the corrected product.`);
     const done = await fix(found);
     const said = done.map((d) => `- ${d}`).join("\n");
-    const answer = await askUser(
-      `Before this: the finding(s) reported during the last step were dealt with.\n${said}\n\n${question}`,
-      ask,
-    );
+    const head = await inUserLanguage(
+      opts.deps, "Before this: the finding(s) reported during the last step were dealt with.", opts.language);
+    const answer = await askUser(`${head}\n${said}\n\n${question}`, ask);
     /**
      * A person answering is proof the loop is not running away, so the allowance is restored.
      *
@@ -525,8 +527,10 @@ export async function runVerify(opts: {
     askUser, findings,
     // The RAW askUser here: handleFindings may need to ask about an escalation, and routing that back through
     // the wrapper would be asking a question about the findings it just drained.
-    (found) => handleFindings({ deps, workdir, askUser, ...(opts.note ? { note: opts.note } : {}) }, found),
-    { ...(opts.note ? { note: opts.note } : {}), budget, refill: MAX_FIX_ROUNDS },
+    (found) => handleFindings({ deps, workdir, askUser, ...(opts.note ? { note: opts.note } : {}),
+      ...(opts.language ? { language: opts.language } : {}) }, found),
+    { ...(opts.note ? { note: opts.note } : {}), budget, refill: MAX_FIX_ROUNDS, deps,
+      ...(opts.language ? { language: opts.language } : {}) },
   );
   const tools = testerTools(deps, handOff, findings);
   /**

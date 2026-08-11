@@ -10,6 +10,7 @@ import { runCoachChat } from "./coach.js";
 import { extractListBlock } from "./next-steps.js";
 import { runReviewLoop } from "./review.js";
 import { commitStep } from "./operational.js";
+import { askInUserLanguage } from "./user-language.js";
 import { isContinuePrompt, readCheckpoint, writeCheckpoint, type UpstreamPhase, type Checkpoint } from "./checkpoint.js";
 import { appendReviewNotes } from "./review-notes.js";
 import type { ProgressEvent } from "./progress.js";
@@ -274,12 +275,13 @@ export async function runUpstream(
     let small = size.verdict === "small";
     if (size.verdict === "unsure") {
       const { describeSizeDoubt } = await import("./triage.js");
-      const answer = await askUser(
+      const answer = await askInUserLanguage(
+        deps, askUser, r.language,
         `${describeSizeDoubt(r.refinedPrompt, size.reason)}\n\nWhich is it?`,
-        { options: [
+        [
           { label: "Small — just do it", description: "Implemented, reviewed and checked against the acceptance criteria, in your working tree." },
           { label: "Full piece of work", description: "Spec, plan, tasks, then waves — on its own branch." },
-        ] },
+        ],
       );
       small = /^small/i.test(answer.trim());
     }
