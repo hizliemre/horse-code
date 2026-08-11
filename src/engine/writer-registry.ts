@@ -87,6 +87,8 @@ export function buildAskUserTool(
         return { content: `ask_user: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       }
       const { question, options, multiSelect, steps } = parsed.data;
+      // Who is asking, carried on every route below — the user sees a question, not a process tree.
+      const asker = ctx.role || ctx.model ? { asker: { ...(ctx.role ? { role: ctx.role } : {}), ...(ctx.model ? { model: ctx.model } : {}) } } : {};
       /**
        * A dangling pointer is refused, not shown.
        *
@@ -110,19 +112,19 @@ export function buildAskUserTool(
         const found = extractChoicesFrom(question);
         if (found.choices.length >= 2) {
           // The trimmed question, so the list is not printed twice — once as prose, once as the list.
-          return { content: await askUser(found.question, { options: found.choices }), isError: false };
+          return { content: await askUser(found.question, { options: found.choices, ...asker }), isError: false };
         }
         // Only prose that hides its choices needs a model.
         if (normalize) {
           try {
             const n = await normalize(question);
             if (n.options.length > 0) {
-              return { content: await askUser(n.question, { options: n.options, multiSelect: n.multiSelect }), isError: false };
+              return { content: await askUser(n.question, { options: n.options, multiSelect: n.multiSelect, ...asker }), isError: false };
             }
           } catch { /* normalizer failed → fall through to the raw question */ }
         }
       }
-      return { content: await askUser(question, { options, multiSelect, steps }), isError: false };
+      return { content: await askUser(question, { options, multiSelect, steps, ...asker }), isError: false };
     },
   };
 }

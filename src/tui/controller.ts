@@ -53,7 +53,9 @@ export interface TuiState {
   phase: string;
   detail?: string;
   cards: BoardCardView[];
-  pending?: { question: string; options?: (string | AskChoice)[]; multiSelect?: boolean };
+  pending?: { question: string; options?: (string | AskChoice)[]; multiSelect?: boolean;
+    /** Who is waiting on the answer — shown under the input, because a bare model id names nobody. */
+    asker?: { role?: string; model?: string } };
   mode?: "input" | "running" | "picker";
   transcript: TranscriptItem[];
   queued: number; // prompts typed while a job is running, waiting to run next
@@ -362,7 +364,8 @@ export class TuiController {
   ask = (question: string, opts?: AskOpts): Promise<string> =>
     this.cancelled ? Promise.resolve("") : new Promise<string>((resolve) => {
       this.pendingResolve = resolve;
-      this.state = { ...this.state, pending: { question, options: opts?.options, multiSelect: opts?.multiSelect } };
+      this.state = { ...this.state, pending: { question, options: opts?.options, multiSelect: opts?.multiSelect,
+        ...(opts?.asker ? { asker: opts.asker } : {}) } };
       this.notify();
     });
 

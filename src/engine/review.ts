@@ -52,6 +52,14 @@ export interface AskOpts {
    * instead of pointing at a document it wrote.
    */
   steps?: string[];
+  /**
+   * Who is waiting on the answer.
+   *
+   * A question arrives in the middle of a long run, and the line under the input box said only which model
+   * was last in use — reported as "input'un altındaki dil modeli kime ait? role belli değil". The role is the
+   * half that means something: `tester` on sonnet is a different situation from `coach` on it.
+   */
+  asker?: { role?: string; model?: string };
 }
 
 /** Normalizes the mixed option form to {@link AskChoice}. */

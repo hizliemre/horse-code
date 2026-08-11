@@ -28,6 +28,7 @@ export interface ToolExecDeps {
   recall?: Recall; // what this agent has already been shown → an identical call is answered with a pointer
   said?: string; // the prose of the turn these calls came with → `ask_user` checks its references against it
   role?: string; // who is calling → recorded on tool events so a repeat can be attributed to an agent
+  model?: string; // …and what is serving it → shown beside the role when a tool stops to ask the user
 }
 
 /** The call's identity, or nothing — see ToolExecResult.key. */
@@ -129,6 +130,7 @@ async function runTool(
   const run = (): Promise<import("../core/types.js").ToolResult> => tool.run(args, {
     cwd: deps.cwd, signal: deps.signal, onActivity, remember: deps.remember,
     proposeMemory: deps.proposeMemory, readFiles: deps.readFiles, said: deps.said,
+    ...(deps.role ? { role: deps.role } : {}), ...(deps.model ? { model: deps.model } : {}),
   });
   // Every tool call, with what it was asked and what came back — the record that made "496 calls in two
   // minutes, the same three files" visible in the first place, now available without reading a screenshot.

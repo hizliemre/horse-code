@@ -115,6 +115,15 @@ export interface ToolContext {
    * after a message that listed five items, and points at nothing after a turn that only called tools.
    */
   said?: string;
+  /**
+   * Who is calling, and on which model.
+   *
+   * Only `ask_user` uses it, and only to say so: a question that appears in the middle of a long run is asked
+   * BY somebody, and the screen showed a bare model id under the box with no way to tell whether the tester,
+   * a reviewer or the coach was waiting on the answer.
+   */
+  role?: string;
+  model?: string;
 }
 
 export interface PermissionDescriptor {

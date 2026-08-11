@@ -290,6 +290,8 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
 
     const results = yield* executeToolCalls(toolCalls, {
       ...(opts.role ? { role: opts.role } : {}),
+      // The model that actually served this turn — not opts.model, which is only the head of the chain.
+      ...(chain[chainIdx] ? { model: chain[chainIdx] as string } : {}),
       tools: opts.tools,
       permission: opts.permission,
       approve: opts.approve,

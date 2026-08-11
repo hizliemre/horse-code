@@ -696,9 +696,21 @@ export function PhaseBar({ phase, detail }: { phase: string; detail?: string }):
  * doesn't flip to the refiner mid-refine). Duration + tokens live next to the status verb above the input;
  * this line stays a compact 1-row model badge. `wrap="truncate-end"` keeps it a single row.
  */
-export function MetricsLine({ meta, model }: { meta: TurnMeta; model?: string }): React.ReactElement {
-  const shown = model || meta.model || "—";
-  return <Text dimColor wrap="truncate-end">{`  ${shown}`}</Text>;
+/**
+ * …and while a question is on the screen it names WHO is asking.
+ *
+ * "cc/claude-sonnet-5" under a question box says which model, and a run has a dozen of those; the role is the
+ * half that tells the user what they are answering. Reported from a live session, looking at the box: "input
+ * altındaki dil modeli kime ait? role belli değil" — the tester had stopped to hand over a scenario, and
+ * nothing on the screen said so.
+ *
+ * The asker's OWN model, not the session's: it is the one that will read the answer.
+ */
+export function MetricsLine(
+  { meta, model, asker }: { meta?: TurnMeta; model?: string; asker?: { role?: string; model?: string } },
+): React.ReactElement {
+  const shown = asker?.model || model || meta?.model || "—";
+  return <Text dimColor wrap="truncate-end">{`  ${asker?.role ? `${asker.role} · ` : ""}${shown}`}</Text>;
 }
 
 /**
@@ -2300,7 +2312,12 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
         </Box>
         )}
         {state.attachments > 0 ? <Text color="#ff9a2e">{`  ${ICONS.attach} ${state.attachments} image${state.attachments === 1 ? "" : "s"} staged — Enter to send`}</Text> : null}
-        {state.meta ? <MetricsLine meta={state.meta} model={state.currentModel || coachModel?.() || model} /> : null}
+        {/* …and a question shows its asker even before the first turn has any metrics to show. */}
+        {state.meta || state.pending?.asker
+          ? <MetricsLine {...(state.meta ? { meta: state.meta } : {})}
+              model={state.currentModel || coachModel?.() || model}
+              {...(state.pending?.asker ? { asker: state.pending.asker } : {})} />
+          : null}
         {state.runningAgents.length > 0 && keep.has("agents") ? <RunningAgents agents={state.runningAgents} cols={size.cols} cursor={state.agentCursor} /> : null}
         {showMonitor && keep.has("monitor") ? <RunMonitor
           report={(monitorReport ?? { records: 0, stages: [], turns: 0, toolCalls: 0, singleToolTurns: 0,
