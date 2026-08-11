@@ -1817,8 +1817,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/clear") controller.clearTranscript();
     else if (c.name === "/exit") onExit?.();
   };
-  const tlen = state.transcript.length;
-  useEffect(() => { setScroll(0); }, [tlen]);
+
   useEffect(() => { setChoiceDismissed(false); }, [state.pending?.question]); // new question → show the selector again
   // @-file picker: load the project file list once when the picker first opens; reset selection/dismissal.
   const atActive = !!at;
@@ -2009,6 +2008,31 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
       return flattenMessage(m.role, m.text, fullscreenChatW, same);
     }),
   ], [state.transcript, fullscreenChatW, size.rows]);
+
+  /**
+   * New output follows the tail — unless the user has scrolled away from it.
+   *
+   * This was `useEffect(() => setScroll(0), [transcript.length])`: every append yanked the view back to the
+   * bottom. During a coding run that is several times a minute, so scrolling up to read something was not
+   * possible — reported live as "scroll çok hızlı bir şekilde küçülüyor ancak chat'e aynı oranda birşey
+   * basılmıyor". The count was falling to zero because the position was being reset, not because anything
+   * was being printed: a run of tool calls folds into ONE row that updates in place, so the screen barely
+   * changes while the item count keeps ticking.
+   *
+   * `scroll` is a distance from the BOTTOM, so holding it still is not holding the content still either —
+   * every appended line would push the reader one line further down through text they had not read. So the
+   * offset grows by exactly what was appended, which leaves the same lines on the screen.
+   *
+   * At the bottom (`scroll === 0`) the old behaviour is the right one, and is what happens: nothing to add to.
+   */
+  const totalLines = fullscreenLines.length;
+  const prevTotal = useRef(totalLines);
+  useEffect(() => {
+    const added = totalLines - prevTotal.current;
+    prevTotal.current = totalLines;
+    if (added > 0) setScroll((v) => (v > 0 ? v + added : 0));
+    else if (added < 0) setScroll((v) => Math.max(0, v + added));   // …lines dropped: never past the end
+  }, [totalLines]);
 
   if (fullscreen) {
     // Chat content sits one unit off the left edge (paddingLeft below); flatten to the narrowed width so lines
