@@ -262,7 +262,11 @@ config detail you had to go and check, a trap you fell into. One short sentence 
 project.
 
 Do not record what you did, what the task was, or anything true of the language or framework in general —
-that is noise, and the store is read by every later run.`,
+that is noise, and the store is read by every later run.
+
+A SECOND failure of the same kind is the trigger. The moment a command fails twice, or a path you were sure
+about turns out not to exist, or a file is not where the obvious place said it would be — that is the thing
+worth a sentence, and you have just paid for it. Write it before you carry on.`,
     );
   }
   return sections.length ? "\n\n" + sections.join("\n\n") : "";

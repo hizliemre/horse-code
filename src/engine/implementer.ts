@@ -177,7 +177,23 @@ export async function runImplementer(
     `When you stop you are HANDING the change over — to a review and an acceptance check that have not run ` +
     `yet. So close with what you changed and what you ran, and leave the verdict to them: do not write that ` +
     `the task is complete, done or finished. Whether it is, is not yours to say, and saying it is how a card ` +
-    `reads "complete" above a review that rejects it.`;
+    `reads "complete" above a review that rejects it.
+
+` +
+    /**
+     * The tool was there, the instruction was there, and it was used zero times.
+     *
+     * Measured over a whole run: 153 tool calls by one implementer, ten of them failed shell commands working
+     * out that this project's formatter has to be invoked from a subdirectory — and not one `remember_fact`.
+     * A standing offer in the system prompt is not a moment; the close of the turn is, and it is the last one
+     * there is.
+     *
+     * Deliberately a CHECK, not the instruction: what is learned should be written the moment it is learned,
+     * because a run that is stopped early still leaves it behind. This is what catches the rest.
+     */
+    `Before you stop: did anything here cost you more than one attempt — a command that had to be invoked a ` +
+    `particular way, a file that was not where it should have been, a trap you fell into? If you have not ` +
+    `already recorded it with \`remember_fact\`, do that now. The next agent pays for it again otherwise.`;
   const content = (returning
     ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
     : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "")

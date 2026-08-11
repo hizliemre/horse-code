@@ -31,3 +31,31 @@ describe("what an implementer is told about stopping", () => {
     expect(s).toContain("${hygiene}\\n\\n${handOver}");
   });
 });
+
+/**
+ * The tool was there, the instruction was there, and it was used zero times.
+ *
+ * Measured over one whole run: 153 tool calls by a single implementer, ten of them failed shell commands
+ * working out that this project's formatter has to be invoked from a subdirectory — and not one
+ * `remember_fact`. The next run pays for all of it again.
+ *
+ * A standing offer in the system prompt is not a moment. The close of the turn is one, and it is the last
+ * one there is — so it carries the check, while the instruction itself still says to write it when it is
+ * learned. A run stopped early must still leave behind what it paid for.
+ */
+describe("what an implementer is asked before it stops", () => {
+  const src = (f: string): Promise<string> => readFile(f, "utf8");
+
+  it("asks whether anything cost more than one attempt, and to record it", async () => {
+    const s = await src("src/engine/implementer.ts");
+    expect(s).toContain("did anything here cost you more than one attempt");
+    expect(s).toContain("remember_fact");
+    expect(s).toContain("The next agent pays for it again otherwise.");
+  });
+
+  it("still tells every role holding the tool to write it AS it is learned", async () => {
+    const s = await src("src/engine/task-types.ts");
+    expect(s).toContain("A SECOND failure of the same kind is the trigger");
+    expect(s).toContain("Write it before you carry on");
+  });
+});
