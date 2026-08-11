@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import { loadGraphSync, areaOf } from "../engine/project-graph.js";
-import { readTraceSync } from "../engine/trace.js";
+import { readTraceSync, everTraceable } from "../engine/trace.js";
 import { readBriefSync } from "../engine/project-brief.js";
 import type { ProjectGraph, GraphNode, GraphEdge } from "../engine/project-graph.js";
 
@@ -302,6 +302,22 @@ export const graphTraceTool: Tool = {
     }
     const body = readTraceSync(ctx.cwd, file);
     if (body) return { content: body, isError: false };
+    /**
+     * "Not yet" and "never" are different answers, and only one of them invites a retry.
+     *
+     * A template, a stylesheet or a config file is not a kind of file the tracer visits, so telling its
+     * asker that a trace might appear later sends them to `graph_find` and back for something that cannot
+     * change. Measured on an Angular project, where the component's markup lives in `.html`: fifteen roles
+     * asked about the same template and every one of them was told to keep looking.
+     */
+    if (!everTraceable(file)) {
+      return {
+        content: `No trace for "${file}", and there never will be: traces cover source code (.ts, .cs, .py, `
+          + `.go, …), not templates, stylesheets or markup. Read the file directly — asking again, or looking `
+          + `for another path with graph_find, will not turn one up.`,
+        isError: true,
+      };
+    }
     return {
       content: `No trace for "${file}". Either it has none yet (traces are written by \`/graph trace\`, a user ` +
         `action) or the path differs — check it with graph_find. Read the file directly instead.`,

@@ -91,7 +91,20 @@ export function discoverTraceRoot(cwd: string, trackedFiles: string[]): string |
 export const TRACE_INDEX = "index.json";
 
 /** Extensions worth a trace — source code, not data or markup. */
-const TRACEABLE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala)$/;
+export const TRACEABLE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|c|h|cc|cpp|hpp|cs|php|swift|kt|scala)$/;
+
+/**
+ * Whether a trace could EVER exist for this path, as distinct from not existing yet.
+ *
+ * `graph_trace` answered both cases the same way — "either it has none yet or the path differs" — and for a
+ * file the tracer never visits, both halves are wrong. Measured on an Angular project: fifteen different
+ * roles asked for the trace of the same `.html` template, each was told it might appear later, and each went
+ * looking with `graph_find` before reading the file itself. Twenty-odd calls for an answer that could not
+ * change.
+ */
+export function everTraceable(file: string): boolean {
+  return TRACEABLE_EXT.test(file);
+}
 
 /**
  * Paths that are not the project's own source, however much code they contain.
