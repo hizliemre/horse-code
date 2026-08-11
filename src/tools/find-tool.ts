@@ -73,7 +73,14 @@ export function buildFindToolTool(registry: ToolRegistry): Tool {
         return { content: `find_tool: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       }
       const { query } = parsed.data;
-      const pool = registry.deferredTools();
+      /**
+       * A tool that has already proven it cannot answer is not offered again.
+       *
+       * Without this the withdrawal only saves the round trip: each fresh agent still finds the tool, calls
+       * it, and spends a turn being told it is broken. Measured on one run — twenty-odd such calls across
+       * eight different roles, every one of them the same reply.
+       */
+      const pool = registry.deferredTools().filter((t) => t.broken === undefined);
       if (!pool.length) {
         return {
           content: "Every tool this project connects is already loaded — there is nothing further to fetch. "

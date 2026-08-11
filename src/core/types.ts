@@ -130,6 +130,14 @@ export interface Tool {
   // An already-formed JSON Schema (draft-7) → sent to the model verbatim instead of deriving it from
   // `parameters`. Used by MCP tools, whose input schema arrives as JSON Schema, not zod.
   rawSchema?: unknown;
+  /**
+   * Why this tool has been withdrawn for the run, when it has.
+   *
+   * Set by a tool that has proven it cannot answer — an MCP server whose reply fails its own declared schema.
+   * Read where tools are OFFERED, so a broken one stops being handed to fresh agents that would each pay a
+   * turn to rediscover it. See mcpToolAdapter.
+   */
+  readonly broken?: string;
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult>;
   // write/exec tools produce a permission request; not needed for safe tools.
   describe?(args: Record<string, unknown>): PermissionDescriptor;

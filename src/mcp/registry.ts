@@ -16,8 +16,24 @@ export function mcpToolName(server: string, tool: string): string {
  * no safety and costs the autonomy the pipeline is for. Everything else stays `exec` and goes through the
  * approval gate.
  */
+/**
+ * A tool that has proven it cannot answer is withdrawn for the rest of the run.
+ *
+ * `explainMcpError` already tells the agent that a server fault will "fail identically" — and that lesson
+ * dies with the agent that learned it. Measured on a real run: `mcp__angular-cli__list_projects` declares
+ * `workspaces`, `parsingErrors` and `versioningErrors` as required output, and the workspace it was pointed
+ * at has no `angular.json` at all, so it answered in plain text and its own schema rejected it. Twenty-odd
+ * calls, from `code-conventions`, `code-observability`, `code-simplicity`, `risk-judge`, `correctness-judge`
+ * and others — each a fresh agent, each paying the same turn to be told the same thing.
+ *
+ * One occurrence is enough: a reply that fails its own declared schema is a property of the build, not a
+ * blip, and this is the same conclusion the message already draws. The tool is not silently removed — every
+ * later call is answered immediately, saying it was withdrawn and why, so a reader of the transcript can see
+ * what happened without wondering why the tool stopped being tried.
+ */
 export function mcpToolAdapter(conn: McpConnection, tool: McpTool): Tool {
   const name = mcpToolName(conn.name, tool.name);
+  let withdrawn: string | undefined;
   return {
     name,
     description: `[MCP:${conn.name}] ${tool.description ?? tool.name}`,
@@ -25,12 +41,21 @@ export function mcpToolAdapter(conn: McpConnection, tool: McpTool): Tool {
     parameters: z.record(z.string(), z.unknown()), // unused — rawSchema is what the model sees
     rawSchema: tool.inputSchema, // MCP provides a JSON Schema; send it verbatim
     describe: (args) => ({ allowKey: `mcp:${conn.name}:${tool.name}`, preview: `mcp ${conn.name}/${tool.name} ${JSON.stringify(args)}`.slice(0, 200) }),
+    /** Whether this tool has been withdrawn — read by `find_tool`, so it stops being offered at all. */
+    get broken(): string | undefined { return withdrawn; },
     async run(args) {
+      if (withdrawn !== undefined) {
+        return { content: `${name}: withdrawn for this run — ${withdrawn}`, isError: true };
+      }
       try {
         const res = await conn.callTool(tool.name, args as Record<string, unknown>);
         return { content: res.content, isError: res.isError };
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        if (isServerFault(message)) {
+          withdrawn = `it answered with a reply that fails its own declared schema (${message.slice(0, 120)}). `
+            + `Nothing you can pass it will change that, so it will not be called again.`;
+        }
         return { content: explainMcpError(name, message, tool.inputSchema), isError: true };
       }
     },
