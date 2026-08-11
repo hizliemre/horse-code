@@ -417,11 +417,23 @@ export class MemoryStore {
     }
   }
 
+  /** Adds one name to an existing ignore list, once. Best-effort: an unreadable file is left alone. */
+  private async ensureIgnored(file: string, name: string): Promise<void> {
+    try {
+      const raw = await readFile(file, "utf8");
+      if (raw.split("\n").some((l) => l.trim() === name)) return;
+      await writeFile(file, raw.endsWith("\n") ? `${raw}${name}\n` : `${raw}\n${name}\n`, "utf8");
+    } catch { /* cannot read it → do not guess at its contents by overwriting them */ }
+  }
+
   /** Best-effort, like every other save here: a lost count is a weaker heuristic, not a lost memory. */
   private async persistUsage(): Promise<void> {
     if (this.deferred) return;
     try {
-      await mkdir(dirname(this.file), { recursive: true });
+      const dir = dirname(this.file);
+      await mkdir(dir, { recursive: true });
+      // This is the one write a read-only run makes; if it is the first, the ignore line has to exist by now.
+      if (existsSync(join(dir, ".gitignore"))) await this.ensureIgnored(join(dir, ".gitignore"), USAGE_FILE);
       await writeAtomic(this.usageFile(), JSON.stringify(this.usage));
     } catch { /* the counts are a heuristic; failing to write them must not fail a run */ }
   }
@@ -443,6 +455,16 @@ export class MemoryStore {
     if (!existsSync(gi)) {
       await writeFile(gi, "# horse-code: local state stays out of git; memory.jsonl + skills are shared\n"
         + `config.json\nsources.json\nworktrees/\nlast-turn.json\n${USAGE_FILE}\n`, "utf8");
+    } else {
+      /**
+       * …and a project that already has one gets the new line APPENDED, not skipped.
+       *
+       * Writing this file only when it was absent was right while its contents never changed. The moment a
+       * name was added to it, every project that had used horse-code before — which is every project that has
+       * one of these — kept the old list and got the new machine-local file as an untracked change instead.
+       * The fix for a dirty tree would have arrived only for projects that never had the problem.
+       */
+      await this.ensureIgnored(gi, USAGE_FILE);
     }
     /**
      * Two sessions that both learn something must not have to fight over this file.

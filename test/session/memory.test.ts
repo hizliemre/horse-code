@@ -550,4 +550,43 @@ describe("counting injections", () => {
     await store().add("anything at all");
     expect(await readFile(join(proj(), ".horsecode", ".gitignore"), "utf8")).toContain(USAGE_FILE);
   });
+
+  /**
+   * A project that already has an ignore list gets the new name APPENDED, not skipped.
+   *
+   * Writing that file only when it was absent was right while its contents never changed. The moment a name
+   * was added, every project that had used horse-code before — which is every project that has one — kept the
+   * old list and got the sidecar as an untracked change instead. The fix for a dirty tree would have arrived
+   * only for the projects that never had the problem.
+   */
+  it("adds itself to an ignore list that already exists", async () => {
+    await mkdir(join(proj(), ".horsecode"), { recursive: true });
+    const gi = join(proj(), ".horsecode", ".gitignore");
+    await writeFile(gi, "# horse-code: local/secret state stays out of git; memory.jsonl is shared\n"
+      + "config.json\nsources.json\nworktrees/\nlast-turn.json\n");
+    await store().add("anything at all");
+    const after = await readFile(gi, "utf8");
+    expect(after).toContain(USAGE_FILE);
+    expect(after).toContain("last-turn.json");   // …and everything that was already in it
+  });
+
+  it("adds it only once, however many times the store is written", async () => {
+    const s = store();
+    await s.add("one");
+    await s.add("two");
+    const after = await readFile(join(proj(), ".horsecode", ".gitignore"), "utf8");
+    expect(after.split("\n").filter((l) => l.trim() === USAGE_FILE)).toHaveLength(1);
+  });
+
+  it("covers the read-only run too — the only file it writes is the sidecar", async () => {
+    const first = store();
+    const res = await first.add("a fact worth counting");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const gi = join(proj(), ".horsecode", ".gitignore");
+    // A project whose ignore list predates the sidecar, and a session that only reads and counts.
+    await writeFile(gi, "config.json\nsources.json\nworktrees/\nlast-turn.json\n");
+    await store().recordInjection([res.entry.id]);
+    expect(await readFile(gi, "utf8")).toContain(USAGE_FILE);
+  });
 });
