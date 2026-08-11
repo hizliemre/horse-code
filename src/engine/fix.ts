@@ -55,21 +55,53 @@ export interface FixResult {
  * Never throws. A verification that stops because a fix went wrong has lost the more valuable thing: the
  * scenarios already run and the evidence already gathered.
  */
+/**
+ * How many times one finding is attempted before it is called open.
+ *
+ * A first attempt that misses is the ordinary case, not a verdict: the acceptance gate has just said, in
+ * writing, what is still not true — which is more than the first attempt was given. Measured live: three
+ * defects came back `NOT fixed`, nothing tried again, and the tester wrote the scenario off as failed.
+ *
+ * Two, not more. A second attempt that fails with the gate's own words in hand is not going to be rescued by
+ * a third; at that point it is something to tell the person about, and they are sitting right there.
+ */
+export const FIX_ATTEMPTS = 2;
+
+/**
+ * What the last attempt was told, said to the next one — as a review note.
+ *
+ * The card is the only thing a fresh cycle knows, and the channel already exists: a card carrying review
+ * notes is handed over as "This is a RETURNING task … Address the reviewer notes". A second attempt that
+ * cannot see why the first was rejected is the first attempt again.
+ */
+function whyItDidNotTake(notes: string[]): string {
+  return `An earlier attempt at this in the same session did not settle it. The acceptance check said: `
+    + `${notes.join("; ") || "it was still not true afterwards"}. That is a description of what is still `
+    + `wrong — find why the change did not take rather than making the same one again.`;
+}
+
 export async function runFix(
   deps: ReviewDeps, workdir: string, f: Finding, id = "fix-1",
 ): Promise<FixResult> {
-  try {
-    const board = new Board();
-    board.addCard(cardFromFinding(f, id));
-    const verdict = await runTaskCycle(deps, board, id, workdir);
-    return {
-      title: f.title,
-      fixed: verdict.verdict === "pass",
-      notes: verdict.verdict === "pass" ? [] : (verdict.noProgress ? ["nothing was written"] : verdict.notes),
-    };
-  } catch (e) {
-    return { title: f.title, fixed: false, notes: [e instanceof Error ? e.message : String(e)] };
+  let last: FixResult = { title: f.title, fixed: false, notes: [] };
+  for (let attempt = 1; attempt <= FIX_ATTEMPTS; attempt++) {
+    const cardId = attempt === 1 ? id : `${id}-retry${attempt - 1}`;
+    try {
+      const board = new Board();
+      board.addCard(cardFromFinding(f, cardId));
+      if (attempt > 1) board.addReviewNote(cardId, whyItDidNotTake(last.notes));
+      const verdict = await runTaskCycle(deps, board, cardId, workdir);
+      last = {
+        title: f.title,
+        fixed: verdict.verdict === "pass",
+        notes: verdict.verdict === "pass" ? [] : (verdict.noProgress ? ["nothing was written"] : verdict.notes),
+      };
+    } catch (e) {
+      last = { title: f.title, fixed: false, notes: [e instanceof Error ? e.message : String(e)] };
+    }
+    if (last.fixed) return last;
   }
+  return last;
 }
 
 /** Repo-relative paths with any uncommitted change right now — the tree as it stood before the work. */

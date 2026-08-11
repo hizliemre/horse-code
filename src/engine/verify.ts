@@ -272,7 +272,7 @@ export function planMessageFor(
  * No plan, because there is nothing a plan would add: the request already names the check and what the right
  * answer looks like. The report is still written, because a result without a record is a result nobody has.
  */
-function directMessage(prompt: string, reportRel: string): string {
+export function directMessage(prompt: string, reportRel: string): string {
   return `${prompt}\n\n`
     + `There is no test plan for this, and none is needed — what you have been asked to check is stated above. `
     + `Verify exactly that, and nothing more.\n\n`
@@ -284,8 +284,9 @@ function directMessage(prompt: string, reportRel: string): string {
     + `When it needs an eye on the screen, describe exactly what to look at and ask what they see. Their `
     + `answer is the evidence; record it as theirs.\n\n`
     + `${handOffRule}\n\n`
-    + `If what you find is wrong but is NOT what you were asked to check, use \`report_finding\` — do not fix `
-    + `anything yourself.`;
+    + `${verdictRule}\n\n`
+    + `Whatever is wrong — the check you were given, or something you noticed beside it — goes to `
+    + `\`report_finding\`. You never fix anything yourself.`;
 }
 
 /** …and when a fix has landed and it should look again. */
@@ -297,7 +298,7 @@ function directResumeMessage(prompt: string, reportRel: string, done: string[]):
 }
 
 /** The run itself: execute, observe, record — in that order, one scenario at a time. */
-function runMessage(prompt: string, planRel: string, reportRel: string, inPlace: boolean): string {
+export function runMessage(prompt: string, planRel: string, reportRel: string, inPlace: boolean): string {
   const where = inPlace
     // Continued where it lives: that is where its history is, and where the people who wrote it look.
     ? `The document is "${planRel}", and it is BOTH the plan and the report — record each result in it, in `
@@ -315,6 +316,7 @@ function runMessage(prompt: string, planRel: string, reportRel: string, inPlace:
     + `developer which command to run and ask them to confirm — then wait. Never start it yourself.\n\n`
     + `When a scenario needs an eye on the screen, describe exactly what to look at and ask the developer what `
     + `they see. Their answer is the evidence; record it as theirs.\n\n`
+    + `${verdictRule}\n\n`
     + handOffRule;
 }
 
@@ -326,6 +328,30 @@ function runMessage(prompt: string, planRel: string, reportRel: string, inPlace:
  * rounds of "share your observation per the 5 items above", answered with "the steps aren't in the chat?".
  * Writing the document is not telling anyone.
  */
+/**
+ * A scenario has two endings, and "failed" is not one of them.
+ *
+ * Measured live: the report was edited from `F4 — step-media (upload/reorder/delete) — **[PENDING]**` to
+ * `**[FAILED]**`, with three defects listed underneath as OPEN, and the session went straight on to F5. The
+ * defects had been watched by a person on a running product — the most expensive evidence this whole flow
+ * produces — and their entire fate was a word in a document nobody was going to act on.
+ *
+ * Writing a verdict is not free of consequence; it is the consequence. A step that does not pass is a defect
+ * to be fixed and the step re-run, and `report_finding` is what makes that happen: the fix runs at the next
+ * hand-off, and the tester is handed back the corrected product with instructions to re-run the same step.
+ *
+ * Moving on is a person's call, not the tester's — they are the one paying for the session.
+ */
+export const verdictRule =
+  `A scenario ends in one of two ways: it PASSES, or it is still open. There is no third. Never record a `
+  + `scenario as failed and start the next one.\n\n`
+  + `When a step does not pass, call \`report_finding\` for EACH defect behind it — one call per distinct `
+  + `defect, with what you saw and what must be true for it to be settled — and leave the scenario's own `
+  + `entry open, saying what it is waiting on. The findings are fixed while you wait, and you are handed the `
+  + `corrected product to run that same step again; do not go on to another scenario until it passes.\n\n`
+  + `If the developer tells you to leave it and move on, that is their decision and it is fine — record it as `
+  + `blocked at their request, with their words, and carry on. Yours it is not.`;
+
 const handOffRule =
   `The developer sees the chat and nothing else. The document you are writing is NOT on their screen, so a `
   + `request that points at it — "the steps above", "the items listed" — asks them to follow something they `
@@ -401,7 +427,7 @@ async function handleFindings(
 }
 
 /** What the tester is told when it is handed back the session after a fix. */
-function resumeMessage(activeRel: string, reportRel: string, inPlace: boolean, done: string[]): string {
+export function resumeMessage(activeRel: string, reportRel: string, inPlace: boolean, done: string[]): string {
   return `The findings you reported have been dealt with:\n${done.map((d) => `- ${d}`).join("\n")}\n\n`
     + `Anything marked FIXED has been changed in the working tree and committed. Re-check the scenarios those `
     + `findings affected — against the corrected product, with fresh evidence — and record the result. Then `
@@ -409,8 +435,9 @@ function resumeMessage(activeRel: string, reportRel: string, inPlace: boolean, d
     + `Update each finding's OWN entry in the report as you re-check it: FIXED and verified, with the evidence `
     + `you just gathered, or still OPEN and what you saw this time. A finding left reading OPEN after it was `
     + `fixed is as wrong as one marked fixed that was not — the entry is what anyone reads later.\n\n`
-    + `Anything NOT fixed stays in the report as an open finding. Do not fix it yourself, and do not fail a `
-    + `scenario for it unless the scenario itself does not pass.\n\n`
+    + `Anything NOT fixed stays in the report as an open finding, and the scenario it holds up stays open with `
+    + `it. Do not fix it yourself, and do not close a scenario as failed to get past it — report what still `
+    + `happens, with the evidence from this attempt, so it goes round again.\n\n`
     + runMessage("", activeRel, reportRel, inPlace);
 }
 

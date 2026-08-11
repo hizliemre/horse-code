@@ -65,15 +65,24 @@ export class FindingQueue {
  * A sentence in prose would have to be parsed back out of the transcript, and a finding has structure that
  * matters: what must be true for it to be settled is the acceptance criteria of the card it becomes, and
  * asking for it here is what stops the fix from being judged by whether it looks done.
+ *
+ * This used to open with "which is NOT the verdict of a scenario" — meant to stop every routine outcome from
+ * becoming a finding, and read by the tester as an instruction to keep the failures to itself. Measured live:
+ * a scenario was written into the report as `F4 — step-media — **[FAILED]**` and the session moved on to F5.
+ * Nothing was raised, so nothing was fixed, and a defect a person had watched with their own eyes ended its
+ * life as a word in a document. A failing scenario is the MOST important thing this tool exists to carry.
  */
 export function buildReportFindingTool(queue: FindingQueue): Tool {
   return {
     name: "report_finding",
     description:
-      "Report something wrong that you noticed, which is NOT the verdict of a scenario. Use it when the "
-      + "product misbehaves in a way the current scenario was not asking about, or when the developer points "
-      + "something out. It is recorded, and a separate role fixes it — you never fix it yourself. Give the "
-      + "acceptance criteria: what must be true for it to be settled.",
+      "Report something the product does wrong, so that it gets FIXED. It is recorded, and a separate role "
+      + "fixes it — you never fix it yourself. Give the acceptance criteria: what must be true for it to be "
+      + "settled.\n\n"
+      + "Use it for BOTH: something that misbehaves in a way the current scenario was not asking about, and — "
+      + "above all — the reason a scenario does not pass. A scenario that fails is not a result to write down "
+      + "and walk away from; it is a defect, and reporting it here is the only thing that gets it fixed and "
+      + "the step re-run. One call per distinct defect, not one for the scenario.",
     permissionLevel: "safe",
     parameters: FindingSchema,
     describe: (args) => ({
