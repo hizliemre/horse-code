@@ -63,3 +63,45 @@ describe("what never reaches the log", () => {
     expect(src).toContain("redactRecord(record)");
   });
 });
+
+/**
+ * A password may contain any character; the shell's punctuation is not a promise about its contents.
+ *
+ * `)` was in the stop set for an unquoted value because it closes a subshell — and a real password closed the
+ * mask instead. Found in a telemetry file written by this project:
+ * `PGPASSWORD=«redacted»)nMKC!1*FWbJY(7` — the name said "secret", the redactor agreed, and then wrote
+ * everything after the first bracket into the log verbatim.
+ */
+describe("a secret with brackets in it", () => {
+  const PW = "caGC-uD)nMKC!1*FWbJY(7";
+
+  it("masks the whole value, not the part before the first bracket", () => {
+    const out = redact(`docker exec -e PGPASSWORD=${PW} postgres psql -U postgres`);
+    expect(out).not.toContain(")nMKC");
+    expect(out).not.toContain("FWbJY");
+    expect(out).toContain(MASK);
+  });
+
+  it("leaves the rest of the command readable — the mask is the value, not the line", () => {
+    const out = redact(`docker exec -e PGPASSWORD=${PW} postgres psql -U postgres`);
+    expect(out).toContain("docker exec");
+    expect(out).toContain("psql -U postgres");
+  });
+
+  it("does the same for a --password flag", () => {
+    const out = redact(`mysql --password=${PW} -h db`);
+    expect(out).not.toContain("FWbJY");
+    expect(out).toContain("-h db");
+  });
+
+  it("still stops at a real command separator, so one secret does not eat the script", () => {
+    const out = redact(`PGPASSWORD=${PW}; echo done`);
+    expect(out).toContain("echo done");
+    expect(out).not.toContain("FWbJY");
+  });
+
+  it("keeps masking quoted values whole, as before", () => {
+    expect(redact(`PGPASSWORD='${PW}' psql`)).not.toContain("FWbJY");
+    expect(redact(`PGPASSWORD="${PW}" psql`)).not.toContain("FWbJY");
+  });
+});

@@ -20,8 +20,19 @@ export const MASK = "«redacted»";
 
 /** `PGPASSWORD=…`, `API_KEY=…`, `--token …`: the name says what it is, so the value goes. */
 // The name may BEGIN with the word — `API_KEY=…` — so the prefix has to be optional, not one character.
-const NAMED = /\b([A-Za-z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]*)"|'([^']*)'|([^\s;&|)]+))/gi;
-const FLAGGED = /(--(?:password|token|secret|api-key|apikey|access-key)(?:[=\s]+))(?:"([^"]*)"|'([^']*)'|([^\s;&|)]+))/gi;
+/**
+ * An unquoted value runs to whitespace or a command separator — and NOT to the first bracket.
+ *
+ * `)` was in the stop set because it closes a subshell, and a real password closed the mask instead. Found in
+ * a telemetry file written by this project: `PGPASSWORD=«redacted»)nMKC!1*FWbJY(7` — the name said "secret",
+ * the redactor agreed, and then wrote everything after the first bracket into the log verbatim. A password
+ * may contain any character; the shell's punctuation is not a promise about its contents.
+ *
+ * Over-redacting is the safe direction. If a `)` really did close a subshell, what is lost is the tail of a
+ * line that was already declaring a secret — and that line is the one thing this file must not keep.
+ */
+const NAMED = /\b([A-Za-z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_?KEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIAL)[A-Za-z0-9_]*)\s*[=:]\s*(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/gi;
+const FLAGGED = /(--(?:password|token|secret|api-key|apikey|access-key)(?:[=\s]+))(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/gi;
 /** `proto://user:pass@host` — the password half only; the user and the host still say what was reached. */
 const IN_URL = /([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):([^\s@/]+)@/gi;
 const BEARER = /\b(Bearer|Basic)\s+([A-Za-z0-9._~+/=-]{8,})/g;
