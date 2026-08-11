@@ -25,8 +25,31 @@ export interface MemoryStoreOpts {
  * the repo and shared with the team (a teammate who pulls the project gets the memory too) — not in the global
  * home. A sibling .gitignore keeps the secret-bearing config out of git while allowing memory.jsonl to be shared.
  */
+/**
+ * Where the counters live: beside the memories, and out of git.
+ *
+ * `memory.jsonl` is SHARED — it is committed, it carries a `merge=union` attribute, and a teammate pulling it
+ * gets what this project has learned. Injection counters are none of those things: they say how often THIS
+ * machine put an entry into a prompt, they change on every run that reads memory, and nothing else changes
+ * with them.
+ *
+ * Measured on the project this runs against: a full session's only uncommitted change was this file, 24 lines
+ * differing in `injections` and `observedInjections` and nothing else — enough for a reviewer to be handed
+ * "the diff contains only bookkeeping changes in .horsecode/memory.jsonl" as the whole of a task's work, and
+ * enough that the developer's tree could never be clean.
+ *
+ * So the numbers move to a machine-local sidecar and are merged back when the store is read. The signal is
+ * kept whole — it is what tells a memory that keeps winning slots and is never cited to stop winning them —
+ * and the shared file stops moving underneath the person using it.
+ */
+export const USAGE_FILE = "memory-usage.json";
+
+interface Usage { injections?: number; observedInjections?: number }
+
 export class MemoryStore {
   private file: string;
+  /** Per-id counters, machine-local. Loaded with the store, written when they change. */
+  private usage: Record<string, Usage> = {};
   private readonly now: () => number;
   private cache?: MemoryEntry[];
   private queue: Promise<unknown> = Promise.resolve(); // serializes mutations (safe under parallel writers)
@@ -154,6 +177,7 @@ export class MemoryStore {
       /* no memory file yet */
     }
     this.cache = out;
+    await this.loadUsage(out);
     /**
      * What was learned before the session existed lands here, once, the first time the session's file is read.
      *
@@ -332,9 +356,11 @@ export class MemoryStore {
         // Every consumer — coach, reviewers, council, judge and now the implementer — reports usage, so an
         // injection recorded from here on is one a memory can be fairly judged on.
         e.observedInjections = (e.observedInjections ?? 0) + 1;
+        this.usage[id] = { injections: e.injections, observedInjections: e.observedInjections };
         touched = true;
       }
-      if (touched) await this.persist();
+      // …to the sidecar, not to the shared file: nothing about the MEMORIES changed. See USAGE_FILE.
+      if (touched) await this.persistUsage();
     });
   }
 
@@ -363,6 +389,43 @@ export class MemoryStore {
     return id;
   }
 
+  private usageFile(): string {
+    return join(dirname(this.file), USAGE_FILE);
+  }
+
+  /**
+   * Folds the machine-local counts onto the entries, and takes over any the shared file still carries.
+   *
+   * The shared file HAS these fields on every entry written before the sidecar existed. Taking the larger of
+   * the two is what makes the move lossless: the history already recorded stays, and it stops growing there.
+   */
+  private async loadUsage(entries: MemoryEntry[]): Promise<void> {
+    try {
+      const raw = await readFile(this.usageFile(), "utf8");
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") this.usage = parsed as Record<string, Usage>;
+    } catch { /* no sidecar yet, or unreadable → start from what the entries carry */ }
+    for (const e of entries) {
+      const u = this.usage[e.id] ?? {};
+      const injections = Math.max(u.injections ?? 0, e.injections ?? 0);
+      const observed = Math.max(u.observedInjections ?? 0, e.observedInjections ?? 0);
+      if (injections || observed) {
+        this.usage[e.id] = { injections, observedInjections: observed };
+        e.injections = injections;
+        e.observedInjections = observed;
+      }
+    }
+  }
+
+  /** Best-effort, like every other save here: a lost count is a weaker heuristic, not a lost memory. */
+  private async persistUsage(): Promise<void> {
+    if (this.deferred) return;
+    try {
+      await mkdir(dirname(this.file), { recursive: true });
+      await writeAtomic(this.usageFile(), JSON.stringify(this.usage));
+    } catch { /* the counts are a heuristic; failing to write them must not fail a run */ }
+  }
+
   private async persist(): Promise<void> {
     // Mid-job, before the session opens: the root is read, never written. It waits in `pending`.
     if (this.deferred) return;
@@ -379,7 +442,7 @@ export class MemoryStore {
     const gi = join(dir, ".gitignore");
     if (!existsSync(gi)) {
       await writeFile(gi, "# horse-code: local state stays out of git; memory.jsonl + skills are shared\n"
-        + "config.json\nsources.json\nworktrees/\nlast-turn.json\n", "utf8");
+        + `config.json\nsources.json\nworktrees/\nlast-turn.json\n${USAGE_FILE}\n`, "utf8");
     }
     /**
      * Two sessions that both learn something must not have to fight over this file.
@@ -406,7 +469,10 @@ export class MemoryStore {
      */
     if (this.cache === undefined) return;
     // Atomic: a crash mid-write must not leave an empty memory. See writeAtomic — this file was lost that way.
-    await writeAtomic(this.file, this.cache.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    // Counts stay in the sidecar — writing them here is what made a read-only run dirty the developer's tree.
+    await writeAtomic(this.file, this.cache
+      .map(({ injections: _i, observedInjections: _o, ...shared }) => JSON.stringify(shared))
+      .join("\n") + "\n");
   }
 
   /**

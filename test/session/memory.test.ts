@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemoryStore } from "../../src/session/memory.js";
+import { MemoryStore, USAGE_FILE } from "../../src/session/memory.js";
 
 let home: string;
 let t = 0;
@@ -482,5 +482,72 @@ describe("an unloaded store never overwrites the file", () => {
       await m.add("something new", "fact");
       expect((await readFile(file, "utf8")).trim().split("\n").length).toBe(2);
     } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * A run that only READS memory must leave the developer's tree exactly as it found it.
+ *
+ * `memory.jsonl` is shared: it is committed, it carries `merge=union`, and a teammate who pulls it gets what
+ * this project has learned. Injection counters are none of those things — they say how often THIS machine put
+ * an entry into a prompt, and they change on every run that reads anything.
+ *
+ * Measured on the project this runs against: a whole session's only uncommitted change was this file, 24
+ * lines differing in `injections` and `observedInjections` and nothing else. It was enough for a reviewer to
+ * be handed "the diff contains only bookkeeping changes in .horsecode/memory.jsonl" as the entirety of a
+ * task's work, and enough that the tree could never be clean.
+ */
+describe("counting injections", () => {
+  const proj = (): string => join(home, "proj-a");
+  const memFile = (): string => join(proj(), ".horsecode", "memory.jsonl");
+  const usageFile = (): string => join(proj(), ".horsecode", USAGE_FILE);
+
+  it("does not touch the shared file — nothing about the memories changed", async () => {
+    const s = store();
+    const res = await s.add("the store adapter lives in src/store.ts");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const before = await readFile(memFile(), "utf8");
+    await s.recordInjection([res.entry.id]);
+    expect(await readFile(memFile(), "utf8")).toBe(before);
+  });
+
+  it("never writes a count into the shared file at all", async () => {
+    const s = store();
+    const res = await s.add("the store adapter lives in src/store.ts");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    await s.recordInjection([res.entry.id]);
+    await s.add("a second fact, which rewrites the shared file");
+    const shared = await readFile(memFile(), "utf8");
+    expect(shared).not.toContain("observedInjections");
+    expect(shared).toContain("the store adapter lives in src/store.ts");   // …the memory itself is all there
+  });
+
+  it("keeps the count in a file of its own beside it", async () => {
+    const s = store();
+    const res = await s.add("the store adapter lives in src/store.ts");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    await s.recordInjection([res.entry.id]);
+    await s.recordInjection([res.entry.id]);
+    const usage = JSON.parse(await readFile(usageFile(), "utf8")) as Record<string, { injections: number }>;
+    expect(usage[res.entry.id]!.injections).toBe(2);
+  });
+
+  it("takes over the counts already written into the shared file — the move loses nothing", async () => {
+    await mkdir(join(proj(), ".horsecode"), { recursive: true });
+    await writeFile(memFile(), JSON.stringify({
+      id: "m1", text: "an old fact", anchors: [], tags: [], createdAt: 1,
+      injections: 9, observedInjections: 7,
+    }) + "\n");
+    const loaded = await store().load();
+    expect(loaded[0]!.injections).toBe(9);
+    expect(loaded[0]!.observedInjections).toBe(7);
+  });
+
+  it("writes the counts out of git, where the rest of the machine-local state already goes", async () => {
+    await store().add("anything at all");
+    expect(await readFile(join(proj(), ".horsecode", ".gitignore"), "utf8")).toContain(USAGE_FILE);
   });
 });
