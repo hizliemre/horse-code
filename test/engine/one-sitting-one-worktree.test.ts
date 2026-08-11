@@ -24,10 +24,13 @@ const src = async (f: string): Promise<string> =>
 describe("one sitting, one worktree", () => {
   it("takes the session it is already working in", async () => {
     const s = await src("src/engine/job.ts");
-    const at = s.indexOf("const ensureWorktree =");
-    const fn = s.slice(at, at + 2000);
+    const at = s.indexOf("const workingIn = ()");
+    const fn = s.slice(at, at + 1200);
     expect(fn).toContain("opts.continueIn");
     expect(fn).toContain("adopt(opts.continueIn)");
+    // …and the one call that opens a worktree asks it first, so it never opens a second one.
+    expect(s.slice(s.indexOf("const ensureWorktree ="), s.indexOf("const ensureWorktree =") + 200))
+      .toContain("workingIn();");
   });
 
   /**
@@ -55,11 +58,19 @@ describe("one sitting, one worktree", () => {
     expect(app).toContain("continueIn: openSession.current");
   });
 
-  /** A plain chat turn still opens nothing: the worktree is lazy, and that has not changed. */
+  /**
+   * A plain chat turn still opens nothing: the worktree is lazy, and that has not changed.
+   *
+   * The adoption moved OUT of `ensureWorktree` so the small-change path — which never calls it — could work
+   * in the open session too. It stayed behind a function for exactly this reason: a chat turn calls neither,
+   * so it adopts nothing, announces nothing and opens nothing.
+   */
   it("does not open one just because a sitting exists", async () => {
     const s = await src("src/engine/job.ts");
-    const at = s.indexOf("const ensureWorktree =");
-    // The adoption lives INSIDE ensureWorktree, which only runs when a phase needs to write.
-    expect(s.slice(0, at)).not.toContain("opts.continueIn");
+    // Nothing adopts at the top level: every mention is inside `workingIn`, or is the call to it.
+    const body = s.slice(s.indexOf("): Promise<JobResult> {"), s.indexOf("const workingIn = ()"));
+    expect(body).not.toContain("opts.continueIn");
+    // …and the small-change path reaches it only through the caller it is handed.
+    expect(await src("src/engine/upstream.ts")).toContain("const cwd = workingIn?.() ?? process.cwd();");
   });
 });

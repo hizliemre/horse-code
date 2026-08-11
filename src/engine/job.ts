@@ -266,19 +266,33 @@ export async function runJob(
     return s;
   };
 
-  const ensureWorktree = async (nameHint?: string): Promise<string> => {
-    /**
-     * Already working somewhere → keep working there.
-     *
-     * Checked against the filesystem rather than trusted: a worktree the user removed between two requests
-     * would otherwise be adopted as if it were still there, and every write would fail somewhere that no
-     * longer exists.
-     */
-    if (!session && opts.continueIn && existsSync(opts.continueIn.baseWorktree)) {
+  /**
+   * Already working somewhere → keep working there. Returns where, or nothing if there is nowhere.
+   *
+   * Lifted out of `ensureWorktree` because the small-change path never calls it: that path does its work in
+   * `process.cwd()` and returns without ever opening anything. So a sitting with a worktree open still made
+   * its next small change in the developer's own tree — measured live, on the branch their team shares.
+   *
+   * Still LAZY, which is the property the old placement was protecting: a plain chat turn calls neither this
+   * nor `ensureWorktree`, so it adopts nothing, announces nothing and opens nothing.
+   *
+   * Checked against the filesystem rather than trusted: a worktree the user removed between two requests
+   * would otherwise be adopted as if it were still there, and every write would fail somewhere that no longer
+   * exists.
+   */
+  const workingIn = (): string | undefined => {
+    if (session) return session.baseWorktree;
+    if (opts.continueIn && existsSync(opts.continueIn.baseWorktree)) {
       adopt(opts.continueIn);
       emit({ kind: "note", text: `↪️ Continuing in \`${opts.continueIn.baseBranch}\` — the work from this `
         + `session so far is already there.` });
+      return opts.continueIn.baseWorktree;
     }
+    return undefined;
+  };
+
+  const ensureWorktree = async (nameHint?: string): Promise<string> => {
+    workingIn();
     if (!session) {
       /**
        * Opening the session is WORK, and it was narrated as something else.
@@ -366,7 +380,7 @@ export async function runJob(
      * it a feature abandoned mid-plan could be re-sized as a small change on its next mention.
      */
     const preserved = resume ? true : !!(await deps.manager.findResumable(opts.prompt).catch(() => null));
-    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images, resume, preserved);
+    const up = await runUpstream(deps, ensureWorktree, opts.prompt, opts.askUser, opts.maxRounds, opts.history, emit, opts.images, resume, preserved, workingIn);
 
     if (up.kind === "chat") {
       // The "chat" phase is emitted inside runUpstream (right before the coach runs) so the UI shows the

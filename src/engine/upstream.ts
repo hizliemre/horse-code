@@ -122,6 +122,18 @@ export async function runUpstream(
    * abandoned mid-plan could be re-sized as a small change and quietly finished by one implementer.
    */
   hasPreservedWork = false,
+  /**
+   * Where this sitting is already working, asked for only when it matters.
+   *
+   * The small-change path does its work in `process.cwd()` — right when there is nowhere else, and wrong the
+   * moment a session is open: the developer picked a worktree for this work and the change belongs in it,
+   * small or not. Measured live: a one-line fix went into the team's shared branch while the worktree it
+   * belonged to sat open beside it.
+   *
+   * A function, not a path: calling it ADOPTS the session (memory store, session handle, one note), and a
+   * chat turn must go on adopting nothing.
+   */
+  workingIn?: () => string | undefined,
 ): Promise<UpstreamResult> {
   // Each spec-kit phase is driven by a specific role — surface it (+ its model) in the status detail so the
   // user sees WHO is working (e.g. "Writing spec… — analyst · cc/opus-4-8"), not just the persistent coach badge.
@@ -260,7 +272,8 @@ export async function runUpstream(
    * Sized BEFORE the worktree, because the worktree is most of what makes the pipeline expensive.
    */
   if (!resume && !hasPreservedWork && routeIntent(r.intent) === "pipeline") {
-    const cwd = process.cwd();
+    // Where the work is happening: the open worktree if this sitting has one, else where the user stands.
+    const cwd = workingIn?.() ?? process.cwd();
     emitPhase("sizing");
     const { sizeRequest } = await import("./triage.js");
     const size = await sizeRequest(deps, cwd, r.refinedPrompt);

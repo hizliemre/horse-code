@@ -672,6 +672,41 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   const startupExtra: Partial<StartupFacts> = {};
   const paintSummary = (): void => summaryLine(startupSummary(summaryFacts()));
   paintSummary();
+  /**
+   * Work that is still open, put to the user before they start typing over the top of it.
+   *
+   * A session begins with whatever was left unfinished last time, and nothing said so: the summary counted
+   * memories and skills and traces, and never mentioned the worktree carrying half a verification. The next
+   * request then went somewhere else — measured live, into the branch the team shares.
+   *
+   * Asked even when there is exactly one, because "carry on there" and "leave it and open a new one" are both
+   * ordinary answers, and only the person at the keyboard knows which.
+   *
+   * Silent when the main branch cannot be established without asking: two questions before the first prompt
+   * is worse than the problem. `mainBranch` in the project's config, or `origin/HEAD`, or nothing.
+   */
+  void (async () => {
+    try {
+      const { defaultGitRunner } = await import("../worktree/git.js");
+      const { recordedMainBranch, detectMainBranch } = await import("../engine/main-branch.js");
+      const cwd = process.cwd();
+      const main = await recordedMainBranch(cwd) ?? await detectMainBranch(cwd, defaultGitRunner);
+      if (!main) return;
+      const { ongoingWork, chooseOngoing } = await import("../engine/ongoing.js");
+      const open = await ongoingWork(defaultGitRunner, cwd, main);
+      if (!open.length) return;
+      const picked = await chooseOngoing(deps, read, open[0]?.language, open);
+      if (!picked) return;
+      openSession.current = {
+        jobSlug: picked.slug, root: picked.root,
+        baseWorktree: picked.baseWorktree, baseBranch: picked.baseBranch, resumed: true,
+      };
+      // The memory store follows the work, exactly as it does when a job opens the session itself.
+      deps.onSession?.(picked.baseWorktree);
+      controller.note(`↪️ Continuing **${picked.slug}** — ${picked.what}. Everything from here, including a `
+        + `small change, happens in \`${picked.baseBranch}\`.`);
+    } catch { /* a startup question that fails is a startup question that is not asked */ }
+  })();
   // The graph and the trace index are read from disk; both are cheap and neither blocks the prompt.
   void (async () => {
     try {
