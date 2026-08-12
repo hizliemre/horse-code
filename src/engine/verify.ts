@@ -353,7 +353,10 @@ export const verdictRule =
   + `blocked at their request, with their words, and carry on. Yours it is not.`;
 
 const handOffRule =
-  `The developer sees the chat and nothing else. The document you are writing is NOT on their screen, so a `
+  `Staging, committing and branches are this tool's business, never the developer's: never ask them to `
+  + `\`git add\`, commit or tidy the tree. Ask them only for what nobody else can do — carry out a scenario, `
+  + `look at a screen, start an environment, decide something.\n\n`
+  + `The developer sees the chat and nothing else. The document you are writing is NOT on their screen, so a `
   + `request that points at it — "the steps above", "the items listed" — asks them to follow something they `
   + `cannot see. When you need them to carry out a scenario, pass the actions to \`ask_user\` in \`steps\`, one `
   + `action per entry, and put in \`question\` what they should report back.`;

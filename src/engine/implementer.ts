@@ -193,7 +193,22 @@ export async function runImplementer(
      */
     `Before you stop: did anything here cost you more than one attempt — a command that had to be invoked a ` +
     `particular way, a file that was not where it should have been, a trap you fell into? If you have not ` +
-    `already recorded it with \`remember_fact\`, do that now. The next agent pays for it again otherwise.`;
+    `already recorded it with \`remember_fact\`, do that now. The next agent pays for it again otherwise.\n\n` +
+    /**
+     * Git is this tool's job, and it was handed back to the person.
+     *
+     * Measured live, under the heading the agent wrote itself — "Geliştiriciye kalan" ("left for the
+     * developer"): "1. SCSS dosyasını `git add` ile stage'e al — şu an untracked". Reported in one line:
+     * "geliştiriciye neden git add işini bıraktığını söylüyor? bu bir otonom coding aracı."
+     *
+     * They were right twice over. Staging is not a decision anyone should be asked to make, and an untracked
+     * file is invisible to `git diff` — so the review would have judged the change with a hole in it, and
+     * nobody would have known which hole.
+     */
+    `Staging, committing and branches are this tool's business, never the developer's: do not end by asking ` +
+    `them to \`git add\`, commit, or tidy the tree. Ask them only for what nobody else can do — look at a ` +
+    `screen, start an environment, decide something. If a file you wrote is not in git yet, that is a fault ` +
+    `to report, not an errand to hand over.`;
   const content = (returning
     ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
     : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "")

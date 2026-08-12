@@ -2,6 +2,7 @@ import { z } from "zod";
 import { runStructuredRole } from "../agent/structured.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { defaultGitRunner, type GitRunner } from "../worktree/git.js";
+import { writableStateRoot } from "./session-scope.js";
 import type { TaskCycleDeps } from "./task-types.js";
 import { callSignal, SHORT_CALL_MS } from "../agent/deadline.js";
 
@@ -88,21 +89,24 @@ export async function commitFile(
   deps: TaskCycleDeps, workdir: string, path: string, git: GitRunner = defaultGitRunner,
 ): Promise<string | undefined> {
   /**
-   * A checkpoint belongs on a task branch, and nowhere else.
+   * A checkpoint belongs in a worktree of ours, and nowhere else.
    *
-   * These commits exist so a killed attempt keeps its work — which is a real problem when the work lives in a
-   * throwaway worktree on a branch nobody is standing on, and `squashTask` replaces the lot with one real
-   * message when the task lands. Neither is true in place: the work is in the developer's OWN tree, where
-   * losing it was never the risk, and nothing squashes anything, because squashing needs a base to squash to.
+   * These commits exist so a killed attempt keeps its work — a real problem in a throwaway worktree on a
+   * branch nobody is standing on, where `squashTask` replaces the lot with one real message when the task
+   * lands. Neither holds in the developer's OWN tree: the work is in front of them, where losing it was never
+   * the risk, and nothing squashes anything.
    *
-   * Measured live on the project this runs against: five `wip(chore/media): …` commits landed directly on
-   * `development`, on top of a merged pull request, for a change the review then rejected. Nobody asked for a
-   * commit, nothing removed them, and the branch people share was left carrying checkpoints of rejected work.
+   * Measured live: five `wip(chore/media): …` commits landed directly on the team's shared branch, on top of
+   * a merged pull request, for a change the review then rejected. Nobody asked for a commit and nothing
+   * removed them.
    *
-   * No base ⇒ no branch of our own ⇒ the tree is where the work stays. A deliberate committer — `commitFix`,
-   * or the person at the keyboard — decides what lands.
+   * The question is WHERE the work is, not whether a caller happened to pass a base ref. Asking `deps.baseRef`
+   * was the first attempt and it was wrong by exactly one lane: the verify lane's fixer runs inside a session
+   * worktree and is handed no base, so its writes stopped being committed — and a file it CREATED stayed
+   * untracked, which `git diff` cannot see at all. The review would have been shown a change with a hole in
+   * it, and the agent, finding the file unstaged, asked the developer to `git add` it.
    */
-  if (!deps.baseRef) return undefined;
+  if (writableStateRoot(workdir) === undefined) return undefined;
   // An agent's scratchpad stays in the worktree and out of the diff the reviewer judges.
   if (isScratch(path)) return undefined;
   await git(["add", "--", path], workdir);

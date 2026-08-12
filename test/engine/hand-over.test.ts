@@ -59,3 +59,45 @@ describe("what an implementer is asked before it stops", () => {
     expect(s).toContain("Write it before you carry on");
   });
 });
+
+/**
+ * Git is this tool's job, and it was handed back to the person.
+ *
+ * Measured live, under a heading the agent wrote itself — "Geliştiriciye kalan" ("left for the developer"):
+ * "1. SCSS dosyasını `git add` ile stage'e al — şu an untracked". Reported in one line: "geliştiriciye neden
+ * git add işini bıraktığını söylüyor? bu bir otonom coding aracı."
+ *
+ * Right twice over. Staging is not a decision anyone should be asked to make, and an untracked file is
+ * invisible to `git diff` — so the review judges the change with a hole in it, and nobody knows which hole.
+ */
+describe("what is never asked of the developer", () => {
+  /** Prompt text is assembled from concatenated template pieces; join them before matching. */
+  const prose = async (f: string): Promise<string> =>
+    (await readFile(f, "utf8")).replace(/`\s*\+\s*`/g, "");
+
+  it("does not hand git over — not from an implementer", async () => {
+    const s = await prose("src/engine/implementer.ts");
+    expect(s).toContain("Staging, committing and branches are this tool's business, never the developer's");
+    expect(s).toContain("that is a fault to report, not an errand to hand over");
+  });
+
+  it("…nor from the tester, which talks to them the most", async () => {
+    const s = await prose("src/engine/verify.ts");
+    expect(s).toContain("Staging, committing and branches are this tool's business, never the developer's");
+    // …and what it MAY still ask for is named, so the rule does not read as "ask them nothing".
+    expect(s).toContain("carry out a scenario, look at a screen, start an environment");
+  });
+
+  /**
+   * The other half: a file the tool wrote must be IN git, or the review is judging a hole.
+   *
+   * The first attempt at "no checkpoints outside a worktree" asked `deps.baseRef`, and was wrong by exactly
+   * one lane — the verify lane's fixer runs inside a session worktree and is handed no base, so its writes
+   * stopped being committed and a file it created stayed untracked. The question is WHERE the work is.
+   */
+  it("commits a checkpoint wherever the work is ours, not wherever a base ref was passed", async () => {
+    const s = await readFile("src/engine/operational.ts", "utf8");
+    expect(s).toContain("if (writableStateRoot(workdir) === undefined) return undefined;");
+    expect(s).not.toContain("if (!deps.baseRef) return undefined;");
+  });
+});

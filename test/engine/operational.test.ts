@@ -37,6 +37,27 @@ describe("runOperational", () => {
   });
 });
 
+/**
+ * A repository at the path a session base actually has: `<root>/.horsecode/worktrees/<slug>/base`.
+ *
+ * The checkpoint gate asks WHERE the work is, not whether a base ref was passed — see commitFile. A test that
+ * inits a bare temp directory is testing the developer's own tree, where the answer is "do not commit".
+ */
+async function sessionRepo(): Promise<string> {
+  const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const base = join(await mkdtemp(join(tmpdir(), "hc-sess-")), ".horsecode", "worktrees", "job-1", "base");
+  await mkdir(base, { recursive: true });
+  const g = (args: string[]) => defaultGitRunner(args, base);
+  await g(["init", "-b", "main"]);
+  await g(["config", "user.email", "t@hc"]);
+  await g(["config", "user.name", "hc"]);
+  await writeFile(join(base, "README.md"), "# repo\n", "utf8");
+  await g(["add", "-A"]);
+  await g(["commit", "-m", "init"]);
+  return base;
+}
+
 describe("commitStep", () => {
   it("commits the worktree with the operational message; no-op when nothing changed", async () => {
     repo = await initTmpRepo();
@@ -63,13 +84,13 @@ describe("commitStep", () => {
    * unit: "persist the sort preference" is what the TASK did, not what one of its five files did.
    */
   it("commitFile commits only the given file, and spends nothing on phrasing it", async () => {
-    repo = await initTmpRepo();
+    repo = await sessionRepo();
     const g = (args: string[]) => defaultGitRunner(args, repo!);
     await writeFile(join(repo, "a.md"), "# A", "utf8");
     await writeFile(join(repo, "b.md"), "# B", "utf8"); // a second, unrelated change
     const p = new MockProvider([submit("docs: add a.md")]);
     const notes: string[] = [];
-    const msg = await commitFile({ ...deps(p), baseRef: "main", note: (t) => notes.push(t) }, repo, "a.md");
+    const msg = await commitFile({ ...deps(p), note: (t) => notes.push(t) }, repo, "a.md");
     expect(p.requests).toHaveLength(0); // no model call to write a commit message
     expect(msg).toBe("wip(docs): a.md");
     // Deliberately silent: `squashTask` replaces the checkpoints with one real message, and narrating each
@@ -93,14 +114,14 @@ describe("commitStep", () => {
    * team's shared branch, on top of a merged pull request, for a change the review then rejected. Nobody
    * asked for a commit and nothing removed them.
    */
-  it("writes no checkpoint when there is no task branch to write it to", async () => {
+  it("writes no checkpoint in the developer's own tree", async () => {
     repo = await initTmpRepo();
     const g = (args: string[]) => defaultGitRunner(args, repo!);
     const head = (await g(["log", "-1", "--format=%s"])).stdout.trim();
     await writeFile(join(repo, "a.md"), "# A", "utf8");
     const p = new MockProvider([]);
 
-    expect(await commitFile(deps(p), repo, "a.md")).toBeUndefined();   // no baseRef ⇒ no branch of our own
+    expect(await commitFile(deps(p), repo, "a.md")).toBeUndefined();   // not a worktree of ours
     expect((await g(["log", "-1", "--format=%s"])).stdout.trim()).toBe(head);
     // …and the work is not lost: it is exactly where the developer can see it.
     expect((await g(["status", "--porcelain"])).stdout).toContain("a.md");
