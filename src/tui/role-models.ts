@@ -1,4 +1,5 @@
 import { SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "../prompts.js";
+import { isAnthropicModel, type Effort } from "../providers/anthropic.js";
 // Role-aware model selection: the /roles setmodel picker filters models to fit a role, and /roles adjust
 // auto-assigns a sensible model to every role (best models → reasoning, coding models → coders, cheap → fast).
 // Heuristic — matches on the model id.
@@ -102,6 +103,29 @@ export function filterModelsForRole(role: string, all: string[], exclude: string
   }
 
   return { models: avail.length ? avail : all }; // no preference for other roles → show everything (minus picked)
+}
+
+/**
+ * How hard a role should work — the same band that decides its model, applied to Anthropic's effort levels.
+ *
+ * Only Anthropic models can be told. In the codex/gpt family every level is sold as its own model id
+ * (`cx/gpt-5.5-xhigh`), so the level is already inside the assignment `adjustRoleModels` makes; a Claude id
+ * names the model and nothing else, and the level has to be set beside it.
+ *
+ * The mapping is the band's own reasoning, restated in the API's vocabulary: a decider runs rarely and is
+ * worth the most thorough pass there is; a lens or an implementer does the bulk of the work; a router
+ * classifies an intent and should not think about it at all.
+ *
+ * `undefined` for anything else, which is not the same as "high" — it means send no level, and let the API's
+ * own default stand. A role whose model has no effort to set must not carry a number that does nothing.
+ */
+export function effortFor(role: string, model: string): Effort | undefined {
+  if (!isAnthropicModel(model)) return undefined;
+  if (FLAGSHIP_ROLES.includes(role)) return "max";
+  if (STRONG_ROLES.includes(role)) return "xhigh";
+  if (FAST_ROLES.includes(role)) return "low";
+  if (MID_ROLES.includes(role)) return "high";
+  return undefined; // a role no band claims — leave it to the API rather than guess
 }
 
 /** Reasoning-effort suffix bump (codex/gpt-5 come as -ultra/-max/-high/-medium/-low). */

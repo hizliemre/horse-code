@@ -29,6 +29,7 @@ export interface ResolvedRole {
 export class RoleRegistry {
   private modelOverride?: string;
   private roleOverrides = new Map<string, string[]>(); // per-role model CHAIN override (highest priority)
+  private readonly effortOverrides = new Map<string, import("../providers/anthropic.js").Effort>();
   // Models that failed retryably (429/5xx/quota) → skipped in every chain until released. Kept WITH the
   // reason and the time so a coordinator can report them and later re-probe whether the limit has reset.
   private readonly quarantine = new Map<string, { at: number; reason: string; until?: number }>();
@@ -79,6 +80,20 @@ export class RoleRegistry {
     const chain = (typeof models === "string" ? [models] : models ?? []).filter((m) => m.length > 0);
     if (chain.length) this.roleOverrides.set(roleName, chain);
     else this.roleOverrides.delete(roleName);
+  }
+
+  /**
+   * How hard this role should work, set alongside its chain.
+   *
+   * An override on the live registry rather than a config re-read, for the same reason `setRoleModel` is one:
+   * `/roles adjust` has to take effect in the session that ran it, not only in the next one.
+   *
+   * `undefined` REMOVES it — a role reassigned from a Claude model to one whose effort cannot be set must
+   * stop carrying a level, or the config keeps a number that no longer applies to anything.
+   */
+  setRoleEffort(roleName: string, effort?: import("../providers/anthropic.js").Effort): void {
+    if (effort) this.effortOverrides.set(roleName, effort);
+    else this.effortOverrides.delete(roleName);
   }
 
   /**
@@ -259,7 +274,7 @@ export class RoleRegistry {
   fallbackOpts(roleName: string): Pick<ResolvedRole, "role" | "model" | "fallbacks" | "effort" | "onExhausted" | "onStructuralFailure" | "onFallback"> {
     const chain = this.chain(roleName);
     const notify = this.notify;
-    const effort = this.roles[roleName]?.effort;
+    const effort = this.effortOverrides.get(roleName) ?? this.roles[roleName]?.effort;
     return {
       // Travels with the chain, not with the prompt: the seven callers that take only the chain are exactly
       // the ones whose work is heaviest (the tester, the analyst, the spec-kit phases).

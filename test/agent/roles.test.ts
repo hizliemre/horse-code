@@ -320,3 +320,37 @@ describe("a role's chain skips what that role has proven it cannot use", () => {
     expect(reg().chain("coder")).toEqual(["a/one", "b/two", "c/three"]);
   });
 });
+
+/**
+ * How hard a role works travels with its chain, not with its prompt.
+ *
+ * Seven callers take the chain from `fallbackOpts` and supply their own prompt — the tester, the analyst,
+ * the spec-kit phases — and they are the ones whose work is heaviest. A level that only rode on `resolve`
+ * would miss exactly them.
+ */
+describe("a role's effort", () => {
+  it("comes with the chain, so a caller that supplies its own prompt still gets it", () => {
+    const reg = new RoleRegistry({ judge: { models: ["cc/claude-opus-5"], systemPrompt: "p", effort: "max" } });
+    expect(reg.fallbackOpts("judge").effort).toBe("max");
+    expect(reg.resolve("judge").effort).toBe("max");
+  });
+
+  it("is absent when the role has none — the field is then never sent, and the API's default stands", () => {
+    const reg = new RoleRegistry({ coder: { models: ["m"], systemPrompt: "p" } });
+    expect(reg.fallbackOpts("coder")).not.toHaveProperty("effort");
+  });
+
+  /** `/roles adjust` has to take effect in the session that ran it, not only in the next one. */
+  it("can be set on the live registry, and the session's value wins over the config's", () => {
+    const reg = new RoleRegistry({ coder: { models: ["m"], systemPrompt: "p", effort: "low" } });
+    reg.setRoleEffort("coder", "xhigh");
+    expect(reg.fallbackOpts("coder").effort).toBe("xhigh");
+  });
+
+  it("is removed when the role moves to a model whose effort cannot be set", () => {
+    const reg = new RoleRegistry({ coder: { models: ["m"], systemPrompt: "p" } });
+    reg.setRoleEffort("coder", "xhigh");
+    reg.setRoleEffort("coder", undefined);
+    expect(reg.fallbackOpts("coder")).not.toHaveProperty("effort");
+  });
+});

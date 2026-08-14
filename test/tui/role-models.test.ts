@@ -405,3 +405,75 @@ describe("strongestPrimary — a durable-output role gets the best model, not me
     expect(DURABLE_ROLES).toContain("tracer");
   });
 });
+
+/**
+ * A role's effort is chosen by the same reasoning that chooses its model — so `/roles adjust` must set both.
+ *
+ * Effort is not part of a Claude model's id. In the codex/gpt family every level is sold as its own model
+ * (`cx/gpt-5.5-xhigh`), so an assignment that picks the model has already picked the level; a Claude id names
+ * the model and nothing else. Before this, a carefully reasoned assignment left every Claude role at the
+ * API's default however deliberately its band had been argued.
+ */
+describe("the effort that goes with a role's model", () => {
+  it("gives a decider the most thorough pass there is — it runs rarely and decides", async () => {
+    const { effortFor } = await import("../../src/tui/role-models.js");
+    expect(effortFor("judge", "cc/claude-opus-5")).toBe("max");
+    expect(effortFor("principal-coder", "cc/claude-opus-5")).toBe("max");
+  });
+
+  it("gives serious reasoning the coding/agentic setting", async () => {
+    const { effortFor } = await import("../../src/tui/role-models.js");
+    expect(effortFor("analyst", "cc/claude-opus-4-8")).toBe("xhigh");
+    expect(effortFor("code-correctness", "cc/claude-sonnet-5")).toBe("xhigh");
+  });
+
+  it("keeps the high-volume roles at the API's own level rather than multiplying their cost", async () => {
+    const { effortFor } = await import("../../src/tui/role-models.js");
+    expect(effortFor("coder", "cc/claude-sonnet-5")).toBe("high");
+    expect(effortFor("coach", "cc/claude-sonnet-5")).toBe("high");
+  });
+
+  it("tells a router not to think about it", async () => {
+    const { effortFor } = await import("../../src/tui/role-models.js");
+    expect(effortFor("refiner", "cc/claude-haiku-4-5-20251001")).toBe("low");
+    expect(effortFor("project-manager", "cc/claude-sonnet-5")).toBe("low");
+  });
+
+  /**
+   * Not "high" — the absence of a level, so the field is never sent. A number that does nothing in the config
+   * is a number someone will later try to tune.
+   */
+  it("says nothing at all for a model whose effort cannot be set", async () => {
+    const { effortFor } = await import("../../src/tui/role-models.js");
+    expect(effortFor("judge", "cx/gpt-5.6-terra")).toBeUndefined();
+    expect(effortFor("coder", "tllm/gemini_3_pro")).toBeUndefined();
+    expect(effortFor("refiner", "")).toBeUndefined();
+  });
+
+  it("leaves a role no band claims to the API as well", async () => {
+    const { effortFor } = await import("../../src/tui/role-models.js");
+    expect(effortFor("some-future-role", "cc/claude-opus-5")).toBeUndefined();
+  });
+});
+
+/** Assigned in the session that ran the adjust, and written down for the next one. */
+describe("where /roles adjust puts the level", () => {
+  const src = (f: string): Promise<string> => import("node:fs/promises").then((m) => m.readFile(f, "utf8"));
+
+  it("sets it on the live registry beside the chain", async () => {
+    expect(await src("src/tui/app.tsx"))
+      .toContain('regFor(role).setRoleEffort(role, effortFor(role, chain[0] ?? ""));');
+  });
+
+  it("writes it with the tuner's chains, not only with a hand-set one", async () => {
+    const s = await src("src/tui/app.tsx");
+    expect(s).toContain("const withEffort = chains.map");
+    expect(s).toContain("saveRoleChains(homedir(), withEffort)");
+  });
+
+  it("removes a stored level when the role's new model has none — a stale number applies to nothing", async () => {
+    const s = await src("src/config/save-roles.ts");
+    expect(s).toContain("if (effort) next.effort = effort;");
+    expect(s).toContain("else delete next.effort;");
+  });
+});

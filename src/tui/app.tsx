@@ -7,7 +7,7 @@ import { makeAskUser } from "../terminal.js";
 import { runJob } from "../engine/job.js";
 import type { JobDeps, JobResult } from "../engine/job.js";
 import { tuneRoleModels } from "../engine/role-tuner.js";
-import { mostCapable, adjustRoleModels, capabilityScore, ROLE_PROFILES } from "./role-models.js";
+import { mostCapable, adjustRoleModels, capabilityScore, effortFor, ROLE_PROFILES } from "./role-models.js";
 import { toSlug } from "../worktree/slug.js";
 import { meterProvider } from "../providers/meter.js";
 import { firewallProvider } from "../providers/firewall.js";
@@ -123,7 +123,17 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     return s ? deps0.teamRegistries[s] : deps0.councilRegistry;
   };
   const peekRole = (role: string): string => regFor(role).peekModel(role);
-  const applyChain = (role: string, chain: string[]): void => regFor(role).setRoleModel(role, chain);
+  /**
+   * A chain and the effort that goes with it — assigned together, because they are chosen together.
+   *
+   * Effort is not part of a Claude model's id (unlike the codex/gpt family, where each level is its own
+   * model), so an assignment that sets only the chain leaves every Claude role at the API default however
+   * carefully its band was reasoned about. See effortFor.
+   */
+  const applyChain = (role: string, chain: string[]): void => {
+    regFor(role).setRoleModel(role, chain);
+    regFor(role).setRoleEffort(role, effortFor(role, chain[0] ?? ""));
+  };
   /**
    * Applies AND persists a chain. Only deliberate choices (`/roles adjust`, `/roles setmodel`) are written —
    * the first-run bootstrap heuristic is intentionally NOT, because it is a guess made to get the session
@@ -131,7 +141,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    */
   const applyChainPersisted = (role: string, chain: string[]): void => {
     applyChain(role, chain);
-    void saveRoleChains(homedir(), [{ role, models: chain }]);
+    const effort = effortFor(role, chain[0] ?? "");
+    void saveRoleChains(homedir(), [{ role, models: chain, ...(effort ? { effort } : {}) }]);
   };
   // /roles → each role + its full model chain (primary + fallbacks). `council` flags review team/council members
   // so the UI can group them. `model` = chain head, reflects /model.
@@ -563,8 +574,15 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       const { chains } = await tuneRoleModels({ provider: deps.provider, models, roles: roleNames, onReason: append });
       for (const { role, models: ch } of chains) applyChain(role, ch);
       controller.endBusy();
-      const saved = await saveRoleChains(homedir(), chains);
-      const rows = chains.map(({ role, models: ch }) => `- \`${role}\` → ${ch[0] ?? "—"}${ch.slice(1).map((m) => `  ↳ ${m}`).join("")}`);
+      // The effort each role's band asks for, alongside the chain the tuner chose — see effortFor. The tuner
+      // picks models; how hard the role should work follows from what the role IS, not from which model won.
+      const withEffort = chains.map(({ role, models: ch }) => {
+        const effort = effortFor(role, ch[0] ?? "");
+        return { role, models: ch, ...(effort ? { effort } : {}) };
+      });
+      const saved = await saveRoleChains(homedir(), withEffort);
+      const rows = withEffort.map(({ role, models: ch, effort }) =>
+        `- \`${role}\` → ${ch[0] ?? "—"}${effort ? ` · effort **${effort}**` : ""}${ch.slice(1).map((m) => `  ↳ ${m}`).join("")}`);
       controller.note(`**Roles adjusted** (LLM-tuned · primary + 2 fallbacks · falls back on exhaustion):\n${rows.join("\n")}\n\n_${saved ? `Saved to your config — future sessions start with these. ` : ""}\`/roles setmodel\` to fine-tune any chain._`);
       // Two runners-up behind the tuner: assigning skills is one call, and losing it to a rate limit means
       // every freshly installed skill stays unassigned with nothing to show for the attempt.
