@@ -5,6 +5,14 @@ export interface RoleConfig {
   models: string[];
   systemPrompt?: string;
   skills?: string[];
+  /**
+   * How hard this role's model should work — Anthropic's effort levels.
+   *
+   * A property of the ROLE, like its model chain: `judge` decides once and should think as hard as the model
+   * can, `refiner` classifies an intent on every turn and should not. Only Anthropic models can be told (the
+   * codex/gpt family sells each level as its own model id instead), and unset means the API's default.
+   */
+  effort?: import("../providers/anthropic.js").Effort;
 }
 
 /** A named reviewer with a viewpoint + its model chain. Used for BOTH the review team (finders) and the
@@ -127,6 +135,9 @@ const fileSchema = z
           models: z.array(z.string()),
           systemPrompt: z.string().optional(),
           skills: z.array(z.string()).optional(),
+          // Anthropic models only — see RoleConfig.effort. Unknown keys are stripped, so without this line a
+          // level written into the config would be silently discarded on the way in.
+          effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
         }),
       )
       .optional(),

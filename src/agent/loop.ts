@@ -21,6 +21,8 @@ export interface RoleAgentOptions {
    */
   role?: string;
   model: string;
+  /** How hard to work this turn — see RoleConfig.effort. Spread in from a resolved role. */
+  effort?: import("../providers/anthropic.js").Effort;
   fallbacks?: string[]; // ordered fallback models: on a retryable error before any output, drop to the next
   /**
    * A deadline for EACH model attempt, rather than one for the whole chain.
@@ -201,7 +203,8 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
        * be called, which would make fetching it pointless. The registry caches the derivation and only
        * rebuilds it when its contents actually change, so a run that fetches nothing pays nothing for asking.
        */
-      const req: ChatRequest = { model: activeModel, messages: [...working], tools: opts.tools.schemas() };
+      const req: ChatRequest = { model: activeModel, messages: [...working], tools: opts.tools.schemas(),
+        ...(opts.effort ? { effort: opts.effort } : {}) };
 
       for await (const ev of opts.provider.chat(req, opts.signal)) {
         if (ev.type === "text-delta") {

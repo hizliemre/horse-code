@@ -18,6 +18,8 @@ export interface ResolvedRole {
   role: string;
   model: string;
   fallbacks: string[];
+  /** The role's effort, when it has one — see RoleConfig.effort. Absent ⇒ the provider sends no level. */
+  effort?: import("../providers/anthropic.js").Effort;
   systemPrompt: string;
   onExhausted: (model: string, reason?: string) => void;
   onStructuralFailure: (model: string, reason?: string) => void;
@@ -254,10 +256,14 @@ export class RoleRegistry {
    * The chain (primary + fallbacks) and session-fallback hooks for a role, WITHOUT its system prompt —
    * for callers that supply their own prompt (e.g. spec-kit phases). resolve() layers the prompt on top.
    */
-  fallbackOpts(roleName: string): Pick<ResolvedRole, "role" | "model" | "fallbacks" | "onExhausted" | "onStructuralFailure" | "onFallback"> {
+  fallbackOpts(roleName: string): Pick<ResolvedRole, "role" | "model" | "fallbacks" | "effort" | "onExhausted" | "onStructuralFailure" | "onFallback"> {
     const chain = this.chain(roleName);
     const notify = this.notify;
+    const effort = this.roles[roleName]?.effort;
     return {
+      // Travels with the chain, not with the prompt: the seven callers that take only the chain are exactly
+      // the ones whose work is heaviest (the tester, the analyst, the spec-kit phases).
+      ...(effort ? { effort } : {}),
       /**
        * The name belongs to the CHAIN, not to the prompt.
        *

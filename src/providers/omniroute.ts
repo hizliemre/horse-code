@@ -1,6 +1,7 @@
 import type { ChatEvent, ChatRequest, Provider, ToolCall } from "../core/types.js";
 import { parseSSE } from "./sse.js";
 import { toOpenAIBody, mapFinishReason } from "./openai.js";
+import { toAnthropicBody, isAnthropicModel, AnthropicDecoder } from "./anthropic.js";
 import { sanitizeForJson } from "../core/surrogates.js";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -150,10 +151,19 @@ export class OmniRouteProvider implements Provider {
   }
 
   async *chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent> {
+    /**
+     * Anthropic's own schema for Anthropic's own models, the OpenAI-compatible one for everything else.
+     *
+     * Not a preference: `output_config.effort` is dropped in silence by the compatible endpoint, so a Claude
+     * model can only be told how hard to work through this door. Measured — see src/providers/anthropic.ts.
+     * Everything else about the two paths is the same from here: same SSE, same billed-token comments.
+     */
+    const native = isAnthropicModel(req.model);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
     };
+    if (native) headers["anthropic-version"] = "2023-06-01";
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
     // Abort the request when EITHER the caller aborts (Ctrl+C) OR the stream goes idle too long.
@@ -162,12 +172,12 @@ export class OmniRouteProvider implements Provider {
 
     let res: Response;
     try {
-      res = await this.fetchFn(`${this.baseUrl}/api/v1/chat/completions`, {
+      res = await this.fetchFn(`${this.baseUrl}${native ? "/v1/messages" : "/api/v1/chat/completions"}`, {
         method: "POST",
         headers,
         // Sanitised at the socket, not at each of the dozens of places that build a prompt — see
         // src/core/surrogates.ts for the four-hour run this cost.
-        body: JSON.stringify(sanitizeForJson(toOpenAIBody(req))),
+        body: JSON.stringify(sanitizeForJson(native ? toAnthropicBody(req) : toOpenAIBody(req))),
         signal: combined,
       });
     } catch (e) {
@@ -200,6 +210,8 @@ export class OmniRouteProvider implements Provider {
       return;
     }
 
+    // The native path decodes its own event stream; the OpenAI path accumulates below. See AnthropicDecoder.
+    const decoder = native ? new AnthropicDecoder() : undefined;
     const toolCalls = new Map<number, ToolCallAccumulator>();
     const lastProgress = new Map<number, number>(); // per tool-call: last arg length we emitted progress for
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
@@ -223,6 +235,10 @@ export class OmniRouteProvider implements Provider {
           chunk = JSON.parse(line.value);
         } catch {
           continue; // malformed chunk → skip
+        }
+        if (decoder) {
+          for (const ev of decoder.push(chunk)) yield ev;
+          continue;
         }
         // Usage arrives (with include_usage) in a final chunk whose `choices` is empty → read it before
         // the no-choice skip below.
@@ -278,6 +294,10 @@ export class OmniRouteProvider implements Provider {
     for (const acc of toolCalls.values()) {
       const toolCall: ToolCall = { id: acc.id, name: acc.name, arguments: acc.arguments };
       yield { type: "tool-call", toolCall };
+    }
+    if (decoder) {
+      finishReason = decoder.finishReason();
+      usage = decoder.usage() ?? usage;
     }
 
     // Usage priority: real billed (SSE comments) → stream usage chunk → response headers. The billed

@@ -70,7 +70,9 @@ describe("where the guard is applied", () => {
   it("is on the body the provider sends", async () => {
     const { readFile } = await import("node:fs/promises");
     const src = await readFile("src/providers/omniroute.ts", "utf8");
-    expect(src).toContain("JSON.stringify(sanitizeForJson(toOpenAIBody(req)))");
+    // Two bodies now — Anthropic's own schema for Claude models, the OpenAI-compatible one for the rest.
+    // The guard is at the socket, so it must wrap whichever body is being sent, not one of them by name.
+    expect(src).toContain("JSON.stringify(sanitizeForJson(native ? toAnthropicBody(req) : toOpenAIBody(req)))");
   });
 
   /** …and the truncations that feed it no longer cut by code unit. */

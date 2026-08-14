@@ -19,7 +19,11 @@ async function drain(it: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
   return out;
 }
 
-const req: ChatRequest = { model: "cc/claude-opus-4-8", messages: [{ role: "user", content: "hi" }], tools: [] };
+/**
+ * A non-Claude model, deliberately: these cases exercise the OpenAI-compatible transport, and a Claude id
+ * now takes the Anthropic one (see src/providers/anthropic.ts — it is the only door effort fits through).
+ */
+const req: ChatRequest = { model: "cx/gpt-5.6-terra", messages: [{ role: "user", content: "hi" }], tools: [] };
 
 describe("OmniRouteProvider — text streaming + error", () => {
   it("emits delta.content as text-delta and ends with done", async () => {
@@ -51,7 +55,7 @@ describe("OmniRouteProvider — text streaming + error", () => {
     const headers = captured?.init?.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer sk-1");
     const sent = JSON.parse(captured?.init?.body as string);
-    expect(sent.model).toBe("cc/claude-opus-4-8");
+    expect(sent.model).toBe("cx/gpt-5.6-terra");
     expect(sent.stream).toBe(true);
   });
 

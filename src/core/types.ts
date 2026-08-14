@@ -157,6 +157,17 @@ export interface ChatRequest {
   model: string;
   messages: Message[];
   tools: { name: string; description: string; parameters: unknown }[];
+  /**
+   * How hard the model should work on this turn — Anthropic's `output_config.effort`.
+   *
+   * Not part of the model id, unlike the codex/gpt family where every level is its own model
+   * (`cx/gpt-5.5-xhigh`). A Claude id names the model and nothing else, so the level has to travel with the
+   * request — and it only arrives if the request speaks Anthropic's own schema. See src/providers/anthropic.ts
+   * for the measurement showing the OpenAI-compatible endpoint drops it in silence.
+   *
+   * Unset means the field is not sent, which is the API's default (`high`).
+   */
+  effort?: import("../providers/anthropic.js").Effort;
 }
 
 export type ChatEvent =
