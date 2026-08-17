@@ -37,3 +37,54 @@ describe("a choice always shows which one is selected", () => {
     expect(wrapPlain(oneLine("\nhello"), 40)).toEqual(["hello"]);
   });
 });
+
+/**
+ * Which option is selected is said on every row it owns, not once.
+ *
+ * The marker row has gone missing in a real terminal three times, under three different diagnoses — ambiguous
+ * -width glyphs, a nested `<Text>`, and a row wider than its content area. Each was real and each was fixed;
+ * the symptom came back. Reported the third time with a screenshot of a three-option question in which no
+ * option carried a marker at all, while the box, the notes row and the key hints all rendered.
+ *
+ * A single row carrying the whole answer to "which one am I about to pick" is the design fault underneath
+ * that. A gutter down the option cannot be erased by losing one row.
+ */
+describe("the selection gutter", () => {
+  const strip = (t: string): string => t.replace(/\x1b\[[0-9;]*m/g, "");
+  const long = {
+    label: "Y kaydı kendi tenant'ında kaydeder; güvenilir olay X hedef tenant'ına gönderilir ve X aynasını güncellir.",
+    description: "Artı: tenant filtresi delinmez, X'in okuması basit kalır.",
+  };
+  const other = { label: "Y işleminde X'in özet satırı güncellenir.", description: "Eksi: kuyruk." };
+
+  const frameOf = (cols: number): string[] => {
+    const { lastFrame } = render(
+      <ChoiceInput cols={cols} multiSelect={false} onSubmit={() => {}} options={[long, other]} />);
+    return strip(lastFrame() ?? "").split("\n");
+  };
+
+  it("marks every wrapped line of the selected option, not just the first", () => {
+    const rows = frameOf(100).filter((l) => l.includes("tenant") || l.includes("güncellir") || l.includes("Artı"));
+    expect(rows.length).toBeGreaterThan(2);          // it wraps, and has a description
+    for (const r of rows) expect(r).toMatch(/│\s*>/);
+  });
+
+  it("leaves the unselected option's rows without a cursor", () => {
+    const rows = frameOf(100).filter((l) => l.includes("özet satırı") || l.includes("kuyruk"));
+    expect(rows.length).toBeGreaterThan(1);
+    for (const r of rows) expect(r).not.toMatch(/│\s*>/);
+  });
+
+  it("still carries the radio marker on the first line of each option", () => {
+    const f = frameOf(100).join("\n");
+    expect(f).toContain("(*)");
+    expect(f).toContain("( )");
+  });
+
+  /** The gutter is two columns on every row, so nothing shifts as the cursor moves. */
+  it("keeps every row of the list the same width", () => {
+    const rows = frameOf(100).filter((l) => l.startsWith("│"));
+    const widths = new Set(rows.map((r) => r.length));
+    expect(widths.size).toBe(1);
+  });
+});

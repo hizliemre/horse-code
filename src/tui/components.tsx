@@ -463,6 +463,8 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
       {choices.map((c, i) => {
         const isSel = i === cursor;
         const mark = multiSelect ? (checked.has(i) ? "[x] " : "[ ] ") : (isSel ? `${RADIO_ON} ` : `${RADIO_OFF} `);
+        // Two columns, on every row of this option — see the note below.
+        const gutter = isSel ? `${CURSOR} ` : "  ";
         return (
           <Box key={i} flexDirection="column">
             {/*
@@ -475,14 +477,30 @@ export function ChoiceInput({ options, multiSelect, cols, onSubmit, onEscape }: 
               * the one structural difference between the line that vanishes and the lines that do not, and
               * it buys nothing here — the whole line shares one style.
               */}
+            {/*
+              * The cursor is on EVERY line of the selected option, not only its first.
+              *
+              * Which row is selected used to be said exactly once, in six columns of one row. Any single row
+              * that fails to reach the screen therefore erases the answer to "which one am I about to pick",
+              * and that row has now gone missing three times in a real terminal, under three different
+              * diagnoses: ambiguous-width glyphs, a nested `<Text>`, and a row wider than its content area.
+              * Each was real and each was fixed; the symptom came back.
+              *
+              * So the information stops living in one place. A gutter of `>` down the whole option — label
+              * lines and description alike — says the same thing on every row it owns, and no single lost row
+              * can take it away. It also reads better on a three-line option, where a marker on the first
+              * line alone is easy to lose track of.
+              */}
             {wrapPlain(oneLine(c.label), listW - MARKER_W).map((line, k) => (
               <Text key={k} color={isSel ? "cyan" : undefined} bold={isSel}>
-                {k === 0 ? `${isSel ? `${CURSOR} ` : "  "}${mark}${line}` : `      ${line}`}
+                {k === 0 ? `${gutter}${mark}${line}` : `${gutter}    ${line}`}
               </Text>
             ))}
             {c.description
-              ? wrapPlain(oneLine(c.description), listW - 6).map((line, k) => (
-                <Text key={`d${k}`} dimColor>{`      ${line}`}</Text>
+              ? wrapPlain(oneLine(c.description), listW - MARKER_W).map((line, k) => (
+                <Text key={`d${k}`} color={isSel ? "cyan" : undefined} dimColor={!isSel}>
+                  {`${gutter}    ${line}`}
+                </Text>
               ))
               : null}
           </Box>
