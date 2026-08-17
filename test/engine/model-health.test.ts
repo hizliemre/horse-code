@@ -188,3 +188,88 @@ describe("ModelHealth.watch — benching one model moves every role off it at on
     expect(notes.join("\n")).not.toMatch(/Benched/);
   });
 });
+
+/**
+ * A busy transport is not a spent model.
+ *
+ * Measured live, mid-feature-run: `cc/claude-opus-5` served five calls in the preceding two minutes (23.8s,
+ * 2.9s, 3.1s, 25.3s, 38.7s — all ok), then returned one 529 in 1.7 seconds. Eighteen roles were moved off the
+ * best model in the fleet, and nothing in the system would have moved them back: the bench had no expiry, and
+ * even with one, `sweep` writes per-role chain OVERRIDES that outlive the quarantine that caused them.
+ *
+ * The code already made this argument for behavioural benches — "a model that answered in prose is a
+ * different case entirely: the transport was fine" — and never applied it to the transport itself.
+ */
+describe("how long a bench lasts", () => {
+  it("benches a busy transport briefly, not for the session", () => {
+    const reg = new RoleRegistry({ coder: { models: ["a", "b"], systemPrompt: "p" } });
+    const t0 = 1_000_000;
+    reg.markExhausted("a", "Overloaded", t0);
+    expect(reg.isQuarantined("a", t0 + 60_000)).toBe(true);
+    expect(reg.isQuarantined("a", t0 + RoleRegistry.TRANSIENT_BENCH_MS + 1)).toBe(false);
+  });
+
+  it("keeps a spent subscription out until something re-probes it", () => {
+    const reg = new RoleRegistry({ coder: { models: ["a", "b"], systemPrompt: "p" } });
+    const t0 = 1_000_000;
+    reg.markExhausted("a", "429 rate limit exceeded", t0);
+    expect(reg.isQuarantined("a", t0 + 24 * 3600_000)).toBe(true);
+  });
+
+  it("reads the difference from the reason it was given", async () => {
+    const { isTransientFailure } = await import("../../src/agent/roles.js");
+    for (const r of ["Overloaded", "529 overloaded_error", "the model did not answer within its deadline",
+      "socket hang up", "ECONNRESET", "503 Service Unavailable", "temporarily unavailable"]) {
+      expect(isTransientFailure(r), r).toBe(true);
+    }
+    for (const r of ["429 rate_limit_error", "quota exhausted", "insufficient credit",
+      "All antigravity accounts have exhausted their quota (reset after 2h 1s)"]) {
+      expect(isTransientFailure(r), r).toBe(false);
+    }
+  });
+
+  /** Anything unrecognised keeps the model out: handing work to one that cannot take it is the worse error. */
+  it("treats a reason it cannot read as permanent", async () => {
+    const { isTransientFailure } = await import("../../src/agent/roles.js");
+    expect(isTransientFailure("something nobody has seen before")).toBe(false);
+  });
+});
+
+/**
+ * A timed bench on its own changes nothing.
+ *
+ * `sweep` writes a per-role chain OVERRIDE, and an override outlives the quarantine that caused it. Measured
+ * live: one 529 moved 18 roles off the best model in the fleet, and nothing would have moved them back even
+ * after the model recovered — the only thing that ever did was a manual `/roles adjust`.
+ */
+describe("when a bench lapses", () => {
+  it("puts the roles it moved back on the model", async () => {
+    const { health, main } = setup();
+    health.watch();
+    const was = [...main.rawChain("coach")];
+    expect(was).toContain("dead-a");
+    main.markExhausted("dead-a", "Overloaded", Date.now(), Date.now() + 30);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(main.rawChain("coach")).not.toContain("dead-a");   // moved off…
+    await new Promise((r) => setTimeout(r, 60));
+    expect(main.rawChain("coach")).toEqual(was);              // …and put back when the bench lapsed
+  });
+
+  it("leaves a role alone if something deliberate moved it since", async () => {
+    const { health, main } = setup();
+    health.watch();
+    main.markExhausted("dead-a", "Overloaded", Date.now(), Date.now() + 30);
+    await new Promise((r) => setTimeout(r, 5));
+    main.setRoleModel("coach", ["chosen-on-purpose"]);        // /roles setmodel, mid-bench
+    await new Promise((r) => setTimeout(r, 60));
+    expect(main.rawChain("coach")).toEqual(["chosen-on-purpose"]);
+  });
+
+  it("says so, so a model reappearing is not a mystery", async () => {
+    const { health, main, notes } = setup();
+    health.watch();
+    main.markExhausted("dead-a", "Overloaded", Date.now(), Date.now() + 30);
+    await new Promise((r) => setTimeout(r, 70));
+    expect(notes.join("\n")).toMatch(/Back in service/);
+  });
+});

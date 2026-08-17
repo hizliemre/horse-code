@@ -5,6 +5,23 @@ import { applySkills } from "../skills/apply.js";
 import type { SkillRegistry } from "../skills/registry.js";
 
 /** A resolved role: its primary model, the ordered fallback chain, prompt, and session-fallback hooks. */
+/**
+ * Whether a bench reason describes the TRANSPORT being busy rather than the model being spent.
+ *
+ * The distinction decides whether a model is out for two minutes or for the session. A 529, a deadline, a
+ * dropped socket — all of them say the request did not get through, and none of them says anything about
+ * this model's remaining quota. A rate limit does, and stays permanent until something re-probes it.
+ *
+ * Anything unrecognised is treated as permanent: the conservative direction is to keep a model out of
+ * service, not to keep handing work to one that cannot take it.
+ */
+export function isTransientFailure(reason: string): boolean {
+  const r = reason.toLowerCase();
+  if (/\b(429|rate.?limit|quota|exhaust|insufficient|billing|credit)\b/.test(r)) return false;
+  return /overload|529|50[0234]|timeout|timed out|deadline|econnreset|epipe|socket hang up|temporar|unavailable|try again/
+    .test(r);
+}
+
 export interface ResolvedRole {
   /**
    * The role's own name, carried alongside its model and prompt.
@@ -34,7 +51,7 @@ export class RoleRegistry {
   // reason and the time so a coordinator can report them and later re-probe whether the limit has reset.
   private readonly quarantine = new Map<string, { at: number; reason: string; until?: number }>();
   private notify?: (msg: string) => void; // fallback UI note sink (wired once the controller exists)
-  private onQuarantine?: (model: string, reason: string) => void;
+  private onQuarantine?: (model: string, reason: string, until?: number) => void;
   /** What each model has actually managed to do in each ROLE — see setFitness. */
   private fitness?: { unfit(role: string, model: string): boolean; record?(role: string, model: string, reason: string): number };
   // Models that answered in prose instead of calling the submit tool. Not a transport error, so nothing ever
@@ -108,15 +125,17 @@ export class RoleRegistry {
   }
 
   /** Wire the quarantine hook: whatever benches a model, every role still holding it must be re-assigned. */
-  setOnQuarantine(fn: (model: string, reason: string) => void): void {
+  setOnQuarantine(fn: (model: string, reason: string, until?: number) => void): void {
     this.onQuarantine = fn;
   }
 
   /** Mark a model spent — every chain skips it from now on, until it is released. */
   markExhausted(model: string, reason = "unavailable", now = Date.now(), until?: number): void {
     if (!model || this.isQuarantined(model)) return;
-    this.quarantine.set(model, { at: now, reason, ...(until !== undefined && { until }) });
-    this.onQuarantine?.(model, reason);
+    // A transport that was busy for a second is not a model that is spent — see TRANSIENT_BENCH_MS.
+    const ends = until ?? (isTransientFailure(reason) ? now + RoleRegistry.TRANSIENT_BENCH_MS : undefined);
+    this.quarantine.set(model, { at: now, reason, ...(ends !== undefined && { until: ends }) });
+    this.onQuarantine?.(model, reason, ends);
   }
 
   /**
@@ -128,6 +147,23 @@ export class RoleRegistry {
    * measured live, one such bench re-assigned SIXTEEN roles away from the best model available.
    */
   static readonly STRUCTURAL_BENCH_MS = 10 * 60_000;
+
+  /**
+   * How long a TRANSPORT bench lasts — the busy server, not the spent subscription.
+   *
+   * The argument above, one door over. A model that answered in prose gets ten minutes because the transport
+   * was fine; a model whose transport said "Overloaded" for one second is the same case in its purest form,
+   * and it was the one getting benched for the whole session.
+   *
+   * Measured live, in the middle of a feature run: `cc/claude-opus-5` served five calls in the preceding two
+   * minutes (23.8s, 2.9s, 3.1s, 25.3s, 38.7s, all ok), then one 529 in 1.7 seconds — and 18 roles were moved
+   * off the best model in the fleet for the rest of the session. A 529 is the textbook transient condition;
+   * the API's own guidance for it is to retry with backoff.
+   *
+   * Two minutes: long enough that a genuinely struggling gateway is not hammered, short enough that a
+   * one-second blip costs a couple of turns rather than an afternoon.
+   */
+  static readonly TRANSIENT_BENCH_MS = 2 * 60_000;
 
   /**
    * How many structured failures a model gets before it is benched. One miss can be a genuinely hard prompt;

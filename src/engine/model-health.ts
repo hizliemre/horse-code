@@ -39,9 +39,14 @@ export interface ModelHealthOpts {
 }
 
 /** Result of healing one role. `chain` is empty when no healthy model could be found at all. */
+/** Node fires anything longer than this on the next tick instead of waiting — see the scheduling guard. */
+const MAX_BENCH_DELAY_MS = 2_147_483_647;
+
 export interface Rechained {
   role: string;
   chain: string[];
+  /** What the role was running before this re-chain — kept so a lapsed bench can put it back. See revive. */
+  before?: string[];
 }
 
 export class ModelHealth {
@@ -62,11 +67,47 @@ export class ModelHealth {
    * of a dozen chains and each of them slid past it on every call.
    */
   watch(): void {
-    for (const r of this.port.registries()) r.setOnQuarantine((m, reason) => { void this.sweep(m, reason); });
+    for (const r of this.port.registries()) {
+      r.setOnQuarantine((m, reason, until) => { void this.sweep(m, reason, until); });
+    }
+  }
+
+  /**
+   * What a bench moved, so a bench that lapses can be undone.
+   *
+   * A timed bench on its own changes nothing: `sweep` writes a per-role chain OVERRIDE, and an override
+   * outlives the quarantine that caused it. Measured live — one 529 moved 18 roles off the best model in the
+   * fleet, and nothing in the system would have moved them back even after the model recovered.
+   */
+  private readonly movedBy = new Map<string, { role: string; before: string[]; installed: string[] }[]>();
+
+  /**
+   * Puts a model back in service and returns the roles it was taken from.
+   *
+   * A role is only restored if it is STILL running the substitute this bench installed. Anything else means
+   * something deliberate happened since — `/roles adjust`, `/roles setmodel`, another bench — and the newer
+   * decision wins over an expiry undoing an older one.
+   */
+  private revive(model: string): void {
+    const moved = this.movedBy.get(model) ?? [];
+    this.movedBy.delete(model);
+    let back = 0;
+    for (const r of this.port.registries()) r.release(model);
+    for (const { role, before, installed } of moved) {
+      const reg = this.port.registryFor(role);
+      const nowOn = reg.rawChain(role);
+      // Only if the role is STILL running the substitute this bench installed. Anything else — `/roles
+      // setmodel`, a later bench, an adjust — is a newer decision, and an expiry must not undo one.
+      if (nowOn.length !== installed.length || nowOn.some((m, i) => m !== installed[i])) continue;
+      reg.setRoleModel(role, before.length ? before : undefined);
+      if (reg.rawChain(role).includes(model)) back++;
+    }
+    this.note(`♻️ **Back in service** — \`${model}\` is out of quarantine`
+      + (back ? `, and ${back} role(s) that were moved off it have it again.` : "."));
   }
 
   /** Re-chains every role still holding `model`. Fire-and-forget: healing must never block the caller. */
-  private async sweep(model: string, reason: string): Promise<void> {
+  private async sweep(model: string, reason: string, until?: number): Promise<void> {
     return this.serialize(async () => {
       const affected = new Set<string>();
       for (const r of this.port.registries()) for (const role of r.rolesUsing(model)) affected.add(role);
@@ -75,7 +116,33 @@ export class ModelHealth {
       if (!healthy.length) return;
       const moved = this.reassign([...affected], healthy);
       if (moved.length) {
-        this.note(`⛔ **Benched** \`${model}\` (${reason.slice(0, 100)}) — re-assigned ${moved.length} role(s) that were using it.`);
+        this.movedBy.set(model, moved.map(({ role, before, chain }) =>
+          ({ role, before: before ?? [], installed: chain })));
+        const mins = until ? Math.max(1, Math.round((until - Date.now()) / 60_000)) : 0;
+        this.note(`⛔ **Benched** \`${model}\` (${reason.slice(0, 100)}) — re-assigned ${moved.length} role(s) `
+          + `that were using it${mins ? `, for ~${mins} minute(s).` : "."}`);
+      }
+      /**
+       * A lapse has to be acted on, not merely allowed.
+       *
+       * `isQuarantined` lets a timed bench expire when someone asks — but nothing asks on behalf of the roles
+       * that were moved, and their overrides would stand for the rest of the session. Unref'd, so a pending
+       * revival never keeps the process alive on its own.
+       */
+      if (until !== undefined) {
+        /**
+         * The delay is read off the SAME clock `setTimeout` uses, and only scheduled when it is sane.
+         *
+         * `this.now` is injectable and `setTimeout` is not, so mixing them produces a delay in the wrong
+         * frame. Node clamps anything over ~24.8 days to fire on the next tick, which turns a nonsense delay
+         * into an INSTANT revival — the bench undone the moment it was applied. Caught by a test whose clock
+         * returns 1000 while the deadline came from the real one.
+         */
+        const delay = until - Date.now();
+        if (delay > 0 && delay <= MAX_BENCH_DELAY_MS) {
+          const t = setTimeout(() => { this.revive(model); }, delay);
+          (t as unknown as { unref?: () => void }).unref?.();
+        }
       }
     });
   }
@@ -197,8 +264,10 @@ export class ModelHealth {
     for (const { role, models } of picked) {
       const chain = models.filter((m) => healthy.includes(m));
       if (!chain.length) continue;
-      this.port.registryFor(role).setRoleModel(role, chain);
-      out.push({ role, chain });
+      const reg = this.port.registryFor(role);
+      const before = [...reg.rawChain(role)];   // …so a bench that lapses can put the role back. See revive.
+      reg.setRoleModel(role, chain);
+      out.push({ role, chain, before });
     }
     return out;
   }
