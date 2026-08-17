@@ -73,22 +73,8 @@ describe("a question that points at items it never states", () => {
   it("says what to do instead: one question at a time, each with its own options", async () => {
     const tool = buildAskUserTool(async () => "unreachable");
     const r = await tool.run({ question: "Answer Q1 and Q2, e.g. Q1: A, Q2: B." }, ctx());
-    expect(r.content).toMatch(/one at a time/i);
+    expect(r.content).toMatch(/ONE question and takes ONE answer/);
     expect(r.content).toContain("`options`");
-  });
-
-  it("lets through a question that sets its items out", async () => {
-    const rec = recorder();
-    const tool = buildAskUserTool(rec.read);
-    const r = await tool.run({
-      question: [
-        "İki karar var:",
-        "Q1: Tedarikçi fiyatı nasıl belirlensin? A) Katalog B) Sabit oran",
-        "Q2: Durum aynası nasıl güncellensin? A) Anlık B) Toplu",
-      ].join("\n"),
-    }, ctx());
-    expect(r.isError).toBe(false);
-    expect(rec.asked).toHaveLength(1);
   });
 
   /** A single named reference beside a written-out item is ordinary prose, not a dangling pointer. */
@@ -107,6 +93,81 @@ describe("a question that points at items it never states", () => {
       { question: "Q1 ve Q2 için seçiminizi yazın." },
       ctx("Q1: Fiyat nasıl belirlensin?\nQ2: Durum nasıl yansısın?"),
     );
+    expect(r.isError).toBe(false);
+  });
+});
+
+/**
+ * The other half of the same failure — what the guard above turned it into.
+ *
+ * With the items forced onto the screen, the analyst's very next question put all four of them in ONE
+ * paragraph over a single free-text box: six lines of prose, four numbered decisions, one `>` prompt. The
+ * user has to hold every decision in their head, answer them in prose, and hope the mapping survives.
+ *
+ * Reported in one line: "if it has itemized requests it should ask them one at a time and take the answers
+ * one at a time."
+ */
+describe("several questions packed into one box", () => {
+  /** Verbatim from the run, trimmed in the middle — the enumerators and the question marks are what matter. */
+  const PACKED =
+    "Spesifikasyonu kesinleştirmek için lütfen şu ürün kararlarını verin: (1) Yönlendirme satıcının "
+    + "işlemiyle hemen sorumluluk devri mi yaratır, yoksa tedarikçinin açık kabulü mü gerekir? "
+    + "(2) Tedarikçiye veri paylaşımı tüm alanlar mı, sabit asgari alan kümesi mi olmalı? "
+    + "(3) Satıcının adı ve logosu yönlendirme anında mı sabitlenmeli, yoksa her görüntülemede güncel "
+    + "profilden mi alınmalı? (4) Bu sürüm yalnızca dağıtıcı iş modelini mi teslim etmeli?";
+
+  it("refuses the paragraph that was actually asked", async () => {
+    const tool = buildAskUserTool(async () => "unreachable");
+    const r = await tool.run({ question: PACKED }, ctx());
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("4 questions in one box");
+  });
+
+  /**
+   * The first version of the refusal above offered a way out — "if they must be answered together, write
+   * them all out in `question`" — and this paragraph is what the model did with it. There is no together.
+   */
+  it("offers no way to ask them together", async () => {
+    const tool = buildAskUserTool(async () => "unreachable");
+    const r = await tool.run({ question: PACKED }, ctx());
+    expect(r.content).toMatch(/ONE question and takes ONE answer/);
+    expect(r.content).not.toMatch(/together/i);
+  });
+
+  /**
+   * An enumerated LIST is not several questions. "(1) Katalog (2) Sabit oran" is one question carrying its
+   * choices, which extractChoicesFrom turns into a selectable list — so the second question mark is what
+   * separates the two: choices do not ask anything.
+   */
+  it("does not mistake a question's own choices for more questions", async () => {
+    const rec = recorder();
+    const tool = buildAskUserTool(rec.read);
+    const r = await tool.run(
+      { question: "Tedarikçi fiyatı nasıl belirlensin? (1) Katalog (2) Sabit oran (3) Elle" },
+      ctx(),
+    );
+    expect(r.isError).toBe(false);
+    expect(rec.asked).toHaveLength(1);
+  });
+
+  it("leaves a question that already passes its choices alone", async () => {
+    const rec = recorder();
+    const tool = buildAskUserTool(rec.read);
+    const r = await tool.run({
+      question: "Hangisi? (1) İlki mi? (2) İkincisi mi?",
+      options: ["İlki", "İkincisi"],
+    }, ctx());
+    expect(r.isError).toBe(false);
+  });
+
+  /** A hand-off's numbered steps are actions to carry out, not decisions to make. */
+  it("leaves a hand-off alone", async () => {
+    const rec = recorder();
+    const tool = buildAskUserTool(rec.read);
+    const r = await tool.run({
+      question: "Ne gördünüz? Ağ yanıtı ne döndü?",
+      steps: ["Sipariş ekranını aç", "Yönlendir'e bas"],
+    }, ctx());
     expect(r.isError).toBe(false);
   });
 

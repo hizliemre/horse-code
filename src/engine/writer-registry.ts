@@ -80,6 +80,44 @@ function danglingItems(question: string): number[] {
 }
 
 /**
+ * Several questions packed into one paragraph.
+ *
+ * The other half of the same failure, and what it turned into once the guard above forced the items to be
+ * written down. Measured live, the very next question the analyst asked — one prose block, one free-text
+ * box, four numbered decisions inside it:
+ *
+ *   "…lütfen şu ürün kararlarını verin: (1) Yönlendirme … gerekir? … (2) Tedarikçiye veri paylaşımı …
+ *    görünmeli? (3) Satıcının adı ve logosu … alınmalı? (4) Bu sürüm yalnızca … içermeli?"
+ *
+ * Six lines of text and a single `>` prompt: the user has to hold four decisions in their head, answer them
+ * in prose, and hope the mapping survives. Reported in one line — "if it has itemized requests it should ask
+ * them one at a time and take the answers one at a time."
+ *
+ * An enumerated LIST is not this. A question offering "(1) Katalog (2) Sabit oran" is one question with its
+ * choices embedded, which extractChoicesFrom already turns into a selectable list — so the second question
+ * mark is what separates the two: choices do not ask anything, sub-questions do.
+ */
+const ENUMERATOR = /(?:^|[^\w])\(?(\d{1,2})[).:]/g;
+
+function packedQuestions(question: string): number {
+  if ((question.match(/\?/g)?.length ?? 0) < 2) return 0;
+  const numbered = new Set([...question.matchAll(ENUMERATOR)].map((m) => Number(m[1])));
+  return numbered.size;
+}
+
+/**
+ * The one instruction both refusals end on.
+ *
+ * An earlier version offered a way out — "if they must be answered together, write them all out in
+ * `question`" — and the model took it, which is how four decisions ended up in a single paragraph over one
+ * free-text box. There is no together. The tool asks one question and collects one answer.
+ */
+const ONE_AT_A_TIME =
+  "This tool asks ONE question and takes ONE answer. Ask the first one on its own, with its own `options`, "
+  + "and call this tool again for the next once you have the answer — the answer to one of these usually "
+  + "changes what the next one should be.";
+
+/**
  * Tool for a role to ask the user a question; returns the answer in content. `normalize` (optional) rescues
  * the common case where the model embeds the choices in the question prose (a table / A-B-C list) instead of
  * passing `options`: it extracts them so the UI can still render a selectable list.
@@ -91,7 +129,10 @@ export function buildAskUserTool(
   return {
     name: "ask_user",
     description:
-      "Ask the user a question and get their answer. For a multiple-choice question, pass `options` (the " +
+      "Ask the user ONE question and get their answer. Several decisions are several calls: ask the first, " +
+      "read the answer, then ask the next — the user has one answer field, so four questions in one box " +
+      "means four decisions they must hold in their head and answer in prose. For a multiple-choice " +
+      "question, pass `options` (the " +
       "choices) — the UI shows a selectable list the user checks off; set `multiSelect: true` when they may " +
       "pick several. Omit `options` for an open-ended (free-text) question. An option may be a plain string, " +
       "or {label, description, preview} when the decision turns on trade-offs the label cannot carry — the " +
@@ -144,9 +185,22 @@ export function buildAskUserTool(
         return {
           content: `ask_user: this asks the user to answer ${dangling.map((n) => `Q${n}`).join(", ")}, and `
             + "none of them is on their screen — you did not write them this turn, and a file you wrote is "
-            + "not something they are looking at. This tool asks ONE question: ask them one at a time, each "
-            + "with its own `options`. If they must be answered together, write every question and its "
-            + "choices out in full inside `question`.",
+            + `not something they are looking at. ${ONE_AT_A_TIME}`,
+          isError: true,
+        };
+      }
+      /**
+       * …and the same refusal for several questions packed into one paragraph.
+       *
+       * This is what the guard above turned the failure into: the items came out of the model's head and onto
+       * the screen, all four of them, in one prose block over a single free-text box. Getting them written
+       * down was half the fix; the other half is that each has to be its own question.
+       */
+      const packed = packedQuestions(question);
+      if (packed >= 2 && !steps?.length && !options?.length) {
+        return {
+          content: `ask_user: this is ${packed} questions in one box, and the user has one answer field for `
+            + `all of them. ${ONE_AT_A_TIME}`,
           isError: true,
         };
       }
