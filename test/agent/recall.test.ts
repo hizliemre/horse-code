@@ -225,11 +225,161 @@ describe("two tools, one subject", () => {
     expect(r.saw("read_file", key)).toBeUndefined();
   });
 
-  /** Paging through a file is not repeating: each slice is its own question. */
-  it("treats different slices of one file as different calls", () => {
+  /**
+   * Paging through a file is not repeating — but a page INSIDE a page already read is.
+   *
+   * This case used to assert that lines 47-97 were a new question after lines 24-184 had been answered. They
+   * are not: the agent is holding them. The distinction that matters is disjoint versus contained, and only
+   * the first is paging. See rangeOfKey.
+   */
+  it("treats a page it has not been given as a new call, and one it has as a repeat", () => {
     const r = new Recall();
-    r.note("read_file", "path:doc.md|limit=160|offset=24");
-    expect(r.saw("read_file", "path:doc.md|limit=50|offset=47")).toBeUndefined();
+    r.note("read_file", "path:doc.md|limit=160|offset=24");                      // lines 24-184
+    expect(r.saw("read_file", "path:doc.md|limit=50|offset=200")).toBeUndefined(); // 200-250: never seen
+    expect(r.saw("read_file", "path:doc.md|limit=50|offset=47")).toBeDefined();    // 47-97: inside it
     expect(r.saw("read_file", "path:doc.md|limit=160|offset=24")).toBeDefined();
+  });
+});
+
+/**
+ * A slice of a file already read in full is not a new read.
+ *
+ * The memo's key is range-aware on purpose: a monitor that counted sixteen pages of one file as sixteen
+ * re-reads reported a loop that was not there. That was right for DISJOINT pages and wrong for CONTAINED
+ * ones — and containment is the case that actually costs.
+ *
+ * Measured on a feature run, inside its first ten minutes: a brainstormer read `src/domain/Orders/Order.cs`
+ * in full (15,302 characters) and then asked for subsets of it eight more times. Across every agent in that
+ * run, 50,479 of 199,866 characters read — one in four — were a range that agent already held.
+ */
+describe("a range already answered", () => {
+  const full = "path:src/domain/Orders/Order.cs";
+  const slice = (limit: number, offset: number) => `${full}|limit=${limit}|offset=${offset}`;
+
+  it("answers a slice from the whole file the agent already read", () => {
+    const r = new Recall();
+    r.note("read_file", full);
+    expect(r.saw("read_file", slice(180, 24))).toBe(0);
+    expect(r.saw("read_file", slice(45, 190))).toBe(0);
+  });
+
+  it("still answers a page it has not been given", () => {
+    const r = new Recall();
+    r.note("read_file", slice(50, 1));           // lines 1-51
+    expect(r.saw("read_file", slice(50, 100))).toBeUndefined();  // …says nothing about 100-150
+  });
+
+  it("answers a narrower page from a wider one", () => {
+    const r = new Recall();
+    r.note("read_file", slice(200, 1));
+    expect(r.saw("read_file", slice(20, 30))).toBe(0);
+  });
+
+  it("does not confuse two files that were read at the same offsets", () => {
+    const r = new Recall();
+    r.note("read_file", "path:a.ts|limit=200|offset=1");
+    expect(r.saw("read_file", "path:b.ts|limit=20|offset=30")).toBeUndefined();
+  });
+
+  /**
+   * A write drops the spans — and `write_file` then claims the file as AUTHORED, so a later read is still
+   * answered, by the other door: the content is the text the agent itself passed to the write.
+   */
+  it("drops the spans of a written file, and answers from what the agent wrote instead", () => {
+    const r = new Recall();
+    r.note("read_file", full);
+    r.note("write_file", full);
+    expect(r.recall("read_file", slice(20, 30))?.authored).toBe(true);
+  });
+
+  it("forgets them outright when the write was an edit — a patch is not the file", () => {
+    const r = new Recall();
+    r.note("read_file", full);
+    r.note("edit_file", full);
+    expect(r.saw("read_file", slice(20, 30))).toBeUndefined();
+  });
+
+  it("forgets every span when a shell command could have changed anything", () => {
+    const r = new Recall();
+    r.note("read_file", full);
+    r.note("shell", "command:rm -rf build");
+    expect(r.saw("read_file", slice(20, 30))).toBeUndefined();
+  });
+
+  it("keeps them when the shell command only looked", () => {
+    const r = new Recall();
+    r.note("read_file", full);
+    r.note("shell", "command:git status");
+    expect(r.saw("read_file", slice(20, 30))).toBe(0);
+  });
+
+  /**
+   * Compaction replaces a result with a stub, and a memo that points at something no longer there leaves the
+   * agent with no way forward — the same reason `forget` exists for exact keys.
+   */
+  it("forgets the spans of a result that was compacted away", () => {
+    const r = new Recall();
+    r.note("read_file", full);
+    r.forget([{ tool: "read_file", key: full }]);
+    expect(r.saw("read_file", slice(20, 30))).toBeUndefined();
+  });
+
+  it("says which turn the wider read was on, so the note can point at it", () => {
+    const r = new Recall();
+    r.nextTurn(); r.nextTurn();          // turn 2
+    r.note("read_file", full);
+    r.nextTurn();
+    expect(r.saw("read_file", slice(10, 5))).toBe(2);
+  });
+});
+
+describe("rangeOfKey", () => {
+  it("reads a key with no limit as the whole file", async () => {
+    const { rangeOfKey } = await import("../../src/agent/recall.js");
+    expect(rangeOfKey("path:a.ts")).toEqual({ start: 1, end: Number.MAX_SAFE_INTEGER });
+  });
+
+  it("reads limit and offset as a half-open span", async () => {
+    const { rangeOfKey } = await import("../../src/agent/recall.js");
+    expect(rangeOfKey("path:a.ts|limit=140|offset=47")).toEqual({ start: 47, end: 187 });
+  });
+});
+
+/**
+ * `shellReadOnly` was never once given something it could read.
+ *
+ * `note` passes the KEY — `command:git status|timeout=120000` — and the function splits on whitespace and
+ * looks up the first word. `command:git` is in no allowlist, so it answered false, and every shell call in
+ * the tool's history cleared everything the agent had read. Measured directly: the bare command answers
+ * true, the key answers false. Its own tests passed bare commands, which is why nothing went red.
+ */
+describe("a shell command that only looks", () => {
+  it("is recognised through the key the caller actually passes", async () => {
+    const { shellReadOnly } = await import("../../src/agent/recall.js");
+    expect(shellReadOnly("git status")).toBe(true);
+    expect(shellReadOnly("command:git status")).toBe(true);
+    expect(shellReadOnly("command:git status|timeout=120000")).toBe(true);
+  });
+
+  it("leaves the memo standing", () => {
+    const r = new Recall();
+    r.note("read_file", "path:a.ts");
+    r.note("shell", "command:git status|timeout=120000");
+    expect(r.saw("read_file", "path:a.ts")).toBe(0);
+  });
+
+  it("still clears everything for a command that could write", () => {
+    const r = new Recall();
+    r.note("read_file", "path:a.ts");
+    r.note("shell", "command:npm run build|timeout=120000");
+    expect(r.saw("read_file", "path:a.ts")).toBeUndefined();
+  });
+
+  it("reads the command out of a key, and leaves a bare command alone", async () => {
+    const { commandOfKey } = await import("../../src/agent/recall.js");
+    expect(commandOfKey("command:git status|timeout=120000")).toBe("git status");
+    expect(commandOfKey("git status")).toBe("git status");
+    // A pipe that is part of the command itself, not the timeout suffix, survives.
+    expect(commandOfKey("command:grep x a.ts | head|timeout=1000")).toBe("grep x a.ts | head");
   });
 });

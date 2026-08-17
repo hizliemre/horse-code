@@ -21,10 +21,48 @@ export const RECALLABLE = new Set(["read_file", "grep", "glob", "graph_trace", "
 /** Anything that can change the tree. `shell` is judged by what it was asked to run — see `shellReadOnly`. */
 export const INVALIDATING = new Set(["write_file", "edit_file"]);
 
+/**
+ * The command a shell call is about, out of its key (`command:git status|timeout=120000` → `git status`).
+ *
+ * `shellReadOnly` was written so that looking around does not wipe an agent's memo, and it has never once
+ * been given something it could read. `note` passes the KEY — the same string telemetry records — and every
+ * key is prefixed `command:` and suffixed `|timeout=…`. So `shellReadOnly("command:git status")` splits into
+ * a first word of `command:git`, which is in no allowlist, and answers false: every shell call in the tool's
+ * history has cleared everything the agent had read.
+ *
+ * Measured directly: `shellReadOnly("git status")` → true, `shellReadOnly("command:git status")` → false.
+ * The function's own tests pass bare commands, which is why the whole path stayed green while never running.
+ */
+export function commandOfKey(key: string): string {
+  const body = key.startsWith("command:") ? key.slice("command:".length) : key;
+  const cut = body.lastIndexOf("|timeout=");
+  return (cut === -1 ? body : body.slice(0, cut)).trim();
+}
+
 /** The path a call is about, out of its key (`path:src/a.ts|limit=40|offset=1` → `src/a.ts`). */
 export function pathOfKey(key: string): string | undefined {
   const m = /^path:([^|]+)/.exec(key);
   return m ? m[1] : undefined;
+}
+
+/**
+ * The span of a read, out of its key — `[start, end)` in lines, 1-based.
+ *
+ * A read with no `limit` is the WHOLE file, and that is the case this exists for: an agent that read a file
+ * complete and then asks for lines 24-204 of it is asking for text it already has, in a call whose key is
+ * different from the one it made. Keys were deliberately made range-aware once, because a monitor counting
+ * sixteen pages of one file as sixteen re-reads reports a loop that is not there. That was right for
+ * DISJOINT pages and wrong for CONTAINED ones.
+ *
+ * Measured on a feature run, in the first ten minutes: one brainstormer read `Order.cs` in full (15,302
+ * characters) and then re-read subsets of it eight more times. Across every agent in the run, 50,479 of
+ * 199,866 characters read — one character in four — was a range that agent already held.
+ */
+export function rangeOfKey(key: string): { start: number; end: number } {
+  const lim = /\|limit=(\d+)/.exec(key);
+  const off = /\|offset=(\d+)/.exec(key);
+  const start = off ? Number(off[1]) : 1;
+  return { start, end: lim ? start + Number(lim[1]) : Number.MAX_SAFE_INTEGER };
 }
 
 /**
@@ -46,7 +84,10 @@ const GIT_READING = new Set([
   "describe", "shortlog", "reflog", "cat-file", "worktree", "config", "tag", "cherry", "merge-base",
 ]);
 
-export function shellReadOnly(command: string): boolean {
+export function shellReadOnly(commandOrKey: string): boolean {
+  // Tolerant of a key as well as a command: a caller that gets this wrong fails SILENTLY and expensively,
+  // and one already did. Stripping here costs nothing and removes the only way to hold it wrong.
+  const command = commandOfKey(commandOrKey);
   if (/[><]|\$\(|`|>>|\btee\b|\bxargs\b/.test(command)) return false;  // …anything that can write, or hide a write
   const segments = command.split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean);
   if (!segments.length) return false;
@@ -64,6 +105,8 @@ export function shellReadOnly(command: string): boolean {
 
 export class Recall {
   private readonly seen = new Map<string, number>();
+  /** Line spans of `read_file` answers already given, per path — see rangeOfKey. */
+  private readonly spans = new Map<string, { start: number; end: number; turn: number }[]>();
   /** Paths this agent WROTE in full — their current content is its own words, one call back. */
   private readonly authored = new Map<string, number>();
   private turn = 0;
@@ -91,6 +134,14 @@ export class Recall {
     if (!RECALLABLE.has(tool) || !key) return undefined;
     const direct = this.seen.get(this.id(tool, key));
     if (direct !== undefined) return { turn: direct, authored: false };
+    // …and neither is a slice of something already answered in full. See rangeOfKey.
+    if (tool === "read_file") {
+      const p = pathOfKey(key);
+      const want = rangeOfKey(key);
+      const held = p !== undefined ? this.spans.get(p) : undefined;
+      const covering = held?.find((h) => want.start >= h.start && want.end <= h.end);
+      if (covering) return { turn: covering.turn, authored: false };
+    }
     // A read of a file this agent wrote in full, at any offset: the content is its own, in the call it made.
     const path = tool === "read_file" ? pathOfKey(key) : undefined;
     const wrote = path !== undefined ? this.authored.get(path) : undefined;
@@ -109,7 +160,7 @@ export class Recall {
       this.seen.delete(this.id(e.tool, e.key));
       // …and a written file whose result was put away is no longer held either.
       const p = pathOfKey(e.key);
-      if (p !== undefined) this.authored.delete(p);
+      if (p !== undefined) { this.authored.delete(p); this.spans.delete(p); }
     }
   }
 
@@ -124,9 +175,20 @@ export class Recall {
    */
   note(tool: string, key: string): void {
     if (INVALIDATING.has(tool)) { this.wrote(tool, key); return; }
-    if (tool === "shell") { if (!shellReadOnly(key)) this.seen.clear(); return; }
+    // The KEY, not the command — see commandOfKey for the years this cost.
+    if (tool === "shell") {
+      if (!shellReadOnly(commandOfKey(key))) { this.seen.clear(); this.spans.clear(); }
+      return;
+    }
     if (!RECALLABLE.has(tool) || !key) return;
     if (!this.seen.has(this.id(tool, key))) this.seen.set(this.id(tool, key), this.turn);
+    if (tool === "read_file") {
+      const p = pathOfKey(key);
+      if (p !== undefined) {
+        const span = { ...rangeOfKey(key), turn: this.turn };
+        this.spans.set(p, [...(this.spans.get(p) ?? []), span]);
+      }
+    }
   }
 
   /**
@@ -143,7 +205,8 @@ export class Recall {
    */
   private wrote(tool: string, key: string): void {
     const path = pathOfKey(key);
-    if (!path) { this.seen.clear(); return; }   // cannot tell what changed → the conservative answer
+    if (!path) { this.seen.clear(); this.spans.clear(); return; }   // cannot tell what changed → conservative
+    this.spans.delete(path);   // what it said before the write is not what it says now
     for (const k of [...this.seen.keys()]) {
       if (pathOfKey(k.slice(k.indexOf("\u0000") + 1)) === path) this.seen.delete(k);
     }
