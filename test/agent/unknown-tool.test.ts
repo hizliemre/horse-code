@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { unknownTool, resolveByShape, executeToolCalls } from "../../src/agent/tool-exec.js";
+import { unknownTool, resolveByShape, executeToolCalls, brokenArguments } from "../../src/agent/tool-exec.js";
 import { Telemetry, setTelemetry, NO_TELEMETRY } from "../../src/obs/telemetry.js";
 import { MemorySink } from "../../src/obs/sink.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
@@ -53,6 +53,31 @@ describe("unknown tool: the message a model can act on", () => {
     const msg = unknownTool("anything", []);
     expect(msg).toContain("unknown tool: anything");
     expect(msg).not.toContain("Did you mean");
+  });
+});
+
+/**
+ * The remainder of a stream that stopped part-way through a call's arguments.
+ *
+ * The transport turns that into a retry while nothing has streamed yet (see src/providers/omniroute.ts).
+ * When prose was already out the turn cannot be re-run, and what the model is told is all that is left.
+ *
+ * Measured live: `cx/gpt-5.6-luna-max` lost 155 seconds of a `write_file` this way and was handed the whole
+ * of "arguments are invalid JSON" — no tool name, no word on whether anything had been written, and no
+ * reason to do anything differently the second time.
+ */
+describe("what a model is told when its arguments arrive cut off", () => {
+  it("says nothing ran — an interrupted write leaves no way to know", () => {
+    expect(brokenArguments("{")).toMatch(/nothing was written/i);
+  });
+
+  it("says what to do differently, since repeating it verbatim is what failed", () => {
+    expect(brokenArguments('{"path":"spec.md","content":"# Sp')).toMatch(/smaller calls/i);
+  });
+
+  /** The tool's name comes from errResult, which prefixes every message it delivers — see tool-exec.test.ts. */
+  it("does not repeat the tool name that the delivery already carries", () => {
+    expect(brokenArguments("{")).not.toContain("write_file");
   });
 });
 

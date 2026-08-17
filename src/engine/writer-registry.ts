@@ -50,7 +50,34 @@ const askUserParams = z.object({
  * developer was not looking at. The reply was "the steps aren't in the chat?". The document an agent writes
  * is not on the user's screen; the question box is.
  */
-const POINTS_ELSEWHERE = /\b(above|below|earlier|previously|as listed|as described)\b|yukarı|aşağı|önceki|birazdan|listelenen/i;
+const POINTS_ELSEWHERE = /\b(above|below|earlier|previously|as listed|as described)\b|yukarı|aşağı|altında|önceki|birazdan|listelenen/i;
+
+/**
+ * A question that asks for answers to items it never states.
+ *
+ * The directional guard above catches "the 5 items above". It does not catch a question that points by NAME,
+ * and that is the form this failure actually takes. Measured live, twice in a row on the same turn:
+ *
+ *   "Lütfen Q1, Q2 ve Q3 için seçeneklerinizi belirtin. Örnek: Q1: B, Q2: A, Q3: C."
+ *
+ * Q1, Q2 and Q3 were never written anywhere — 1,483 output tokens, `hc.text_chars: 0`: the questions and
+ * their options existed only in the model's own reasoning. Asked to "ask the question again, more clearly",
+ * it produced the same sentence a second time. Nothing in the loop could have fixed this, because from
+ * inside the turn the question IS clear; only the tool can see that its referents never reached a screen.
+ *
+ * A reference resolves when the question itself sets the item out — `Q1: …` at the start of a line, which is
+ * how an enumerated question is written when it is written at all.
+ */
+const ITEM_REFERENCE = /(?:^|[^\w])(?:q|soru|question|madde|item)\s*\.?\s*(\d{1,2})\b/gi;
+const ITEM_STATED = /^[\s>*\-–—#]*(?:q|soru|question|madde|item)\s*\.?\s*\d{1,2}\s*[:).]/gim;
+
+/** Item numbers the question asks about but never states. */
+function danglingItems(question: string): number[] {
+  const referenced = new Set([...question.matchAll(ITEM_REFERENCE)].map((m) => Number(m[1])));
+  if (referenced.size < 2) return [];   // "see Q3" beside a written-out Q3 is one number, and resolves below
+  const stated = question.match(ITEM_STATED)?.length ?? 0;
+  return stated >= referenced.size ? [] : [...referenced].sort((a, b) => a - b);
+}
 
 /**
  * Tool for a role to ask the user a question; returns the answer in content. `normalize` (optional) rescues
@@ -102,6 +129,24 @@ export function buildAskUserTool(
             + "this turn, so there is nothing above it — and a file you wrote is not on their screen. Put "
             + "what they must do in `steps` (one action per entry), or write it out in `question`, and ask "
             + "again.",
+          isError: true,
+        };
+      }
+      /**
+       * …and the same refusal for a question that points by NAME rather than by direction.
+       *
+       * `options` does not rescue this one: a single list of choices cannot answer three questions, and the
+       * observed call passed none anyway. What the model must do instead is stated outright, because being
+       * told to "ask more clearly" produced the identical sentence a second time.
+       */
+      const dangling = danglingItems(question);
+      if (dangling.length && !steps?.length && !ctx.said?.trim()) {
+        return {
+          content: `ask_user: this asks the user to answer ${dangling.map((n) => `Q${n}`).join(", ")}, and `
+            + "none of them is on their screen — you did not write them this turn, and a file you wrote is "
+            + "not something they are looking at. This tool asks ONE question: ask them one at a time, each "
+            + "with its own `options`. If they must be answered together, write every question and its "
+            + "choices out in full inside `question`.",
           isError: true,
         };
       }

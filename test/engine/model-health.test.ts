@@ -219,7 +219,9 @@ describe("how long a bench lasts", () => {
   it("reads the difference from the reason it was given", async () => {
     const { isTransientFailure } = await import("../../src/agent/roles.js");
     for (const r of ["Overloaded", "529 overloaded_error", "the model did not answer within its deadline",
-      "socket hang up", "ECONNRESET", "503 Service Unavailable", "temporarily unavailable"]) {
+      "socket hang up", "ECONNRESET", "503 Service Unavailable", "temporarily unavailable",
+      // A connection that dropped part-way through a tool call — see src/providers/omniroute.ts.
+      "the stream ended in the middle of write_file's arguments"]) {
       expect(isTransientFailure(r), r).toBe(true);
     }
     for (const r of ["429 rate_limit_error", "quota exhausted", "insufficient credit",

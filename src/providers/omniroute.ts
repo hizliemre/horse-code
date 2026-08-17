@@ -103,6 +103,23 @@ function pathOf(args: string): string | undefined {
   return args.match(/"path"\s*:\s*"([^"\\]+)"/)?.[1];
 }
 
+/**
+ * Whether a tool call's accumulated arguments are a WHOLE argument object.
+ *
+ * They are accumulated one delta at a time, so a stream that stops early leaves a valid prefix of JSON and
+ * nothing to distinguish it from a stream that finished. Empty is not truncation: a tool with no arguments
+ * sends none, and the executor reads that as `{}`.
+ */
+function argumentsComplete(args: string): boolean {
+  if (!args.trim()) return true;
+  try {
+    JSON.parse(args);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 
 /**
  * Whether a thrown error is the CALLER's cancellation rather than a fault.
@@ -215,6 +232,7 @@ export class OmniRouteProvider implements Provider {
     const toolCalls = new Map<number, ToolCallAccumulator>();
     const lastProgress = new Map<number, number>(); // per tool-call: last arg length we emitted progress for
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
+    let sawText = false;
     let usage: { promptTokens: number; completionTokens: number; cachedTokens: number } | undefined;
     // omniroute appends the REAL billed token counts as trailing SSE comments (":
     // x-omniroute-tokens-in=48"). The stream's own usage chunk counts the full prompt the model saw —
@@ -258,6 +276,7 @@ export class OmniRouteProvider implements Provider {
         const delta = choice.delta ?? {};
 
         if (typeof delta.content === "string" && delta.content.length) {
+          sawText = true;
           yield { type: "text-delta", text: delta.content };
         }
 
@@ -291,6 +310,28 @@ export class OmniRouteProvider implements Provider {
       return;
     }
 
+    /**
+     * A tool call whose arguments never became whole JSON is a stream that stopped, not a call the model made.
+     *
+     * Measured on a live feature run: `cx/gpt-5.6-luna-max` streamed one `write_file` for 155 seconds and then
+     * the stream simply ended — no `finish_reason` in any chunk, no usage chunk, no billed comment, no text
+     * (`hc.text_chars: 0`). Half a JSON object was handed to the agent as "arguments are invalid JSON", and
+     * 155 seconds of a spec file was gone. The transport reported the turn as `ok`.
+     *
+     * Reported as a retryable error instead, this is exactly the shape the chain already recovers from: an
+     * error before anything streamed retries the SAME turn on the next model (see src/agent/loop.ts). Only
+     * while nothing streamed — once text is out the turn cannot be re-run, and telling the model its call
+     * arrived broken is the better of the two remaining moves.
+     */
+    const cut = sawText ? undefined : [...toolCalls.values()].find((a) => !argumentsComplete(a.arguments));
+    if (cut) {
+      yield {
+        type: "error",
+        message: `the stream ended in the middle of ${cut.name || "a tool call"}'s arguments`,
+        retryable: true,
+      };
+      return;
+    }
     for (const acc of toolCalls.values()) {
       const toolCall: ToolCall = { id: acc.id, name: acc.name, arguments: acc.arguments };
       yield { type: "tool-call", toolCall };

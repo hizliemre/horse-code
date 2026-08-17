@@ -220,6 +220,25 @@ function similarity(a: string, b: string): number {
   return (2 * hit) / (A.length + B.length);
 }
 
+/**
+ * What to say when a call's arguments do not parse.
+ *
+ * They reach here in one shape: the stream carrying them stopped part-way. The transport turns that into a
+ * retry while nothing has streamed yet (see src/providers/omniroute.ts); this is the remainder, where the
+ * model had already written prose and the turn cannot be re-run.
+ *
+ * "arguments are invalid JSON" said nothing about whether the call had run, and gave no reason to do
+ * anything differently the second time. Measured live: 155 seconds of a `write_file` lost this way.
+ *
+ * The tool's own name is not repeated here — errResult puts it in front of every message it delivers.
+ */
+export function brokenArguments(args: string | undefined): string {
+  const chars = args?.length ?? 0;
+  return `the arguments did not arrive complete — ${chars} characters that are not whole JSON. `
+    + "Nothing ran and nothing was written. Call it again; if the content is long, write it in several "
+    + "smaller calls rather than one.";
+}
+
 export function unknownTool(name: string, available: string[]): string {
   /**
    * Ranked by shape, not by prefix.
@@ -287,7 +306,7 @@ export async function* executeToolCalls(
     try {
       args = call.arguments ? JSON.parse(call.arguments) : {};
     } catch {
-      plans.push({ index: i, call, kind: "error", errorContent: "arguments are invalid JSON" });
+      plans.push({ index: i, call, kind: "error", errorContent: brokenArguments(call.name, call.arguments) });
       continue;
     }
     if (tool.permissionLevel === "safe") {

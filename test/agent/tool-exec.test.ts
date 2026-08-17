@@ -166,11 +166,16 @@ describe("executeToolCalls", () => {
     expect(result.map((r) => r.result.content)).toEqual(["echo:a", "echo:b"]);
   });
 
+  /**
+   * The message names the tool and says nothing ran, because a call whose arguments do not parse is a stream
+   * that stopped part-way — see brokenArguments in src/agent/tool-exec.ts.
+   */
   it("malformed JSON argument → error result (not executed)", async () => {
     const badCall = { id: "1", name: "echo", arguments: "{not json" };
     const { result } = await drainGen(executeToolCalls([badCall], deps({})));
     expect(result[0].result.isError).toBe(true);
-    expect(result[0].result.content).toContain("invalid JSON");
+    expect(result[0].result.content).toContain("echo:");
+    expect(result[0].result.content).toMatch(/not whole JSON/);
   });
 });
 

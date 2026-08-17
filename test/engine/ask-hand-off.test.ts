@@ -35,6 +35,80 @@ describe("handing the next step to the user", () => {
     const r = await tool.run({ question: "Gözleminizi yukarıdaki 5 maddeyle paylaşın." }, ctx());
     expect(r.isError).toBe(true);
   });
+});
+
+/**
+ * The same defect, pointing by NAME instead of by direction — which is the form it actually takes.
+ *
+ * Measured live, twice on one turn. The analyst asked, verbatim:
+ *
+ *   "Lütfen Q1, Q2 ve Q3 için seçeneklerinizi belirtin. Örnek: Q1: B, Q2: A, Q3: C."
+ *
+ * Q1, Q2 and Q3 appeared nowhere — 1,483 output tokens with `hc.text_chars: 0`, so the questions and their
+ * options existed only inside the model's reasoning. The user asked for the question to be put again more
+ * clearly, and got the same sentence back. From inside the turn the question IS clear; only the tool can
+ * see that what it refers to never reached a screen.
+ */
+describe("a question that points at items it never states", () => {
+  it("refuses the question that was actually asked", async () => {
+    const tool = buildAskUserTool(async () => "unreachable");
+    const r = await tool.run(
+      { question: "Lütfen Q1, Q2 ve Q3 için seçeneklerinizi belirtin. Örnek: Q1: B, Q2: A, Q3: C." },
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("Q1, Q2, Q3");
+  });
+
+  it("refuses the rephrasing too — asking for it again was what failed", async () => {
+    const tool = buildAskUserTool(async () => "unreachable");
+    const r = await tool.run(
+      { question: "Q1, Q2 ve Q3 için seçiminizi ve varsa özel kurallarınızı yazın. Örnek: Q1: A, Q2: C, Q3: A." },
+      ctx(),
+    );
+    expect(r.isError).toBe(true);
+  });
+
+  /** Being told to be clearer produced the same sentence; the way out has to be spelled out. */
+  it("says what to do instead: one question at a time, each with its own options", async () => {
+    const tool = buildAskUserTool(async () => "unreachable");
+    const r = await tool.run({ question: "Answer Q1 and Q2, e.g. Q1: A, Q2: B." }, ctx());
+    expect(r.content).toMatch(/one at a time/i);
+    expect(r.content).toContain("`options`");
+  });
+
+  it("lets through a question that sets its items out", async () => {
+    const rec = recorder();
+    const tool = buildAskUserTool(rec.read);
+    const r = await tool.run({
+      question: [
+        "İki karar var:",
+        "Q1: Tedarikçi fiyatı nasıl belirlensin? A) Katalog B) Sabit oran",
+        "Q2: Durum aynası nasıl güncellensin? A) Anlık B) Toplu",
+      ].join("\n"),
+    }, ctx());
+    expect(r.isError).toBe(false);
+    expect(rec.asked).toHaveLength(1);
+  });
+
+  /** A single named reference beside a written-out item is ordinary prose, not a dangling pointer. */
+  it("does not refuse a question that merely mentions one item", async () => {
+    const rec = recorder();
+    const tool = buildAskUserTool(rec.read);
+    const r = await tool.run({ question: "FR-016 kapsamda kalsın mı?" }, ctx());
+    expect(r.isError).toBe(false);
+  });
+
+  /** The questions being on screen is the whole test — a turn that wrote them has satisfied it. */
+  it("allows the reference when the turn wrote the questions itself", async () => {
+    const rec = recorder();
+    const tool = buildAskUserTool(rec.read);
+    const r = await tool.run(
+      { question: "Q1 ve Q2 için seçiminizi yazın." },
+      ctx("Q1: Fiyat nasıl belirlensin?\nQ2: Durum nasıl yansısın?"),
+    );
+    expect(r.isError).toBe(false);
+  });
 
   /** The reference resolves when there IS a message above it — that one is on the screen. */
   it("allows the reference when the turn said something", async () => {

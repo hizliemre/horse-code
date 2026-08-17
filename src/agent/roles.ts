@@ -18,7 +18,8 @@ import type { SkillRegistry } from "../skills/registry.js";
 export function isTransientFailure(reason: string): boolean {
   const r = reason.toLowerCase();
   if (/\b(429|rate.?limit|quota|exhaust|insufficient|billing|credit)\b/.test(r)) return false;
-  return /overload|529|50[0234]|timeout|timed out|deadline|econnreset|epipe|socket hang up|temporar|unavailable|try again/
+  // "the stream ended in the middle of …" is a dropped connection by another name — see src/providers/omniroute.ts.
+  return /overload|529|50[0234]|timeout|timed out|deadline|econnreset|epipe|socket hang up|stream ended|temporar|unavailable|try again/
     .test(r);
 }
 
