@@ -103,3 +103,63 @@ describe("a timed-out command takes everything it started with it", () => {
     }
   }, 15_000);
 });
+
+/**
+ * A `cd` that leaves this session's working directory.
+ *
+ * The system prompt already says it — "You are already in `<cwd>` … do not `cd` elsewhere" — and an
+ * instruction is advice. Measured live, verbatim, from an implementer inside its own task worktree:
+ *
+ *   cd /Users/…/parrot/src/infra.persistence.postgre && dotnet ef migrations add AddCompanyAssociation
+ *
+ * It walked into the DEVELOPER'S checkout by absolute path and generated 1.4 MB of migration there. The
+ * developer's tree was dirtied, and — the worse cost — the work landed outside the worktree the review
+ * reads, so the change would have been judged with a hole in it.
+ */
+describe("a command that walks out of the working directory", () => {
+  const CWD = "/w/.horsecode/worktrees/mon_01/tasks/company-association";
+
+  it("catches the command that was actually run", async () => {
+    const { leavesWorkdir } = await import("../../src/tools/shell.js");
+    expect(leavesWorkdir(
+      "cd /Users/x/parrot/src/infra.persistence.postgre && dotnet ef migrations add AddCompanyAssociation",
+      CWD,
+    )).toBeTruthy();
+  });
+
+  /** Driving a monorepo from a subdirectory is ordinary and must keep working. */
+  it("allows a cd DOWN into the tree", async () => {
+    const { leavesWorkdir } = await import("../../src/tools/shell.js");
+    expect(leavesWorkdir("cd toucan && npx nx build beempa", CWD)).toBeUndefined();
+    expect(leavesWorkdir("cd ./src/api && dotnet build", CWD)).toBeUndefined();
+  });
+
+  it("follows the directory across a chain, so a climb back out is caught", async () => {
+    const { leavesWorkdir } = await import("../../src/tools/shell.js");
+    expect(leavesWorkdir("cd toucan && cd ../../.. && ls", CWD)).toBeTruthy();
+    expect(leavesWorkdir("cd toucan && cd .. && ls", CWD)).toBeUndefined();  // back to the root of the tree
+  });
+
+  it("treats going home as leaving, however it is spelled", async () => {
+    const { leavesWorkdir } = await import("../../src/tools/shell.js");
+    for (const c of ["cd", "cd ~", "cd $HOME", "cd ~/parrot", "cd -"]) {
+      expect(leavesWorkdir(`${c} && ls`, CWD), c).toBeTruthy();
+    }
+  });
+
+  it("leaves a command with no cd in it alone", async () => {
+    const { leavesWorkdir } = await import("../../src/tools/shell.js");
+    expect(leavesWorkdir("dotnet build && dotnet test", CWD)).toBeUndefined();
+    expect(leavesWorkdir("grep -rn 'cd ' src", CWD)).toBeUndefined();
+  });
+
+  it("refuses it through the tool, naming where the session actually is", async () => {
+    const r = await shellTool.run(
+      { command: "cd /Users/x/parrot/src && dotnet ef migrations add X" },
+      { cwd: CWD, signal: new AbortController().signal } as never,
+    );
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain(CWD);
+    expect(r.content).toMatch(/invisible to the review/);
+  });
+});

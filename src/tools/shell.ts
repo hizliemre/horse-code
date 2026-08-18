@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolve, sep } from "node:path";
 import { z } from "zod";
 import type { Tool, ToolResult } from "../core/types.js";
 
@@ -70,6 +71,42 @@ const REWRITES = [
 /** A redirection into something that looks like a path in this project, rather than /dev/null or /tmp. */
 const REDIRECT = /(?:^|[^0-9<>&])>>?\s*(?!\/dev\/|\/tmp\/|&)([A-Za-z0-9_./-]*\.[A-Za-z0-9]+)/;
 
+/**
+ * A `cd` that leaves this session's working directory.
+ *
+ * The system prompt already says it: "You are already in `<cwd>` … do not `cd` elsewhere, and do not go
+ * looking for the repository." An instruction is advice, and advice is what a model skips. Measured live,
+ * verbatim, from an implementer working inside its own task worktree:
+ *
+ *   cd /Users/…/parrot/src/infra.persistence.postgre && dotnet ef migrations add AddCompanyAssociation
+ *
+ * It walked into the DEVELOPER'S checkout by absolute path and generated 1.4 MB of migration there. Two
+ * costs, and the second is the worse one: the developer's tree was dirtied with untracked files, and the
+ * work landed outside the worktree the review reads — so the change would have been judged with a hole in
+ * it, exactly as an unstaged file is.
+ *
+ * Refused rather than rewritten. Running the command somewhere other than where the model believes it is
+ * running is how this class of fault starts, not how it ends.
+ *
+ * A `cd` DOWN into the tree is ordinary and stays allowed: `cd toucan && npx nx build` is how a monorepo is
+ * driven. The directory is tracked across a chain, so `cd toucan && cd ../..` is caught too.
+ */
+export function leavesWorkdir(command: string, cwd: string): string | undefined {
+  const base = resolve(cwd);
+  let at = base;
+  for (const seg of command.split(/&&|\|\||;|\|/)) {
+    const m = /^\s*(?:cd|pushd)(?:\s+(.*))?$/.exec(seg.trim());
+    if (!m) continue;
+    const raw = (m[1] ?? "").trim().replace(/^["']|["']$/g, "");
+    // A bare `cd`, `cd ~` or `cd $HOME` goes home — always outside a project worktree.
+    if (!raw || raw === "~" || raw === "$HOME" || raw.startsWith("~/")) return raw || "~";
+    if (raw === "-") return "-";                     // back to wherever it was before: not knowable here
+    at = resolve(at, raw);
+    if (at !== base && !at.startsWith(base + sep)) return raw;
+  }
+  return undefined;
+}
+
 export function rewritesAFile(command: string): string | undefined {
   for (const re of REWRITES) if (re.test(command)) return re.source;
   const m = REDIRECT.exec(command);
@@ -104,6 +141,17 @@ export const shellTool: Tool = {
     if (!parsed.success) {
       return Promise.resolve({
         content: `shell: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        isError: true,
+      });
+    }
+    const away = leavesWorkdir(parsed.data.command, ctx.cwd);
+    if (away !== undefined) {
+      return Promise.resolve({
+        content: `shell: \`cd ${away}\` leaves this session's working directory. You are in \`${ctx.cwd}\` and `
+          + `everything this task does belongs here — another checkout of the same repository is someone `
+          + `else's working copy, and anything written there is invisible to the review of THIS change and `
+          + `left behind as clutter. Run the command from here (a \`cd\` into a subdirectory is fine), or `
+          + `point the tool at a path under this directory.`,
         isError: true,
       });
     }
