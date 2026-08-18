@@ -81,3 +81,51 @@ describe("withdrawing a broken MCP tool", () => {
     expect(calls).toBe(2);                      // …so it is still tried
   });
 });
+
+/**
+ * …and it must stop being OFFERED, which is where the earlier fix stopped short.
+ *
+ * `Tool.broken` was documented as read "where tools are offered, so a broken one stops being handed to fresh
+ * agents" — and only `find_tool` read it, which covers the deferred pool and not the tools already on the
+ * list. Measured on one run: the first caller broke it, and it was then offered to seventeen more agents who
+ * called it twenty-eight more times. Every one was answered without touching the server, and every one still
+ * cost a whole model turn.
+ */
+describe("a withdrawn tool is not offered again", () => {
+  it("disappears from the schemas the model is sent", async () => {
+    const t = mcpToolAdapter(brokenConn({ calls: 0 }), listProjects);
+    const r = new ToolRegistry();
+    r.register(t);
+
+    expect(r.schemas().map((s) => s.name)).toContain("mcp__angular-cli__list_projects");
+    await t.run({}, ctx());
+    expect(r.schemas().map((s) => s.name)).not.toContain("mcp__angular-cli__list_projects");
+  });
+
+  /**
+   * The cache is keyed on a version the registry bumps itself, and a tool withdraws from inside its own
+   * closure — so without counting the withdrawals the stale list would be served for the rest of the run.
+   */
+  it("is not served from the cache built before it broke", async () => {
+    const t = mcpToolAdapter(brokenConn({ calls: 0 }), listProjects);
+    const r = new ToolRegistry();
+    r.register(t);
+    const before = r.schemas();
+    expect(r.schemas()).toBe(before);            // unchanged → same array, no rebuild
+    await t.run({}, ctx());
+    expect(r.schemas()).not.toBe(before);
+  });
+
+  it("leaves every healthy tool where it was", async () => {
+    const t = mcpToolAdapter(brokenConn({ calls: 0 }), listProjects);
+    const healthy = mcpToolAdapter(
+      { name: "angular-cli", async callTool() { return { content: "ok", isError: false }; } } as never,
+      { name: "search_documentation", description: "d", inputSchema: {} } as never,
+    );
+    const r = new ToolRegistry();
+    r.register(t);
+    r.register(healthy);
+    await t.run({}, ctx());
+    expect(r.schemas().map((s) => s.name)).toEqual(["mcp__angular-cli__search_documentation"]);
+  });
+});

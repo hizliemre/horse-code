@@ -15,7 +15,7 @@ export class ToolRegistry {
   private deferred = new Set<string>();
   /** Bumped by anything that changes what `schemas()` would return, so the derivation can be cached. */
   private version = 0;
-  private cached?: { version: number; schemas: ChatRequest["tools"] };
+  private cached?: { version: number; withdrawn: number; schemas: ChatRequest["tools"] };
 
   register(tool: Tool): void {
     this.tools.set(tool.name, tool);
@@ -62,18 +62,32 @@ export class ToolRegistry {
     return [...this.tools.values()];
   }
 
-  /** Tool schemas to send to the LLM: zod parameters → JSON Schema (zod 4 native). Withheld ones are omitted. */
+  /**
+   * Tool schemas to send to the LLM: zod parameters → JSON Schema (zod 4 native). Withheld ones are omitted.
+   *
+   * …and so is a tool that has withdrawn itself. `Tool.broken` was documented as being read "where tools are
+   * OFFERED, so a broken one stops being handed to fresh agents" — and only `find_tool` ever read it, which
+   * covers the deferred tools and not the ones already on the list.
+   *
+   * Measured on one run: `mcp__angular-cli__list_projects` answered its first caller with a reply that failed
+   * its own declared output schema and withdrew itself. It was then offered to seventeen more agents, who
+   * called it twenty-eight more times. Every one of those was answered instantly, without touching the
+   * server — and still cost a whole model turn to learn what the run already knew.
+   */
   schemas(): ChatRequest["tools"] {
-    if (this.cached?.version === this.version) return this.cached.schemas;
+    // A tool withdraws itself from inside its own closure, which does not touch `version` — so the cache is
+    // keyed on how many are withdrawn as well. Counting a few dozen booleans is cheaper than rebuilding.
+    const withdrawn = this.list().reduce((n, t) => n + (t.broken === undefined ? 0 : 1), 0);
+    if (this.cached?.version === this.version && this.cached.withdrawn === withdrawn) return this.cached.schemas;
     const schemas = this.list()
-      .filter((t) => !this.deferred.has(t.name))
+      .filter((t) => !this.deferred.has(t.name) && t.broken === undefined)
       .map((t) => ({
         name: t.name,
         description: t.description,
         // MCP tools already carry a JSON Schema; everyone else derives it from their zod parameters.
         parameters: t.rawSchema ?? z.toJSONSchema(t.parameters, { target: "draft-7" }),
       }));
-    this.cached = { version: this.version, schemas };
+    this.cached = { version: this.version, withdrawn, schemas };
     return schemas;
   }
 }
