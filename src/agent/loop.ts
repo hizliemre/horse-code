@@ -8,6 +8,7 @@ import type { PermissionEngine, PermissionRequest } from "../permission/engine.j
 import type { ToolRegistry } from "../tools/registry.js";
 import { executeToolCalls, capToolResult } from "./tool-exec.js";
 import { compact } from "./compact.js";
+import { telemetry } from "../obs/telemetry.js";
 import { shieldToolOutput } from "../core/prompt-guard.js";
 import { elideInPlace } from "./elide.js";
 
@@ -95,6 +96,14 @@ export function workingDirectoryNote(cwd: string): string {
   return `\n\n# Working directory\n\nYou are already in \`${cwd}\`. Every relative path resolves from here, `
     + `and every tool runs here — do not \`cd\` elsewhere, and do not go looking for the repository.`;
 }
+
+/**
+ * How many of a compaction's forgotten calls are named in the record.
+ *
+ * Enough to see WHICH document was put away, which is the whole question; not so many that one event becomes
+ * a copy of the conversation. A compaction that forgets more than this still reports the true count.
+ */
+export const COMPACT_KEYS_LOGGED = 24;
 
 /**
  * Agent ids, counted rather than random.
@@ -198,6 +207,25 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
           + `this conversation workable — anything still needed can be fetched again. This continues quietly `
           + `from here.`, false);
       }
+      /**
+       * WHAT was put away, not just how much.
+       *
+       * Compaction is the suspect behind two costs measured on one run, and neither could be pinned on it
+       * from the record. A planner re-read `spec.md` window after window — right, if its earlier reads had
+       * been put away, and waste if they had not. And `edit_file` failed with "no line of your oldString is
+       * in the file" 0 times in its first 132 edits and 4 times in the last 54, which is what editing from a
+       * half-remembered file looks like — but proving it needs the elided key beside the failing path.
+       *
+       * Named, not counted: `hc.compact.freed: 46000` cannot answer either question.
+       */
+      telemetry().event("memory.compacted", {
+        "hc.compact.freed": packed.freed,
+        "hc.compact.count": packed.forgotten.length,
+        "hc.compact.keys": packed.forgotten.slice(0, COMPACT_KEYS_LOGGED)
+          .map((e) => `${e.tool}:${e.key}`).join(" · "),
+        ...(opts.role ? { "hc.role": opts.role } : {}),
+        "hc.agent": agentId,
+      });
     }
 
     let assistantText = "";

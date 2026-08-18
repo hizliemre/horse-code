@@ -39,3 +39,44 @@ describe("the compaction notice", () => {
     expect(decl).toBeGreaterThan(loopStart);
   });
 });
+
+/**
+ * …and WHAT it put away, which the notice's headline number cannot say.
+ *
+ * Compaction is the suspect behind two costs measured on one run, and neither could be pinned on it from the
+ * record. A planner re-read `spec.md` window after window — correct if its earlier reads had been put away,
+ * waste if they had not. And `edit_file` failed with "no line of your oldString is in the file" 0 times in
+ * its first 132 edits and 4 times in the last 54, which is what editing from a half-remembered file looks
+ * like — but proving it needs the elided key beside the failing path.
+ *
+ * `hc.compact.freed: 46000` answers neither question. The keys do.
+ */
+describe("what a compaction records", () => {
+  const src = readFileSync("src/agent/loop.ts", "utf8");
+
+  it("names the calls it forgot, not only how many", () => {
+    expect(src).toContain('telemetry().event("memory.compacted"');
+    expect(src).toContain('"hc.compact.keys"');
+    expect(src).toContain('"hc.compact.count": packed.forgotten.length');
+  });
+
+  it("is attributed, so a re-read can be matched to the agent that lost it", () => {
+    const ev = src.slice(src.indexOf('"memory.compacted"'));
+    expect(ev.slice(0, 600)).toContain('"hc.agent": agentId');
+  });
+
+  /** A run that forgets hundreds of calls must not turn one event into a copy of the conversation. */
+  it("caps the list, while still reporting the true count", async () => {
+    const { COMPACT_KEYS_LOGGED } = await import("../../src/agent/loop.js");
+    expect(COMPACT_KEYS_LOGGED).toBeGreaterThan(0);
+    expect(COMPACT_KEYS_LOGGED).toBeLessThanOrEqual(50);
+    expect(src).toContain("packed.forgotten.slice(0, COMPACT_KEYS_LOGGED)");
+  });
+
+  it("reports it beside the notice, which is emitted at most once", () => {
+    // The event is unconditional; the sentence to the user is the thing behind the latch.
+    const latch = src.indexOf("if (!saidCompaction) {");
+    const event = src.indexOf('telemetry().event("memory.compacted"');
+    expect(event).toBeGreaterThan(latch);
+  });
+});
