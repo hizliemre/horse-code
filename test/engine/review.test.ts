@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1331,5 +1332,41 @@ describe("a code review judges one task, not the whole plan", () => {
     await runTeam(rdeps(spy), "spec", dir, "spec.md");
     const sent = rec.map((r) => r.messages.map((m) => m.content).join("\n")).join("\n");
     expect(sent).not.toMatch(/not your subject/i);
+  });
+});
+
+/**
+ * A round's blocking findings, in the record — the one thing that says whether a review loop is working.
+ *
+ * A watcher sees the verdicts and not the reasons, so three rounds of "8 revise, 0 approve" read identically
+ * whether the lenses raised NEW objections each time, which is a document with real problems, or repeated
+ * the same ones, which is a loop that will not end. Measured on a plan review that went 3/16 → 4/11 → 3/8 →
+ * 0/8 → 0/8 approvals: from the trace alone the question could only be guessed at.
+ */
+describe("what a review round leaves in the record", () => {
+  const src = readFileSync("src/engine/review.ts", "utf8");
+
+  it("records the round's blocking signatures, not just how many", () => {
+    expect(src).toContain('telemetry().event("decision.review_round"');
+    expect(src).toContain('"hc.review.signatures"');
+    expect(src).toContain('"hc.review.blocking": sig.size');
+  });
+
+  it("says how many of them are the SAME as last round — that is the loop, measured", () => {
+    expect(src).toContain('"hc.review.repeated": [...sig].filter((x) => prevSignatures.has(x)).length');
+    expect(src).toContain('"hc.review.stuck": stuck');
+  });
+
+  /** Compared against the PREVIOUS round, so the event has to be emitted before the set is replaced. */
+  it("is emitted before prevSignatures is overwritten", () => {
+    const event = src.indexOf('"decision.review_round"');
+    const overwrite = src.indexOf("prevSignatures = sig;");
+    expect(event).toBeGreaterThan(0);
+    expect(overwrite).toBeGreaterThan(event);
+  });
+
+  it("caps what it copies, so a long review does not become a log entry", () => {
+    expect(src).toContain("REVIEW_SIGNATURES_LOGGED");
+    expect(src).toContain("SIGNATURE_CHARS");
   });
 });

@@ -685,6 +685,15 @@ export async function runJudge(
 /** A strong TEAM majority (this share of "approve") passes without convening the council — one lens's nitpick
  *  shouldn't force a full council vote, which matters with a large (15-lens) team. */
 const TEAM_CONSENSUS = 0.7;
+
+/**
+ * How much of a round's blocking findings reaches the record.
+ *
+ * Enough to tell one round's objections from the next one's, which is the whole question; short of copying
+ * the review into a log. A round with more still reports the true counts beside the sample.
+ */
+const REVIEW_SIGNATURES_LOGGED = 8;
+const SIGNATURE_CHARS = 120;
 /** The council's decisive share: with 5 members this is a 4/5 supermajority. ≥ this share of one side decides;
  *  anything short of it (a split) escalates to the judge, the final link. */
 const COUNCIL_SUPERMAJORITY = 0.8;
@@ -816,6 +825,27 @@ export async function runReviewLoop(deps: ReviewDeps, o: ReviewLoopOpts): Promis
       // still progress, so the loop continues. Detected here but acted on AFTER the council has had its say.
       const sig = blockingSignatures(assessments);
       const stuck = round > 0 && sig.size > 0 && [...sig].every((x) => prevSignatures.has(x));
+      /**
+       * The round's blocking findings, in the record — the one thing that says whether a loop is working.
+       *
+       * A watcher can see the verdicts (`submit: revise`) and not the reasons, so three rounds of "8 revise,
+       * 0 approve" read identically whether the lenses were raising NEW objections each time, which is a
+       * document with real problems, or repeating the same ones, which is a loop that will not end. Measured
+       * on a plan review that went 3/16 → 4/11 → 3/8 → 0/8 → 0/8 approvals: the question could not be
+       * answered from the trace, only guessed at.
+       *
+       * `stuck` is this comparison already made; recording the signatures lets it be checked from outside,
+       * and lets a run that ended badly be read afterwards.
+       */
+      telemetry().event("decision.review_round", {
+        "hc.stage": stage,
+        "hc.review.round": round,
+        "hc.review.blocking": sig.size,
+        "hc.review.repeated": [...sig].filter((x) => prevSignatures.has(x)).length,
+        "hc.review.stuck": stuck,
+        "hc.review.signatures": [...sig].slice(0, REVIEW_SIGNATURES_LOGGED)
+          .map((s) => (s.length > SIGNATURE_CHARS ? `${s.slice(0, SIGNATURE_CHARS)}…` : s)).join(" · "),
+      });
       prevSignatures = sig;
 
       // The defects a revision actually has to fix, per the SAME tiered bar the round is judged by: round 1
