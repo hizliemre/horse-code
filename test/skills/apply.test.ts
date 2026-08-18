@@ -98,3 +98,39 @@ describe("a skill asked for with an empty file", () => {
     expect(res.content).not.toContain("SKILL.md"); // the skill itself is not a supporting document
   });
 });
+
+/**
+ * "no such skill" is only useful beside "these exist".
+ *
+ * Measured live: a plan lens called `skill(name: "review-plan")`, a name it had invented, and the entire
+ * reply was `skill not found: review-plan`. That is the message `unknown tool: <name>` used to be before it
+ * started naming the tools that do exist — and that one cost seven turns and a phase's whole output once.
+ */
+describe("a skill that does not exist", () => {
+  const SKILLS = ["angular-developer", "apple-design", "pick-ui-library"];
+
+  it("lists what this project has", async () => {
+    const { noSuchSkill } = await import("../../src/skills/apply.js");
+    const msg = noSuchSkill("review-plan", SKILLS);
+    for (const s of SKILLS) expect(msg).toContain(s);
+  });
+
+  it("tells it not to guess another name", async () => {
+    const { noSuchSkill } = await import("../../src/skills/apply.js");
+    expect(noSuchSkill("review-plan", SKILLS)).toMatch(/do not guess/i);
+  });
+
+  /** A punctuation variant of a real name is the mistake models actually make — see resolveByShape. */
+  it("resolves a name that differs only in punctuation", async () => {
+    const { noSuchSkill } = await import("../../src/skills/apply.js");
+    expect(noSuchSkill("angular_developer", SKILLS)).toContain("did you mean `angular-developer`");
+    expect(noSuchSkill("Apple Design", SKILLS)).toContain("did you mean `apple-design`");
+  });
+
+  it("says so plainly when the project has no skills at all", async () => {
+    const { noSuchSkill } = await import("../../src/skills/apply.js");
+    const msg = noSuchSkill("anything", []);
+    expect(msg).toMatch(/no skills installed/i);
+    expect(msg).not.toMatch(/Available:/);
+  });
+});

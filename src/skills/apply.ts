@@ -70,6 +70,26 @@ export const MAX_SKILL_DOC_CHARS = 30_000;
  * while its reference tree can run to megabytes. Inlining the tree would cost far more on every single call
  * than the guidance is worth on the rare call that needs it.
  */
+/**
+ * "no such skill" is only useful beside "these exist".
+ *
+ * The whole message was `skill not found: review-plan` — a lens reaching for a skill by a name it had made
+ * up, and told nothing it could act on. This is the same message `unknown tool: <name>` used to be, and the
+ * same cure: name what IS there. There are ten-odd skills in a project, so they all fit; a punctuation
+ * variant of a real name is resolved rather than refused, which is the mistake models actually make.
+ */
+export function noSuchSkill(name: string, available: string[]): string {
+  const shape = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const same = available.filter((s) => shape(s) === shape(name));
+  if (same.length === 1) {
+    return `skill not found: ${name} — did you mean \`${same[0]}\`? Call it with that exact name.`;
+  }
+  return available.length
+    ? `skill not found: ${name}. Available: ${available.join(", ")}. Use one of these exactly, or carry on `
+      + `without a skill — do not guess another name.`
+    : `skill not found: ${name}. This project has no skills installed, so carry on without one.`;
+}
+
 export function buildSkillTool(registry: SkillRegistry): Tool {
   return {
     name: "skill",
@@ -86,7 +106,7 @@ export function buildSkillTool(registry: SkillRegistry): Tool {
       }
       const { name, file } = parsed.data;
       const skill = registry.get(name);
-      if (!skill) return { content: `skill not found: ${name}`, isError: true };
+      if (!skill) return { content: noSuchSkill(name, registry.list().map((s) => s.name)), isError: true };
       /**
        * An empty `file` means "the skill", not "a document with no name".
        *
