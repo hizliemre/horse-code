@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitTool, refuse } from "../../src/tools/git.js";
@@ -77,5 +78,54 @@ describe("git: what it refuses, and why", () => {
     const res = await gitTool.run({ args: ["log", "--grep=; touch /tmp/pwned"] }, ctx() as never);
     expect(existsSync("/tmp/pwned")).toBe(false);
     expect(res.content).toBeDefined();
+  });
+});
+
+/**
+ * Git uses exit code 1 as an ANSWER for some queries, and reporting it as a failure hands an agent the
+ * answer while telling it the question could not be answered.
+ *
+ * Measured live: a project-manager asked twice in ten seconds; both replies were marked errors, each
+ * carrying the diff it had asked for. The same shape as prettier's exit 1 — a working tool saying "yes".
+ */
+describe("an exit code that is an answer", () => {
+  it("knows which queries answer with 1", async () => {
+    const { answeredWithOne } = await import("../../src/tools/git.js");
+    expect(answeredWithOne(["diff", "--exit-code"], 1)).toBe(true);
+    expect(answeredWithOne(["merge-base", "--is-ancestor", "a", "b"], 1)).toBe(true);
+    // …and which do not.
+    expect(answeredWithOne(["status"], 1)).toBe(false);
+    expect(answeredWithOne(["log"], 1)).toBe(false);
+  });
+
+  /** 128 and up are git's own faults — a bad object, not a repository — and never an answer. */
+  it("never reads a fault as an answer", async () => {
+    const { answeredWithOne } = await import("../../src/tools/git.js");
+    expect(answeredWithOne(["diff", "--exit-code"], 128)).toBe(false);
+    expect(answeredWithOne(["merge-base", "a", "b"], 129)).toBe(false);
+  });
+
+  /** With `--quiet` git prints nothing at all, so the answer has to be said in words. */
+  it("says what 1 meant when git printed nothing", async () => {
+    const { answerOfOne } = await import("../../src/tools/git.js");
+    expect(answerOfOne(["diff", "--quiet"])).toMatch(/ARE differences/);
+    expect(answerOfOne(["merge-base", "--is-ancestor", "a", "b"])).toMatch(/not an ancestor/);
+    expect(answerOfOne(["merge-base", "a", "b"])).toMatch(/no common ancestor/i);
+  });
+
+  it("reports a real diff as a result, not as a failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-git-exit-"));
+    try {
+      const run = (cmd: string) => execSync(cmd, { cwd: dir, stdio: "pipe" });
+      run("git init -q");
+      run("git config user.email t@t.t"); run("git config user.name T");
+      await writeFile(join(dir, "a.txt"), "one\n");
+      run("git add a.txt"); run("git commit -qm first");
+      await writeFile(join(dir, "a.txt"), "two\n");
+      const r = await gitTool.run({ args: ["diff", "--exit-code"] },
+        { cwd: dir, signal: new AbortController().signal } as never);
+      expect(r.isError).toBe(false);
+      expect(r.content).toContain("-one");
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

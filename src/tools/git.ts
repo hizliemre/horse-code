@@ -66,6 +66,36 @@ export const GIT_TIMEOUT_MS = 30_000;
 /** A push crosses the network; the local ceiling would fail a large first push on a slow link. */
 export const GIT_PUSH_TIMEOUT_MS = 120_000;
 
+/**
+ * Queries where git uses exit code 1 as an ANSWER rather than as a failure.
+ *
+ * `git diff --exit-code` returns 1 to say "there ARE differences"; `merge-base --is-ancestor` returns 1 to
+ * say "no it is not"; plain `merge-base` returns 1 when the commits share no base. Reporting those as
+ * failures tells an agent its question could not be answered while handing it the answer.
+ *
+ * Measured live: a project-manager asked twice in ten seconds and both replies were marked errors, each
+ * carrying the diff it had asked for. The same shape as prettier's exit 1 — a working tool saying "yes".
+ *
+ * 128 and above are never answers: those are git's own faults (bad object, not a repository).
+ */
+const ANSWERS_WITH_ONE = new Set(["diff", "diff-index", "diff-tree", "diff-files", "merge-base"]);
+
+export function answeredWithOne(args: string[], code: number): boolean {
+  return code === 1 && ANSWERS_WITH_ONE.has(args[0] ?? "");
+}
+
+/** What exit 1 MEANS for this query, for the case where git printed nothing at all (`--quiet`). */
+export function answerOfOne(args: string[]): string {
+  const verb = args[0] ?? "";
+  if (verb === "merge-base") {
+    return args.includes("--is-ancestor")
+      ? "No — the first commit is not an ancestor of the second. (git exit code 1, which is the answer here.)"
+      : "No merge base: these commits share no common ancestor. (git exit code 1, which is the answer here.)";
+  }
+  return "There ARE differences — the comparison is not empty. Nothing failed; `--quiet`/`--exit-code` "
+    + "reports this as exit code 1. Re-run without it to see them.";
+}
+
 /** Why this invocation is not allowed, or undefined when it is. */
 export function refuse(args: string[]): string | undefined {
   const bad = args.find((a) => REFUSED_ARG.test(a));
@@ -118,16 +148,21 @@ export const gitTool: Tool = {
         env: { ...process.env, GIT_PAGER: "cat", PAGER: "cat", GIT_TERMINAL_PROMPT: "0" },
       }, (err, stdout, stderr) => {
         const text = `${stdout}${stderr}`.trim();
-        resolve({ code: err ? 1 : 0, text });
+        // The REAL code, not a boolean: 1 is an answer for some of these queries, 128 never is.
+        resolve({ code: (err as { code?: number } | null)?.code ?? (err ? 1 : 0), text });
       });
       ctx.signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
     });
 
-    if (!out.text) return { content: out.code === 0 ? "(no output)" : "git failed with no output.", isError: out.code !== 0 };
+    const failed = out.code !== 0 && !answeredWithOne(args, out.code);
+    if (!out.text) {
+      if (!failed && out.code === 1) return { content: answerOfOne(args), isError: false };
+      return { content: out.code === 0 ? "(no output)" : "git failed with no output.", isError: failed };
+    }
     const clipped = out.text.length > MAX_GIT_OUTPUT
       ? `${truncateSafe(out.text, MAX_GIT_OUTPUT)}\n…[truncated — narrow the range or add --stat]`
       : out.text;
-    return { content: clipped, isError: out.code !== 0 };
+    return { content: clipped, isError: failed };
   },
 };
 
