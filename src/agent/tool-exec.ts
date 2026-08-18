@@ -28,6 +28,14 @@ export interface ToolExecDeps {
   recall?: Recall; // what this agent has already been shown → an identical call is answered with a pointer
   said?: string; // the prose of the turn these calls came with → `ask_user` checks its references against it
   role?: string; // who is calling → recorded on tool events so a repeat can be attributed to an agent
+  /**
+   * …and WHICH agent, since a role is run many times over.
+   *
+   * One id per memo. Without it, four reads of one path under the role `planner` cannot be told apart as one
+   * agent repeating itself — waste the memo should have caught — from four agents each asking once, which is
+   * correct. Two separate diagnoses stopped at exactly that question.
+   */
+  agentId?: string;
   model?: string; // …and what is serving it → shown beside the role when a tool stops to ask the user
 }
 
@@ -152,7 +160,8 @@ async function runTool(
   if (earlier !== undefined) {
     tel.event("tool.recalled", { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key,
       "hc.recall.authored": earlier.authored, ...(earlier.settled ? { "hc.recall.settled": true } : {}),
-      ...(deps.role ? { "hc.role": deps.role } : {}) });
+      ...(deps.role ? { "hc.role": deps.role } : {}),
+      ...(deps.agentId ? { "hc.agent": deps.agentId } : {}) });
     deps.onActivity?.({ tool: tool.name, target: subject, lines: 0,
       summary: earlier.settled ? `refused on turn ${earlier.turn} — unchanged`
         : earlier.authored ? "you wrote this — it is above" : `already answered on turn ${earlier.turn}` });
@@ -178,6 +187,7 @@ async function runTool(
     "hc.result_chars": (result.content ?? "").length,
     "hc.status": result.isError ? "error" : "ok",
     ...(deps.role ? { "hc.role": deps.role } : {}),
+    ...(deps.agentId ? { "hc.agent": deps.agentId } : {}),
     ...(result.isError ? { "hc.error": errorExcerpt(result.content) } : {}),
   });
   if (!reported) {
@@ -319,7 +329,7 @@ export async function* executeToolCalls(
     try {
       args = call.arguments ? JSON.parse(call.arguments) : {};
     } catch {
-      plans.push({ index: i, call, kind: "error", errorContent: brokenArguments(call.name, call.arguments) });
+      plans.push({ index: i, call, kind: "error", errorContent: brokenArguments(call.arguments) });
       continue;
     }
     if (tool.permissionLevel === "safe") {
@@ -363,6 +373,10 @@ export async function* executeToolCalls(
         "hc.tool": p.call.name,
         "hc.outcome": p.kind === "error" ? "unknown-or-invalid" : "denied",
         "hc.error": result.content.slice(0, 200),
+        // Attributed like every other result. A call that never ran is the one most worth attributing:
+        // a role inventing a tool name is exactly what a reader of the log is trying to pin down.
+        ...(deps.role ? { "hc.role": deps.role } : {}),
+        ...(deps.agentId ? { "hc.agent": deps.agentId } : {}),
       });
       yield { type: "tool.request", toolCall: p.call };
       // Omitted when empty: a key that identifies nothing cannot be forgotten by, and an absent field

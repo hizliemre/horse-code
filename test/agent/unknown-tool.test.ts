@@ -71,6 +71,15 @@ describe("what a model is told when its arguments arrive cut off", () => {
     expect(brokenArguments("{")).toMatch(/nothing was written/i);
   });
 
+  /**
+   * The count is of the ARGUMENTS. Written with the tool name in that position instead, the message reported
+   * the length of the word `write_file` as the size of a truncated document — and nothing failed at runtime,
+   * because both are strings. `npm run typecheck` had the answer; neither `tsup` nor `vitest` runs it.
+   */
+  it("counts the characters that arrived, not something else the call carries", () => {
+    expect(brokenArguments('{"path":"a.ts"}')).toContain("15 characters");
+  });
+
   it("says what to do differently, since repeating it verbatim is what failed", () => {
     expect(brokenArguments('{"path":"spec.md","content":"# Sp')).toMatch(/smaller calls/i);
   });
@@ -151,5 +160,44 @@ describe("a name that differs only in punctuation is the same name", () => {
     } as never);
     for await (const _ of gen) { /* drain */ }
     expect(ran).toBe(true);
+  });
+});
+
+/**
+ * Which AGENT called it, not just which role.
+ *
+ * A role is run many times over, so `read_file` on one path four times under `planner` reads the same in the
+ * log whether it was one agent repeating itself — waste the memo should have caught, and a defect — or four
+ * agents each asking once, which is correct. Both were live possibilities in the same run and nothing
+ * recorded could separate them; two diagnoses stopped at exactly that question before this existed.
+ */
+describe("who made the call", () => {
+  it("stamps the calling agent on the record", async () => {
+    const sink = new MemorySink();
+    setTelemetry(new Telemetry(sink));
+    try {
+      const gen = executeToolCalls([{ id: "1", name: "nope", arguments: "{}" }], {
+        tools: new ToolRegistry(),
+        permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
+        approve: async () => true,
+        cwd: ".",
+        signal: new AbortController().signal,
+        role: "planner",
+        agentId: "a7",
+      } as never);
+      for await (const _ of gen) { /* drain */ }
+      const e = sink.records.find((r) => r.name === "tool.result");
+      expect(e!.attributes["hc.role"]).toBe("planner");
+      expect(e!.attributes["hc.agent"]).toBe("a7");
+    } finally { setTelemetry(NO_TELEMETRY); }
+  });
+
+  /** Counted, so a replayed trace gives the same ids and they sort into the order the agents started. */
+  it("names agents in the order they start", async () => {
+    const { nextAgentId } = await import("../../src/agent/loop.js");
+    const a = nextAgentId();
+    const b = nextAgentId();
+    expect(a).toMatch(/^a\d+$/);
+    expect(Number(b.slice(1))).toBe(Number(a.slice(1)) + 1);
   });
 });

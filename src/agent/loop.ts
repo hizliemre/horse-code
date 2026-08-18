@@ -96,12 +96,35 @@ export function workingDirectoryNote(cwd: string): string {
     + `and every tool runs here — do not \`cd\` elsewhere, and do not go looking for the repository.`;
 }
 
+/**
+ * Agent ids, counted rather than random.
+ *
+ * A counter is reproducible across a replayed trace and sorts into the order the agents started, which is
+ * what a reader of the log wants; a random id gives neither and reads no better.
+ */
+let agentSeq = 0;
+export function nextAgentId(): string {
+  agentSeq += 1;
+  return `a${agentSeq}`;
+}
+
 export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<AgentEvent, void, void> {
   const working: Message[] = [
     { role: "system", content: opts.systemPrompt + (opts.cwd ? workingDirectoryNote(opts.cwd) : "") },
     ...opts.messages,
   ];
   const recall = new Recall();
+  /**
+   * This agent's own name in the record — one per run of this function, which is one per memo.
+   *
+   * The role is not enough, and twice now a diagnosis has stopped here. `read_file` on one path four times
+   * under the role `planner` reads the same in the log whether it was ONE agent repeating itself, which the
+   * memo should have caught and is a defect, or four agents each asking once, which is correct and is not.
+   * Both readings were live possibilities in the same run, and nothing recorded could separate them.
+   *
+   * The memo is the boundary that matters, so the id is minted where the memo is.
+   */
+  const agentId = nextAgentId();
   // The blind-overwrite guard is only wired for agents whose writes are NOT individually committed.
   //
   // Its premise is that an overwrite destroys content irrecoverably. That is true for the merge-conflict
@@ -293,6 +316,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
 
     const results = yield* executeToolCalls(toolCalls, {
       ...(opts.role ? { role: opts.role } : {}),
+      agentId,
       // The model that actually served this turn — not opts.model, which is only the head of the chain.
       ...(chain[chainIdx] ? { model: chain[chainIdx] as string } : {}),
       tools: opts.tools,
