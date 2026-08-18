@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import { readTraceSync } from "../engine/trace.js";
+import { walkFiles } from "./walk.js";
 
 const params = z.object({
   path: z.string(),
@@ -47,6 +48,41 @@ function traceHint(cwd: string, path: string): string {
  * whole size again on every turn that follows. An agent that needs more asks for the next window.
  */
 export const MAX_READ_CHARS = 30_000;
+
+/**
+ * How many same-named files are worth naming. Beyond a handful the name is not the answer, and a long list
+ * of candidates is a worse reply than "it is not there".
+ */
+export const MAX_SAME_NAME = 3;
+
+/**
+ * The right file name in the wrong directory, named rather than left to a second guess.
+ *
+ * Measured over four runs: 27 of 1,127 reads asked for a file that is not there, and NINE of them had the
+ * basename exactly right — `src/domain/Companies/Company.cs` for `src/domain/Company.cs`,
+ * `src/postgre/BeempaDbContext.cs` for `src/infra.persistence.postgre/BeempaDbContext.cs`, a contract asked
+ * for one directory above the `contracts/` it lives in. Each cost a turn to be told only that nothing was
+ * there — the same shape as `unknown tool: <name>` before it started naming the tools that do exist.
+ *
+ * Named, not opened. A path the agent did not ask for may be a file it does not mean, and the earlier lesson
+ * from tool names holds: offer the candidates, do not pick one on the model's behalf.
+ */
+export async function sameNameElsewhere(cwd: string, asked: string): Promise<string> {
+  const base = asked.split("/").pop() ?? "";
+  if (!base || base.includes("*")) return "";
+  const hits: string[] = [];
+  try {
+    for await (const abs of walkFiles(cwd)) {
+      if (abs.split("/").pop() !== base) continue;
+      hits.push(abs.startsWith(`${cwd}/`) ? abs.slice(cwd.length + 1) : abs);
+      if (hits.length > MAX_SAME_NAME) return "";   // too many to be an answer
+    }
+  } catch { return ""; }
+  if (!hits.length) return "";
+  return hits.length === 1
+    ? ` There is one file named \`${base}\` in this project, at \`${hits[0]}\` — read that if it is what you meant.`
+    : ` Files named \`${base}\` in this project: ${hits.map((h) => `\`${h}\``).join(", ")}.`;
+}
 
 /**
  * Prefixes each line with its 1-based number, `cat -n` style.
@@ -128,10 +164,9 @@ export const readFileTool: Tool = {
     try {
       raw = await readFile(abs, "utf8");
     } catch (e) {
-      return {
-        content: `read_file error: ${e instanceof Error ? e.message : String(e)}`,
-        isError: true,
-      };
+      const said = e instanceof Error ? e.message : String(e);
+      const elsewhere = said.includes("ENOENT") ? await sameNameElsewhere(ctx.cwd, args.path) : "";
+      return { content: `read_file error: ${said}${elsewhere}`, isError: true };
     }
     const all = raw.split("\n");
     // A small file, requested whole: numbered, no footer — there is nothing to page.

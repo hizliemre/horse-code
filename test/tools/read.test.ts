@@ -139,3 +139,54 @@ describe("what a truncated read says about the graph", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * The right file name in the wrong directory, named rather than left to a second guess.
+ *
+ * Measured over four runs: 27 of 1,127 reads asked for a file that is not there, and NINE had the basename
+ * exactly right — `src/domain/Companies/Company.cs` for `src/domain/Company.cs`,
+ * `src/postgre/BeempaDbContext.cs` for `src/infra.persistence.postgre/BeempaDbContext.cs`, a contract asked
+ * for one directory above the `contracts/` it lives in. Each cost a turn to learn only that nothing was there.
+ */
+describe("a file that is somewhere else", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "hc-read-elsewhere-"));
+    await mkdir(join(dir, "src/domain"), { recursive: true });
+    await mkdir(join(dir, "src/infra.persistence.postgre"), { recursive: true });
+    await writeFile(join(dir, "src/domain/Company.cs"), "class Company {}\n");
+    await writeFile(join(dir, "src/infra.persistence.postgre/BeempaDbContext.cs"), "class Ctx {}\n");
+  });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  const read = (path: string) =>
+    readFileTool.run({ path }, { cwd: dir, signal: new AbortController().signal } as never);
+
+  it("names the one file with that name — the case measured twice", async () => {
+    const r = await read("src/domain/Companies/Company.cs");
+    expect(r.isError).toBe(true);
+    expect(r.content).toContain("src/domain/Company.cs");
+  });
+
+  it("still says the asked-for path is not there, rather than quietly answering another one", async () => {
+    const r = await read("src/postgre/BeempaDbContext.cs");
+    expect(r.content).toMatch(/no such file|ENOENT/);
+    expect(r.content).toContain("src/infra.persistence.postgre/BeempaDbContext.cs");
+    expect(r.content).not.toContain("class Ctx");   // named, not opened
+  });
+
+  it("adds nothing when the name exists nowhere", async () => {
+    const r = await read("src/domain/Abstraction/BaseEntity.cs");
+    expect(r.isError).toBe(true);
+    expect(r.content).not.toMatch(/There is one file|Files named/);
+  });
+
+  it("says nothing when too many files share the name to be an answer", async () => {
+    for (const d of ["a", "b", "c", "d"]) {
+      await mkdir(join(dir, d), { recursive: true });
+      await writeFile(join(dir, d, "index.ts"), "export {};\n");
+    }
+    const r = await read("src/index.ts");
+    expect(r.content).not.toMatch(/There is one file|Files named/);
+  });
+});
