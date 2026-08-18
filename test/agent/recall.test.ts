@@ -557,3 +557,41 @@ describe("two spellings of one path", () => {
     expect(relativise("pattern:TODO|flags=g", CWD)).toBe("pattern:TODO|flags=g");
   });
 });
+
+/**
+ * …and a path can be spelled differently without changing its prefix.
+ *
+ * `specs/005/contracts/../spec.md` is `specs/005/spec.md`, and models write it that way when they walk from a
+ * file they were just looking at. Measured over four runs: 49 of 981 file calls carried a `..`, a `.` or a
+ * doubled slash, twenty of them on `spec.md` alone — the run's largest document.
+ */
+describe("a path that walks through itself", () => {
+  const CWD = "/Users/x/parrot/.horsecode/worktrees/17-Aug-2026-MONDAY_01/base";
+
+  it("is the same file as the one written straight", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    const r = new Recall();
+    r.nextTurn();
+    r.note("read_file", relativise("path:specs/005/spec.md", CWD));
+    expect(r.saw("read_file", relativise("path:specs/005/contracts/../spec.md", CWD))).toBe(1);
+  });
+
+  it("flattens the shapes that were actually seen", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    for (const spelling of ["path:./specs/005/spec.md", "path:specs//005/spec.md",
+      "path:specs/005/./spec.md", `path:${CWD}/specs/005/contracts/../spec.md`]) {
+      expect(relativise(spelling, CWD), spelling).toBe("path:specs/005/spec.md");
+    }
+  });
+
+  /** A `..` that climbs OUT of the working directory points at a different file, and must keep saying so. */
+  it("does not flatten a path out of the tree into one inside it", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    expect(relativise("path:../other/spec.md", CWD)).toBe("path:../other/spec.md");
+  });
+
+  it("leaves the range fields where they are", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    expect(relativise("path:specs/./spec.md|limit=40|offset=20", CWD)).toBe("path:specs/spec.md|limit=40|offset=20");
+  });
+});

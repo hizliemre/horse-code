@@ -94,11 +94,39 @@ export function subjectOf(argumentsJson: string): string {
  *
  * Only inside the working directory. An absolute path pointing somewhere else is genuinely a different file,
  * and shortening it would be a lie about which one was read.
+ *
+ * The prefix is not the only way to spell a path differently. `specs/005/contracts/../spec.md` is the same
+ * document as `specs/005/spec.md`, and models write it that way when they are walking from a file they were
+ * just looking at: 49 of 981 file calls over four runs carried a `..`, `.` or doubled slash, twenty of them
+ * on `spec.md` alone. So the segments are flattened as well.
  */
 export function relativise(key: string, cwd: string): string {
   const base = cwd.endsWith("/") ? cwd : `${cwd}/`;
-  return key.replace(/(^|\|)([a-z_]+):([^|]+)/g, (whole, sep: string, field: string, value: string) =>
-    value.startsWith(base) ? `${sep}${field}:${value.slice(base.length)}` : whole);
+  return key.replace(/(^|\|)([a-z_]+):([^|]+)/g, (whole, sep: string, field: string, value: string) => {
+    const inside = value.startsWith(base) ? value.slice(base.length) : value;
+    if (inside === value && !NEEDS_FLATTENING.test(value)) return whole;
+    return `${sep}${field}:${flatten(inside)}`;
+  });
+}
+
+const NEEDS_FLATTENING = /(^|\/)\.\.?(\/|$)|\/\//;
+
+/**
+ * `a/b/../c` → `a/c`, without touching the filesystem.
+ *
+ * A `..` that would climb above the start is kept: the path then points outside the working directory, which
+ * is a different file and must keep saying so.
+ */
+function flatten(path: string): string {
+  const absolute = path.startsWith("/");
+  const out: string[] = [];
+  for (const seg of path.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === ".." && out.length && out[out.length - 1] !== "..") out.pop();
+    else if (seg === ".." && absolute) continue;   // above the root is the root
+    else out.push(seg);
+  }
+  return (absolute ? "/" : "") + out.join("/");
 }
 
 /** The same key from already-parsed arguments — what the executor has, and what telemetry records. */
