@@ -42,3 +42,37 @@ describe("errorExcerpt", () => {
     expect(errorExcerpt("   ")).toBe("");
   });
 });
+
+/**
+ * …and the FIRST line too, because for one tool the rule above is backwards.
+ *
+ * `edit_file` says what went wrong first and then quotes the file: "oldString not found (plan.md) — the text
+ * IS in the file, but its whitespace differs", then the block. Keeping only the end recorded the quoted
+ * paragraph and none of the diagnosis — twice in one run a monitor line was six words of a Turkish spec and
+ * nothing about the failure, and each took a query against the trace to classify.
+ */
+describe("a failure that says the useful part FIRST", () => {
+  const block = "Bu bölüm sipariş akışını anlatır. ".repeat(30);
+
+  it("keeps the diagnosis, not only the quoted file", () => {
+    const said = errorExcerpt(`edit_file: oldString not found (plan.md) — the text IS in the file, but its `
+      + `whitespace differs from what you sent. Here it is exactly as the file has it, from line 42:\n${block}`);
+    expect(said).toContain("oldString not found (plan.md)");
+    expect(said).toContain("whitespace differs");
+  });
+
+  it("still shows how it ended, within the budget", () => {
+    const said = errorExcerpt(`edit_file: oldString not found (plan.md) — short reason.\n${block}`);
+    expect(said).toContain("short reason.");
+    expect(said).toContain("sipariş akışını");
+    expect(said.length).toBeLessThanOrEqual(MAX_ERROR_EXCERPT + 40);
+  });
+
+  /** The shell case is untouched: its first line is the command, and the command is already in the key. */
+  it("still drops a `$ command` opening and keeps the end", () => {
+    const command = `$ python3 - <<'PY' ${"import x ".repeat(60)}`;
+    const said = errorExcerpt(`${command}\nTraceback: ConnectionRefusedError [Errno 61]`);
+    expect(said).toContain("ConnectionRefusedError");
+    expect(said).not.toContain("python3");
+  });
+});

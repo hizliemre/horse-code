@@ -66,10 +66,28 @@ export const MAX_ERROR_EXCERPT = 300;
  *
  * Errors only. A successful result is the file, the search hits, the diff — recording those would put the
  * user's source into a log file that exists to describe the run, not to copy it. A failure is a sentence.
+ *
+ * …with the FIRST line kept as well, because for one tool the rule above is backwards. `edit_file` says what
+ * went wrong first and then quotes the file — "oldString not found (plan.md) — the text IS in the file, but
+ * its whitespace differs", then the block. Taking only the end recorded the quoted paragraph and none of the
+ * diagnosis: twice in one run a monitor line was six words of a Turkish spec and nothing about the failure,
+ * and both took a query against the trace to classify.
+ *
+ * A `$ <command>` opening is still skipped — that is the shell case above, and the command is already in
+ * `hc.tool.key`.
  */
 export function errorExcerpt(content: string | undefined): string {
-  const said = (content ?? "").replace(/\s+/g, " ").trim();
-  return said.length > MAX_ERROR_EXCERPT ? `…${said.slice(-MAX_ERROR_EXCERPT)}` : said;
+  const raw = (content ?? "").trim();
+  const cut = raw.indexOf("\n");
+  const head = (cut === -1 ? raw : raw.slice(0, cut)).replace(/\s+/g, " ").trim();
+  const lead = head.startsWith("$ ") ? "" : head;
+  const said = raw.replace(/\s+/g, " ").trim();
+  if (said.length <= MAX_ERROR_EXCERPT) return said;
+  // One line has no first-line-versus-rest to exploit, and neither does a `$ command` opening: take the end.
+  if (cut === -1 || !lead) return `…${said.slice(-MAX_ERROR_EXCERPT)}`;
+  // The diagnosis, then as much of the ending as the budget still allows.
+  const keep = MAX_ERROR_EXCERPT - Math.min(lead.length, MAX_ERROR_EXCERPT) - 2;
+  return keep > 0 ? `${lead} …${said.slice(-keep)}` : `…${said.slice(-MAX_ERROR_EXCERPT)}`;
 }
 
 interface Plan {
