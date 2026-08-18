@@ -75,3 +75,41 @@ describe("edit_file", () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * A failure names the file the way this project does, not the way the caller happened to spell it.
+ *
+ * An agent that writes absolute paths — the planner does — puts 110 characters of
+ * `/Users/…/.horsecode/worktrees/17-Aug-2026-MONDAY_01/base/` in front of every diagnosis. The model is
+ * charged for it on each failure, and it swamps the excerpt kept in telemetry: 21 edit failures in one run
+ * collapsed to 11 distinct log lines, several groups identical only because the shared prefix filled the
+ * budget before the message reached anything that differed.
+ */
+describe("the path a failure names", () => {
+  it("shortens a path inside the working directory", async () => {
+    const { shortPath } = await import("../../src/tools/edit.js");
+    expect(shortPath("/w/base/specs/005/plan.md", "/w/base")).toBe("specs/005/plan.md");
+    expect(shortPath("specs/005/plan.md", "/w/base")).toBe("specs/005/plan.md");
+  });
+
+  /** Outside the tree it stays as given — shortening it would name a file that is not the one asked for. */
+  it("leaves a path elsewhere exactly as it came", async () => {
+    const { shortPath } = await import("../../src/tools/edit.js");
+    expect(shortPath("/etc/hosts", "/w/base")).toBe("/etc/hosts");
+  });
+
+  it("puts the short form in the message an agent actually reads", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-edit-path-"));
+    try {
+      await mkdir(join(dir, "specs"), { recursive: true });
+      await writeFile(join(dir, "specs/plan.md"), "# Plan\n\nBody.\n");
+      const r = await editFileTool.run(
+        { path: join(dir, "specs/plan.md"), oldString: "nothing like this", newString: "x" },
+        { cwd: dir, signal: new AbortController().signal } as never,
+      );
+      expect(r.isError).toBe(true);
+      expect(r.content).toContain("(specs/plan.md)");
+      expect(r.content).not.toContain(dir);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});

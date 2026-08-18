@@ -28,6 +28,20 @@ const norm = (t: string): string => t.replace(/[ \t]+/g, " ").replace(/[ \t]+$/g
  * the file moved on. So the answer quotes the file's REAL bytes for the span it was clearly aiming at, which
  * is the one thing that turns a second attempt into a hit rather than another guess.
  */
+/**
+ * The path as this project names it, not as the caller happened to spell it.
+ *
+ * A failure message opens with the path, and an agent that writes absolute paths — the planner does — puts
+ * 110 characters of `/Users/…/.horsecode/worktrees/17-Aug-2026-MONDAY_01/base/` in front of every diagnosis.
+ * That is charged to the model on each failure, and it swamps the excerpt kept in telemetry: 21 edit failures
+ * in one run collapsed to 11 distinct log lines, several groups identical only because the shared prefix
+ * filled the budget before the message reached anything that differed.
+ */
+export function shortPath(path: string, cwd: string): string {
+  const abs = resolve(cwd, path);
+  return abs === cwd ? "." : abs.startsWith(cwd + sep) ? abs.slice(cwd.length + 1) : path;
+}
+
 export function whyNotFound(content: string, oldString: string): string {
   if (/^\s*\d+\t/m.test(oldString)) {
     return " — your oldString still carries read_file's display prefixes (`123\\t…`). Strip the number and "
@@ -95,7 +109,8 @@ export const editFileTool: Tool = {
     const count = content.split(a.oldString).length - 1;
     if (count === 0) {
       return {
-        content: `edit_file: oldString not found (${a.path})${whyNotFound(content, a.oldString)}`,
+        content: `edit_file: oldString not found (${shortPath(a.path, cwdResolved)})`
+          + `${whyNotFound(content, a.oldString)}`,
         isError: true,
       };
     }
