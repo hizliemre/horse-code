@@ -516,3 +516,43 @@ describe("the tools that were measured repeating themselves", () => {
     expect(second.content).toContain("export const x");
   });
 });
+
+/**
+ * One file, one key — whichever way the agent spelled the path.
+ *
+ * The memo compares keys as strings. Measured across four runs: three times the same document was fetched
+ * twice because one role wrote a relative path and another an absolute one, and every one of them was
+ * `spec.md` — the 1,600-line document, the most expensive read in the run.
+ */
+describe("two spellings of one path", () => {
+  const CWD = "/Users/x/parrot/.horsecode/worktrees/17-Aug-2026-MONDAY_01/base";
+
+  it("answers a relative read from an absolute one already made", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    const r = new Recall();
+    r.nextTurn();
+    r.note("read_file", relativise(`path:${CWD}/specs/spec.md`, CWD));
+    expect(r.saw("read_file", relativise("path:specs/spec.md", CWD))).toBe(1);
+  });
+
+  it("keeps the ranges comparable across both spellings", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    const r = new Recall();
+    r.nextTurn();
+    r.note("read_file", relativise(`path:${CWD}/specs/spec.md|limit=1600|offset=1`, CWD));
+    // A window inside what was already answered, asked for by the short name.
+    expect(r.saw("read_file", relativise("path:specs/spec.md|limit=40|offset=20", CWD))).toBe(1);
+  });
+
+  /** A path OUTSIDE the working directory is a different file, and shortening it would say otherwise. */
+  it("leaves a path elsewhere alone", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    expect(relativise("path:/etc/hosts", CWD)).toBe("path:/etc/hosts");
+    expect(relativise(`path:${CWD}-other/specs/spec.md`, CWD)).toContain("-other/");
+  });
+
+  it("touches nothing in a key that carries no path", async () => {
+    const { relativise } = await import("../../src/agent/elide.js");
+    expect(relativise("pattern:TODO|flags=g", CWD)).toBe("pattern:TODO|flags=g");
+  });
+});

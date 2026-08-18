@@ -80,6 +80,24 @@ export function subjectOf(argumentsJson: string): string {
   }
 }
 
+/**
+ * One file, one key — whichever way the agent spelled the path.
+ *
+ * The memo compares keys as strings, so `specs/spec.md` and
+ * `/Users/…/worktrees/17-Aug-2026-MONDAY_01/base/specs/spec.md` are two different files to it, and the
+ * second read of the same document is answered by reading it again. Measured across four runs: three
+ * collisions, every one of them on the 1,600-line `spec.md` — the largest document in the run, fetched twice
+ * because one role wrote an absolute path and another a relative one.
+ *
+ * Only inside the working directory. An absolute path pointing somewhere else is genuinely a different file,
+ * and shortening it would be a lie about which one was read.
+ */
+export function relativise(key: string, cwd: string): string {
+  const base = cwd.endsWith("/") ? cwd : `${cwd}/`;
+  return key.replace(/(^|\|)([a-z_]+):([^|]+)/g, (whole, sep: string, field: string, value: string) =>
+    value.startsWith(base) ? `${sep}${field}:${value.slice(base.length)}` : whole);
+}
+
 /** The same key from already-parsed arguments — what the executor has, and what telemetry records. */
 export function subjectOfArgs(args: Record<string, unknown>): string {
   {

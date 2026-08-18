@@ -4,7 +4,7 @@ import type { PermissionEngine, PermissionRequest } from "../permission/engine.j
 import type { ToolRegistry } from "../tools/registry.js";
 import { Recall, recallNote, refusalNote } from "./recall.js";
 import { telemetry } from "../obs/telemetry.js";
-import { subjectOfArgs } from "./elide.js";
+import { subjectOfArgs, relativise } from "./elide.js";
 
 export interface ToolExecResult {
   id: string;
@@ -140,7 +140,8 @@ async function runTool(
    * including the range, because a monitor that counts pages of one file as re-reads of it reports a loop
    * that is not there. Found by using the monitor: it showed 16 re-reads that were 16 different pages.
    */
-  const key = subjectOfArgs(args);
+  // …and spelled one way, so the memo and the telemetry both see one file. See relativise.
+  const key = relativise(subjectOfArgs(args), deps.cwd);
   /**
    * An answer the agent already has is not fetched twice.
    *
