@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { elideOldToolResults, elideInPlace, subjectOf, MAX_KEY_VALUE_CHARS, RECENT_RESULT_BUDGET, ELIDE_MIN_CHARS } from "../../src/agent/elide.js";
+import { elideOldToolResults, elideInPlace, subjectOf, MAX_KEY_VALUE_CHARS, RECENT_RESULT_BUDGET, DISTINCT_RESULT_BUDGET, ELIDE_MIN_CHARS } from "../../src/agent/elide.js";
 import type { Message } from "../../src/core/types.js";
 
 const toolMsg = (id: string, content: string): Message => ({ role: "tool", content, name: "read_file", toolCallId: id });
@@ -102,7 +102,8 @@ describe("the newest look at each file survives the recency window", () => {
   };
 
   it("keeps a file the agent read, even when newer reads pushed it out of the budget", () => {
-    // Four distinct 20k reads: the recency budget (40k) holds two, the distinct budget holds the rest.
+    // Four distinct 20k reads: 80k fits the recency budget outright, and the distinct reserve would
+    // hold any that did not. Nothing here is a duplicate, so nothing is elided.
     const out = elideOldToolResults(readsOf(["a.ts", "b.ts", "c.ts", "d.ts"], 20_000));
     const bodies = out.filter((m) => m.role === "tool").map((m) => m.content);
     expect(bodies.every((b) => !b.startsWith("["))).toBe(true);
@@ -129,7 +130,10 @@ describe("the newest look at each file survives the recency window", () => {
     const out = elideOldToolResults(readsOf(paths, 20_000));
     const kept = out.filter((m) => m.role === "tool" && !m.content.startsWith("["))
       .reduce((n, m) => n + m.content.length, 0);
-    expect(kept).toBeLessThan(200_000); // 60 × 20k = 1.2 MB unbounded
+    // The ceiling is the two budgets together — recency (100k) plus the newest-of-each-target reserve (120k)
+    // — against 1.2 MB of reads. What matters is that it is bounded by the budgets and not by how much the
+    // agent chose to read.
+    expect(kept).toBeLessThan(RECENT_RESULT_BUDGET + DISTINCT_RESULT_BUDGET);
     expect(out.some((m) => m.role === "tool" && m.content.startsWith("["))).toBe(true);
   });
 });
@@ -239,5 +243,47 @@ describe("old reasoning is elided with the exchange it belonged to", () => {
     const before = w.map((m) => m.content);
     elideInPlace(w);
     expect(w.map((m) => m.content)).toEqual(before);
+  });
+});
+
+/**
+ * A duplicate is dead weight wherever it sits — including inside the recency window.
+ *
+ * The rule used to be applied only OUTSIDE the window, which was survivable while the window held about one
+ * large read. Raising it to 100,000 made the window hold three, so identical calls started living inside it
+ * and the same bytes were re-sent on every turn from then on: the failure the supersede stub exists for,
+ * arriving through the fix for a different one.
+ */
+describe("an identical call that is still inside the window", () => {
+  const sized = (paths: string[], size: number): Message[] => {
+    const out: Message[] = [{ role: "system", content: "sys" }];
+    paths.forEach((p, i) => out.push(readOf(`c${i}`, p), toolMsg(`c${i}`, `${p} `.repeat(size / 8))));
+    return out;
+  };
+
+  it("elides the older copy even when both fit the budget", () => {
+    // 3 × 5k = 15k, far inside a 100k window — under the old rule neither copy was touched.
+    const out = elideOldToolResults(sized(["a.ts", "b.ts", "a.ts"], 5_000));
+    const bodies = out.filter((m) => m.role === "tool").map((m) => m.content);
+    expect(bodies[0]).toMatch(/^\[/);
+    expect(bodies[2].startsWith("[")).toBe(false);
+  });
+
+  it("points at the newer copy rather than telling it to look again", () => {
+    const out = elideOldToolResults(sized(["a.ts", "b.ts", "a.ts"], 5_000));
+    const stub = out.filter((m) => m.role === "tool").map((m) => m.content).find((b) => b.startsWith("["))!;
+    expect(stub).toMatch(/Do not run it again/);
+  });
+
+  it("leaves distinct calls alone — only a repeat of the SAME call is a duplicate", () => {
+    const out = elideOldToolResults(sized(["a.ts", "b.ts", "c.ts"], 5_000));
+    expect(out.filter((m) => m.role === "tool").every((m) => !m.content.startsWith("["))).toBe(true);
+  });
+
+  /** The newest exchange is never touched, duplicate or not — it is what the agent is acting on. */
+  it("never elides the newest exchange", () => {
+    const out = elideOldToolResults(sized(["a.ts", "a.ts"], 5_000));
+    const bodies = out.filter((m) => m.role === "tool").map((m) => m.content);
+    expect(bodies.at(-1)!.startsWith("[")).toBe(false);
   });
 });

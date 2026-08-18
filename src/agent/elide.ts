@@ -19,8 +19,18 @@ import type { Message } from "../core/types.js";
  * edits, and "keep the last 2 results" threw a file's contents away after two unrelated greps — leaving it to
  * edit from memory. A budget keeps many small results and only trims once the total genuinely weighs
  * something, which is the thing being paid for on every turn.
+ *
+ * Sized against the READ CAP, which is the thing that fills it. At 40,000 against a 30,000-character read
+ * ceiling the window held one large read and a fraction of a second — so an agent working through a big
+ * document evicted its own last page on every call. Measured on one project-manager: 136,000 characters of
+ * `spec.md` in 62 seconds, and then a request for lines 1–121 that were read verbatim two and a half minutes
+ * earlier, gone because two later windows had pushed them out.
+ *
+ * At 100,000 the window holds three full-sized reads, which is what paging through one document actually
+ * needs. It is charged on every turn of every agent, so it is deliberately not larger: this buys the working
+ * set of one document, not a second copy of the conversation.
  */
-export const RECENT_RESULT_BUDGET = 40_000;
+export const RECENT_RESULT_BUDGET = 100_000;
 /**
  * How much is kept for the NEWEST result of each distinct thing the agent looked at, beyond the recency
  * budget.
@@ -244,6 +254,25 @@ function planElision(
     const key = keyOf(i);
     const first = key !== "" && !seen.has(key);
     if (key !== "") seen.add(key);
+
+    /**
+     * A DUPLICATE is dead weight wherever it sits, including inside the recency window.
+     *
+     * The newest copy of that exact call is already in the conversation, so keeping an older identical one
+     * pays for the same bytes twice on every turn from here on. The window is not a reason to keep it: it
+     * is a reason to keep what the agent is WORKING with, and it is working with the newer copy.
+     *
+     * This used to be decided only outside the window, which was survivable while the window held about one
+     * large read. Raising the budget to 100,000 made the window hold three, so duplicates started living
+     * inside it — the failure this rule was written for, arriving through the fix for a different one.
+     */
+    if (!first && key !== "" && k < toolIdx.length - ALWAYS_KEEP_NEWEST) {
+      const dupId = messages[i].toolCallId;
+      if (dupId) argIds.add(dupId);
+      results.add(i);
+      superseded.add(i);
+      continue;
+    }
 
     // Inside the recency window nothing is touched — it is what the agent is working with right now.
     if (k >= toolIdx.length - ALWAYS_KEEP_NEWEST || used + cost(i) <= budget) {
