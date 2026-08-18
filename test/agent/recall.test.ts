@@ -520,9 +520,10 @@ describe("the tools that were measured repeating themselves", () => {
 /**
  * One file, one key — whichever way the agent spelled the path.
  *
- * The memo compares keys as strings. Measured across four runs: three times the same document was fetched
- * twice because one role wrote a relative path and another an absolute one, and every one of them was
- * `spec.md` — the 1,600-line document, the most expensive read in the run.
+ * The memo compares keys as strings. Measured on one run's planning phase, where fourteen lenses each read a
+ * document whole by its short name and then read windows of it back by its long one: of 374 reads and
+ * 4,904,815 characters, 122 reads and 1,555,951 characters — 32% of everything read — were ranges the agent
+ * already held, hidden from the memo by nothing but how the path was spelled.
  */
 describe("two spellings of one path", () => {
   const CWD = "/Users/x/parrot/.horsecode/worktrees/17-Aug-2026-MONDAY_01/base";

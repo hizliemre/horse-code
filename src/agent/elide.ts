@@ -85,9 +85,12 @@ export function subjectOf(argumentsJson: string): string {
  *
  * The memo compares keys as strings, so `specs/spec.md` and
  * `/Users/…/worktrees/17-Aug-2026-MONDAY_01/base/specs/spec.md` are two different files to it, and the
- * second read of the same document is answered by reading it again. Measured across four runs: three
- * collisions, every one of them on the 1,600-line `spec.md` — the largest document in the run, fetched twice
- * because one role wrote an absolute path and another a relative one.
+ * second read of the same document is answered by reading it again.
+ *
+ * Measured on one run's planning phase, where the shape is at its worst: a lens reads `plan.md` whole by its
+ * short name, then reads windows of it back by its long one. Of 374 reads and 4,904,815 characters, 122
+ * reads and 1,555,951 characters — 32% of everything read — were ranges the agent already held, hidden from
+ * the memo by nothing but how the path was spelled.
  *
  * Only inside the working directory. An absolute path pointing somewhere else is genuinely a different file,
  * and shortening it would be a lie about which one was read.
