@@ -84,9 +84,20 @@ export function subjectOf(argumentsJson: string): string {
 export function subjectOfArgs(args: Record<string, unknown>): string {
   {
     let primary = "";
-    for (const key of ["path", "file", "file_path", "symbol", "pattern", "query", "command", "name", "url"]) {
+    for (const key of ["path", "file", "file_path", "symbol", "pattern", "query", "command", "name", "url", "args"]) {
       const v = args[key];
       if (typeof v === "string" && v.trim()) { primary = `${key}:${v.trim()}`; break; }
+      /**
+       * A LIST is a subject too — `git` takes its whole command as one.
+       *
+       * Without this the git tool had no key at all: nothing to memoise it by, and telemetry that recorded
+       * sixteen git calls in a run without saying what any of them ran. Both showed up at once — a judge
+       * repeated an unavailable subcommand eight times, and the record could not name it.
+       */
+      if (Array.isArray(v) && v.length && v.every((x) => typeof x === "string")) {
+        const joined = (v as string[]).join(" ").trim();
+        if (joined) { primary = `${key}:${joined}`; break; }
+      }
     }
     if (!primary) return "";
     // Sorted, so two calls that pass the same arguments in a different order are still one target.

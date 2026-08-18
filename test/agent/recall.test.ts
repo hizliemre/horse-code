@@ -383,3 +383,136 @@ describe("a shell command that only looks", () => {
     expect(commandOfKey("command:grep x a.ts | head|timeout=1000")).toBe("grep x a.ts | head");
   });
 });
+
+/**
+ * A refusal that will never become an acceptance is worth remembering.
+ *
+ * Two shapes of it, measured over four runs:
+ *
+ *   `graph_trace` on an Angular template — 27 of 90 calls, thirteen different agents, several of them twice
+ *   in one conversation. The message already said "there never will be", and they asked anyway.
+ *
+ *   `git` with a subcommand this tool does not carry — one correctness-judge asked EIGHT times in a single
+ *   turn, and got the same 468-character list of what IS available every time.
+ *
+ * Each of those is a full model turn spent to be told something the transcript already says.
+ */
+describe("a refusal that will not change", () => {
+  it("is remembered, and answered from the memo the second time", () => {
+    const r = new Recall();
+    r.nextTurn();
+    expect(r.recall("git", "args:bisect start")).toBeUndefined();
+    r.settle("git", "args:bisect start");
+    expect(r.recall("git", "args:bisect start")).toMatchObject({ turn: 1, settled: true });
+  });
+
+  /**
+   * `git status` must NEVER be answered from memory — the tree moves under it — while `git bisect` may be.
+   * So this is decided by the refusal, not by whether the tool is recallable.
+   */
+  it("holds for tools whose answers are never recalled", () => {
+    const r = new Recall();
+    r.nextTurn();
+    expect(RECALLABLE.has("git")).toBe(false);
+    r.note("git", "args:status --porcelain");
+    expect(r.recall("git", "args:status --porcelain")).toBeUndefined();
+    r.settle("git", "args:bisect start");
+    expect(r.recall("git", "args:bisect start")?.settled).toBe(true);
+  });
+
+  it("does not answer a DIFFERENT call with someone else's refusal", () => {
+    const r = new Recall();
+    r.nextTurn();
+    r.settle("git", "args:bisect start");
+    expect(r.recall("git", "args:log -5")).toBeUndefined();
+  });
+
+  it("says the answer is a refusal, not a result waiting above", async () => {
+    const { refusalNote } = await import("../../src/agent/recall.js");
+    const note = refusalNote("graph_trace", "media.html", 3);
+    expect(note).toMatch(/refused/i);
+    expect(note).toContain("turn 3");
+    // …and what to do now, since repeating it is what happened thirteen times.
+    expect(note).toMatch(/different route/i);
+  });
+});
+
+/**
+ * The git tool's whole command is a list, and a key built only from string fields left it with none.
+ *
+ * So there was nothing to memoise a refusal by — and the telemetry recorded sixteen git calls in one run
+ * without naming a single one of them. Both failures had the same cause.
+ */
+describe("a call whose subject is a list", () => {
+  it("keys a git command by what it actually ran", async () => {
+    const { subjectOfArgs } = await import("../../src/agent/elide.js");
+    expect(subjectOfArgs({ args: ["status", "--porcelain"] })).toBe("args:status --porcelain");
+  });
+
+  it("still prefers a real path when there is one", async () => {
+    const { subjectOfArgs } = await import("../../src/agent/elide.js");
+    expect(subjectOfArgs({ path: "a.ts", args: ["x"] })).toContain("path:a.ts");
+  });
+
+  it("says nothing for an empty list rather than inventing a key", async () => {
+    const { subjectOfArgs } = await import("../../src/agent/elide.js");
+    expect(subjectOfArgs({ args: [] })).toBe("");
+    expect(subjectOfArgs({ args: [1, 2] })).toBe("");
+  });
+});
+
+/**
+ * End to end, through the executor — the memo only helps if the tools mark their refusals.
+ */
+describe("the tools that were measured repeating themselves", () => {
+  const deps = (recall: Recall, registry: ToolRegistry) => ({
+    tools: registry,
+    permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
+    approve: async () => true,
+    cwd, signal: new AbortController().signal, recall,
+  });
+
+  const drain = async (gen: AsyncGenerator<unknown, unknown>) => {
+    let out = await gen.next();
+    while (!out.done) out = await gen.next();
+    return (out.value as { result: { content: string; isError: boolean } }[])[0]!.result;
+  };
+
+  it("refuses an unavailable git subcommand once, then from the memo", async () => {
+    const { gitTool } = await import("../../src/tools/git.js");
+    const registry = new ToolRegistry();
+    registry.register(gitTool);
+    const recall = new Recall();
+    recall.nextTurn();
+    const call = { id: "1", name: "git", arguments: JSON.stringify({ args: ["bisect", "start"] }) };
+
+    const first = await drain(executeToolCalls([call], deps(recall, registry) as never) as never);
+    expect(first.isError).toBe(true);
+    expect(first.content).toContain("not available here");
+
+    recall.nextTurn();
+    const second = await drain(executeToolCalls([call], deps(recall, registry) as never) as never);
+    // Still an error — the second call did not succeed just because it was answered from the memo.
+    expect(second.isError).toBe(true);
+    expect(second.content).toMatch(/refused for good/i);
+    expect(second.content).toContain("turn 1");
+  });
+
+  /** A refusal that is about the moment must NOT be remembered — the file may be written next. */
+  it("keeps letting a missing file be asked for again", async () => {
+    const registry = new ToolRegistry();
+    registry.register(readFileTool);
+    const recall = new Recall();
+    recall.nextTurn();
+    const call = { id: "1", name: "read_file", arguments: JSON.stringify({ path: "later.ts" }) };
+
+    const first = await drain(executeToolCalls([call], deps(recall, registry) as never) as never);
+    expect(first.isError).toBe(true);
+
+    await writeFile(join(cwd, "later.ts"), "export const x = 1;\n");
+    recall.nextTurn();
+    const second = await drain(executeToolCalls([call], deps(recall, registry) as never) as never);
+    expect(second.isError).toBe(false);
+    expect(second.content).toContain("export const x");
+  });
+});

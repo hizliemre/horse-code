@@ -103,7 +103,10 @@ export const gitTool: Tool = {
     }
     const args = parsed.data.args;
     const why = refuse(args);
-    if (why) return { content: why, isError: true };
+    // Settled: what this tool carries is a fixed list, so the same arguments are refused the same way for
+    // the life of the run. Measured — one correctness-judge asked for the same missing subcommand eight
+    // times in a single turn and was handed the same 468-character list of alternatives each time.
+    if (why) return { content: why, isError: true, settled: true };
 
     const out = await new Promise<{ code: number; text: string }>((resolve) => {
       const child = execFile("git", args, {
@@ -224,7 +227,7 @@ export const gitWriteTool: Tool = {
     }
     const args = parsed.data.args;
     const why = refuseWrite(args);
-    if (why) return { content: why, isError: true };
+    if (why) return { content: why, isError: true, settled: true };
 
     const out = await new Promise<{ code: number; text: string }>((resolve) => {
       const child = execFile("git", args, {

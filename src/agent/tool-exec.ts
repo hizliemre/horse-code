@@ -2,7 +2,7 @@ import type { AgentEvent, PermissionDescriptor, Tool, ToolCall, ToolResult } fro
 import { truncateSafe } from "../core/surrogates.js";
 import type { PermissionEngine, PermissionRequest } from "../permission/engine.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { Recall, recallNote } from "./recall.js";
+import { Recall, recallNote, refusalNote } from "./recall.js";
 import { telemetry } from "../obs/telemetry.js";
 import { subjectOfArgs } from "./elide.js";
 
@@ -150,14 +150,26 @@ async function runTool(
   const earlier = deps.recall?.recall(tool.name, key);
   if (earlier !== undefined) {
     tel.event("tool.recalled", { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key,
-      "hc.recall.authored": earlier.authored, ...(deps.role ? { "hc.role": deps.role } : {}) });
+      "hc.recall.authored": earlier.authored, ...(earlier.settled ? { "hc.recall.settled": true } : {}),
+      ...(deps.role ? { "hc.role": deps.role } : {}) });
     deps.onActivity?.({ tool: tool.name, target: subject, lines: 0,
-      summary: earlier.authored ? "you wrote this — it is above" : `already answered on turn ${earlier.turn}` });
+      summary: earlier.settled ? `refused on turn ${earlier.turn} — unchanged`
+        : earlier.authored ? "you wrote this — it is above" : `already answered on turn ${earlier.turn}` });
+    /**
+     * A refusal comes back as a refusal.
+     *
+     * Answering it with `isError: false` would tell the agent its call had succeeded, and the second time
+     * round it would be the one call in the transcript that looked like it worked.
+     */
+    if (earlier.settled) {
+      return { content: refusalNote(tool.name, subject, earlier.turn), isError: true, settled: true };
+    }
     return { content: recallNote(tool.name, subject, earlier.turn, earlier.authored), isError: false };
   }
   const result = await tel.span(`tool.${tool.name}`,
     { "hc.tool": tool.name, "hc.tool.subject": subject, "hc.tool.key": key }, run);
   if (!result.isError) deps.recall?.note(tool.name, key);
+  else if (result.settled) deps.recall?.settle(tool.name, key);
   tel.event("tool.result", {
     "hc.tool": tool.name,
     "hc.tool.subject": subject,

@@ -109,6 +109,16 @@ export class Recall {
   private readonly spans = new Map<string, { start: number; end: number; turn: number }[]>();
   /** Paths this agent WROTE in full — their current content is its own words, one call back. */
   private readonly authored = new Map<string, number>();
+  /**
+   * Calls that were refused for good — see ToolResult.settled.
+   *
+   * Kept apart from `seen` because it answers a different question and obeys different rules. A settled
+   * refusal is not about the state of the tree, so no write can invalidate it and no compaction makes it
+   * wrong: `git bisect` is unavailable whatever else happens, and the reminder says so in its own words
+   * rather than pointing at a result. It is also allowed for tools that are NOT recallable — `git status`
+   * must never be answered from memory, because the tree moves under it, but `git bisect` may.
+   */
+  private readonly refused = new Map<string, number>();
   private turn = 0;
 
   /** Advances the clock; called once per model turn so the reminder can say WHEN. */
@@ -129,9 +139,19 @@ export class Recall {
     return this.recall(tool, key)?.turn;
   }
 
+  /** Records a refusal that the same call will always get again — see ToolResult.settled. */
+  settle(tool: string, key: string): void {
+    if (!key) return;
+    if (!this.refused.has(this.id(tool, key))) this.refused.set(this.id(tool, key), this.turn);
+  }
+
   /** The turn it was answered on, and whether the answer is the agent's OWN write rather than a result. */
-  recall(tool: string, key: string): { turn: number; authored: boolean } | undefined {
-    if (!RECALLABLE.has(tool) || !key) return undefined;
+  recall(tool: string, key: string): { turn: number; authored: boolean; settled?: boolean } | undefined {
+    if (!key) return undefined;
+    // Checked before RECALLABLE: a refusal is remembered for every tool, an ANSWER only for some.
+    const no = this.refused.get(this.id(tool, key));
+    if (no !== undefined) return { turn: no, authored: false, settled: true };
+    if (!RECALLABLE.has(tool)) return undefined;
     const direct = this.seen.get(this.id(tool, key));
     if (direct !== undefined) return { turn: direct, authored: false };
     // …and neither is a slice of something already answered in full. See rangeOfKey.
@@ -229,6 +249,12 @@ export class Recall {
  * It names the call and where the answer is, so the agent can look up rather than ask again — and says
  * plainly what to do if it wanted a fresh read, so a genuine re-read is one step away rather than blocked.
  */
+export function refusalNote(tool: string, subject: string, turn: number): string {
+  return `You already asked this on turn ${turn}: \`${tool}\`${subject ? ` on ${subject}` : ""}, and it was `
+    + `refused for good — the refusal, with what IS available, is above. Asking again returns the same words. `
+    + `Take a different route to what you need.`;
+}
+
 export function recallNote(tool: string, subject: string, turn: number, authored = false): string {
   /**
    * A file the agent WROTE is pointed at differently, because it is somewhere else.

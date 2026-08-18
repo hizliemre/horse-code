@@ -316,6 +316,9 @@ export const graphTraceTool: Tool = {
           + `.go, …), not templates, stylesheets or markup. Read the file directly — asking again, or looking `
           + `for another path with graph_find, will not turn one up.`,
         isError: true,
+        // Saying "never" was not enough on its own: 27 of 90 calls over four runs asked anyway, several of
+        // them twice in the same conversation. Marked settled, the memo answers the second one.
+        settled: true,
       };
     }
     return {

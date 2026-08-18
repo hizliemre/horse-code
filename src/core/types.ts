@@ -33,6 +33,20 @@ export type PermissionMode = "ask" | "acceptEdits" | "auto";
 export interface ToolResult {
   content: string;
   isError: boolean;
+  /**
+   * This answer will not change — asking again produces the same one, word for word.
+   *
+   * Only for a refusal that is a property of the REQUEST rather than of the moment: a git subcommand this
+   * tool does not carry, a trace for a file the tracer never visits. A missing file is not settled (someone
+   * may create it) and neither is a failing command.
+   *
+   * Set it and the memo remembers the refusal, so the agent is answered from its own transcript instead of
+   * spending a turn to be told the same thing. Measured over four runs: 27 of 90 `graph_trace` calls asked
+   * for a trace that can never exist — thirteen different agents, several of them twice — and one
+   * correctness-judge asked for the same unavailable git subcommand EIGHT times in one turn, receiving the
+   * same 468-character list of what is available each time.
+   */
+  settled?: boolean;
 }
 
 /** A file-touching tool's activity, surfaced in the chat flow (Claude Code-style: name + target + preview). */
