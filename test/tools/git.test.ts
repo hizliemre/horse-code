@@ -129,3 +129,29 @@ describe("an exit code that is an answer", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * Advice that produces a failure is worse than no advice.
+ *
+ * The truncation notice said "narrow the range or add --stat". Measured live: a lens appended the flag after
+ * the paths, and git answered `fatal: option '--stat' must come before non-option arguments`. Git requires
+ * options before non-option arguments, so the notice has to say where the flag goes.
+ */
+describe("what a truncated result suggests", () => {
+  it("names where the flag belongs, not just which flag", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-git-trunc-"));
+    try {
+      const run = (cmd: string) => execSync(cmd, { cwd: dir, stdio: "pipe" });
+      run("git init -q");
+      run("git config user.email t@t.t"); run("git config user.name T");
+      await writeFile(join(dir, "a.txt"), "x\n");
+      run("git add a.txt"); run("git commit -qm first");
+      // A diff far larger than the output ceiling, so the notice is appended.
+      await writeFile(join(dir, "a.txt"), `${"line of text\n".repeat(8_000)}`);
+      const r = await gitTool.run({ args: ["diff"] },
+        { cwd: dir, signal: new AbortController().signal } as never);
+      expect(r.content).toContain("truncated");
+      expect(r.content).toContain("directly after the subcommand");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});

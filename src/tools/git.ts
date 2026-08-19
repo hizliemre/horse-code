@@ -160,7 +160,11 @@ export const gitTool: Tool = {
       return { content: out.code === 0 ? "(no output)" : "git failed with no output.", isError: failed };
     }
     const clipped = out.text.length > MAX_GIT_OUTPUT
-      ? `${truncateSafe(out.text, MAX_GIT_OUTPUT)}\n…[truncated — narrow the range or add --stat]`
+      // The advice names WHERE the flag goes. Measured live: told only to "add --stat", a lens appended it
+      // after the paths and git answered `fatal: option '--stat' must come before non-option arguments` —
+      // a suggestion that produces a failure is worse than no suggestion.
+      ? `${truncateSafe(out.text, MAX_GIT_OUTPUT)}\n…[truncated — narrow the range, or put \`--stat\` `
+        + `directly after the subcommand (git diff --stat <rest>), which git requires]`
       : out.text;
     return { content: clipped, isError: failed };
   },
