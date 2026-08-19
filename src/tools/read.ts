@@ -165,6 +165,20 @@ export const readFileTool: Tool = {
       raw = await readFile(abs, "utf8");
     } catch (e) {
       const said = e instanceof Error ? e.message : String(e);
+      /**
+       * A directory is a legitimate thing to be curious about, and `EISDIR` is not an answer to that.
+       *
+       * Measured on one run: eleven reads of a directory — `src/domain/Abstraction`, `Migrations/` — each
+       * answered with the name of a syscall. The agent wanted to know what is in there, which is a question
+       * this project has a tool for; naming it costs nothing and saves the turn spent working that out.
+       */
+      if (said.includes("EISDIR")) {
+        return {
+          content: `read_file: \`${args.path}\` is a directory, not a file. Use \`glob\` with `
+            + `\`${args.path.replace(/\/$/, "")}/**\` to see what is in it, then read the file you want.`,
+          isError: true,
+        };
+      }
       const elsewhere = said.includes("ENOENT") ? await sameNameElsewhere(ctx.cwd, args.path) : "";
       return { content: `read_file error: ${said}${elsewhere}`, isError: true };
     }

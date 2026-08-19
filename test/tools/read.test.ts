@@ -190,3 +190,41 @@ describe("a file that is somewhere else", () => {
     expect(r.content).not.toMatch(/There is one file|Files named/);
   });
 });
+
+/**
+ * A directory is a legitimate thing to be curious about, and `EISDIR` is not an answer to that.
+ *
+ * Measured on one run: eleven reads of a directory — `src/domain/Abstraction`, `Migrations/` — each answered
+ * with the name of a syscall. The agent wanted to know what is in there, which this project has a tool for.
+ */
+describe("reading a directory", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "hc-read-dir-"));
+    await mkdir(join(dir, "src/domain/Abstraction"), { recursive: true });
+    await writeFile(join(dir, "src/domain/Abstraction/Entity.cs"), "class Entity {}\n");
+  });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  const read = (path: string) =>
+    readFileTool.run({ path }, { cwd: dir, signal: new AbortController().signal } as never);
+
+  it("says it is a directory, not the name of a syscall", async () => {
+    const r = await read("src/domain/Abstraction");
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/is a directory/);
+    expect(r.content).not.toContain("EISDIR");
+  });
+
+  it("names the tool that answers the question actually being asked", async () => {
+    const r = await read("src/domain/Abstraction");
+    expect(r.content).toContain("glob");
+    expect(r.content).toContain("src/domain/Abstraction/**");
+  });
+
+  it("does not double the slash when the path already ends in one", async () => {
+    const r = await read("src/domain/Abstraction/");
+    expect(r.content).toContain("src/domain/Abstraction/**");
+    expect(r.content).not.toContain("Abstraction//");
+  });
+});
