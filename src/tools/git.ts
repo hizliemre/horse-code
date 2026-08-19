@@ -34,6 +34,14 @@ const READ_ONLY = new Set([
   "status", "log", "show", "diff", "blame", "shortlog", "whatchanged",
   "rev-parse", "rev-list", "merge-base", "name-rev", "describe", "symbolic-ref",
   "ls-files", "ls-tree", "cat-file", "count-objects", "show-ref", "for-each-ref", "ls-remote",
+  /**
+   * `check-ignore` asks whether a path is ignored — it reads `.gitignore` and answers, and changes nothing.
+   *
+   * Left out, it was the one read-only verb agents had to reach for `shell` to run: four calls in one run,
+   * each landing outside the tool that knows this repository's rules. And through `shell` its exit code is
+   * raw, so "no, that path is not ignored" — which git says with 1 — came back as a failed command.
+   */
+  "check-ignore",
 ]);
 
 /**
@@ -78,7 +86,7 @@ export const GIT_PUSH_TIMEOUT_MS = 120_000;
  *
  * 128 and above are never answers: those are git's own faults (bad object, not a repository).
  */
-const ANSWERS_WITH_ONE = new Set(["diff", "diff-index", "diff-tree", "diff-files", "merge-base"]);
+const ANSWERS_WITH_ONE = new Set(["diff", "diff-index", "diff-tree", "diff-files", "merge-base", "check-ignore"]);
 
 export function answeredWithOne(args: string[], code: number): boolean {
   return code === 1 && ANSWERS_WITH_ONE.has(args[0] ?? "");
@@ -87,6 +95,9 @@ export function answeredWithOne(args: string[], code: number): boolean {
 /** What exit 1 MEANS for this query, for the case where git printed nothing at all (`--quiet`). */
 export function answerOfOne(args: string[]): string {
   const verb = args[0] ?? "";
+  if (verb === "check-ignore") {
+    return "No — that path is not ignored by this repository's rules. (git exit code 1, which is the answer here.)";
+  }
   if (verb === "merge-base") {
     return args.includes("--is-ancestor")
       ? "No — the first commit is not an ancestor of the second. (git exit code 1, which is the answer here.)"

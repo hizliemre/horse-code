@@ -155,3 +155,33 @@ describe("what a truncated result suggests", () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * `check-ignore` was the one read-only verb agents had to reach for `shell` to run — four calls in one run,
+ * each landing outside the tool that knows this repository's rules, and each with a raw exit code: "no, that
+ * path is not ignored", which git says with 1, came back as a failed command.
+ */
+describe("asking whether a path is ignored", () => {
+  it("is allowed — it reads the rules and changes nothing", async () => {
+    const { refuse } = await import("../../src/tools/git.js");
+    expect(refuse(["check-ignore", "-v", "src/a.cs"])).toBeUndefined();
+  });
+
+  it("reads exit 1 as the answer it is", async () => {
+    const { answeredWithOne, answerOfOne } = await import("../../src/tools/git.js");
+    expect(answeredWithOne(["check-ignore", "src/a.cs"], 1)).toBe(true);
+    expect(answerOfOne(["check-ignore", "src/a.cs"])).toMatch(/not ignored/);
+  });
+
+  it("answers a real repository without calling it a failure", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-git-ci-"));
+    try {
+      execSync("git init -q", { cwd: dir, stdio: "pipe" });
+      await writeFile(join(dir, ".gitignore"), "build/\n");
+      const r = await gitTool.run({ args: ["check-ignore", "src/a.cs"] },
+        { cwd: dir, signal: new AbortController().signal } as never);
+      expect(r.isError).toBe(false);
+      expect(r.content).toMatch(/not ignored/);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
