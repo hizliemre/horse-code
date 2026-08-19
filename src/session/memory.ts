@@ -1,4 +1,5 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { telemetry } from "../obs/telemetry.js";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
@@ -123,10 +124,29 @@ export class MemoryStore {
    * stale snapshot of itself.
    */
   retarget(cwd: string): void {
+    /**
+     * The wait ends because a SESSION is here, not because the path changed.
+     *
+     * These were one statement, after an early return taken when the file was already right — and the file
+     * IS already right whenever the session was adopted once before. Measured on a 22-hour feature run that
+     * continued an existing worktree:
+     *
+     *   startup adopts it   → retarget(base): path changes, deferred cleared
+     *   the job begins      → deferUntilSession(): deferred set again, from the PROJECT root
+     *   the job adopts it   → retarget(base): path already base → early return → deferred stays TRUE
+     *
+     * Every `persist()` for the rest of the run then returned at its first line. Eleven facts were learned
+     * and injected — later agents read them out of the in-memory cache, so nothing looked wrong — and both
+     * `memory.jsonl` files were untouched from the first minute to the last. The run's whole memory would
+     * have gone with the process.
+     *
+     * `adopt()` was already called on every path; the earlier fix for this is intact. What failed is here:
+     * adopting a session that was already adopted has to be a no-op for the FILE and not for the wait.
+     */
+    if (writableStateRoot(cwd) !== undefined) this.deferred = false;
     const next = join(stateRoot(cwd), ".horsecode", "memory.jsonl");
     if (next === this.file) return;
     this.file = next;
-    if (writableStateRoot(cwd) !== undefined) this.deferred = false;  // …the session is here; the wait is over
     this.cache = undefined;
   }
 
@@ -439,8 +459,23 @@ export class MemoryStore {
   }
 
   private async persist(): Promise<void> {
-    // Mid-job, before the session opens: the root is read, never written. It waits in `pending`.
-    if (this.deferred) return;
+    /**
+     * Mid-job, before the session opens: the root is read, never written. It waits in `pending`.
+     *
+     * Recorded, because a wait that never ends is indistinguishable from a save. Measured on a 22-hour
+     * feature run: eleven facts were learned and injected — later agents in the run were reading them out of
+     * the in-memory cache — and neither `memory.jsonl` was touched. `add` loads before it writes, so the
+     * cache is never undefined by the time this runs, which leaves exactly one way for that to happen: the
+     * store stayed deferred for the whole run and every entry is still sitting in `pending`, to be lost with
+     * the process. Which door failed to adopt the session could not be told from outside; this says so.
+     */
+    if (this.deferred) {
+      telemetry().event("memory.deferred", {
+        "hc.memory.pending": this.pending.length,
+        "hc.memory.file": this.file,
+      });
+      return;
+    }
     const dir = dirname(this.file);
     await mkdir(dir, { recursive: true });
     /**

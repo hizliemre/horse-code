@@ -590,3 +590,62 @@ describe("counting injections", () => {
     expect(await readFile(gi, "utf8")).toContain(USAGE_FILE);
   });
 });
+
+/**
+ * Adopting a session that was already adopted must be a no-op for the FILE and not for the WAIT.
+ *
+ * Measured on a 22-hour feature run that continued an existing worktree:
+ *
+ *   startup adopts it   → retarget(base): path changes, deferred cleared
+ *   the job begins      → deferUntilSession(): deferred set again, from the PROJECT root
+ *   the job adopts it   → retarget(base): the path is already base → early return → deferred stays TRUE
+ *
+ * Every `persist()` for the rest of the run returned at its first line. Eleven facts were learned and
+ * injected — later agents read them out of the in-memory cache, so nothing looked wrong — and both
+ * `memory.jsonl` files were untouched from the first minute to the last.
+ */
+describe("a session adopted twice", () => {
+  it("still writes what it learns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mem-twice-"));
+    try {
+      const base = join(root, ".horsecode", "worktrees", "job", "base");
+      await mkdir(join(base, ".horsecode"), { recursive: true });
+      const store = new MemoryStore({ home: root, cwd: root });
+
+      store.retarget(base);          // the startup question adopts the open worktree
+      store.deferUntilSession();     // …then a job begins, and defers from the project root
+      store.retarget(base);          // …and adopts the same worktree again
+
+      await store.add("learned during the run", "fact");
+      const file = join(base, ".horsecode", "memory.jsonl");
+      expect(existsSync(file)).toBe(true);
+      expect(await readFile(file, "utf8")).toContain("learned during the run");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  /** The project root stays a reference — re-adopting must not move the writes back out of the session. */
+  it("keeps writing into the session, not the project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mem-twice2-"));
+    try {
+      const base = join(root, ".horsecode", "worktrees", "job", "base");
+      await mkdir(join(base, ".horsecode"), { recursive: true });
+      const store = new MemoryStore({ home: root, cwd: root });
+      store.retarget(base);
+      store.deferUntilSession();
+      store.retarget(base);
+      await store.add("stays in the session", "fact");
+      expect(existsSync(join(root, ".horsecode", "memory.jsonl"))).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  /** …and a job that has NOT adopted anything must still hold its writes, which is what the wait is for. */
+  it("still waits when there is no session to adopt", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mem-wait-"));
+    try {
+      const store = new MemoryStore({ home: root, cwd: root });
+      store.deferUntilSession();
+      await store.add("learned before any session", "fact");
+      expect(existsSync(join(root, ".horsecode", "memory.jsonl"))).toBe(false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});
