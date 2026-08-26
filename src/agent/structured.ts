@@ -118,6 +118,20 @@ export async function runStructuredRole<T>(
     if (ci > 0) opts.onFallback?.(chain[ci - 1], model, "structured: previous model returned no valid result");
     const messages: Message[] = [...opts.messages]; // fresh conversation for each model
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      /**
+       * An attempt that cannot run is not made.
+       *
+       * The budget was checked only AFTER a model's attempts, so when it ran out mid-attempt the next one
+       * still started — against an already-aborted signal — and came back instantly as "the model did not
+       * answer within its deadline". Measured over a 36-hour run: of 126 such reports, 26 arrived in under
+       * ten seconds and 70 more inside a minute, against a three-minute per-model budget. A model does not
+       * fail to answer in eight seconds; it was never asked.
+       *
+       * The record then reads as a fleet of slow models, which is the opposite of what happened, and the
+       * next reader of that log spends their time on the wrong question. (It cost this one an hour.)
+       */
+      if (opts.signal.aborted) throw new Error("cancelled");
+      if (outOfTime()) break;
       let lastText = "";
       let errored: string | undefined;
       for await (const ev of runRoleAgent({ ...opts, model, fallbacks: [], messages, tools: registry, signal: signalFor() })) {
@@ -136,7 +150,18 @@ export async function runStructuredRole<T>(
            * finishing in four hours.
            */
           if (opts.signal.aborted) throw new Error("cancelled");
-          errored = "the model did not answer within its deadline";
+          /**
+           * WHICH clock ran out, in the message.
+           *
+           * "did not answer within its deadline" reads as a statement about the model, and for the
+           * per-model clock it is one. For the chain's total it is not: that says the walk is longer than
+           * the job is worth, and the model it lands on is blameless. The two were indistinguishable in the
+           * record, and telling them apart is the difference between "raise the model's budget" and "the
+           * chain is being started too late" — a distinction a whole evening was spent guessing at.
+           */
+          errored = total?.aborted
+            ? "the chain's total budget ran out before this model was given a fair turn"
+            : "the model did not answer within its deadline";
           break;
         }
         // NB: runRoleAgent reports usage itself (it knows which chain link actually served the call), so

@@ -20,6 +20,7 @@ import type { SpecKitTemplates } from "./templates.js";
 import type { FeaturePaths } from "./layout.js";
 import { constitutionPath } from "./layout.js";
 import { constitutionNote } from "../engine/constitution-store.js";
+import { WHAT_IT_COST } from "../engine/implementer.js";
 
 export interface PhaseDeps {
   deps: TaskCycleDeps;
@@ -117,6 +118,14 @@ async function runRole(
     systemPrompt: (routed.length
       ? applySkills(`${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`, routed.map((m) => m.name), p.deps.skillRegistry)
       : `${command}\n\n${SKIP}${p.deps.roleRegistry.ruleSuffix()}`) + law + projectToolsNote(tools.list(), !!loadGraphSync(p.workdir)) + BATCH_TOOLS_NOTE
+      /**
+       * …and the same close-of-turn question the implementers are asked.
+       *
+       * These phases run LONGEST and had it LEAST. Measured over a 36-hour run: eight planner rounds re-read
+       * `BeempaDbContext.cs` fifty-five times between them, each starting from nothing, and left two facts
+       * behind — against sixteen from the implementers, who were asked. They were not learning less.
+       */
+      + `\n\n${WHAT_IT_COST}`
       // Every phase narrates as it works and two of them ask outright — all of it lands in the user's chat.
       + respondIn(p.language),
     tools,

@@ -107,6 +107,46 @@ export function leavesWorkdir(command: string, cwd: string): string | undefined 
   return undefined;
 }
 
+/**
+ * A git command that DESTROYS uncommitted work, run through the door the git tool closed.
+ *
+ * The git tool refuses everything that writes, so "this tool never changes anything" is a guarantee it can
+ * make. `shell` made no such promise, and the same commands went through it. Measured over one run, all from
+ * implementers cleaning up after themselves:
+ *
+ *   git reset --mixed HEAD~11        git checkout -- .
+ *   git reset --hard origin/<branch> git restore --source=<sha> -- .
+ *
+ * Committing and staging stay allowed: an implementer records its own work, and taking that away leaves it
+ * unable to finish. What is refused is the shape that throws work away wholesale — every one of these can
+ * erase a turn's output with no diff, no checkpoint and nothing in the transcript to say what was lost.
+ *
+ * Scoped to a PATH is still allowed (`git checkout -- one/file.cs`): reverting one file is an edit, and the
+ * agent that does it can say which file. It is `.` and `-A` — everything, at once — that is refused, along
+ * with `reset --hard` and `clean -fd`, which do not take a path in any safe sense.
+ *
+ * Every write is already checkpointed as a `wip(…)` commit, so recovery has a route that leaves a record.
+ */
+const DESTROYS_WORK = [
+  { re: /^reset\b[^]*\s--hard\b/, what: "reset --hard" },
+  { re: /^clean\b[^]*\s-\S*[fd]/, what: "clean -f/-d" },
+  { re: /^checkout\b[^]*\s--\s+(?:\.|-A|:\/)\s*$/, what: "checkout -- ." },
+  { re: /^restore\b[^]*\s(?:\.|-A|:\/)\s*$/, what: "restore ." },
+];
+
+export function destroysWork(command: string): string | undefined {
+  // Segment by segment, and only where `git` is the VERB — otherwise `grep -rn "git reset --hard" docs/`
+  // reads as the thing it is searching for.
+  for (const seg of command.split(/&&|\|\||;|\|/)) {
+    const m = /^\s*git\s+(.*)$/.exec(seg.trim());
+    if (!m) continue;
+    const rest = (m[1] ?? "").replace(/^(?:-\S+\s+)*/, "").trim();
+    const hit = DESTROYS_WORK.find((d) => d.re.test(rest));
+    if (hit) return hit.what;
+  }
+  return undefined;
+}
+
 export function rewritesAFile(command: string): string | undefined {
   for (const re of REWRITES) if (re.test(command)) return re.source;
   const m = REDIRECT.exec(command);
@@ -141,6 +181,16 @@ export const shellTool: Tool = {
     if (!parsed.success) {
       return Promise.resolve({
         content: `shell: invalid args: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        isError: true,
+      });
+    }
+    const wipes = parsed.success ? destroysWork(parsed.data.command) : undefined;
+    if (wipes !== undefined) {
+      return Promise.resolve({
+        content: `shell: \`git ${wipes}\` throws away uncommitted work wholesale, and the \`git\` tool refuses `
+          + `it for that reason — running it here goes around the same rule. Every file you write is already `
+          + `committed as a \`wip(…)\` checkpoint, so undo by going back to one of those, or revert a NAMED `
+          + `path (\`git checkout -- path/to/file\`), which says in the transcript what was undone.`,
         isError: true,
       });
     }

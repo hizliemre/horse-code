@@ -33,6 +33,24 @@ const IMPLEMENTER_MAX_TURNS = 200;
  * Nothing written is lost when it fires: every write is committed to the task worktree as it happens, so the
  * partial work stays and the next tier continues from it.
  */
+/**
+ * The last moment to write down what this turn paid for.
+ *
+ * A standing offer in the system prompt is not a moment; the close of the turn is, and it is the last one
+ * there is. Measured before it existed: 153 tool calls by one implementer, ten of them failed shell commands
+ * working out that this project's formatter has to be invoked from a subdirectory — and not one
+ * `remember_fact`.
+ *
+ * Shared, because the reflex was wired to implementers only and the phases that run LONGEST had it least.
+ * Measured over a 36-hour feature run: eight planner rounds re-read `BeempaDbContext.cs` fifty-five times
+ * between them, each starting from nothing, and wrote two facts in total — while the implementers, asked
+ * this question, wrote sixteen. The document phases were not learning less; they were not being asked.
+ */
+export const WHAT_IT_COST =
+  "Before you stop: did anything here cost you more than one attempt — a command that had to be invoked a "
+  + "particular way, a file that was not where it should have been, a trap you fell into? If you have not "
+  + "already recorded it with `remember_fact`, do that now. The next agent pays for it again otherwise.";
+
 export const IMPLEMENTER_TIMEOUT_MS = 20 * 60 * 1000;
 /** How many times a task's budget may be extended. Past this, more time is not what is missing. */
 export const MAX_BUDGET_EXTENSIONS = 2;
@@ -191,9 +209,7 @@ export async function runImplementer(
      * Deliberately a CHECK, not the instruction: what is learned should be written the moment it is learned,
      * because a run that is stopped early still leaves it behind. This is what catches the rest.
      */
-    `Before you stop: did anything here cost you more than one attempt — a command that had to be invoked a ` +
-    `particular way, a file that was not where it should have been, a trap you fell into? If you have not ` +
-    `already recorded it with \`remember_fact\`, do that now. The next agent pays for it again otherwise.\n\n` +
+    `${WHAT_IT_COST}\n\n` +
     /**
      * Git is this tool's job, and it was handed back to the person.
      *

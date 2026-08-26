@@ -101,3 +101,36 @@ describe("what is never asked of the developer", () => {
     expect(s).not.toContain("if (!deps.baseRef) return undefined;");
   });
 });
+
+/**
+ * The close-of-turn memory question reaches the phases that run LONGEST, not only the implementers.
+ *
+ * It was wired to implementers alone. Measured over a 36-hour feature run: eight planner rounds re-read
+ * `BeempaDbContext.cs` fifty-five times between them, each starting from nothing, and left two facts behind
+ * — against sixteen from the implementers, who were asked the question. The document phases were not
+ * learning less; they were not being asked.
+ */
+describe("what a document phase is asked before it stops", () => {
+  const src = (f: string): Promise<string> => readFile(f, "utf8");
+
+  it("asks the same question, from one place", async () => {
+    const impl = await src("src/engine/implementer.ts");
+    expect(impl).toContain("export const WHAT_IT_COST");
+    expect(impl).toContain("did anything here cost you more than one attempt");
+    // …and the implementer's own prompt uses that constant rather than a second copy of the words.
+    expect(impl).toContain("`${WHAT_IT_COST}\\n\\n`");
+  });
+
+  it("reaches specify, plan and the rest — they share one prompt builder", async () => {
+    const phases = await src("src/speckit/phases.ts");
+    expect(phases).toContain("WHAT_IT_COST");
+    expect(phases).toContain('import { WHAT_IT_COST } from "../engine/implementer.js"');
+  });
+
+  /** One wording, so a lesson written by a planner reads like one written by a coder. */
+  it("keeps a single wording rather than two that drift", async () => {
+    const impl = await src("src/engine/implementer.ts");
+    const occurrences = impl.split("did anything here cost you more than one attempt").length - 1;
+    expect(occurrences).toBe(1);
+  });
+});

@@ -163,3 +163,53 @@ describe("a command that walks out of the working directory", () => {
     expect(r.content).toMatch(/invisible to the review/);
   });
 });
+
+/**
+ * A git command that DESTROYS uncommitted work, run through the door the git tool closed.
+ *
+ * The git tool refuses everything that writes, so "this tool never changes anything" is a guarantee it can
+ * make. `shell` made no such promise and the same commands went through it. Measured over one run, all from
+ * implementers cleaning up after themselves: `reset --mixed HEAD~11`, `reset --hard origin/<branch>`,
+ * `checkout -- .`, `restore --source=<sha> -- .`
+ */
+describe("a git command that throws work away", () => {
+  const CWD = "/w/base";
+  const run = (command: string) =>
+    shellTool.run({ command }, { cwd: CWD, signal: new AbortController().signal } as never);
+
+  it("refuses the shapes that were actually run", async () => {
+    const { destroysWork } = await import("../../src/tools/shell.js");
+    expect(destroysWork("git reset --hard origin/hc/t/x")).toBeTruthy();
+    expect(destroysWork("git checkout -- .")).toBeTruthy();
+    expect(destroysWork("git restore --source=c2649bc64 -- .")).toBeTruthy();
+    expect(destroysWork("git clean -fd")).toBeTruthy();
+  });
+
+  /** Recording work is the implementer's job; taking it away leaves it unable to finish. */
+  it("leaves committing and staging alone", async () => {
+    const { destroysWork } = await import("../../src/tools/shell.js");
+    for (const c of ["git add src/a.cs", "git commit -m 'wip'", "git push", "git stash list",
+      "git reset --mixed HEAD~1", "git status"]) {
+      expect(destroysWork(c), c).toBeUndefined();
+    }
+  });
+
+  /** Reverting ONE named file is an edit, and the transcript says which file. */
+  it("allows a revert scoped to a path", async () => {
+    const { destroysWork } = await import("../../src/tools/shell.js");
+    expect(destroysWork("git checkout -- src/domain/Order.cs")).toBeUndefined();
+    expect(destroysWork("git restore src/domain/Order.cs")).toBeUndefined();
+  });
+
+  it("does not fire on a command that merely mentions the words", async () => {
+    const { destroysWork } = await import("../../src/tools/shell.js");
+    expect(destroysWork("grep -rn 'git reset --hard' docs/")).toBeUndefined();
+  });
+
+  it("points at the checkpoint route rather than just refusing", async () => {
+    const r = await run("git checkout -- .");
+    expect(r.isError).toBe(true);
+    expect(r.content).toMatch(/wip\(…\)` checkpoint/);
+    expect(r.content).toMatch(/NAMED path/);
+  });
+});

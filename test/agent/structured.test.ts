@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { runStructuredRole } from "../../src/agent/structured.js";
 import type { Provider } from "../../src/core/types.js";
@@ -290,5 +291,44 @@ describe("the whole chain has a ceiling too", () => {
       perAttemptMs: 5_000, totalMs: 10_000,
     }, z.object({ a: z.string() }));
     expect(out.a).toBe("ok");
+  });
+});
+
+/**
+ * An attempt that cannot run is not made, and a clock that is not the model's does not read as its fault.
+ *
+ * The total budget was checked only AFTER a model's attempts, so when it ran out mid-attempt the next one
+ * still started — against an already-aborted signal — and returned instantly as "the model did not answer
+ * within its deadline". Measured over a 36-hour run: of 126 such reports, 26 arrived in under ten seconds
+ * and 70 more inside a minute, against a three-minute per-model budget. A model does not fail to answer in
+ * eight seconds; it was never asked. The log then reads as a fleet of slow models, which is the opposite of
+ * what happened.
+ */
+describe("a chain that has run out of time", () => {
+  const src = readFileSync("src/agent/structured.ts", "utf8");
+
+  it("checks the budget BEFORE starting an attempt, not only after a model's attempts", () => {
+    const inner = src.indexOf("for (let attempt = 0; attempt < maxAttempts; attempt++)");
+    const guard = src.indexOf("if (outOfTime()) break;", inner);
+    const run = src.indexOf("runRoleAgent(", inner);
+    expect(guard).toBeGreaterThan(inner);
+    expect(guard).toBeLessThan(run);
+  });
+
+  it("still stops the whole walk when the total is spent", () => {
+    expect(src).toContain("the model chain did not produce a result within its total budget");
+  });
+
+  /** The two clocks say different things and lead to different fixes; the record has to tell them apart. */
+  it("names the chain's total separately from a model's own deadline", () => {
+    expect(src).toContain("the chain's total budget ran out before this model was given a fair turn");
+    expect(src).toContain("the model did not answer within its deadline");
+    expect(src).toContain("total?.aborted");
+  });
+
+  /** A person pressing stop is neither of those, and must not be reported as a model problem. */
+  it("keeps a caller's cancellation distinct from both", () => {
+    const inner = src.indexOf("for (let attempt = 0; attempt < maxAttempts; attempt++)");
+    expect(src.indexOf('throw new Error("cancelled")', inner)).toBeGreaterThan(inner);
   });
 });
