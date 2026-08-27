@@ -14,6 +14,9 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # A hang must cost minutes, not hours. Measured: a run whose tests had all reported sat for 3h42m before
+    # anyone noticed, because vitest could not exit while processes a test had spawned were still alive.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       # The floor from `engines` and the current LTS. A break on one and not the other is the finding.
@@ -21,6 +24,11 @@ jobs:
         node: ["20", "22"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The suite diffs THIS repository against `HEAD~1` — a lens's request is checked against a real
+          # diff, which is the shape it actually receives. The default shallow clone has no `HEAD~1`, so the
+          # diff came back empty and the assertion failed on CI while passing everywhere else.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -36,7 +44,12 @@ jobs:
       # tool's name as the size of a truncated document. Runtime never noticed; both were strings.
       - run: npm run typecheck
 
+      # A test asserts the bold ANSI escape a rendered question carries. Without a TTY the colour library
+      # switches itself off, the escape is never emitted, and the assertion fails on a difference in the
+      # terminal rather than in the code.
       - run: npm test
+        env:
+          FORCE_COLOR: "1"
 
       # Build last, and always: `files` publishes `dist/` alone, so a build that fails here is a package
       # that would publish nothing runnable.

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { shellTool, clampOutput, MAX_SHELL_CHARS } from "../../src/tools/shell.js";
 
@@ -72,6 +72,25 @@ describe("a timed-out command takes everything it started with it", () => {
     try { process.kill(pid, 0); return true; } catch { return false; }
   };
 
+  /**
+   * Whatever these tests start, they also bury.
+   *
+   * They exist to prove the tool kills a process tree, so they deliberately create one — and when the tool
+   * is WRONG, the leftovers are real processes that outlive the test. Vitest then cannot exit, because the
+   * event loop is not the thing holding it open: the runner is waiting on children that will never end.
+   *
+   * Measured on CI: every test file reported, no summary was ever printed, and the job sat for 3 hours 42
+   * minutes until it was cancelled. The runner's own cleanup named them on the way out — "Terminate orphan
+   * process: (sh), (node), (node), (node)". A test that asserts a kill must not depend on that kill working
+   * in order to clean up after itself.
+   */
+  const spawned: number[] = [];
+  afterEach(() => {
+    for (const pid of spawned.splice(0)) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone, which is the passing case */ }
+    }
+  });
+
   it("kills the grandchild, not just the shell", async () => {
     // Backgrounded, so `sh` does NOT exec into it: a real grandchild, which is the case that used to leak.
     const grandchild = `node -e "setInterval(()=>{},1000)" & echo $!; wait`;
@@ -80,6 +99,7 @@ describe("a timed-out command takes everything it started with it", () => {
       { cwd: process.cwd(), signal: new AbortController().signal },
     );
     const pid = Number(/(\d+)/.exec(r.content)?.[1]);
+    if (pid > 0) spawned.push(pid);
     expect(pid).toBeGreaterThan(0);
     expect(r.isError).toBe(true);           // it was killed, not finished
     await new Promise((res) => setTimeout(res, 300)); // SIGTERM → SIGKILL grace
@@ -97,6 +117,7 @@ describe("a timed-out command takes everything it started with it", () => {
     ac.abort();
     const r = await run;
     const pid = Number(/(\d+)/.exec(r.content)?.[1]);
+    if (pid > 0) spawned.push(pid);
     if (pid > 0) {
       await new Promise((res) => setTimeout(res, 300));
       expect(alive(pid)).toBe(false);

@@ -10,12 +10,15 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20     # the same guard as CI: a hang must cost minutes, not hours
     environment: npm            # a protection rule here can require an approval before the token is reachable
     permissions:
       contents: write           # create the GitHub Release
       id-token: write           # provenance: signs the package with a statement of where it was built
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # the suite diffs this repository against HEAD~1 — see ci.yml
 
       - uses: actions/setup-node@v4
         with:
@@ -44,6 +47,8 @@ jobs:
       # published is THIS tree, and it is the last moment anything can be stopped.
       - run: npm run typecheck
       - run: npm test
+        env:
+          FORCE_COLOR: "1"  # a test asserts a bold ANSI escape — see ci.yml
       - run: npm run build
 
       # Refuse a version that is already on the registry with a message that says so, instead of letting
