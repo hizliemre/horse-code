@@ -47,7 +47,12 @@ jobs:
       # A test asserts the bold ANSI escape a rendered question carries. Without a TTY the colour library
       # switches itself off, the escape is never emitted, and the assertion fails on a difference in the
       # terminal rather than in the code.
-      - run: npm test
+      # `hanging-process` names what is still holding the process open when vitest should have exited.
+      #
+      # Two runs reported every test file and then printed no summary at all — the first sat for 3h42m, the
+      # second was stopped by the timeout above. Without the summary the failing assertions are invisible,
+      # so the hang is not one problem among several; it is the one hiding the others.
+      - run: npx vitest run --reporter=default --reporter=hanging-process
         env:
           FORCE_COLOR: "1"
 
