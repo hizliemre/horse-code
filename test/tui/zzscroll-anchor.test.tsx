@@ -15,7 +15,25 @@ const screen = (rows: number, columns = 120) => {
   return { stdout: e, frame: (): string => all, clear: (): void => { all = ""; } };
 };
 
+/**
+ * A fixed sleep is a bet on how fast the machine renders, and it lost on a two-core runner: the assertion
+ * read an EMPTY frame — `expected '' to contain 'THE LATEST THING'`. The test is about which line the view
+ * anchors to, not about how long a render takes.
+ *
+ * Kept as `settle()` for the callers that just need the render to have happened, and given a text-aware form
+ * for the ones that then assert on it. Slow machines wait longer; a real regression still fails, because the
+ * text never arrives however long it waits.
+ */
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 60));
+
+const untilFrame = async (frame: () => string, text: string, ms = 4_000): Promise<string> => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const f = strip(frame());
+    if (f.includes(text) || Date.now() > deadline) return f;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+};
 
 /**
  * Scrolling up during a run has to survive the run.
@@ -80,8 +98,7 @@ describe("scrolling back through a run", () => {
       await settle();
       s.clear();
       c.note("THE LATEST THING");
-      await settle();
-      expect(strip(s.frame())).toContain("THE LATEST THING");
+      expect(await untilFrame(s.frame, "THE LATEST THING")).toContain("THE LATEST THING");
     });
   });
 });

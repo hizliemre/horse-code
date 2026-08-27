@@ -13,6 +13,16 @@ const git = (...args: string[]): string =>
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), "hc-deliver-"));
   git("init", "-b", "main");
+  /**
+   * The identity goes into the REPOSITORY, not just onto this file's own git calls.
+   *
+   * `git(...)` above passes `-c user.email=…`, which covers what the test runs and nothing else. The code
+   * under test makes its own git calls, and `git merge --no-ff -m …` has to write a commit — so on a machine
+   * with no global identity it fails with "Please tell me who you are". A developer laptop has one; a fresh
+   * CI runner does not, which is why four of these passed everywhere except where it mattered.
+   */
+  git("config", "user.email", "t@t");
+  git("config", "user.name", "t");
   await writeFile(join(repo, "README.md"), "start\n", "utf8");
   git("add", "-A");
   git("commit", "-m", "initial");

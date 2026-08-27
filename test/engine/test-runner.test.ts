@@ -118,7 +118,15 @@ describe("runProjectTests", () => {
    */
   it("keeps only the tail of a chatty suite", async () => {
     const lines = Math.ceil((MAX_TEST_OUTPUT * 5) / 10); // ~10 chars per line
-    await pkg({ test: `node -e "for(let i=0;i<${lines};i++)console.log('noise'+i); process.exit(1)"` });
+    /**
+     * `process.exitCode`, not `process.exit()`.
+     *
+     * `process.exit()` does not wait for stdout that has not drained, and stdout to a pipe is asynchronous —
+     * so the child can exit with thousands of its lines still buffered. The assertion is about the TAIL, and
+     * on a CI runner the tail was exactly what never arrived: `expected … to contain 'noise5999'` against
+     * output that began at `noise0`. Setting the code and returning lets Node flush before it leaves.
+     */
+    await pkg({ test: `node -e "for(let i=0;i<${lines};i++)console.log('noise'+i); process.exitCode = 1"` });
     const r = await runProjectTests(dir);
     expect(r.output.length).toBeLessThanOrEqual(MAX_TEST_OUTPUT + 200);
     // The tail is what matters: failures are printed last.

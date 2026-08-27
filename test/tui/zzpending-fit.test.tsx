@@ -36,6 +36,26 @@ const OPTIONS = [
  * the question's own first characters gone — "2 standing rule(s)" for twelve. The user pressed Enter on a
  * choice they could not see and got "No", losing the import.
  */
+/**
+ * Waits for a frame to carry `text`, rather than sleeping and hoping.
+ *
+ * A fixed `setTimeout(80)` is a bet on how fast the machine renders. It paid out on a developer laptop and
+ * lost on a two-core CI runner: the assertion read an EMPTY frame — `expected '' to contain 'Yes — import
+ * all'` — four times over, once per terminal height. The test was never about timing; it is about what the
+ * layout keeps when the terminal is short.
+ *
+ * So it polls to a deadline instead. A slow machine takes longer and still passes; a real layout regression
+ * still fails, because the text never arrives however long it waits.
+ */
+const until = async (frame: () => string, text: string, ms = 4_000): Promise<string> => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const f = strip(frame());
+    if (f.includes(text) || Date.now() > deadline) return f;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+};
+
 describe("a pending question never crowds out its own answers", () => {
   /**
    * 16 is the measured floor, not a preference: the answer box alone is ten rows (border, two labels, two
@@ -49,8 +69,7 @@ describe("a pending question never crowds out its own answers", () => {
       const app = render(<App controller={c} fullscreen />, { stdout: stdout as never, patchConsole: false, exitOnCtrlC: false });
       try {
         void c.ask(QUESTION, { options: OPTIONS });
-        await new Promise((r) => setTimeout(r, 80));
-        const f = strip(frame());
+        const f = await until(frame, "Yes — import all");
         expect(f).toContain("Yes — import all");
         expect(f).toContain("No");
         expect(f).toContain("Esc to type");       // …and the list is complete, not cut short
@@ -66,8 +85,7 @@ describe("a pending question never crowds out its own answers", () => {
     const app = render(<App controller={c} fullscreen />, { stdout: stdout as never, patchConsole: false, exitOnCtrlC: false });
     try {
       void c.ask(QUESTION, { options: OPTIONS });
-      await new Promise((r) => setTimeout(r, 80));
-      const f = strip(frame());
+      const f = await until(frame, "12 standing rule(s)");
       expect(f).toContain("12 standing rule(s)");  // the headline survives…
       expect(f).toContain("Import them?");         // …so does the actual question
       expect(f).toMatch(/… \d+ more line\(s\)/);   // …and the gap is named
