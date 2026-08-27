@@ -13,6 +13,10 @@ node_modules/
 
 # AST cache, keyed by local mtime — meaningless on another machine and a guaranteed merge conflict.
 graphify-out/manifest.json
+# …and the cache itself, which the line above named but never covered: 96 files, one per parsed source,
+# under a version-pinned directory (`cache/ast/v0.8.44/`). Derived from the sources beside them, rebuilt on
+# demand, and replaced wholesale by the next graphify version — churn with nothing to review.
+graphify-out/cache/
 # ~850 KB viewer, regenerated from graph.json on every build.
 graphify-out/graph.html
 graphify-out/.graphify_root
