@@ -59,11 +59,26 @@ export class FileSink implements TelemetrySink {
     return this.dropped;
   }
 
+  /**
+   * A stream that failed to open never calls `end`'s callback, and this awaited it forever.
+   *
+   * `createWriteStream` does not throw when the path cannot be opened — it emits `error` on a later tick. So
+   * the constructor's `catch` does not run, `stream` is set, and whether the error handler has cleared it by
+   * the time anything flushes is a race with the event loop. Lose that race and `end(cb)` is called on a
+   * broken stream, the callback is never invoked, and the promise has nothing left to resolve it.
+   *
+   * The observer then outlives what it observes: `flush()` is awaited as a run finishes, so a machine that
+   * cannot write the log cannot finish the run either. The `error` listener is the second exit, and either
+   * one is enough.
+   */
   async flush(): Promise<void> {
     const s = this.stream;
     if (!s) return;
     this.stream = undefined;
-    await new Promise<void>((resolve) => s.end(() => resolve()));
+    await new Promise<void>((resolve) => {
+      s.once("error", () => resolve());
+      s.end(() => resolve());
+    });
   }
 }
 

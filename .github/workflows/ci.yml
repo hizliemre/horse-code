@@ -52,7 +52,12 @@ jobs:
       # Two runs reported every test file and then printed no summary at all — the first sat for 3h42m, the
       # second was stopped by the timeout above. Without the summary the failing assertions are invisible,
       # so the hang is not one problem among several; it is the one hiding the others.
-      - run: npx vitest run --reporter=default --reporter=hanging-process
+      # `verbose` prints each test AS IT COMPLETES, not each file when it finishes.
+      #
+      # Two rounds were spent narrowing a hang to a file; the default reporter cannot say more than that,
+      # because a file that never finishes never prints. With per-test output the last line before the stall
+      # names the test that completed, and the hang is the one after it.
+      - run: npx vitest run --reporter=verbose
         env:
           FORCE_COLOR: "1"
 
