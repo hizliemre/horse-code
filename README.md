@@ -42,7 +42,13 @@ Three constraints drove most of the design:
 ## Install
 
 ```bash
-git clone <this repo> && cd horse-code
+npm install -g horse-code
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/hizliemre/horse-code && cd horse-code
 npm install          # `prepare` builds automatically
 npm link             # puts `hcode` on your PATH
 ```
@@ -121,6 +127,15 @@ npm run build     # tsup → dist/
 
 Tests carry the measurement that motivated them in the describe block. A test whose comment says "measured live: 27 of 90 calls" is documentation as much as a guard — if you change the behaviour, that number is what you are trading away.
 
+Releases are cut by tag: `npm version <patch|minor|major>` then push the tag. The workflow refuses to publish
+if the tag and `package.json` disagree, or if that version is already on the registry — npm versions are
+permanent, so both are checked before anything is built.
+
 ## Status
 
-Working software, used daily against a real .NET + Angular monorepo. Version `0.0.0` is honest: interfaces move when a measurement says they should.
+Working software, used daily against a real .NET + Angular monorepo. Pre-1.0 is honest: interfaces move when
+a measurement says they should.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

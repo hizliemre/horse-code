@@ -1,7 +1,29 @@
 {
   "name": "horse-code",
-  "version": "0.0.0",
-  "description": "Terminal coding agent",
+  "version": "0.1.0",
+  "description": "Terminal coding agent: one sentence to reviewed, committed code — in its own git worktree",
+  "license": "MIT",
+  "author": "Emre Hızlı <hizliemre@gmail.com>",
+  "homepage": "https://github.com/hizliemre/horse-code#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hizliemre/horse-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hizliemre/horse-code/issues"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "coding-agent",
+    "llm",
+    "terminal",
+    "tui",
+    "code-review",
+    "claude",
+    "mcp"
+  ],
   "type": "module",
   "bin": {
     "hcode": "./dist/cli.js"
@@ -17,7 +39,8 @@
     "prepare": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

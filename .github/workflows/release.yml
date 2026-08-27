@@ -1,0 +1,72 @@
+name: Release
+
+# A tag is the trigger, so publishing is a deliberate act with a name: `git tag v0.1.0 && git push --tags`.
+# Publishing on every push to main would make the version field the only thing standing between a typo and
+# a release nobody can unpublish — npm keeps a published version forever.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm            # a protection rule here can require an approval before the token is reachable
+    permissions:
+      contents: write           # create the GitHub Release
+      id-token: write           # provenance: signs the package with a statement of where it was built
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # The tag and the manifest must agree BEFORE anything is built or sent.
+      #
+      # `git tag v0.2.0` on a tree whose package.json still says 0.1.0 republishes 0.1.0 — which npm refuses
+      # if it exists, and silently mislabels if it does not. The tag is what a human reads; the manifest is
+      # what npm records. They disagreeing is the whole failure, so it is the first thing checked.
+      - name: Tag matches package.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag v$TAG does not match package.json $PKG — bump one of them and re-tag"
+            exit 1
+          fi
+          echo "publishing $PKG"
+
+      # The same gate CI runs. Re-run rather than trust a green tick on some earlier commit: what is being
+      # published is THIS tree, and it is the last moment anything can be stopped.
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # Refuse a version that is already on the registry with a message that says so, instead of letting
+      # `npm publish` fail with E403 halfway through.
+      - name: Version is not already published
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          if npm view "horse-code@$PKG" version >/dev/null 2>&1; then
+            echo "::error::horse-code@$PKG is already on the registry — npm versions are permanent, bump first"
+            exit 1
+          fi
+
+      # --provenance publishes a signed attestation of the commit and workflow that produced the tarball, so
+      # anyone installing can verify it came from this repository rather than from someone's laptop.
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

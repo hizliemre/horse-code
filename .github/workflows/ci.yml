@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Only the newest run per branch matters; a superseded one is spending minutes on an answer nobody wants.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # The floor from `engines` and the current LTS. A break on one and not the other is the finding.
+      matrix:
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # `npm ci` and not `install`: the lockfile is the input, and a run that resolves its own versions is
+      # testing something other than what ships.
+      - run: npm ci
+
+      # tsup does NOT typecheck — it strips types and emits. A type error ships silently without this step,
+      # and one did: a call site left with the wrong argument count made a message report the length of a
+      # tool's name as the size of a truncated document. Runtime never noticed; both were strings.
+      - run: npm run typecheck
+
+      - run: npm test
+
+      # Build last, and always: `files` publishes `dist/` alone, so a build that fails here is a package
+      # that would publish nothing runnable.
+      - run: npm run build
