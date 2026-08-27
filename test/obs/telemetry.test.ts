@@ -142,7 +142,23 @@ describe("FileSink", () => {
  * A stack trace names the last allocation; a curve names the shape; only a snapshot names the objects.
  */
 describe("writeHeapSnapshot", () => {
-  it("writes a snapshot and records where it went", async () => {
+  /**
+   * The two tests that take a REAL snapshot do not run on a shared runner.
+   *
+   * `v8.writeHeapSnapshot()` is synchronous: it stops the world, walks the whole heap and writes it out.
+   * A test timeout cannot interrupt that — vitest can only time out between awaits — so on a slow, small
+   * runner the worker simply freezes inside V8 and the file never reports at all.
+   *
+   * Measured on CI: 262 of 264 test files reported, no summary was ever printed, and the job sat until it
+   * was killed — 3h42m the first time. The missing file was this one. Locally the same snapshot takes about
+   * a second, which is why it had never been seen.
+   *
+   * What is skipped is V8 doing its job; what still runs everywhere is ours — that a failure to write
+   * returns nothing instead of throwing, which is the behaviour a diagnostic must have.
+   */
+  const onCI = !!process.env.CI;
+
+  it.skipIf(onCI)("writes a snapshot and records where it went", async () => {
     const home = await mkdtemp(join(tmpdir(), "hc-heap-"));
     try {
       const sink = new MemorySink();
@@ -156,7 +172,7 @@ describe("writeHeapSnapshot", () => {
   }, 30_000);
 
   /** Named by heap size, so a pair says which is which before either is opened. */
-  it("puts the heap size in the filename", async () => {
+  it.skipIf(onCI)("puts the heap size in the filename", async () => {
     const home = await mkdtemp(join(tmpdir(), "hc-heap-"));
     try {
       expect(await writeHeapSnapshot(home, new Telemetry(new MemorySink()))).toMatch(/-\d+mb\.heapsnapshot$/);
