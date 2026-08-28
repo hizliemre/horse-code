@@ -64,6 +64,23 @@ jobs:
             exit 1
           fi
 
+      # npm answers "403 Forbidden" to two different questions and does not say which one it is answering:
+      # a token that cannot authenticate at all, and a token that authenticates but is not permitted to
+      # publish. Two release attempts were spent on that ambiguity. `whoami` settles the first, so whatever
+      # the next failure is, it is a different failure.
+      - name: Token authenticates
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if ! who="$(npm whoami 2>&1)"; then
+            echo "::error::NPM_TOKEN does not authenticate — it is expired, revoked, or not an npm token: $who"
+            exit 1
+          fi
+          echo "authenticated as $who — a 403 after this line is about what this token MAY DO, not who it is."
+          echo "Publishing needs a Granular Access Token (Read and write, covering a package that does not"
+          echo "exist yet — so 'All packages') or a classic AUTOMATION token. A classic 'Publish' token is"
+          echo "refused when the account has 2FA on writes, which is what E403 reports."
+
       # --provenance publishes a signed attestation of the commit and workflow that produced the tarball, so
       # anyone installing can verify it came from this repository rather than from someone's laptop.
       - run: npm publish --provenance --access public
