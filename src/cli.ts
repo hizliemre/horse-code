@@ -30,7 +30,7 @@ import { MemoryStore } from "./session/memory.js";
 import { memoryNote } from "./engine/memory-inject.js";
 import { runJob } from "./engine/job.js";
 import type { JobResult, JobDeps } from "./engine/job.js";
-import type { Delivery } from "./engine/wave-engine.js";
+import type { Delivery, WaveEngineResult } from "./engine/wave-engine.js";
 import { runInit } from "./init.js";
 import { DEFAULT_ROLE_SKILLS } from "./prompts.js";
 import { telemetryProvider } from "./providers/telemetry.js";
@@ -144,6 +144,43 @@ export function describeDelivery(d: Delivery): string {
   ].filter((l) => l !== undefined).join("\n");
 }
 
+/**
+ * Below this share of tasks merged, a run did not build the feature — whatever else it did.
+ *
+ * Not a precise line, and it does not need to be: it decides which SENTENCE the user reads, and the numbers
+ * are printed either way. What it prevents is a run that landed a tenth of its plan reading like one that
+ * landed all of it.
+ */
+export const DELIVERED_SHARE = 0.5;
+
+/**
+ * What LANDED, first. It is the number the user's next decision depends on.
+ *
+ * Reported live: a run of 34 tasks merged 3, failed 4, and left 27 blocked behind them. It ended with
+ * "Status: partial — Partial: 4 failed, 27 skipped", and the user read the run as finished and asked to move
+ * on to local smoke testing. Nothing in that line was false. It simply never said three of thirty-four, and
+ * "4 failed" is a small number sitting at the end of a long report.
+ *
+ * Two changes, and the first matters more. The count that leads is what MERGED, because a task that did not
+ * merge delivered nothing whatever its column says. And "skipped" is now "blocked": those tasks were never
+ * attempted — each was parked waiting on a dependency that never arrived — while "skipped" reads like a
+ * decision somebody took.
+ */
+export function describeOutcome(w: WaveEngineResult): string {
+  if (w.status === "completed") return w.pr ? `PR: ${w.pr.url}` : "all tasks merged";
+  const stuck = w.failed.length + w.skipped.length;
+  const total = w.waves.flat().length || stuck;
+  const merged = Math.max(0, total - stuck);
+  const parts = [
+    w.failed.length ? `${w.failed.length} failed` : "",
+    w.skipped.length ? `${w.skipped.length} blocked behind them` : "",
+  ].filter(Boolean).join(", ");
+  const head = `${merged} of ${total} tasks merged`;
+  return merged / total < DELIVERED_SHARE
+    ? `⚠️ ${head} — ${parts}. Most of the plan did not land; the feature is not built.`
+    : `${head} — ${parts}.`;
+}
+
 export function renderResult(res: JobResult): string {
   /**
    * A model that emits its own `<think>` tags must not leak them into the answer.
@@ -170,10 +207,7 @@ export function renderResult(res: JobResult): string {
     return res.written ? `**Constitution written** — \`${res.path}\`\n\n_${whereItLanded(res.path)}_`
       : `The constitution phase finished without writing \`${res.path}\` — nothing was changed.`;
   }
-  const outcome =
-    res.wave.status === "completed"
-      ? (res.wave.pr ? `PR: ${res.wave.pr.url}` : "all tasks completed")
-      : `Partial: ${res.wave.failed.length} failed, ${res.wave.skipped.length} skipped`;
+  const outcome = describeOutcome(res.wave);
   const rev = res.revision ? `\nrevision: ${res.revision.status}` : "";
   // Stripped here as well as at the source: the report is the longest thing the user reads, and a stray
   // `</think>` at the top of it is the first thing they see. Idempotent, so belt and braces costs nothing.
