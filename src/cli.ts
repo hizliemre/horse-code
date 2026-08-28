@@ -37,6 +37,7 @@ import { telemetryProvider } from "./providers/telemetry.js";
 import { Telemetry, setTelemetry, telemetry, sampleMemory, writeHeapSnapshot, clearPerfMarks } from "./obs/telemetry.js";
 import { FileSink, telemetryDir } from "./obs/sink.js";
 import { restoreTerminal, sttySane } from "./tui/restore-terminal.js";
+import { hcodeVersion, usage, nearestFlag } from "./cli-info.js";
 
 /** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
 const HEAP_MB = 12_288;
@@ -48,6 +49,10 @@ export interface CliArgs {
   rounds?: number;
   revisionRounds?: number;
   noTui?: boolean;
+  help?: boolean;
+  version?: boolean;
+  /** A flag nobody recognised. Reported rather than run — see `nearestFlag`. */
+  unknown?: string;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -56,6 +61,9 @@ export function parseArgs(argv: string[]): CliArgs {
   let rounds: number | undefined;
   let revisionRounds: number | undefined;
   let noTui: boolean | undefined;
+  let help: boolean | undefined;
+  let version: boolean | undefined;
+  let unknown: string | undefined;
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -64,6 +72,16 @@ export function parseArgs(argv: string[]): CliArgs {
     else if (a === "--rounds") rounds = Number(argv[++i]);
     else if (a === "--revision-rounds") revisionRounds = Number(argv[++i]);
     else if (a === "--no-tui") noTui = true;
+    else if (a === "--help" || a === "-h") help = true;
+    else if (a === "--version" || a === "-v") version = true;
+    /**
+     * A bare `-flag` is a mistake, not a request.
+     *
+     * These fell through to `rest` and became the prompt, so `hcode --version` opened a worktree and asked a
+     * model to implement the string "--version". Only a token that is ALONE and starts with a dash counts:
+     * a quoted request arrives as one argument, so `hcode "make --no-cache the default"` is untouched.
+     */
+    else if (unknown === undefined && a !== undefined && /^-/.test(a)) unknown = a;
     else rest.push(a);
   }
   return {
@@ -73,6 +91,9 @@ export function parseArgs(argv: string[]): CliArgs {
     ...(rounds !== undefined && { rounds }),
     ...(revisionRounds !== undefined && { revisionRounds }),
     ...(noTui !== undefined && { noTui }),
+    ...(help !== undefined && { help }),
+    ...(version !== undefined && { version }),
+    ...(unknown !== undefined && { unknown }),
   };
 }
 
@@ -188,6 +209,23 @@ async function currentBranch(cwd: string): Promise<string> {
 }
 
 export async function main(argv: string[]): Promise<void> {
+  const args = parseArgs(argv);
+  /**
+   * Answered before anything else runs: no config, no re-exec, no worktree, no network.
+   *
+   * These three are what someone types FIRST after installing, and what a bug report quotes. Each used to
+   * fall through and become the request — `hcode --version` reached a provider and printed "error: fetch
+   * failed", which is a true statement about the wrong question.
+   */
+  if (args.version) { console.log(hcodeVersion()); return; }
+  if (args.help) { console.log(usage()); return; }
+  if (args.unknown !== undefined) {
+    const near = nearestFlag(args.unknown);
+    console.error(`unknown option: ${args.unknown}${near !== undefined ? ` — did you mean ${near}?` : ""}`);
+    console.error("`hcode --help` lists every option. To pass text starting with a dash, quote the whole request.");
+    process.exitCode = 1;
+    return;
+  }
   if (argv[0] === "init") {
     const { read, close } = nodeLineReader();
     try {
@@ -201,7 +239,6 @@ export async function main(argv: string[]): Promise<void> {
     } finally { close(); }
     return;
   }
-  const args = parseArgs(argv);
   const cwd = process.cwd();
   const config = loadConfig({
     cwd,
