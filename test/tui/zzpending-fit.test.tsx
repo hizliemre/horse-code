@@ -66,7 +66,13 @@ describe("a pending question never crowds out its own answers", () => {
     it(`keeps every option label at ${rows} rows`, async () => {
       const c = new TuiController();
       const { stdout, frame } = screen(rows);
-      const app = render(<App controller={c} fullscreen />, { stdout: stdout as never, patchConsole: false, exitOnCtrlC: false });
+      // `interactive: true` is not a preference here, it is the subject.
+      //
+      // Ink decides for itself: `interactive ?? (!isInCi && stdout.isTTY)`. Under CI the first half is
+      // false whatever the fake stdout claims, so Ink stops repainting and the accumulated frame stays
+      // EMPTY — `expected '' to contain …`, and waiting longer cannot help, because nothing is ever
+      // drawn. These tests are about what an interactive terminal shows, so they ask for one.
+      const app = render(<App controller={c} fullscreen />, { stdout: stdout as never, patchConsole: false, exitOnCtrlC: false, interactive: true });
       try {
         void c.ask(QUESTION, { options: OPTIONS });
         const f = await until(frame, "Yes — import all");
@@ -82,7 +88,7 @@ describe("a pending question never crowds out its own answers", () => {
   it("elides the middle of a long body rather than the answers", async () => {
     const c = new TuiController();
     const { stdout, frame } = screen(20);
-    const app = render(<App controller={c} fullscreen />, { stdout: stdout as never, patchConsole: false, exitOnCtrlC: false });
+    const app = render(<App controller={c} fullscreen />, { stdout: stdout as never, patchConsole: false, exitOnCtrlC: false, interactive: true });
     try {
       void c.ask(QUESTION, { options: OPTIONS });
       const f = await until(frame, "12 standing rule(s)");

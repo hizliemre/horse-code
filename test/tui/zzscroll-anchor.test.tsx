@@ -52,7 +52,13 @@ describe("scrolling back through a run", () => {
   const withApp = async (rows: number, fn: (c: TuiController, s: ReturnType<typeof screen>) => Promise<void>) => {
     const c = new TuiController();
     const s = screen(rows);
-    const app = render(<App controller={c} fullscreen />, { stdout: s.stdout as never, patchConsole: false, exitOnCtrlC: false });
+    // `interactive: true` is not a preference here, it is the subject.
+    //
+    // Ink decides for itself: `interactive ?? (!isInCi && stdout.isTTY)`. Under CI the first half is
+    // false whatever the fake stdout claims, so Ink stops repainting and the accumulated frame stays
+    // EMPTY — `expected '' to contain …`, and waiting longer cannot help, because nothing is ever
+    // drawn. These tests are about what an interactive terminal shows, so they ask for one.
+    const app = render(<App controller={c} fullscreen />, { stdout: s.stdout as never, patchConsole: false, exitOnCtrlC: false, interactive: true });
     try { await fn(c, s); } finally { app.unmount(); }
   };
 
