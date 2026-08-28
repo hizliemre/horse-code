@@ -127,14 +127,14 @@ export function whereItLanded(path: string): string {
  * A run that produced twenty-one working tasks once reported only "Status: partial" — the code sat on a
  * branch nobody knew existed, the repository root was empty, and from the outside that is indistinguishable
  * from having built nothing. Whatever else a report says, it says where the code is and how to get it.
+ *
+ * Saying it is now the WHOLE of delivery. A run does not merge into the checkout the user is standing in —
+ * not to be helpful, not when there is no remote to open a pull request against — so this text is not a
+ * consolation for the case that failed; it is the case.
  */
 export function describeDelivery(d: Delivery): string {
-  if (d.mergedInto) {
-    return `Merged into \`${d.mergedInto}\` — the files are in your working copy.`;
-  }
   return [
     `**The work is on branch \`${d.branch}\`** — not in your working copy yet.`,
-    d.notMerged ? `Not merged: ${d.notMerged}.` : "",
     "",
     "To bring it in:",
     "```",

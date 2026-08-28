@@ -111,6 +111,63 @@ export function sessionName(now: Date, taken: (name: string) => boolean): string
   return `${day}_${Date.now()}`;   // …a thousand sessions in one day: unreachable, but never a collision
 }
 
+/**
+ * Git verbs that change the checkout the user is standing in — their branch, their history, their files.
+ *
+ * None of these may run in `repoRoot`, ever. Reported from a live run: a session's work was merged into the
+ * project's own `development` branch, which the user then had to undo by hand. The pipeline's first rule is
+ * that a run never writes to the checkout you are working in, and until now that rule lived only in prose
+ * and in the discipline of each call site. One call site broke it.
+ *
+ * A worktree is a different matter: everything a session does happens in its own, and this says nothing
+ * about those. The list is the working tree and history verbs only — `worktree`, `branch` and `fetch` are
+ * repository bookkeeping and stay allowed, because creating a session needs them.
+ */
+export const FORBIDDEN_AT_ROOT = new Set([
+  "merge", "rebase", "cherry-pick", "revert", "reset", "checkout", "switch",
+  "restore", "commit", "am", "apply", "stash", "pull", "clean",
+]);
+
+/**
+ * Wraps a runner so the rule is enforced where the command is ISSUED, not where it is written.
+ *
+ * A guard at each call site is a guard that the next call site can forget — and the delivery path did. This
+ * one call is in front of every git command this manager will ever run, including the ones nobody has
+ * written yet, and it throws rather than skipping: silently declining to do what a caller asked would hide
+ * the bug instead of the damage.
+ */
+/**
+ * Git's global options come BEFORE the verb, and two of them take a separate value.
+ *
+ * "the first argument that is not a flag" is wrong for `git -c user.email=t@t commit`: the value is not a
+ * flag either, so it is read as the verb and the commit goes through. The guard's own test caught that. The
+ * `--opt=value` forms are one token and need no help; only these take the next one.
+ */
+const TAKES_A_VALUE = new Set(["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
+
+export function gitVerb(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === undefined) continue;
+    if (!a.startsWith("-")) return a;
+    if (TAKES_A_VALUE.has(a)) i++;
+  }
+  return undefined;
+}
+
+export function guardRoot(run: GitRunner, repoRoot: string): GitRunner {
+  return async (args, cwd) => {
+    const verb = gitVerb(args);
+    if (cwd === repoRoot && verb !== undefined && FORBIDDEN_AT_ROOT.has(verb)) {
+      throw new Error(
+        `refusing to run \`git ${verb}\` in the project checkout (${repoRoot}). A session's work stays on its `
+        + "own branch and in its own worktree; bringing it in is the user's decision, taken in their own time.",
+      );
+    }
+    return run(args, cwd);
+  };
+}
+
 export class WorktreeManager {
   private readonly repoRoot: string;
 
@@ -129,6 +186,16 @@ export class WorktreeManager {
    */
   private readonly worktreeHome: string;
   private readonly git: GitRunner;
+  /**
+   * The unguarded runner, for the one case that legitimately needs a forbidden verb: turning a directory
+   * that is not a repository into one.
+   *
+   * `git worktree add` needs a commit to branch from, and an empty repository has none — so a first commit
+   * is not delivery, it is the precondition for ever leaving the root alone again. It runs only when there
+   * is no HEAD, so there is no branch to disturb and no work to overwrite. Named rather than flagged, so
+   * grepping for it finds every use.
+   */
+  private readonly rawGit: GitRunner;
 
   /** Injectable clock: a session's NAME is the day it opened, so a test has to be able to say which day. */
   private readonly now: () => Date;
@@ -136,7 +203,8 @@ export class WorktreeManager {
   constructor(deps: { repoRoot: string; worktreeHome?: string; runGit?: GitRunner; now?: () => Date }) {
     this.repoRoot = deps.repoRoot;
     this.worktreeHome = deps.worktreeHome ?? deps.repoRoot;
-    this.git = deps.runGit ?? defaultGitRunner;
+    this.rawGit = deps.runGit ?? defaultGitRunner;
+    this.git = guardRoot(this.rawGit, deps.repoRoot);
     this.now = deps.now ?? ((): Date => new Date());
   }
 
@@ -172,7 +240,15 @@ export class WorktreeManager {
     await this.ensureRepo();
     const head = await this.git(["rev-parse", "--verify", "--quiet", "HEAD"], this.repoRoot);
     if (head.code === 0) return; // repo already has at least one commit
-    await this.run(["commit", "--allow-empty", "-m", "hc: initial commit"], this.repoRoot);
+    /**
+     * The sole commit this pipeline ever makes in the project checkout, and only when there is no HEAD.
+     *
+     * Guarded by the check above, not by trust: with no HEAD there is no branch to disturb and no work to
+     * overwrite, and `git worktree add` cannot branch from nothing. Every later commit belongs to a session
+     * worktree. `rawGit` because `commit` is otherwise refused at the root — see guardRoot.
+     */
+    const r = await this.rawGit(["commit", "--allow-empty", "-m", "hc: initial commit"], this.repoRoot);
+    if (r.code !== 0) throw new Error(`git commit --allow-empty failed (${r.code}): ${(r.stderr || r.stdout).trim()}`);
   }
 
   /**
@@ -512,44 +588,6 @@ export class WorktreeManager {
     const check = await this.git(["remote", "get-url", remote], session.baseWorktree);
     if (check.code !== 0) return; // no remote → local-only, skip push
     await this.run(["push", remote, session.baseBranch], session.baseWorktree);
-  }
-
-  /**
-   * Lands the finished work on the branch the job started from, in the main working copy.
-   *
-   * Without this, a project with no git remote gets nothing: `push` is a no-op and a pull request has
-   * nowhere to go, so every completed task sits on `hc/<job>/base` — invisible from the repository root.
-   * A user who watched thirty tasks succeed then finds an empty directory and cannot run the project.
-   *
-   * A pull request is delivery when there is a remote to open it against. When there is not, merging is.
-   *
-   * Refuses rather than forces. A dirty working copy or a checkout on some other branch means the user has
-   * something in progress, and overwriting that to deliver would be a worse failure than not delivering:
-   * the branch still exists and the caller reports how to merge it by hand.
-   */
-  async deliverLocally(session: WorktreeSession, targetBranch: string): Promise<
-    { ok: true; commits: number } | { ok: false; why: string }
-  > {
-    const dirty = await this.git(["status", "--porcelain"], this.repoRoot);
-    if (dirty.code !== 0) return { ok: false, why: "the repository could not be read" };
-    if (dirty.stdout.split("\n").some((l) => l.trim() && !l.startsWith("??"))) {
-      return { ok: false, why: "the working copy has uncommitted changes" };
-    }
-    const head = await this.git(["symbolic-ref", "--short", "HEAD"], this.repoRoot);
-    const current = head.stdout.trim();
-    if (head.code !== 0 || !current) return { ok: false, why: "the repository is not on a branch" };
-    if (current !== targetBranch) return { ok: false, why: `the repository is on \`${current}\`, not \`${targetBranch}\`` };
-
-    const count = await this.git(["rev-list", "--count", `${targetBranch}..${session.baseBranch}`], this.repoRoot);
-    const commits = Number(count.stdout.trim()) || 0;
-    if (!commits) return { ok: true, commits: 0 }; // already contains it — nothing to do, and not a failure
-
-    // --no-ff keeps the job visible as one merge; a fast-forward would scatter hundreds of task commits
-    // into the branch with no record of what they belonged to.
-    const merged = await this.git(
-      ["merge", "--no-ff", "-m", `hc: ${session.jobSlug}`, session.baseBranch], this.repoRoot);
-    if (merged.code !== 0) return { ok: false, why: "the merge did not apply cleanly" };
-    return { ok: true, commits };
   }
 
   async openPR(

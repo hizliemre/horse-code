@@ -462,10 +462,6 @@ export interface Delivery {
   branch: string;
   /** The worktree it was built in, still on disk. */
   worktree: string;
-  /** Set when the work was merged into the branch the job started from. */
-  mergedInto?: string;
-  /** Why it was not merged, when it was not — so the report can say what to do instead. */
-  notMerged?: string;
 }
 
 export type WaveEngineResult =

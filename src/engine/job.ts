@@ -551,16 +551,19 @@ export async function runJob(
      *
      * A pull request, when there is a remote, is already the delivery — the user reviews and merges it
      * themselves, and merging here as well would take that decision away from them.
+     *
+     * Without a remote there used to be a local merge into the branch the job started from, on the argument
+     * that a project with nowhere to open a PR would otherwise get nothing. It got something worse: reported
+     * from a live run, a session's work landed in the project's own `development` branch and the user had to
+     * undo it by hand. Merging on someone's behalf is the same decision a pull request exists to leave with
+     * them, and the checkout they are standing in is the one place a run must never write.
+     *
+     * So delivery is the report, in both cases. The branch is named, the command to bring it in is printed,
+     * and the choice stays where it belongs. `git merge` in the project checkout is now refused outright —
+     * see guardRoot — so this cannot come back by a different route.
      */
     if (!wave.pr && reviewable) {
-      const landed = await deps.manager.deliverLocally(session, opts.fromBranch);
-      if (landed.ok) {
-        wave.delivery.mergedInto = opts.fromBranch;
-        emit({ kind: "note", text: `📦 Merged into \`${opts.fromBranch}\` — the files are in your working copy.` });
-      } else {
-        wave.delivery.notMerged = landed.why;
-        emit({ kind: "note", text: `📦 Not merged (${landed.why}) — the work is on \`${wave.delivery.branch}\`.` });
-      }
+      emit({ kind: "note", text: `📦 The work is on \`${wave.delivery.branch}\` — merge it when you are ready.` });
     }
 
     await curate(deps, up.refinedPrompt ?? opts.prompt, board.list(), deferredAll, session.baseWorktree);

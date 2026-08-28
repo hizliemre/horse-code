@@ -33,7 +33,7 @@ Implementation tasks run in parallel, each in its own worktree, and escalate thr
 
 Three constraints drove most of the design:
 
-**One session, one worktree.** A run never writes to the checkout you are working in. Every file an agent writes is committed as a `wip(…)` checkpoint, so a bad change is recoverable and the review always sees the whole diff — an unstaged file is a hole in the evidence.
+**One session, one worktree.** A run never writes to the checkout you are working in — enforced, not intended: `merge`, `commit`, `reset`, `checkout` and the rest are refused outright at the project root, so a finished run hands you a branch and the command to bring it in, and the decision stays yours. Every file an agent writes is committed as a `wip(…)` checkpoint, so a bad change is recoverable and the review always sees the whole diff — an unstaged file is a hole in the evidence.
 
 **Every message an agent reads is a decision point.** A tool that answers "unknown tool: `view_file`" costs a full model turn to say nothing. So error messages name what exists, suggest the near miss, and say what to do next. Much of this repository is that: the difference between a syscall name and an answer.
 

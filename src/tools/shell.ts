@@ -140,7 +140,15 @@ export function destroysWork(command: string): string | undefined {
   for (const seg of command.split(/&&|\|\||;|\|/)) {
     const m = /^\s*git\s+(.*)$/.exec(seg.trim());
     if (!m) continue;
-    const rest = (m[1] ?? "").replace(/^(?:-\S+\s+)*/, "").trim();
+    /**
+     * Global options come before the verb, and `-c` / `-C` take a SEPARATE value.
+     *
+     * Stripping only the flags left `git -c foo=bar reset --hard` reading as `foo=bar reset --hard`, which
+     * matches none of the patterns below — so the one command this guard exists to refuse walked straight
+     * through it. Found by the same defect in the worktree manager's root guard; the two are the same
+     * mistake about the same command line, so both are fixed.
+     */
+    const rest = (m[1] ?? "").replace(/^(?:(?:-[cC]|--(?:git-dir|work-tree|namespace|exec-path|config-env))\s+\S+|-\S+)\s+/g, "").trim();
     const hit = DESTROYS_WORK.find((d) => d.re.test(rest));
     if (hit) return hit.what;
   }

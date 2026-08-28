@@ -557,7 +557,7 @@ describe("delivery information", () => {
       expect(res.status).toBe("completed");
       expect(res.pr).toBeUndefined();
       expect(adapter.calls).toBe(0);
-      expect(res.delivery.mergedInto).toBeUndefined();
+      expect(res.delivery.branch).toContain("hc/");   // on its own branch, and nowhere else
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });

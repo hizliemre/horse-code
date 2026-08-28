@@ -227,6 +227,23 @@ describe("a git command that throws work away", () => {
     expect(destroysWork("grep -rn 'git reset --hard' docs/")).toBeUndefined();
   });
 
+  /**
+   * A global option with a separate value used to hide the verb behind it.
+   *
+   * The leading flags were stripped by pattern, and `-c` takes its value as the NEXT word — which is not a
+   * flag, so it was read as the verb. `git -c foo=bar reset --hard` therefore matched nothing and the one
+   * command this guard exists to refuse went through. Found while fixing the identical mistake in the
+   * worktree manager's root guard: the same command line, misread the same way, in two places.
+   */
+  it("sees past a global option that carries its own value", async () => {
+    const { destroysWork } = await import("../../src/tools/shell.js");
+    expect(destroysWork("git -c core.pager=cat reset --hard HEAD~3")).toBeTruthy();
+    expect(destroysWork("git -C /elsewhere clean -fd")).toBeTruthy();
+    expect(destroysWork("git --git-dir /x/.git checkout -- .")).toBeTruthy();
+    // …and the harmless ones stay harmless with the same options in front.
+    expect(destroysWork("git -c core.pager=cat status")).toBeUndefined();
+  });
+
   it("points at the checkpoint route rather than just refusing", async () => {
     const r = await run("git checkout -- .");
     expect(r.isError).toBe(true);
