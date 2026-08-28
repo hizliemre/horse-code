@@ -2,6 +2,7 @@ import type { ChatEvent, ChatRequest, Provider, ToolCall } from "../core/types.j
 import { parseSSE } from "./sse.js";
 import { toOpenAIBody, mapFinishReason } from "./openai.js";
 import { toAnthropicBody, isAnthropicModel, AnthropicDecoder } from "./anthropic.js";
+import { transportMessage } from "./transport.js";
 import { sanitizeForJson } from "../core/surrogates.js";
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -202,8 +203,14 @@ export class OmniRouteProvider implements Provider {
       if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
       // A deadline is OURS. Another model in the chain may answer inside it, so this is retryable.
       if (isDeadline(signal)) { yield { type: "error", message: "the model did not answer within its deadline", retryable: true }; return; }
-      // Network/connection failure (DNS, refused, reset) — transient; a fallback may connect.
-      yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
+      /**
+       * Network/connection failure (DNS, refused, reset) — transient; a fallback may connect.
+       *
+       * Node puts "fetch failed" in the message and the fact on `cause`. Reported live: 348 trace attempts
+       * against a gateway that was not running produced 348 lines reading "fetch failed", and the answer —
+       * ECONNREFUSED on localhost:20128 — was one field away the whole time.
+       */
+      yield { type: "error", message: transportMessage(e, this.baseUrl), retryable: true };
       return;
     }
 
@@ -305,8 +312,9 @@ export class OmniRouteProvider implements Provider {
       if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
       // A deadline is OURS. Another model in the chain may answer inside it, so this is retryable.
       if (isDeadline(signal)) { yield { type: "error", message: "the model did not answer within its deadline", retryable: true }; return; }
-      // Mid-stream failure or idle-timeout stall — transient; a fallback may complete.
-      yield { type: "error", message: e instanceof Error ? e.message : String(e), retryable: true };
+      // Mid-stream failure or idle-timeout stall — transient; a fallback may complete. Same reason as above
+      // for reading the cause: a connection reset mid-stream also arrives as the word "fetch".
+      yield { type: "error", message: transportMessage(e, this.baseUrl), retryable: true };
       return;
     }
 

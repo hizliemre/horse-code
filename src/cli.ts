@@ -181,6 +181,34 @@ export function describeOutcome(w: WaveEngineResult): string {
     : `${head} — ${parts}.`;
 }
 
+/**
+ * One cause, said once — with the files as examples rather than as the message.
+ *
+ * Reported live: `/graph trace` attempted 348 files against a gateway that was not running and printed a
+ * list of paths each ending "— fetch failed". The list was the wrong shape for the fact: the paths varied
+ * and the reason did not, so the reader was given 348 things to look at and no reason to look anywhere.
+ * When every failure shares a cause, the cause is the finding and the paths are illustration.
+ *
+ * Distinct causes are still listed, commonest first — that is the case where the paths do carry the signal.
+ */
+export function describeTraceFailures(failed: { file: string; error: string }[]): string {
+  if (!failed.length) return "";
+  const byError = new Map<string, string[]>();
+  for (const f of failed) byError.set(f.error, [...(byError.get(f.error) ?? []), f.file]);
+
+  if (byError.size === 1) {
+    const [error, files] = [...byError][0] as [string, string[]];
+    const shown = files.slice(0, 3).map((f) => `- \`${f}\``);
+    if (files.length > shown.length) shown.push(`- …and ${files.length - shown.length} more`);
+    return `⚠️ ${failed.length} failed, all for the same reason — ${error}\n${shown.join("\n")}`;
+  }
+  const rows = [...byError].sort((a, b) => b[1].length - a[1].length).slice(0, 5)
+    .map(([error, files]) => `- ${files.length}× ${error} (e.g. \`${files[0]}\`)`);
+  const rest = byError.size - rows.length;
+  if (rest > 0) rows.push(`- …and ${rest} further cause(s)`);
+  return `⚠️ ${failed.length} failed:\n${rows.join("\n")}`;
+}
+
 export function renderResult(res: JobResult): string {
   /**
    * A model that emits its own `<think>` tags must not leak them into the answer.
@@ -641,10 +669,11 @@ export async function main(argv: string[]): Promise<void> {
         if (res.upToDate) bits.push(`${res.upToDate} already current`);
         if (res.pruned.length) bits.push(`${res.pruned.length} removed for deleted files`);
         if (res.wroteGitignore) bits.push("\n\n_Added .gitignore rules: traces are committed, the AST cache is not._");
-        if (res.failed.length) {
-          bits.push(`\n\n⚠️ ${res.failed.length} failed:\n${res.failed.slice(0, 5).map((f) => `- \`${f.file}\` — ${f.error}`).join("\n")}`);
-        }
-        return `${bits.join(" · ")}\n\n_Committed with the repo, so every clone starts with them. Agents read one with \`graph_trace\`._`;
+        // The failures are their own paragraph, not another `·` item: appending one that began with a
+        // newline left the list ending in a dangling separator — "0 · 2308 already current ·".
+        const failures = describeTraceFailures(res.failed);
+        return `${bits.join(" · ")}${failures ? `\n\n${failures}` : ""}`
+          + "\n\n_Committed with the repo, so every clone starts with them. Agents read one with `graph_trace`._";
       };
       await runTuiRepl({
         buildDeps,
