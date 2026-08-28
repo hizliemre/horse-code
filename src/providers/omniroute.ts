@@ -188,6 +188,23 @@ export class OmniRouteProvider implements Provider {
     const idleAc = new AbortController();
     const combined = AbortSignal.any([signal, idleAc.signal]);
 
+    /**
+     * The same clock, started BEFORE the request — because the silence that hung a run was earlier than any
+     * stream.
+     *
+     * `withIdleTimeout` wraps the response body, so it cannot start until there is a body to read. Measured
+     * live: a gateway accepted the connection for `antigravity/gemini-3.5-flash-medium` and then sent
+     * nothing at all — no data, no headers, no status. `fetch` never settled, the idle guard never began,
+     * and the refine phase sat at 4m47s against a 2-minute budget with the whole chain waiting behind a
+     * model that was never going to answer. Probed directly afterwards: 45 seconds, no response, while
+     * `cc/claude-opus-5` answered in 1.9.
+     *
+     * Retryable on purpose. A source that has stopped answering is exactly what a fallback chain is for, and
+     * the model is benched by the caller the same way any other transient failure benches it.
+     */
+    let silent = false;
+    const firstByte = setTimeout(() => { silent = true; idleAc.abort(); }, this.idleMs);
+
     let res: Response;
     try {
       res = await this.fetchFn(`${this.baseUrl}${native ? "/v1/messages" : "/api/v1/chat/completions"}`, {
@@ -198,7 +215,14 @@ export class OmniRouteProvider implements Provider {
         body: JSON.stringify(sanitizeForJson(native ? toAnthropicBody(req) : toOpenAIBody(req))),
         signal: combined,
       });
+      clearTimeout(firstByte);
     } catch (e) {
+      clearTimeout(firstByte);
+      if (silent && !isCallerAbort(signal)) {
+        yield { type: "error", retryable: true,
+          message: `the model sent nothing at all for ${Math.round(this.idleMs / 1000)}s — not even a response header` };
+        return;
+      }
       // The caller cancelling is not a failure of anything: no fallback, no benching.
       if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
       // A deadline is OURS. Another model in the chain may answer inside it, so this is retryable.
