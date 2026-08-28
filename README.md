@@ -123,7 +123,14 @@ Some boundaries are enforced rather than requested, because an instruction is ad
 npm test          # vitest — 3200+ tests
 npm run typecheck # tsc --noEmit  (tsup does NOT typecheck; run this)
 npm run build     # tsup → dist/
+
+CI=1 npm test     # what CI runs — see below
 ```
+
+`CI=1` is not decoration: libraries change behaviour under it. Ink stops repainting, so a terminal test
+reads an empty frame; colour libraries switch themselves off, so an escape a test asserts is never
+emitted. Six failures that only appeared on the runner reproduced locally the moment that variable was
+set. Set it before blaming the runner.
 
 Tests carry the measurement that motivated them in the describe block. A test whose comment says "measured live: 27 of 90 calls" is documentation as much as a guard — if you change the behaviour, that number is what you are trading away.
 

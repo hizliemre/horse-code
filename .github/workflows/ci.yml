@@ -44,20 +44,18 @@ jobs:
       # tool's name as the size of a truncated document. Runtime never noticed; both were strings.
       - run: npm run typecheck
 
-      # A test asserts the bold ANSI escape a rendered question carries. Without a TTY the colour library
-      # switches itself off, the escape is never emitted, and the assertion fails on a difference in the
-      # terminal rather than in the code.
-      # `hanging-process` names what is still holding the process open when vitest should have exited.
+      # `hanging-process` names what is still holding the process open when vitest should have exited. It
+      # costs nothing on a healthy run and it is what two hangs here needed: the first sat for 3h42m, the
+      # second was stopped by the timeout above, and neither printed a summary — so the hang was not one
+      # problem among several, it was the one hiding the others.
       #
-      # Two runs reported every test file and then printed no summary at all — the first sat for 3h42m, the
-      # second was stopped by the timeout above. Without the summary the failing assertions are invisible,
-      # so the hang is not one problem among several; it is the one hiding the others.
-      # `verbose` prints each test AS IT COMPLETES, not each file when it finishes.
+      # `verbose` earned its keep during those rounds and is deliberately NOT kept: per-test output is 3200
+      # lines that nobody reads while it is green, and it can be asked for in one line when it is not.
       #
-      # Two rounds were spent narrowing a hang to a file; the default reporter cannot say more than that,
-      # because a file that never finishes never prints. With per-test output the last line before the stall
-      # names the test that completed, and the hang is the one after it.
-      - run: npx vitest run --reporter=verbose
+      # FORCE_COLOR: a test asserts the bold ANSI escape a rendered question carries. Without a TTY the
+      # colour library switches itself off, the escape is never emitted, and the assertion fails on a
+      # difference in the terminal rather than in the code.
+      - run: npx vitest run --reporter=default --reporter=hanging-process
         env:
           FORCE_COLOR: "1"
 
