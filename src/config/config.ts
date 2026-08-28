@@ -113,7 +113,17 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   mcp: {},
   modelSources: [],
   traceDir: "",
-  skillSources: [],
+  /**
+   * Shipped as a REFERENCE, not a copy, for the reasons skills/README.md gives for exactly this shape: it is
+   * 3.3 MB across 154 files, it carries its own scripts, and it is maintained upstream. Vendoring it would
+   * freeze it at the commit it was taken on and turn every upstream fix into a manual merge — and it would
+   * multiply the published package by ten for a skill most runs never open.
+   *
+   * A default source is not an install. Startup stays offline; `/skills update` is the explicit act that
+   * fetches it, and a user who removes this entry from their own config is not overruled — the two configs
+   * merge by name.
+   */
+  skillSources: [{ name: "impeccable", repo: "pbakaus/impeccable", path: ".agents/skills/impeccable" }],
   maxParallel: 8,
   telemetry: true,
 };
@@ -225,7 +235,14 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // skillSources MERGE by name: a machine-wide skill set stays available in every project, and a project may
   // add its own or pin a different ref for one of them.
-  const byName = new Map((global.skillSources ?? []).map((s) => [s.name, s]));
+  //
+  // The shipped defaults seed a config that has never spoken about skill sources. A STATED list — an empty
+  // one included — is the user's own word and wins outright, which is the same distinction saveRoleSkills
+  // already draws: "no skill sources" and "never said" mean different things, and only the second has a
+  // default to fall back to. Without this the default could never be turned off.
+  const spoken = global.skillSources !== undefined || projectSafe.skillSources !== undefined;
+  const byName = new Map((spoken ? [] : DEFAULT_CONFIG.skillSources).map((s) => [s.name, s]));
+  for (const s of global.skillSources ?? []) byName.set(s.name, s);
   for (const s of projectSafe.skillSources ?? []) byName.set(s.name, s);
   merged.skillSources = [...byName.values()];
 

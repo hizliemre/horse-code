@@ -97,8 +97,21 @@ describe("the shipped skills reach the roles that need them", () => {
   it("ships the expected set", async () => {
     const names = (await reg()).list().map((s) => s.name).sort();
     expect(names).toEqual([
-      "brainstorming", "frontend-design", "systematic-debugging", "test-driven-development", "writing-plans",
+      "brainstorming", "frontend-design", "systematic-debugging", "test-driven-development",
+      "ui-ux-pro-max", "writing-plans",
     ]);
+  });
+
+  /**
+   * `ui-ux-pro-max` is 43.7 KB — a searchable database of palettes, font pairings and product types, not a
+   * method. Inlining it into every designer prompt would cost that on every call for guidance most calls
+   * never reach for, so it stays in the listing and is fetched with the `skill` tool. `frontend-design`
+   * remains the inlined one: it is the method, and it is small enough to be.
+   */
+  it("keeps the big reference skill discoverable rather than inlined", () => {
+    for (const role of Object.keys(DEFAULT_ROLE_SKILLS)) {
+      expect(DEFAULT_ROLE_SKILLS[role], `${role} inlines a 43 KB reference`).not.toContain("ui-ux-pro-max");
+    }
   });
 
   it("the UI roles get design direction, for the same reason the coders get TDD", () => {

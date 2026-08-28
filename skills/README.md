@@ -9,6 +9,7 @@ Every `SKILL.md` here is a **verbatim copy** from upstream:
 | `writing-plans` | superpowers 6.1.1 | plugin |
 | `systematic-debugging` | superpowers 6.1.1 | plugin |
 | `frontend-design` | [anthropics/skills](https://github.com/anthropics/skills) | Apache-2.0 (`LICENSE.txt` shipped alongside) |
+| `ui-ux-pro-max` | ui-ux-pro-max-skill 2.0.1 | MIT © Next Level Builder (`LICENSE.txt` shipped alongside) |
 
 Do not edit them. Byte-identical is what makes them re-syncable when the upstream skill changes — a local
 tweak would either be silently overwritten on the next sync, or quietly diverge and stay.
@@ -20,6 +21,12 @@ tweak would either be silently overwritten on the next sync, or quietly diverge 
 | `writing-plans` | `project-manager` | mandatory |
 | `systematic-debugging` | — | discoverable |
 | `frontend-design` | `designer`, `senior-designer` | mandatory |
+| `ui-ux-pro-max` | — | discoverable |
+
+`ui-ux-pro-max` is discoverable rather than mandatory because of what it is: 43.7 KB of searchable database —
+161 palettes, 57 font pairings, 161 product types, 25 chart types — and not a method. `frontend-design` is the
+method the design roles need on every call, and it is small enough to inline. Paying 43.7 KB on every designer
+prompt for a lookup table most calls never open is the trade the discoverable listing exists to avoid.
 
 **Mandatory** skills are inlined into the role's system prompt (`applySkills`). **Discoverable** ones appear
 only as a one-line entry in the listing every role receives, and are fetched on demand with the `skill` tool —
@@ -66,6 +73,17 @@ A skill can also be **referenced** instead of vendored. Declare it in `config.sk
   { "name": "impeccable", "repo": "pbakaus/impeccable", "path": ".agents/skills/impeccable" }
 ]
 ```
+
+That entry is not an example: `impeccable` ships this way, declared in `DEFAULT_CONFIG.skillSources`. It is
+3.3 MB across 154 files and drives its own browser scripts, which is precisely the case this section
+describes — and vendoring it would have multiplied the published package by ten for guidance most runs never
+open.
+
+A default nobody can turn off would be a worse deal than no default, so an explicitly stated list wins
+outright, an empty one included. "No skill sources" and "never said" mean different things, and only the
+second falls back — the same distinction `saveRoleSkills` draws for role skills. Installing your first source
+writes the shipped ones into your config alongside it, so nothing disappears behind your back; removing one
+afterwards is then a real act with a real result.
 
 `/skills update` installs or refreshes them into `~/.horsecode/skills/<name>/` — outside this repo, because
 they are not ours. The commit is recorded beside each one, so an update knows whether anything actually

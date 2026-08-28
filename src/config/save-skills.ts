@@ -1,4 +1,5 @@
 import { patchConfig, objectField, arrayField } from "./patch.js";
+import { DEFAULT_CONFIG } from "./config.js";
 import type { SkillSource } from "../skills/external.js";
 
 /**
@@ -9,6 +10,15 @@ import type { SkillSource } from "../skills/external.js";
  */
 export async function saveSkillSource(home: string, src: SkillSource): Promise<boolean> {
   return patchConfig(home, (current) => {
+    /**
+     * Installing one skill must not silently drop the shipped ones.
+     *
+     * A config that has never stated a list gets the defaults at load time; writing a list for the first
+     * time ends that, so the defaults are written INTO the list here rather than being quietly replaced by
+     * the single skill the user happened to install first. Removing one afterwards is then a real act with
+     * a real result, which is the point.
+     */
+    if (current["skillSources"] === undefined) current = { ...current, skillSources: [...DEFAULT_CONFIG.skillSources] };
     const sources = arrayField(current, "skillSources").filter(
       (s) => !(typeof s === "object" && s !== null && (s as { name?: unknown }).name === src.name),
     );

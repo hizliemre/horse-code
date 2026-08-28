@@ -108,6 +108,27 @@ Facts an agent learns — a command that only works from a subdirectory, a file 
 
 Each role is asked, at the close of its turn, whether anything cost it more than one attempt. That question is the difference between a run that learns and one that rediscovers.
 
+## Skills
+
+Six skills ship with the package. Each is a verbatim copy of its upstream, under `skills/`, in the same
+format a project uses for its own — the only difference is who supplies them, and a project may replace any
+of them by defining a skill of the same name in `.horsecode/skills/`.
+
+| | |
+|---|---|
+| `brainstorming` | intent and requirements before implementation — bound to the brainstormer |
+| `writing-plans` | what makes an individual task executable — bound to the task list |
+| `test-driven-development` | inlined into every role that writes code |
+| `frontend-design` | design direction, inlined into the design roles |
+| `systematic-debugging` | fetched on demand, when something is stuck |
+| `ui-ux-pro-max` | 161 palettes, 57 font pairings, 25 chart types across 10 stacks — fetched on demand |
+
+A skill can also be **referenced** rather than copied, for the ones that are large, script-driven, or
+maintained upstream. [`impeccable`](https://github.com/pbakaus/impeccable) ships that way: declared by
+default, installed by `/skills update` into `~/.horsecode/skills/`, and updatable from its source. Startup
+never waits on the network — installing is an explicit act. An explicitly stated `skillSources` list, an
+empty one included, replaces the shipped default entirely.
+
 ## Tools an agent has
 
 `read_file` `write_file` `edit_file` `grep` `glob` `shell` `git` (read-only) `git_write` `web_fetch` `ask_user` `remember_fact` `propose_memory` `skill` `find_tool` `find_unfinished`, plus the graph tools (`graph_overview`, `graph_find`, `graph_context`, `graph_impact`, `graph_trace`) and every tool exposed by a connected MCP server.
