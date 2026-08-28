@@ -52,12 +52,10 @@ jobs:
       # `verbose` earned its keep during those rounds and is deliberately NOT kept: per-test output is 3200
       # lines that nobody reads while it is green, and it can be asked for in one line when it is not.
       #
-      # FORCE_COLOR: a test asserts the bold ANSI escape a rendered question carries. Without a TTY the
-      # colour library switches itself off, the escape is never emitted, and the assertion fails on a
-      # difference in the terminal rather than in the code.
+      # No FORCE_COLOR here any more. It used to be set on this step, which made this step green and left
+      # every OTHER caller of the suite to discover the requirement for itself — `npm publish` did, through
+      # `prepublishOnly`, and failed a release on one assertion. The suite now carries it in vitest.config.
       - run: npx vitest run --reporter=default --reporter=hanging-process
-        env:
-          FORCE_COLOR: "1"
 
       # Build last, and always: `files` publishes `dist/` alone, so a build that fails here is a package
       # that would publish nothing runnable.

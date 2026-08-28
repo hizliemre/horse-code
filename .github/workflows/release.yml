@@ -45,10 +45,13 @@ jobs:
 
       # The same gate CI runs. Re-run rather than trust a green tick on some earlier commit: what is being
       # published is THIS tree, and it is the last moment anything can be stopped.
+      #
+      # `prepublishOnly` runs all three again inside `npm publish`, and that duplication is deliberate: it is
+      # what protects a publish done by hand from a laptop, where no workflow is watching. Here the value is
+      # attribution — a failure reports as "npm test", not buried in the output of `npm publish`, which is
+      # exactly how the first attempt at v0.1.0 presented itself.
       - run: npm run typecheck
       - run: npm test
-        env:
-          FORCE_COLOR: "1"  # a test asserts a bold ANSI escape — see ci.yml
       - run: npm run build
 
       # Refuse a version that is already on the registry with a message that says so, instead of letting
