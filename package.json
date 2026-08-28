@@ -1,5 +1,5 @@
 {
-  "name": "horse-code",
+  "name": "@hizliemre/horse-code",
   "version": "0.1.0",
   "description": "Terminal coding agent: one sentence to reviewed, committed code — in its own git worktree",
   "license": "MIT",

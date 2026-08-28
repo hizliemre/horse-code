@@ -56,11 +56,15 @@ jobs:
 
       # Refuse a version that is already on the registry with a message that says so, instead of letting
       # `npm publish` fail with E403 halfway through.
+      # The NAME comes from the manifest too. It was written out here, and when the package was renamed —
+      # npm refuses a name too similar to one that exists — this check would have gone on asking the
+      # registry about a package nobody was publishing, and answered "not published" every time.
       - name: Version is not already published
         run: |
+          NAME="$(node -p "require('./package.json').name")"
           PKG="$(node -p "require('./package.json').version")"
-          if npm view "horse-code@$PKG" version >/dev/null 2>&1; then
-            echo "::error::horse-code@$PKG is already on the registry — npm versions are permanent, bump first"
+          if npm view "$NAME@$PKG" version >/dev/null 2>&1; then
+            echo "::error::$NAME@$PKG is already on the registry — npm versions are permanent, bump first"
             exit 1
           fi
 

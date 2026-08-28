@@ -42,8 +42,10 @@ Three constraints drove most of the design:
 ## Install
 
 ```bash
-npm install -g horse-code
+npm install -g @hizliemre/horse-code
 ```
+
+The package is scoped; the command it installs is `hcode`.
 
 Or from source:
 
