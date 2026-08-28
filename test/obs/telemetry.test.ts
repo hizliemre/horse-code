@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Telemetry, NO_TELEMETRY, setTelemetry, telemetry, writeHeapSnapshot, estimateFreezeSeconds, clearPerfMarks } from "../../src/obs/telemetry.js";
@@ -111,20 +111,22 @@ describe("Telemetry", () => {
   });
 });
 
+/**
+ * A path that cannot become a directory anywhere, for any user: one component of it is a regular file.
+ *
+ * The unwritable-path tests used to aim at `/proc`, which is not a fact about the filesystem so much as a
+ * fact about Linux — absent on macOS, real and privileged on the runner, and therefore a different code path
+ * on each. `mkdir` on a path THROUGH a file fails with ENOTDIR on every platform and is not waived for root,
+ * which is what a test about "cannot write here" actually needs.
+ */
+const blockedPath = async (): Promise<string> => {
+  const dir = await mkdtemp(join(tmpdir(), "hc-blocked-"));
+  const file = join(dir, "not-a-directory");
+  await writeFile(file, "");
+  return join(file, "logs");
+};
+
 describe("FileSink", () => {
-  /**
-   * The unwritable-path tests are held back on CI while the hang they are suspected of is narrowed.
-   *
-   * They aim at `/proc`, which does not exist on macOS — `mkdir` fails at once there and the stream is never
-   * created. On Linux `/proc` is real, so the same call takes a different path through the runtime, and this
-   * file is the one that never reported: of 264 test files, 263 printed and this printed nothing at all, not
-   * even its first test. Three CI rounds ended that way.
-   *
-   * Skipped rather than deleted, and only where the difference lives: the behaviour they cover — a sink that
-   * cannot open its log must never raise, and must never block the run — is real and still checked on every
-   * developer machine.
-   */
-  const onCI = !!process.env.CI;
   it("writes one JSON object per line, which is what Loki and jq read unchanged", async () => {
     const home = await mkdtemp(join(tmpdir(), "hc-tel-"));
     try {
@@ -141,12 +143,35 @@ describe("FileSink", () => {
   });
 
   /** An observer that can fail the thing it observes is worse than no observer. */
-  it.skipIf(onCI)("never raises when the log cannot be opened", async () => {
-    const sink = new FileSink("/proc/nonexistent-and-unwritable", "run-1");
+  it("never raises when the directory cannot even be created", async () => {
+    const sink = new FileSink(await blockedPath(), "run-1");
     const tel = new Telemetry(sink);
     await expect(tel.span("x", {}, async () => 1)).resolves.toBe(1);
     await expect(sink.flush()).resolves.toBeUndefined();
   });
+
+  /**
+   * The half of the failure `/proc` never reached: `mkdir` succeeds and the OPEN is what fails.
+   *
+   * `createWriteStream` does not throw for an unopenable path — it emits `error` on a later tick, so the
+   * constructor's catch does not run and `stream` is set. Reproduced here by making the log path an existing
+   * DIRECTORY: the parent is created, the open fails asynchronously with EISDIR, and `flush()` is called in
+   * the same tick as the constructor, before any error handler could have cleared the field.
+   *
+   * What this asserts is what matters and all that is claimed: the run gets its flush back. It is NOT a
+   * regression test for a hang — removing `flush`'s error listener was tried here and this still passes, so
+   * on this runtime `end(cb)` does call back on a stream whose open failed. That listener is a cheap second
+   * exit, not a fix for a failure anyone has reproduced.
+   */
+  it("resolves flush when the stream fails to open on a later tick", async () => {
+    const home = await mkdtemp(join(tmpdir(), "hc-tel-"));
+    try {
+      await mkdir(join(home, ".horsecode", "telemetry", "run-1.jsonl"), { recursive: true });
+      const sink = new FileSink(home, "run-1");
+      sink.write({ kind: "event", name: "x", attributes: {}, at: 0 } as never);
+      await expect(sink.flush()).resolves.toBeUndefined();
+    } finally { await rm(home, { recursive: true, force: true }); }
+  }, 10_000);
 });
 
 /**
@@ -156,22 +181,20 @@ describe("FileSink", () => {
  */
 describe("writeHeapSnapshot", () => {
   /**
-   * The two tests that take a REAL snapshot do not run on a shared runner.
+   * These two take a REAL snapshot, and they run everywhere — the skip that was here has been withdrawn.
    *
-   * `v8.writeHeapSnapshot()` is synchronous: it stops the world, walks the whole heap and writes it out.
-   * A test timeout cannot interrupt that — vitest can only time out between awaits — so on a slow, small
-   * runner the worker simply freezes inside V8 and the file never reports at all.
+   * It was added on suspicion, and the record never convicted them. `v8.writeHeapSnapshot()` is synchronous
+   * and a test timeout cannot interrupt it, so a freeze inside V8 was a fair hypothesis for the file that
+   * never reported. But skipping them did NOT end the hang: the next round still printed nothing from this
+   * file, and the round after that — with per-test output — showed the stall came before any test here had
+   * completed. The `/proc` tests above were the ones holding it, and fixing those is what turned a 3h42m
+   * timeout into a run with a summary.
    *
-   * Measured on CI: 262 of 264 test files reported, no summary was ever printed, and the job sat until it
-   * was killed — 3h42m the first time. The missing file was this one. Locally the same snapshot takes about
-   * a second, which is why it had never been seen.
-   *
-   * What is skipped is V8 doing its job; what still runs everywhere is ours — that a failure to write
-   * returns nothing instead of throwing, which is the behaviour a diagnostic must have.
+   * Leaving a skip in place for a theory that has been disproved is worse than never having added it: it
+   * reads as evidence. A snapshot of a test worker's heap is a fraction of a second, nothing like the 70
+   * seconds a 2.7 GB session costs, and the 30-second budget is there for a slow runner.
    */
-  const onCI = !!process.env.CI;
-
-  it.skipIf(onCI)("writes a snapshot and records where it went", async () => {
+  it("writes a snapshot and records where it went", async () => {
     const home = await mkdtemp(join(tmpdir(), "hc-heap-"));
     try {
       const sink = new MemorySink();
@@ -185,7 +208,7 @@ describe("writeHeapSnapshot", () => {
   }, 30_000);
 
   /** Named by heap size, so a pair says which is which before either is opened. */
-  it.skipIf(onCI)("puts the heap size in the filename", async () => {
+  it("puts the heap size in the filename", async () => {
     const home = await mkdtemp(join(tmpdir(), "hc-heap-"));
     try {
       expect(await writeHeapSnapshot(home, new Telemetry(new MemorySink()))).toMatch(/-\d+mb\.heapsnapshot$/);
@@ -193,8 +216,8 @@ describe("writeHeapSnapshot", () => {
   }, 30_000);
 
   /** A snapshot is a diagnostic; failing to take one must never disturb the run it is diagnosing. */
-  it.skipIf(onCI)("returns nothing rather than throwing when it cannot write", async () => {
-    await expect(writeHeapSnapshot("/proc/nowhere-writable", new Telemetry(new MemorySink())))
+  it("returns nothing rather than throwing when it cannot write", async () => {
+    await expect(writeHeapSnapshot(await blockedPath(), new Telemetry(new MemorySink())))
       .resolves.toBeUndefined();
   });
 });

@@ -60,16 +60,18 @@ export class FileSink implements TelemetrySink {
   }
 
   /**
-   * A stream that failed to open never calls `end`'s callback, and this awaited it forever.
+   * `flush()` is awaited as a run finishes, so whatever happens here decides whether the run can end.
    *
-   * `createWriteStream` does not throw when the path cannot be opened — it emits `error` on a later tick. So
+   * `createWriteStream` does not throw when the path cannot be opened — it emits `error` on a later tick, so
    * the constructor's `catch` does not run, `stream` is set, and whether the error handler has cleared it by
-   * the time anything flushes is a race with the event loop. Lose that race and `end(cb)` is called on a
-   * broken stream, the callback is never invoked, and the promise has nothing left to resolve it.
+   * the time anything flushes is a race with the event loop. Losing that race means `end(cb)` is called on a
+   * stream that never opened.
    *
-   * The observer then outlives what it observes: `flush()` is awaited as a run finishes, so a machine that
-   * cannot write the log cannot finish the run either. The `error` listener is the second exit, and either
-   * one is enough.
+   * The `error` listener is a second exit for that case. It was added believing the callback would otherwise
+   * never fire and hang the run — an honest guess that has since been TESTED and did not hold: with the
+   * listener removed, an EISDIR stream still resolves (test/obs/telemetry.test.ts). It stays because it
+   * costs one line and closes a path nothing else covers, not because a hang was ever reproduced through it.
+   * The 3h42m CI hang this was written during had a different cause, in the tests themselves.
    */
   async flush(): Promise<void> {
     const s = this.stream;
