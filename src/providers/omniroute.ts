@@ -271,10 +271,38 @@ export class OmniRouteProvider implements Provider {
     // which is prompt-cached and barely billed. So the comment counts are the truthful cost signal.
     const billed: { in?: number; out?: number } = {};
 
+    /**
+     * The clock that measures PRODUCTION, not traffic.
+     *
+     * Measured live, against the gateway that hung a refine phase for three and a half minutes: it answers
+     * in 2 seconds with `200 text/event-stream` and then sends `{"id":"chatcmpl-keepalive",…}` every 2.5
+     * seconds, indefinitely, while the upstream model produces nothing. Both existing guards behave exactly
+     * as designed and neither can help — the headers arrived, so the first-byte timer was cleared, and the
+     * stream never goes quiet, so the idle timer never trips. A live stream carrying nothing is a third
+     * thing, and it was unbounded.
+     *
+     * Checked on arrival rather than on a timer of its own, which is the whole point: a keepalive wakes this
+     * loop every few seconds, so the one case that needs catching is also the one that keeps handing us the
+     * opportunity. A stream that goes genuinely silent never reaches here, and `withIdleTimeout` still owns
+     * that.
+     *
+     * Deliberately the SAME budget as silence. A gateway sending keepalives while a reasoning model thinks
+     * is legitimate, and this must not cut that short by being stricter than the guard for saying nothing
+     * at all.
+     */
+    let producedAt = Date.now();
+    const noProduction = (): boolean => Date.now() - producedAt > this.idleMs;
+
     try {
       // Idle-timeout guard: if omniroute/the upstream model stalls mid-stream, abort instead of hanging.
       for await (const line of withIdleTimeout(parseSSE(stream), this.idleMs, () => idleAc.abort())) {
+        if (noProduction()) {
+          idleAc.abort();
+          throw new Error(`omniroute: the stream stayed open for ${Math.round(this.idleMs / 1000)}s `
+            + "without the model producing anything — aborted");
+        }
         if (line.kind === "comment") {
+          producedAt = Date.now(); // the billed-token trailers are real output, and they arrive at the end
           const m = line.value.match(/^x-omniroute-tokens-(in|out)\s*=\s*(\d+)/i);
           if (m) billed[m[1] === "in" ? "in" : "out"] = Number(m[2]);
           continue;
@@ -285,8 +313,29 @@ export class OmniRouteProvider implements Provider {
         } catch {
           continue; // malformed chunk → skip
         }
+        /**
+         * What counts as the model having produced something — read from the chunk's own shape, not from a
+         * gateway's name for its filler.
+         *
+         * omniroute labels its filler `chatcmpl-keepalive`, and matching that string would work until the
+         * day it changes or another gateway pads differently. An empty `delta` with no `finish_reason` and
+         * no `usage` carries nothing whoever sent it, which is the fact worth testing.
+         */
+        const c = chunk as {
+          choices?: { delta?: Record<string, unknown>; finish_reason?: string | null }[];
+          usage?: unknown;
+        };
+        if (c.usage !== undefined
+          || (c.choices ?? []).some((ch) => ch.finish_reason || Object.keys(ch.delta ?? {}).length > 0)) {
+          producedAt = Date.now();
+        }
         if (decoder) {
-          for (const ev of decoder.push(chunk)) yield ev;
+          /**
+           * The native path speaks a different schema entirely, so the OpenAI-shaped test above can never
+           * match it — leaving it out would abort every Claude stream at the budget instead of the stalled
+           * ones. An event out of the decoder IS the production, whatever the wire shape was.
+           */
+          for (const ev of decoder.push(chunk)) { producedAt = Date.now(); yield ev; }
           continue;
         }
         // Usage arrives (with include_usage) in a final chunk whose `choices` is empty → read it before

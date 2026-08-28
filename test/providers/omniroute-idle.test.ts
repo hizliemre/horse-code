@@ -83,3 +83,67 @@ describe("OmniRouteProvider — a server that never answers at all", () => {
     expect(events[0]).toEqual({ type: "error", message: "cancelled", retryable: false });
   });
 });
+
+/**
+ * A stream that is alive and producing nothing — the third case, and the one that actually hung a run.
+ *
+ * Measured against the live gateway: it answers in 2 seconds with `200 text/event-stream` and then sends
+ * `{"id":"chatcmpl-keepalive",…}` every 2.5 seconds, indefinitely, while the upstream model produces
+ * nothing. The refine phase sat at 3m30s. Both existing guards behaved exactly as designed and neither
+ * could help: headers had arrived, so the first-byte timer was cleared, and the stream never went quiet,
+ * so the idle timer never tripped.
+ */
+describe("OmniRouteProvider — a stream kept alive with nothing in it", () => {
+  const keepalives = (everyMs: number): ReadableStream<Uint8Array> => {
+    const enc = new TextEncoder();
+    let timer: ReturnType<typeof setInterval>;
+    return new ReadableStream<Uint8Array>({
+      start(c) {
+        timer = setInterval(() => {
+          // The shape the gateway actually sends: a chunk with an empty delta and no finish_reason.
+          c.enqueue(enc.encode('data: {"id":"chatcmpl-keepalive","model":"keepalive","choices":[{"index":0,"delta":{},"finish_reason":null}]}\n'));
+        }, everyMs);
+      },
+      cancel() { clearInterval(timer); },
+    });
+  };
+
+  it("gives up on padding that never becomes output", async () => {
+    const fetch: FetchLike = async () => new Response(keepalives(10), { status: 200 });
+    const provider = new OmniRouteProvider({ baseUrl: "http://x", fetch, idleTimeoutMs: 60 });
+    const events: ChatEvent[] = [];
+    const t0 = Date.now();
+    for await (const e of provider.chat(req, new AbortController().signal)) events.push(e);
+    expect(Date.now() - t0).toBeLessThan(2_000);          // it ended, and it ended on its own budget
+    expect(events.at(-1)).toMatchObject({ type: "error", retryable: true });
+    expect((events.at(-1) as { message: string }).message).toMatch(/without the model producing anything/);
+  });
+
+  /**
+   * The budget is deliberately the same as the one for silence: a gateway padding while a reasoning model
+   * thinks is legitimate, and being stricter here than there would cut short exactly that.
+   */
+  it("does not fire while real output keeps arriving, however slowly", async () => {
+    const enc = new TextEncoder();
+    let n = 0;
+    const slow = new ReadableStream<Uint8Array>({
+      start(c) {
+        const timer = setInterval(() => {
+          // Two keepalives for every one real token — padding must not by itself keep the stream alive,
+          // and content must not be starved by the padding around it.
+          c.enqueue(enc.encode('data: {"choices":[{"index":0,"delta":{},"finish_reason":null}]}\n'));
+          c.enqueue(enc.encode('data: {"choices":[{"index":0,"delta":{},"finish_reason":null}]}\n'));
+          c.enqueue(enc.encode(`data: {"choices":[{"index":0,"delta":{"content":"t${n}"},"finish_reason":null}]}\n`));
+          if (++n >= 6) { clearInterval(timer); c.enqueue(enc.encode("data: [DONE]\n")); c.close(); }
+        }, 15);
+      },
+    });
+    const fetch: FetchLike = async () => new Response(slow, { status: 200 });
+    const provider = new OmniRouteProvider({ baseUrl: "http://x", fetch, idleTimeoutMs: 60 });
+    const events: ChatEvent[] = [];
+    for await (const e of provider.chat(req, new AbortController().signal)) events.push(e);
+    const text = events.filter((e) => e.type === "text-delta").map((e) => (e as { text: string }).text).join("");
+    expect(text).toBe("t0t1t2t3t4t5");
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+});
