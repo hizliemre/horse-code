@@ -13,6 +13,9 @@ const params = z.object({
 /** How much of the file's real text an error may quote back. Enough to paste; short of re-sending the file. */
 export const NEAR_MISS_CHARS = 600;
 
+/** How many match locations are worth naming. Enough to choose between; not a search result. */
+export const MAX_MATCH_LINES = 5;
+
 const norm = (t: string): string => t.replace(/[ \t]+/g, " ").replace(/[ \t]+$/gm, "").trim();
 
 /**
@@ -115,8 +118,30 @@ export const editFileTool: Tool = {
       };
     }
     if (count > 1 && !a.replaceAll) {
+      /**
+       * Two routes out, and the message used to name only the riskier one.
+       *
+       * "replaceAll required" is true when every occurrence should change and wrong when one should — and an
+       * agent told to do a thing generally does it. Extending the string is the safer answer and belongs
+       * first; `replaceAll` belongs to the case where the sameness is the point.
+       *
+       * The line numbers are what makes the choice possible at all. Without them the model cannot tell
+       * whether the matches are the same code twice or two different places that happen to read alike, so it
+       * is choosing between two remedies with no way to know which it needs.
+       */
+      const lines = content.split("\n");
+      const at: number[] = [];
+      for (let i = 0; i < lines.length && at.length <= MAX_MATCH_LINES; i++) {
+        if (lines[i]?.includes(a.oldString.split("\n")[0] ?? "")) at.push(i + 1);
+      }
+      const where = at.length
+        ? ` First seen at line${at.length > 1 ? "s" : ""} ${at.slice(0, MAX_MATCH_LINES).join(", ")}`
+          + `${at.length > MAX_MATCH_LINES ? ", …" : ""}.`
+        : "";
       return {
-        content: `edit_file: oldString is not unique (${count} matches) — replaceAll required`,
+        content: `edit_file: oldString matches ${count} places in ${shortPath(a.path, cwdResolved)}.${where}`
+          + " Add surrounding lines to oldString so it names the one you mean —"
+          + " or pass replaceAll: true if every occurrence should change.",
         isError: true,
       };
     }

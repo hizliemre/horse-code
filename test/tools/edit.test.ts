@@ -22,11 +22,30 @@ describe("edit_file", () => {
     expect(await readFile(join(dir, "f.txt"), "utf8")).toBe("a Y a");
   });
 
-  it("returns an error on multiple matches without replaceAll", async () => {
+  /**
+   * An ambiguous edit has TWO ways out and the message used to name only the riskier one.
+   *
+   * "replaceAll required" is true when every occurrence should change and wrong when one should — and an
+   * agent told to do a thing generally does it. Caught while watching a live run. Extending the string is
+   * the safer route and now leads; the line numbers are what make the choice possible at all, because
+   * without them the model cannot tell two copies of the same code from two places that merely read alike.
+   */
+  it("offers the safe route first, and says where the matches are", async () => {
     await writeFile(join(dir, "f.txt"), "a b a", "utf8");
     const res = await editFileTool.run({ path: "f.txt", oldString: "a", newString: "X" }, ctx());
     expect(res.isError).toBe(true);
-    expect(res.content).toContain("not unique");
+    expect(res.content).toContain("matches 2 places");
+    expect(res.content).toContain("line 1");
+    const extend = res.content.indexOf("Add surrounding lines");
+    const all = res.content.indexOf("replaceAll: true");
+    expect(extend).toBeGreaterThan(-1);
+    expect(extend).toBeLessThan(all);   // the safer remedy is read first
+  });
+
+  it("names each line a match sits on, so the model can pick one", async () => {
+    await writeFile(join(dir, "f.txt"), "x\nhit\ny\nhit\n", "utf8");
+    const res = await editFileTool.run({ path: "f.txt", oldString: "hit", newString: "Z" }, ctx());
+    expect(res.content).toContain("lines 2, 4");
   });
 
   it("replaces all matches with replaceAll", async () => {
