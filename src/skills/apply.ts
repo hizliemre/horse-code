@@ -75,19 +75,41 @@ export const MAX_SKILL_DOC_CHARS = 30_000;
  *
  * The whole message was `skill not found: review-plan` — a lens reaching for a skill by a name it had made
  * up, and told nothing it could act on. This is the same message `unknown tool: <name>` used to be, and the
- * same cure: name what IS there. There are ten-odd skills in a project, so they all fit; a punctuation
- * variant of a real name is resolved rather than refused, which is the mistake models actually make.
+ * same cure: name what IS there. A punctuation variant of a real name is resolved rather than refused,
+ * which is the mistake models actually make.
+ *
+ * "There are ten-odd skills in a project, so they all fit" was true when this was written and is not any
+ * more: measured live, a project with 87 installed skills answered a miss with all 87 names. The list was
+ * the longest part of the message, it cost that on every miss, and it buried the one line that would have
+ * ended the question — the agent had asked for `review` while `review-return` sat in the list.
  */
+export const MAX_SKILLS_LISTED = 12;
+
 export function noSuchSkill(name: string, available: string[]): string {
   const shape = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
   const same = available.filter((s) => shape(s) === shape(name));
   if (same.length === 1) {
     return `skill not found: ${name} — did you mean \`${same[0]}\`? Call it with that exact name.`;
   }
-  return available.length
-    ? `skill not found: ${name}. Available: ${available.join(", ")}. Use one of these exactly, or carry on `
-      + `without a skill — do not guess another name.`
-    : `skill not found: ${name}. This project has no skills installed, so carry on without one.`;
+  if (!available.length) return `skill not found: ${name}. This project has no skills installed, so carry on without one.`;
+
+  /**
+   * A name that CONTAINS the asked-for one, or is contained by it, is the near miss worth naming.
+   *
+   * `review` → `review-return`, `code-review-checklist`: the model reached for a category and the real
+   * skills are specialisations of it. Offered, never chosen on its behalf — the same rule the read tool
+   * follows for a path that exists elsewhere.
+   */
+  const near = available.filter((s) => shape(s).includes(shape(name)) || shape(name).includes(shape(s)));
+  if (near.length && near.length <= MAX_SKILLS_LISTED) {
+    return `skill not found: ${name}. Closest by name: ${near.map((s) => `\`${s}\``).join(", ")}. `
+      + `Call one of those exactly if it is what you meant, or carry on without a skill.`;
+  }
+  const shown = available.slice(0, MAX_SKILLS_LISTED);
+  const rest = available.length - shown.length;
+  return `skill not found: ${name}. Available: ${shown.join(", ")}`
+    + `${rest > 0 ? `, and ${rest} more — the full list is in your system prompt` : ""}. `
+    + `Use one of these exactly, or carry on without a skill — do not guess another name.`;
 }
 
 export function buildSkillTool(registry: SkillRegistry): Tool {

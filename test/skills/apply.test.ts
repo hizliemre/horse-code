@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applySkills, buildSkillTool } from "../../src/skills/apply.js";
+import { applySkills, buildSkillTool, noSuchSkill, MAX_SKILLS_LISTED } from "../../src/skills/apply.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 const ctx = () => ({ cwd: "/tmp", signal: new AbortController().signal });
@@ -132,5 +132,47 @@ describe("a skill that does not exist", () => {
     const msg = noSuchSkill("anything", []);
     expect(msg).toMatch(/no skills installed/i);
     expect(msg).not.toMatch(/Available:/);
+  });
+});
+
+/**
+ * "There are ten-odd skills in a project, so they all fit" stopped being true.
+ *
+ * Measured live: a project with 87 installed skills answered a miss by listing all 87. The list was the
+ * longest part of the message, it was paid on every miss, and it buried the one line that would have ended
+ * the question — the agent had asked for `review` while `review-return` sat in that list.
+ */
+describe("a skill miss in a project with many skills", () => {
+  const many = (n: number): string[] => Array.from({ length: n }, (_, i) => `skill-${i}`);
+
+  it("offers the near miss instead of the catalogue", () => {
+    const text = noSuchSkill("review", ["review-return", "code-review-checklist", ...many(80)]);
+    expect(text).toContain("`review-return`");
+    expect(text).toContain("`code-review-checklist`");
+    expect(text).not.toContain("skill-40");           // the other eighty are not the answer
+    expect(text.length).toBeLessThan(300);
+  });
+
+  it("caps the list when nothing is close, and says how many were left out", () => {
+    const text = noSuchSkill("nothing-like-this", many(87));
+    expect(text).toContain(`and ${87 - MAX_SKILLS_LISTED} more`);
+    expect(text.split(", ").length).toBeLessThan(MAX_SKILLS_LISTED + 6);
+  });
+
+  /** The behaviour that was already right, and must stay right: a punctuation variant is resolved outright. */
+  it("still resolves a punctuation variant rather than offering it", () => {
+    expect(noSuchSkill("test_driven_development", ["test-driven-development"]))
+      .toContain("did you mean `test-driven-development`?");
+  });
+
+  it("still says so plainly when a project has no skills at all", () => {
+    expect(noSuchSkill("anything", [])).toContain("no skills installed");
+  });
+
+  /** A short project keeps the old behaviour: every name fits, so every name is given. */
+  it("names them all when they do all fit", () => {
+    const text = noSuchSkill("zzz", ["alpha", "beta", "gamma"]);
+    for (const s of ["alpha", "beta", "gamma"]) expect(text).toContain(s);
+    expect(text).not.toContain("more");
   });
 });
