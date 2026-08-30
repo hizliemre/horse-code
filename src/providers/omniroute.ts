@@ -18,6 +18,20 @@ export interface OmniRouteOptions {
  * Wraps an async iterable with an idle-timeout: if no value arrives within `idleMs`, it invokes `onIdle`
  * (to abort the underlying request) and throws — turning a silent, indefinite stream stall into a real error.
  */
+/**
+ * How much longer a stream may go unproductive than it may go silent.
+ *
+ * The two are not the same risk and must not share a number. Total silence is nearly always a hang: nothing
+ * is arriving, not even framing. A stream that is arriving but carrying nothing may still be a model at
+ * work behind a gateway that pads — and cutting one of those off is far more expensive than waiting.
+ * Measured, at that exact cost: this guard aborted a working `cc/claude-opus-5` at 120 seconds, benched it,
+ * re-assigned six roles, and ended an 85-minute run at the moment it was handing work back to the user.
+ *
+ * The other half of that fix is counting thinking as production, which it now is. This multiplier is the
+ * margin for whatever else is not yet known to look like work.
+ */
+export const UNPRODUCTIVE_BUDGET = 3;
+
 export async function* withIdleTimeout<T>(source: AsyncIterable<T>, idleMs: number, onIdle?: () => void): AsyncIterable<T> {
   const it = source[Symbol.asyncIterator]();
   for (;;) {
@@ -291,14 +305,15 @@ export class OmniRouteProvider implements Provider {
      * at all.
      */
     let producedAt = Date.now();
-    const noProduction = (): boolean => Date.now() - producedAt > this.idleMs;
+    const budget = this.idleMs * UNPRODUCTIVE_BUDGET;
+    const noProduction = (): boolean => Date.now() - producedAt > budget;
 
     try {
       // Idle-timeout guard: if omniroute/the upstream model stalls mid-stream, abort instead of hanging.
       for await (const line of withIdleTimeout(parseSSE(stream), this.idleMs, () => idleAc.abort())) {
         if (noProduction()) {
           idleAc.abort();
-          throw new Error(`omniroute: the stream stayed open for ${Math.round(this.idleMs / 1000)}s `
+          throw new Error(`omniroute: the stream stayed open for ${Math.round(budget / 1000)}s `
             + "without the model producing anything — aborted");
         }
         if (line.kind === "comment") {
@@ -331,11 +346,19 @@ export class OmniRouteProvider implements Provider {
         }
         if (decoder) {
           /**
-           * The native path speaks a different schema entirely, so the OpenAI-shaped test above can never
-           * match it — leaving it out would abort every Claude stream at the budget instead of the stalled
-           * ones. An event out of the decoder IS the production, whatever the wire shape was.
+           * Read from the WIRE event, not from whether our decoder chose to surface it.
+           *
+           * "An event out of the decoder is the production" was wrong, and it cost a live run 85 minutes at
+           * the moment of handoff. `content_block_delta` yields nothing for `thinking_delta` — deliberately,
+           * it is not output — so a model reasoning over a 199,621-character prompt produces no decoder
+           * events for as long as it thinks. The clock never advanced, and at 120s this aborted
+           * `cc/claude-opus-5` in the middle of working, benched it, and re-assigned the six roles using it.
+           *
+           * Thinking IS the model producing. `ping` is the only thing on this stream that is not.
            */
-          for (const ev of decoder.push(chunk)) { producedAt = Date.now(); yield ev; }
+          const type = (chunk as { type?: string }).type;
+          if (type !== undefined && type !== "ping") producedAt = Date.now();
+          for (const ev of decoder.push(chunk)) yield ev;
           continue;
         }
         // Usage arrives (with include_usage) in a final chunk whose `choices` is empty → read it before

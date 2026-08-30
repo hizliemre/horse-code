@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { OmniRouteProvider, withIdleTimeout, type FetchLike } from "../../src/providers/omniroute.js";
+import { OmniRouteProvider, withIdleTimeout, UNPRODUCTIVE_BUDGET, type FetchLike } from "../../src/providers/omniroute.js";
 import type { ChatEvent, ChatRequest } from "../../src/core/types.js";
 
 const req: ChatRequest = { model: "m", messages: [{ role: "user", content: "hi" }], tools: [] };
@@ -145,5 +145,71 @@ describe("OmniRouteProvider — a stream kept alive with nothing in it", () => {
     const text = events.filter((e) => e.type === "text-delta").map((e) => (e as { text: string }).text).join("");
     expect(text).toBe("t0t1t2t3t4t5");
     expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+});
+
+/**
+ * Thinking is the model producing, and treating it as silence cost a live run 85 minutes.
+ *
+ * `AnthropicDecoder` yields nothing for `thinking_delta` — correctly, it is not output — so the first
+ * version of the production clock, which counted decoder events, saw a reasoning model as a dead one.
+ * Measured: `cc/claude-opus-5` over a 199,621-character prompt was aborted at 120s while working, benched,
+ * and the six roles using it were re-assigned. The run ended at the moment it was handing back to the user.
+ *
+ * So progress is read from the WIRE event now. `ping` is the only thing on this stream that is not work.
+ */
+describe("OmniRouteProvider — a Claude stream that is thinking, not stalling", () => {
+  const thinkingThen = (thinkChunks: number, gapMs: number): ReadableStream<Uint8Array> => {
+    const enc = new TextEncoder();
+    const send = (o: unknown) => enc.encode(`data: ${JSON.stringify(o)}\n`);
+    return new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(send({ type: "message_start", message: { usage: {} } }));
+        c.enqueue(send({ type: "content_block_start", index: 0, content_block: { type: "thinking" } }));
+        let n = 0;
+        const timer = setInterval(() => {
+          if (n < thinkChunks) {
+            // The decoder surfaces nothing for these — which was the whole bug.
+            c.enqueue(send({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "…" } }));
+            n++;
+            return;
+          }
+          clearInterval(timer);
+          c.enqueue(send({ type: "content_block_stop", index: 0 }));
+          c.enqueue(send({ type: "content_block_start", index: 1, content_block: { type: "text" } }));
+          c.enqueue(send({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "answer" } }));
+          c.enqueue(send({ type: "message_delta", delta: { stop_reason: "end_turn" } }));
+          c.close();
+        }, gapMs);
+      },
+    });
+  };
+
+  it("lets a model think for far longer than the budget and still answer", async () => {
+    const fetch: FetchLike = async () => new Response(thinkingThen(30, 8), { status: 200 });
+    // 20ms silence budget → 60ms unproductive budget; the thinking runs ~240ms past both.
+    const provider = new OmniRouteProvider({ baseUrl: "http://x", fetch, idleTimeoutMs: 20 });
+    const events: ChatEvent[] = [];
+    for await (const e of provider.chat({ ...req, model: "cc/claude-opus-5" }, new AbortController().signal)) events.push(e);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events.filter((e) => e.type === "text-delta").map((e) => (e as { text: string }).text).join("")).toBe("answer");
+  });
+
+  /** A ping is framing, not work — the one thing on this stream that must NOT hold the budget open. */
+  it("still gives up on a Claude stream that sends nothing but pings", async () => {
+    const enc = new TextEncoder();
+    const pings = new ReadableStream<Uint8Array>({
+      start(c) { setInterval(() => c.enqueue(enc.encode('data: {"type":"ping"}\n')), 10); },
+    });
+    const fetch: FetchLike = async () => new Response(pings, { status: 200 });
+    const provider = new OmniRouteProvider({ baseUrl: "http://x", fetch, idleTimeoutMs: 20 });
+    const events: ChatEvent[] = [];
+    for await (const e of provider.chat({ ...req, model: "cc/claude-opus-5" }, new AbortController().signal)) events.push(e);
+    expect((events.at(-1) as { message: string }).message).toMatch(/without the model producing anything/);
+  });
+
+  /** Silence and unproductive-but-alive are different risks and must not share a number. */
+  it("gives an unproductive stream more rope than a silent one", () => {
+    expect(UNPRODUCTIVE_BUDGET).toBeGreaterThan(1);
   });
 });
