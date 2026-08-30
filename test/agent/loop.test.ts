@@ -211,6 +211,39 @@ describe("runRoleAgent fallback chain", () => {
     expect(events.at(-1)).toEqual({ type: "error", message: "429 again", retryable: true });
   });
 
+  /**
+   * The failure that ended a run one line too late.
+   *
+   * Measured live: `cc/claude-opus-5` streamed for 48 seconds, the upstream sent `Overloaded` mid-stream,
+   * and the run stopped — while the bench that followed re-assigned six roles onto a working model that was
+   * never asked. The guard was `!streamed`, on the reasoning that a partial response cannot be cleanly
+   * retried. It can: every attempt resets `assistantText` and `toolCalls`, nothing joins the history until
+   * the turn succeeds, tool calls run only after the stream closes, and the partial is not even displayed.
+   */
+  it("retries on the next model even when the failed one had already begun streaming", async () => {
+    const p = new MockProvider([
+      [{ type: "text-delta", text: "half an ans" }, { type: "error", message: "Overloaded", retryable: true }],
+      [{ type: "text-delta", text: "a whole answer" }, { type: "done", finishReason: "stop" }],
+    ]);
+    const falls: { from: string; to: string }[] = [];
+    const events = await drain(runRoleAgent(opts(p, { fallbacks: ["f1"], onFallback: (from, to) => falls.push({ from, to }) })));
+    expect(p.requests.map((r) => r.model)).toEqual(["m", "f1"]);
+    expect(falls).toEqual([{ from: "m", to: "f1" }]);
+    // The abandoned half is gone: the committed message is the fallback's answer alone.
+    expect(events.at(-1)).toEqual({ type: "message.done", message: { role: "assistant", content: "a whole answer" } });
+  });
+
+  /** Mid-stream tool arguments are abandoned with the rest — a half-built call must never be executed. */
+  it("throws away a tool call the failed model had not finished", async () => {
+    const p = new MockProvider([
+      [{ type: "tool-progress", name: "write_file", chars: 40, path: "a.ts" },
+        { type: "error", message: "Overloaded", retryable: true }],
+      [{ type: "text-delta", text: "recovered" }, { type: "done", finishReason: "stop" }],
+    ]);
+    const events = await drain(runRoleAgent(opts(p, { fallbacks: ["f1"] })));
+    expect(events.at(-1)).toEqual({ type: "message.done", message: { role: "assistant", content: "recovered" } });
+  });
+
   it("a NON-retryable error does not fall back", async () => {
     const p = new MockProvider([[{ type: "error", message: "401 unauthorized" }]]);
     const exhausted: string[] = [];
@@ -220,13 +253,35 @@ describe("runRoleAgent fallback chain", () => {
     expect(events.at(-1)).toEqual({ type: "error", message: "401 unauthorized", retryable: undefined });
   });
 
-  it("does not fall back once text has already streamed (can't cleanly retry)", async () => {
+  /**
+   * This asserted the opposite until a live run showed what it was buying: nothing, at the price of the run.
+   *
+   * The old rule was "once text has streamed, the turn cannot be cleanly retried". Reading the loop says it
+   * can — every attempt resets its own accumulator, the history is only appended to on success, and tool
+   * calls execute after the stream closes. So a mid-stream `Overloaded` ended a run whose spec had just
+   * been written, one line before the bench moved six roles onto a model that answered fine.
+   *
+   * What survives from the old test is the part that was always right: the partial IS emitted while it is
+   * arriving, because nobody can know in advance that it will not finish.
+   */
+  it("still emits the partial while it arrives, then abandons it for the fallback's answer", async () => {
+    const p = new MockProvider([
+      [{ type: "text-delta", text: "partial" }, { type: "error", message: "stream stalled", retryable: true }],
+      [{ type: "text-delta", text: "complete" }, { type: "done", finishReason: "stop" }],
+    ]);
+    const events = await drain(runRoleAgent(opts(p, { fallbacks: ["f1"] })));
+    expect(p.requests.map((r) => r.model)).toEqual(["m", "f1"]);
+    expect(events).toContainEqual({ type: "message.delta", text: "partial" });
+    expect(events.at(-1)).toEqual({ type: "message.done", message: { role: "assistant", content: "complete" } });
+  });
+
+  /** With nothing left to fall to, a mid-stream failure is still a failure. */
+  it("surfaces a mid-stream error when the chain is exhausted", async () => {
     const p = new MockProvider([
       [{ type: "text-delta", text: "partial" }, { type: "error", message: "stream stalled", retryable: true }],
     ]);
-    const events = await drain(runRoleAgent(opts(p, { fallbacks: ["f1"] })));
-    expect(p.requests.map((r) => r.model)).toEqual(["m"]); // no retry — output was already emitted
-    expect(events).toContainEqual({ type: "message.delta", text: "partial" });
+    const events = await drain(runRoleAgent(opts(p)));
+    expect(p.requests.map((r) => r.model)).toEqual(["m"]);
     expect(events.at(-1)).toEqual({ type: "error", message: "stream stalled", retryable: true });
   });
 });

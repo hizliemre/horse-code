@@ -232,9 +232,9 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
     let toolCalls: ToolCall[] = [];
     let fatal: { message: string; retryable?: boolean } | undefined;
 
-    // Attempt the turn with the active model; on a retryable error BEFORE any text streamed, mark the model
-    // exhausted and retry the same turn with the next chain model. A partial (streamed) response can't be
-    // cleanly retried, so it surfaces as a normal error.
+    // Attempt the turn with the active model; on a retryable error, mark the model exhausted and retry the
+    // same turn with the next chain model — mid-stream included, because nothing is committed until the
+    // turn succeeds. See the fallback below for what that used to cost.
     for (;;) {
       const activeModel = chain[chainIdx];
       assistantText = "";
@@ -314,7 +314,21 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
        */
       // A refusal, or a fault that is not about this model at all, moves on WITHOUT taking it out of service.
       if (errored.retryable && !errored.capability && !errored.noBench) opts.onExhausted?.(activeModel, errored.message);
-      if (errored.retryable && !streamed && chainIdx < chain.length - 1) {
+      /**
+       * A turn that had begun streaming is retried too, and that is the whole difference between an
+       * overloaded model costing a turn and costing a run.
+       *
+       * `!streamed` was here on the reasoning that a partial response cannot be cleanly retried. It can:
+       * `assistantText` and `toolCalls` are reset at the top of every attempt, nothing is appended to
+       * `working` until the turn succeeds, and tool calls execute only after the stream closes — so a
+       * mid-stream failure has committed nothing anywhere. The partial is not even shown: `message.delta`
+       * has no consumer, and the phase driver reads `message.done` alone.
+       *
+       * Measured live: `cc/claude-opus-5` streamed for 48 seconds, the upstream sent `Overloaded`
+       * mid-stream, and a run that had just written a 424-line spec ended at 7m13s with six roles being
+       * re-assigned to a working model one line too late to be used.
+       */
+      if (errored.retryable && chainIdx < chain.length - 1) {
         const next = chain[chainIdx + 1];
         opts.onFallback?.(activeModel, next, errored.message);
         chainIdx++;
