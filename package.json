@@ -1,6 +1,6 @@
 {
   "name": "@hizliemre/horse-code",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Terminal coding agent: one sentence to reviewed, committed code — in its own git worktree",
   "license": "MIT",
   "author": "Emre Hızlı <hizliemre@gmail.com>",
