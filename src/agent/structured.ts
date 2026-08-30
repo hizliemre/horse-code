@@ -13,6 +13,38 @@ export interface SubmitToolHandle<T> {
  * When the model calls submit, the args are validated; if valid they're written to the box,
  * if invalid isError is returned.
  */
+/** The value actually at `path` in what the model sent — the half of the complaint it could not see. */
+function valueAt(args: unknown, path: readonly PropertyKey[]): unknown {
+  let cur = args;
+  for (const key of path) {
+    if (typeof cur !== "object" || cur === null) return undefined;
+    cur = (cur as Record<PropertyKey, unknown>)[key];
+  }
+  return cur;
+}
+
+/**
+ * Names the field and what was in it, not only the rule it broke.
+ *
+ * Measured on a live run: the refiner sent an invalid `kind` and was told `Invalid option: expected one of
+ * "chat"|"feature"|"bugfix"|"govern"|"undo"|"verify"` — four times, four model turns, before it guessed its
+ * way to a legal value on the fifth. The message stated the rule perfectly and never said which field was
+ * wrong or what had been put there, so each retry was a fresh guess rather than a correction.
+ *
+ * This is the same defect the tool layer has been fixed for repeatedly: an error that describes the law
+ * costs a turn; one that describes the violation ends it.
+ */
+export function whatWasWrong(issues: readonly z.core.$ZodIssue[], args: unknown): string {
+  return issues.map((i) => {
+    const where = i.path.length ? i.path.join(".") : undefined;
+    const got = valueAt(args, i.path);
+    const shown = got === undefined ? "nothing" : JSON.stringify(got);
+    const head = where ? `${where}: ${i.message}` : i.message;
+    // A value long enough to be the problem itself is truncated: the point is what it WAS, not all of it.
+    return `${head} — got ${shown.length > 120 ? `${shown.slice(0, 120)}…` : shown}`;
+  }).join("; ");
+}
+
 export function buildSubmitTool<T>(schema: z.ZodType<T>): SubmitToolHandle<T> {
   let box: { value: T } | undefined;
   const tool: Tool = {
@@ -23,10 +55,7 @@ export function buildSubmitTool<T>(schema: z.ZodType<T>): SubmitToolHandle<T> {
     run: async (rawArgs) => {
       const parsed = schema.safeParse(rawArgs);
       if (!parsed.success) {
-        return {
-          content: `submit: invalid output: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-          isError: true,
-        };
+        return { content: `submit: invalid output: ${whatWasWrong(parsed.error.issues, rawArgs)}`, isError: true };
       }
       box = { value: parsed.data };
       return { content: "received", isError: false };
