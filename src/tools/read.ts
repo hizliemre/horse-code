@@ -84,6 +84,38 @@ export async function sameNameElsewhere(cwd: string, asked: string): Promise<str
     : ` Files named \`${base}\` in this project: ${hits.map((h) => `\`${h}\``).join(", ")}.`;
 }
 
+/** How many siblings are worth naming. Past this the directory is the answer to a different question. */
+export const MAX_SIBLINGS = 12;
+
+/**
+ * When the DIRECTORY is right and the filename is not, say what is in the directory.
+ *
+ * Measured live: the brainstormer asked for `src/domain/Orders/OrderLine.cs`. There is no file by that name
+ * anywhere, so `sameNameElsewhere` correctly said nothing — but `src/domain/Orders/` exists and is full of
+ * the entities it was looking for. The agent had the right room and the wrong door, and was told only that
+ * the door was not there.
+ *
+ * This is the case that helper cannot reach, and between them they cover both halves of a wrong path: a
+ * name that exists elsewhere, and a place that exists without that name. Names, never opens — a file the
+ * agent did not ask for may not be the one it means.
+ */
+export async function whatIsInThatDirectory(cwd: string, asked: string): Promise<string> {
+  const slash = asked.lastIndexOf("/");
+  if (slash <= 0) return "";
+  const dir = asked.slice(0, slash);
+  try {
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(resolve(cwd, dir), { withFileTypes: true });
+    const names = entries.filter((e) => !e.name.startsWith(".")).map((e) => (e.isDirectory() ? `${e.name}/` : e.name));
+    if (!names.length) return ` \`${dir}/\` exists but is empty.`;
+    const shown = names.slice(0, MAX_SIBLINGS).map((n) => `\`${n}\``).join(", ");
+    const rest = names.length - Math.min(names.length, MAX_SIBLINGS);
+    return ` \`${dir}/\` does exist, and holds: ${shown}${rest > 0 ? `, and ${rest} more` : ""}.`;
+  } catch {
+    return ""; // the directory is not there either — sameNameElsewhere is the better answer, or none is
+  }
+}
+
 /**
  * Prefixes each line with its 1-based number, `cat -n` style.
  *
@@ -179,8 +211,18 @@ export const readFileTool: Tool = {
           isError: true,
         };
       }
-      const elsewhere = said.includes("ENOENT") ? await sameNameElsewhere(ctx.cwd, args.path) : "";
-      return { content: `read_file error: ${said}${elsewhere}`, isError: true };
+      /**
+       * Two different wrong paths, two different answers, and only one of them ever applies.
+       *
+       * A name that exists elsewhere is the stronger hint, so it wins when there is one. When there is not,
+       * the directory may still be right — which is the case that used to get nothing at all.
+       */
+      let hint = "";
+      if (said.includes("ENOENT")) {
+        hint = await sameNameElsewhere(ctx.cwd, args.path);
+        if (!hint) hint = await whatIsInThatDirectory(ctx.cwd, args.path);
+      }
+      return { content: `read_file error: ${said}${hint}`, isError: true };
     }
     const all = raw.split("\n");
     // A small file, requested whole: numbered, no footer — there is nothing to page.

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readFileTool, MAX_READ_CHARS } from "../../src/tools/read.js";
+import { readFileTool, MAX_READ_CHARS, whatIsInThatDirectory, MAX_SIBLINGS } from "../../src/tools/read.js";
 
 let dir: string;
 const ctx = () => ({ cwd: dir, signal: new AbortController().signal });
@@ -226,5 +226,58 @@ describe("reading a directory", () => {
     const r = await read("src/domain/Abstraction/");
     expect(r.content).toContain("src/domain/Abstraction/**");
     expect(r.content).not.toContain("Abstraction//");
+  });
+});
+
+/**
+ * The right room, the wrong door.
+ *
+ * Measured live while watching a run: the brainstormer asked for `src/domain/Orders/OrderLine.cs`. No file
+ * of that name exists anywhere, so the same-name hint correctly said nothing — and `src/domain/Orders/`
+ * exists and is full of the entities it was looking for. It was told only that the door was not there.
+ */
+describe("a path whose directory is right and whose filename is not", () => {
+  it("names what the directory actually holds", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-dirhint-"));
+    try {
+      await mkdir(join(dir, "src", "domain", "Orders"), { recursive: true });
+      await writeFile(join(dir, "src", "domain", "Orders", "Order.cs"), "x");
+      await writeFile(join(dir, "src", "domain", "Orders", "OrderStatus.cs"), "x");
+      const hint = await whatIsInThatDirectory(dir, "src/domain/Orders/OrderLine.cs");
+      expect(hint).toContain("src/domain/Orders/` does exist");
+      expect(hint).toContain("`Order.cs`");
+      expect(hint).toContain("`OrderStatus.cs`");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("says nothing when the directory is not there either", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-dirhint-"));
+    try {
+      expect(await whatIsInThatDirectory(dir, "nowhere/at/all/File.cs")).toBe("");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("caps a directory too large to be an answer", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-dirhint-"));
+    try {
+      await mkdir(join(dir, "big"), { recursive: true });
+      for (let i = 0; i < MAX_SIBLINGS + 5; i++) await writeFile(join(dir, "big", `F${i}.cs`), "x");
+      const hint = await whatIsInThatDirectory(dir, "big/Missing.cs");
+      expect(hint).toContain("and 5 more");
+      expect(hint.match(/`F\d+\.cs`/g) ?? []).toHaveLength(MAX_SIBLINGS);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("marks subdirectories so a further path is obviously available", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hc-dirhint-"));
+    try {
+      await mkdir(join(dir, "src", "nested"), { recursive: true });
+      expect(await whatIsInThatDirectory(dir, "src/Missing.cs")).toContain("`nested/`");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  /** A bare filename has no directory to be right about. */
+  it("stays quiet for a path with no directory at all", async () => {
+    expect(await whatIsInThatDirectory(process.cwd(), "Missing.cs")).toBe("");
   });
 });
