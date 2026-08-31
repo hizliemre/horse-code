@@ -221,3 +221,39 @@ describe("what to do about output too big to return", () => {
     expect(howToNarrow(["cat-file", "-p", "HEAD"])).toContain("narrower");
   });
 });
+
+/**
+ * A short flag admitted and its long twin refused is not a boundary, it is a typo in one.
+ *
+ * Measured in one run: an agent asked for `git branch --all` and then `git branch --show-current`, and paid
+ * a refused turn for each — while `branch -a`, the same command spelled the other way, sat in the allowlist.
+ */
+describe("the read-only forms of a subcommand that also writes", () => {
+  it("admits the long spelling of what the short one already allowed", () => {
+    for (const args of [["branch", "--all"], ["branch", "--verbose"], ["branch", "--remotes"]]) {
+      expect(refuse(args), args.join(" ")).toBeUndefined();
+    }
+  });
+
+  it("admits the queries that only ask", () => {
+    for (const args of [["branch", "--show-current"], ["branch", "--merged"], ["branch", "--points-at", "HEAD"],
+      ["tag", "--contains", "HEAD"], ["remote", "get-url", "origin"], ["stash", "show"]]) {
+      expect(refuse(args), args.join(" ")).toBeUndefined();
+    }
+  });
+
+  /** The point of the list is what it still keeps out, and that must not have moved. */
+  it("still refuses every form that changes a ref", () => {
+    for (const args of [["branch", "-d", "x"], ["branch", "-D", "x"], ["branch", "--delete", "x"],
+      ["branch", "-m", "a", "b"], ["branch", "--move", "a", "b"], ["branch", "--set-upstream-to=o/x"],
+      ["tag", "-d", "v1"], ["stash", "pop"], ["stash", "drop"], ["worktree", "add", "p"],
+      ["remote", "add", "o", "u"], ["config", "--global", "user.name", "x"]]) {
+      expect(refuse(args), args.join(" ")).toBeDefined();
+    }
+  });
+
+  /** A bare `git branch <name>` creates one, and no flag list can catch that — the first word must be a flag. */
+  it("still refuses a branch name given as a positional argument", () => {
+    expect(refuse(["branch", "new-feature"])).toBeDefined();
+  });
+});

@@ -54,6 +54,23 @@ const READ_ONLY = new Set([
 const READ_ONLY_PAIRS = new Set([
   "worktree list", "branch --list", "branch -l", "branch -a", "branch -v", "branch -r",
   "tag --list", "tag -l", "stash list", "remote -v", "remote show", "config --get", "config --list",
+  /**
+   * The long forms of what is already allowed, and the queries that only ask.
+   *
+   * `branch -a` was allowed and `branch --all` was not — the same command spelled the way git's own
+   * documentation spells it. Measured in one run: an agent asked for `branch --all` and then `branch
+   * --show-current`, and paid a refused turn for each while `-a` sat in this list. A short flag admitted and
+   * its long twin refused is not a security boundary, it is a typo in one.
+   *
+   * These are the closure of what this set already permits, not new ground: every one of them prints
+   * information about branches or tags and none of them can create, move or delete a ref. The forms that
+   * write — `-d`, `-D`, `-m`, `-M`, `-c`, `-C`, `--delete`, `--move`, `--copy`, `--set-upstream-to`,
+   * `--edit-description` — are still absent, and a first argument that is not a flag never reaches here.
+   */
+  "branch --all", "branch --verbose", "branch --remotes", "branch --show-current",
+  "branch --contains", "branch --no-contains", "branch --merged", "branch --no-merged", "branch --points-at",
+  "tag --contains", "tag --no-contains", "tag --merged", "tag --points-at", "tag -n",
+  "remote --verbose", "remote get-url", "stash show",
 ]);
 
 /**
