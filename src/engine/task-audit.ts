@@ -28,6 +28,23 @@ export const CoverageSchema = z.object({
   weak: z.array(z.object({ task: z.string(), issue: z.string() })).default([]).describe(
     "Tasks whose acceptance criteria do not actually establish what the task claims to deliver — the work "
     + "could be marked done without the requirement being met."),
+  /**
+   * The question this audit was not asking, and the one that cost a 16-hour run.
+   *
+   * Coverage was checked in one direction only: is every requirement covered? Measured live on a 124-task
+   * breakdown, the expensive gap was the other direction. `T001 — Backend: Supplier entity model` invented a
+   * `Supplier` entity and a `SupplierContext` that the spec never described; the spec asks for
+   * `SupplierRelationship`. The implementer built what the task said and the code reviewer rejected it for
+   * not matching the spec — six times, across two roles, until the task was abandoned. 117 further tasks
+   * were parked behind it and never attempted. Four of 124 landed.
+   *
+   * A task nothing asked for is not merely wasted work: it deadlocks, because the two halves of the
+   * pipeline are reading different documents and each is right about its own.
+   */
+  fabricated: z.array(z.object({ task: z.string(), issue: z.string() })).default([]).describe(
+    "Tasks that deliver something the plan does not ask for — an entity, a module or a behaviour that "
+    + "appears in the task and nowhere in the plan. Name what the task invents and what the plan says "
+    + "instead. A task that merely IMPLEMENTS a plan requirement in a reasonable way is not fabricated."),
 });
 
 const words = (s: string): string[] => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
@@ -200,12 +217,16 @@ export async function auditBreakdown(opts: RoleAgentOptions | undefined, board: 
     role: "user" as const,
     content:
       `The plan:\n\n${planText}\n\nThe tasks it was broken into:\n${cards}\n\n` +
-      `Two questions, and only these:\n` +
+      `Three questions, and only these:\n` +
       `1. missing — is there anything the plan REQUIRES that no task delivers? Quote the plan. Do not list ` +
       `work the plan does not ask for, however sensible it would be.\n` +
       `2. weak — is there a task whose acceptance criteria would still be satisfied by an implementation ` +
-      `that does not do what the task says?\n\n` +
-      `Both lists are usually empty on a good breakdown. Return {missing, weak} via submit.`,
+      `that does not do what the task says?\n` +
+      `3. fabricated — the reverse of 1: is there a task that delivers something the plan never asks for? ` +
+      `An entity, module or behaviour named in the task and nowhere in the plan. Name what the task ` +
+      `invents AND what the plan says instead. Implementing a plan requirement in a reasonable way is not ` +
+      `fabrication; inventing the requirement is.\n\n` +
+      `All three lists are usually empty on a good breakdown. Return {missing, weak, fabricated} via submit.`,
   };
 
   try {
@@ -215,6 +236,10 @@ export async function auditBreakdown(opts: RoleAgentOptions | undefined, board: 
       findings: [
         ...out.missing.map((m) => ({ issue: `the plan requires this and no task delivers it: ${m}` })),
         ...out.weak.filter((w) => board.get(w.task)).map((w) => ({ task: w.task, issue: w.issue })),
+        // Filtered against the board like `weak`: an auditor naming a task that does not exist has answered
+        // about something else, and acting on it would repair a card nobody planned.
+        ...out.fabricated.filter((f) => board.get(f.task)).map((f) => ({
+          task: f.task, issue: `the plan does not ask for this: ${f.issue}` })),
       ],
     };
   } catch (e) {

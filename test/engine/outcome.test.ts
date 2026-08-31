@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { describeOutcome, DELIVERED_SHARE } from "../../src/cli.js";
+import { describeOutcome } from "../../src/cli.js";
+import { DELIVERED_SHARE } from "../../src/engine/tally.js";
 import type { WaveEngineResult } from "../../src/engine/wave-engine.js";
 
 const delivery = { branch: "hc/job/base", worktree: "/repo/.horsecode/worktrees/job" };

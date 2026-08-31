@@ -38,6 +38,7 @@ import { Telemetry, setTelemetry, telemetry, sampleMemory, writeHeapSnapshot, cl
 import { FileSink, telemetryDir } from "./obs/sink.js";
 import { restoreTerminal, sttySane } from "./tui/restore-terminal.js";
 import { hcodeVersion, usage, nearestFlag } from "./cli-info.js";
+import { describeTally } from "./engine/tally.js";
 
 /** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
 const HEAP_MB = 12_288;
@@ -145,40 +146,18 @@ export function describeDelivery(d: Delivery): string {
 }
 
 /**
- * Below this share of tasks merged, a run did not build the feature — whatever else it did.
+ * The outcome sentence for a run that reached its normal ending.
  *
- * Not a precise line, and it does not need to be: it decides which SENTENCE the user reads, and the numbers
- * are printed either way. What it prevents is a run that landed a tenth of its plan reading like one that
- * landed all of it.
- */
-export const DELIVERED_SHARE = 0.5;
-
-/**
- * What LANDED, first. It is the number the user's next decision depends on.
- *
- * Reported live: a run of 34 tasks merged 3, failed 4, and left 27 blocked behind them. It ended with
- * "Status: partial — Partial: 4 failed, 27 skipped", and the user read the run as finished and asked to move
- * on to local smoke testing. Nothing in that line was false. It simply never said three of thirty-four, and
- * "4 failed" is a small number sitting at the end of a long report.
- *
- * Two changes, and the first matters more. The count that leads is what MERGED, because a task that did not
- * merge delivered nothing whatever its column says. And "skipped" is now "blocked": those tasks were never
- * attempted — each was parked waiting on a dependency that never arrived — while "skipped" reads like a
- * decision somebody took.
+ * The wording and the threshold live in engine/tally.ts, because the OTHER ending needs them too: a run
+ * that throws never reaches here, and a run of 124 tasks that merged 4 ended exactly that way — the tally
+ * the user most needed was the one that never printed.
  */
 export function describeOutcome(w: WaveEngineResult): string {
   if (w.status === "completed") return w.pr ? `PR: ${w.pr.url}` : "all tasks merged";
-  const stuck = w.failed.length + w.skipped.length;
-  const total = w.waves.flat().length || stuck;
-  const merged = Math.max(0, total - stuck);
-  const parts = [
-    w.failed.length ? `${w.failed.length} failed` : "",
-    w.skipped.length ? `${w.skipped.length} blocked behind them` : "",
-  ].filter(Boolean).join(", ");
-  const head = `${merged} of ${total} tasks merged`;
-  return merged / total < DELIVERED_SHARE
-    ? `⚠️ ${head} — ${parts}. Most of the plan did not land; the feature is not built.`
-    : `${head} — ${parts}.`;
+  const failed = w.failed.length;
+  const blocked = w.skipped.length;
+  const total = w.waves.flat().length || failed + blocked;
+  return describeTally({ merged: Math.max(0, total - failed - blocked), failed, blocked, unfinished: 0 });
 }
 
 /**

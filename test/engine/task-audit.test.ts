@@ -155,3 +155,63 @@ describe("repairRequest", () => {
     expect(req).toMatch(/repair, not a rewrite/);
   });
 });
+
+/**
+ * Coverage was checked in one direction and the expensive gap was the other one.
+ *
+ * Measured on a live 124-task breakdown: `T001 — Backend: Supplier entity model` invented a `Supplier`
+ * entity and a `SupplierContext` the spec never described — the spec asks for `SupplierRelationship`. The
+ * implementer built what the task said; the code reviewer rejected it for not matching the spec. Six
+ * attempts across two roles, then abandoned, with 117 tasks parked behind it that were never attempted.
+ * Four of 124 landed.
+ *
+ * A task nothing asked for does not merely waste work. It deadlocks, because the two halves of the pipeline
+ * are reading different documents and each is right about its own.
+ */
+describe("a task the plan never asked for", () => {
+  const wellFormed = (): Board => {
+    const b = new Board();
+    b.addCard({ id: "T001", title: "Backend: Supplier entity model",
+      acceptance: ["src/domain/Supplier.cs defines a Supplier entity", "the DbContext registers Supplier"],
+      files: ["src/domain/Supplier.cs"] });
+    return b;
+  };
+
+  it("is reported, and names what the plan says instead", async () => {
+    const p = new MockProvider([submitTurn(JSON.stringify({
+      missing: [], weak: [],
+      fabricated: [{ task: "T001", issue: "invents a `Supplier` entity; the plan describes `SupplierRelationship`" }],
+    }))]);
+    const r = await auditBreakdown(opts(p), wellFormed(), "# plan\nSupplierRelationship is the entity.");
+    expect(r.asked).toBe(true);
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0]?.task).toBe("T001");
+    expect(r.findings[0]?.issue).toContain("the plan does not ask for this");
+    expect(r.findings[0]?.issue).toContain("SupplierRelationship");
+  });
+
+  it("is asked about at all — the question has to reach the auditor", async () => {
+    const p = new MockProvider([submitTurn('{"missing":[],"weak":[],"fabricated":[]}')]);
+    await auditBreakdown(opts(p), wellFormed(), "# plan");
+    const sent = JSON.stringify(p.requests[0]?.messages ?? []);
+    expect(sent).toContain("fabricated");
+    expect(sent).toContain("never asks for");
+  });
+
+  /** An auditor naming a card that does not exist has answered about something else. */
+  it("ignores a finding against a task the board does not have", async () => {
+    const p = new MockProvider([submitTurn(JSON.stringify({
+      missing: [], weak: [], fabricated: [{ task: "T999", issue: "invents things" }],
+    }))]);
+    const r = await auditBreakdown(opts(p), wellFormed(), "# plan");
+    expect(r.findings).toEqual([]);
+  });
+
+  /** An auditor that answers the old shape must not break: the field defaults to empty. */
+  it("accepts a reply that predates the question", async () => {
+    const p = new MockProvider([submitTurn('{"missing":[],"weak":[]}')]);
+    const r = await auditBreakdown(opts(p), wellFormed(), "# plan");
+    expect(r.asked).toBe(true);
+    expect(r.findings).toEqual([]);
+  });
+});

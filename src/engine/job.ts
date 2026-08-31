@@ -24,7 +24,8 @@ import { appendReviewNotes } from "./review-notes.js";
 import { memoryHints, reinforceUsed } from "./memory-inject.js";
 import { curateMemories } from "./memory-consolidate.js";
 import { saveBoard, loadBoard, flushBoard } from "../board/persist.js";
-import { existsSync } from "node:fs";
+import { describeTally, tallyBoard, type Tally } from "./tally.js";
+import { existsSync, readFileSync } from "node:fs";
 import { rm, readFile } from "node:fs/promises";
 import type { Card, Column } from "../board/board.js";
 import { dirname, join } from "node:path";
@@ -215,6 +216,22 @@ async function runCoachReport(deps: JobDeps, session: WorktreeSession, board: Bo
  * Top-level job: openSession → runUpstream → (chat/rejected: close) → commit spec/plan →
  * project-manager board → runWaves → coach report. On done, the session is left open (G revision).
  */
+/**
+ * The board as it was last SAVED — the only account of the work that survives a run ending badly.
+ *
+ * Best-effort by design: a run that failed before opening a board, or one whose board cannot be parsed,
+ * must not fail again here on the way out. Nothing is worse to throw from than a catch block.
+ */
+function tallyOnDisk(sessionRoot: string): Tally | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(sessionRoot, "board.json"), "utf8")) as unknown;
+    const cards = Array.isArray(raw) ? raw : (raw as { cards?: unknown[] }).cards;
+    return Array.isArray(cards) && cards.length ? tallyBoard(cards as never) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runJob(
   deps: JobDeps,
   opts: {
@@ -614,7 +631,23 @@ export async function runJob(
   } catch (e) {
     // Keep the worktree on error so the user can inspect whatever the pipeline produced before it failed
     // (files are already committed per-write). Don't closeSession — that would delete them.
-    if (session) emit({ kind: "note", text: `📄 Work so far is kept at \`${session.baseWorktree}\` (branch \`${session.baseBranch}\`). Re-run the same request to resume from where it stopped.` });
+    /**
+     * What LANDED, on the way out — the ending that needed this most is the one that never had it.
+     *
+     * Measured: a run of 124 tasks merged 4 and then threw on an unroutable model. It printed where the work
+     * was kept and nothing about what the work amounted to, because the tally lives on the success path. The
+     * user read "the work is on hc/…, merge it when you are ready" and asked, reasonably, whether the tasks
+     * were done. They were not: 3 had failed and 117 had never been attempted, all behind one task whose
+     * description contradicted the spec.
+     *
+     * Read from the board on DISK rather than from a variable: this catch can be reached from anywhere in
+     * the run, including before the in-memory board exists, and what was saved is what actually happened.
+     */
+    if (session) {
+      const tally = tallyOnDisk(session.root);
+      if (tally) emit({ kind: "note", text: `📊 ${describeTally(tally)}` });
+      emit({ kind: "note", text: `📄 Work so far is kept at \`${session.baseWorktree}\` (branch \`${session.baseBranch}\`). Re-run the same request to resume from where it stopped.` });
+    }
     // Curate on the way out too: the runs that FAIL are the most instructive ones, and their proposals live
     // only in process memory — rethrowing without curating would throw away exactly the hardest-won signal.
     if (session) await curate(deps, opts.prompt, [], [], session.baseWorktree);
