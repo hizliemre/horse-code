@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { RoleRegistry } from "../../src/agent/roles.js";
+import { RoleRegistry, providerOutage } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 const reg = (): RoleRegistry => new RoleRegistry({
@@ -66,5 +66,53 @@ describe("a structural miss is about the role first, the model only later", () =
       vi.advanceTimersByTime(RoleRegistry.STRUCTURAL_BENCH_MS * 10);
       expect(r.isQuarantined("cc/opus-5")).toBe(true);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+/**
+ * Twelve of eighteen model errors in one run's first eight minutes were the same sentence:
+ * `No active credentials for provider: antigravity`.
+ *
+ * The quarantine is keyed by model, so each of that provider's models had to fail on its own before the
+ * chain gave up on it — and every one of those failures spent an ATTEMPT from the task walking the ladder.
+ * `T001` reached attempt 6, the number at which a task is abandoned, having had two or three real tries.
+ * The rest went to a source with no credentials.
+ */
+describe("a failure about the provider, not the model", () => {
+  const registry = (): RoleRegistry => new RoleRegistry({
+    coder: { models: ["antigravity/claude-sonnet-5", "antigravity/gemini-3.1-pro-low", "cx/gpt-5.6-terra"] },
+    "senior-coder": { models: ["antigravity/gemini-3.1-pro-high", "cc/claude-opus-5"] },
+  } as never, {} as never);
+
+  it("recognises the gateway's wording", () => {
+    expect(providerOutage("No active credentials for provider: antigravity")).toBe("antigravity");
+    expect(providerOutage("No active credentials for provider: opencode-go")).toBe("opencode-go");
+  });
+
+  it("is not confused by a failure that is about one model", () => {
+    for (const m of ["Overloaded", "Shared egress IP quota exhausted (opencode-go)",
+      "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'."]) {
+      expect(providerOutage(m), m).toBeUndefined();
+    }
+  });
+
+  it("takes out every model of that provider at once, and leaves the others", () => {
+    const r = registry();
+    const hit = r.markProviderExhausted("antigravity", "antigravity/claude-sonnet-5", "No active credentials");
+    expect(hit).toHaveLength(3);
+    const benched = r.quarantined().map((q) => q.model).sort();
+    expect(benched).toEqual([
+      "antigravity/claude-sonnet-5", "antigravity/gemini-3.1-pro-high", "antigravity/gemini-3.1-pro-low",
+    ]);
+    expect(benched).not.toContain("cx/gpt-5.6-terra");
+    expect(benched).not.toContain("cc/claude-opus-5");
+  });
+
+  /** An unknown provider is still a real failure: bench what actually failed rather than nothing at all. */
+  it("falls back to the one model when the pool names none of that provider", () => {
+    const r = registry();
+    const hit = r.markProviderExhausted("someone-else", "someone-else/m", "No active credentials");
+    expect(hit).toEqual(["someone-else/m"]);
+    expect(r.quarantined().map((q) => q.model)).toEqual(["someone-else/m"]);
   });
 });

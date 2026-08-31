@@ -23,6 +23,23 @@ export function isTransientFailure(reason: string): boolean {
     .test(r);
 }
 
+/**
+ * A failure about the PROVIDER rather than about one of its models.
+ *
+ * Measured live: `No active credentials for provider: antigravity` accounted for twelve of eighteen model
+ * errors in the first eight minutes of a run. The quarantine is keyed by model, so each of that provider's
+ * models had to fail on its own before the chain gave up on it — and every one of those failures spent an
+ * ATTEMPT from the task that was walking the ladder. `T001` reached attempt 6, the number at which a task is
+ * abandoned, having been given two or three real tries; the rest went to a source with no credentials.
+ *
+ * Benching one model at a time is right when the model is the problem. When the account is, it is a way of
+ * discovering the same fact six times at a task's expense.
+ */
+export function providerOutage(reason: string): string | undefined {
+  return /no active credentials for provider:?\s*([\w.-]+)/i.exec(reason)?.[1]
+    ?? /provider\s+'?([\w.-]+)'?\s+is not configured/i.exec(reason)?.[1];
+}
+
 export interface ResolvedRole {
   /**
    * The role's own name, carried alongside its model and prompt.
@@ -137,6 +154,24 @@ export class RoleRegistry {
     const ends = until ?? (isTransientFailure(reason) ? now + RoleRegistry.TRANSIENT_BENCH_MS : undefined);
     this.quarantine.set(model, { at: now, reason, ...(ends !== undefined && { until: ends }) });
     this.onQuarantine?.(model, reason, ends);
+  }
+
+  /** Every model any role's chain names — the pool this registry can actually reach for. */
+  knownModels(): string[] {
+    return [...new Set(Object.values(this.roles).flatMap((r) => r.models ?? []))];
+  }
+
+  /**
+   * Benches every model of one provider, for a failure that is about the provider itself.
+   *
+   * Returns what it took out, so the caller can say so once instead of six times. Falls back to benching the
+   * single model when the pool names none of that provider — an unknown provider is still a real failure.
+   */
+  markProviderExhausted(provider: string, model: string, reason: string, now = Date.now()): string[] {
+    const hit = this.knownModels().filter((m) => m.startsWith(`${provider}/`));
+    for (const m of hit) this.markExhausted(m, reason, now);
+    if (!hit.length) { this.markExhausted(model, reason, now); return [model]; }
+    return hit;
   }
 
   /**
@@ -327,7 +362,12 @@ export class RoleRegistry {
       role: roleName,
       model: chain[0] ?? "",
       fallbacks: chain.slice(1),
-      onExhausted: (m, reason) => this.markExhausted(m, reason ?? "unavailable"),
+      onExhausted: (m, reason) => {
+        const why = reason ?? "unavailable";
+        const provider = providerOutage(why);
+        if (provider) this.markProviderExhausted(provider, m, why);
+        else this.markExhausted(m, why);
+      },
       onStructuralFailure: (m, reason) => this.markStructuralFailure(m, reason, roleName),
       onFallback: notify ? (from, to, reason) => notify(`⤵ \`${from}\` → \`${to}\` — ${reason}`) : undefined,
     };
