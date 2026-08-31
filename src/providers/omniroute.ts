@@ -101,6 +101,27 @@ export function isCapabilityError(message: string): boolean {
 }
 
 /**
+ * A provider whose credentials are absent — an outage of one SOURCE, not a fault of one model.
+ *
+ * Measured across two runs: `No active credentials for provider: antigravity.` arrives as HTTP 401, which
+ * `isRetryableStatus` rightly calls unretryable, and it is not a capability refusal or an unknown model
+ * either. So the chain did neither of the two things it should: no fallback to the next model, and no call
+ * to `onExhausted` — which meant the provider-wide bench added for exactly this failure was dead code. 233
+ * of one run's 562 model errors were this one sentence, repeated.
+ *
+ * Retryable is the right reading: the request is fine and a model on ANY other provider can serve it. It
+ * must also reach the bench, so `noBench` is deliberately NOT set — that flag is for a refusal that says
+ * nothing about the model's health, and a source with no credentials is the opposite.
+ *
+ * Narrow on purpose. It matches a message that names a PROVIDER, so a 401 about the gateway key itself —
+ * which no fallback can fix — does not qualify and still ends the call.
+ */
+export function isProviderOutage(message: string): boolean {
+  return /no active credentials for provider:?\s*[\w.-]+/i.test(message)
+    || /provider\s+'?[\w.-]+'?\s+is not configured/i.test(message);
+}
+
+/**
  * The gateway could not resolve the MODEL ID it was given.
  *
  * "Unable to determine provider for model 'default'" is a statement about the id, not about any model's
@@ -270,11 +291,12 @@ export class OmniRouteProvider implements Provider {
       const message = await readErrorMessage(res);
       const capability = isCapabilityError(message);
       const unknownModel = isUnknownModelError(message);
+      const outage = isProviderOutage(message);
       // Only present when it IS one: the flag means something in the affirmative, and emitting it on every
       // error would put a field in the shape that says nothing.
       yield {
         type: "error", message,
-        retryable: isRetryableStatus(res.status) || capability || unknownModel,
+        retryable: isRetryableStatus(res.status) || capability || unknownModel || outage,
         ...(capability && { capability: true }),
         ...(unknownModel && { noBench: true }),
       };

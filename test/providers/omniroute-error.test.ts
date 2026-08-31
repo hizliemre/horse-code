@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readErrorMessage, isRetryableStatus, isCapabilityError, OmniRouteProvider, isUnknownModelError } from "../../src/providers/omniroute.js";
+import { readErrorMessage, isRetryableStatus, isCapabilityError, OmniRouteProvider, isUnknownModelError, isProviderOutage } from "../../src/providers/omniroute.js";
 import type { FetchLike } from "../../src/providers/omniroute.js";
 
 describe("isRetryableStatus", () => {
@@ -109,5 +109,67 @@ describe("a model the catalog lists and the router refuses", () => {
   it("does not fire on ordinary trouble that happens to mention availability", () => {
     expect(isUnknownModelError("Overloaded")).toBe(false);
     expect(isUnknownModelError("upstream is not available right now, retry")).toBe(false);
+  });
+});
+
+/**
+ * A provider with no credentials was neither retried nor benched, so the bench built for it never ran.
+ *
+ * Measured across two runs: `No active credentials for provider: antigravity.` arrives as HTTP 401.
+ * `isRetryableStatus` calls 401 unretryable — correctly, for an auth failure nothing can fix — and it is
+ * not a capability refusal or an unknown model either. So `loop.ts` did neither of the two things it
+ * should: no fallback to the next model, and no call to `onExhausted`. The provider-wide bench added for
+ * exactly this failure was dead code, and 233 of one run's 562 model errors were this one sentence.
+ */
+describe("a provider whose credentials are gone", () => {
+  const LIVE = "No active credentials for provider: antigravity.";
+  const drain = async (p: OmniRouteProvider) => {
+    const out = [];
+    for await (const e of p.chat({ model: "m", messages: [{ role: "user", content: "hi" }], tools: [] },
+      new AbortController().signal)) out.push(e);
+    return out;
+  };
+
+  it("is recognised", () => {
+    expect(isProviderOutage(LIVE)).toBe(true);
+    expect(isProviderOutage("Provider 'opencode-go' is not configured")).toBe(true);
+  });
+
+  /** A 401 about the gateway key itself is not this: no fallback can fix it, and it must still end the call. */
+  it("does not swallow an auth failure that names no provider", () => {
+    expect(isProviderOutage("Invalid API key")).toBe(false);
+    expect(isProviderOutage("Unauthorized")).toBe(false);
+    expect(isProviderOutage("authentication_error")).toBe(false);
+  });
+
+  it("is not confused by failures that are about one model", () => {
+    for (const m of ["Overloaded", "Shared egress IP quota exhausted (opencode-go)",
+      "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'."]) {
+      expect(isProviderOutage(m), m).toBe(false);
+    }
+  });
+
+  it("reaches the chain as retryable, on a status that is otherwise not", async () => {
+    const fetch: FetchLike = async () => new Response(JSON.stringify({ error: LIVE }), { status: 401 });
+    const events = await drain(new OmniRouteProvider({ baseUrl: "http://x", fetch }));
+    expect(events.at(-1)).toMatchObject({ type: "error", retryable: true });
+  });
+
+  /**
+   * `noBench` must stay absent. It marks a refusal that says nothing about a model's health; a source with
+   * no credentials is the opposite, and suppressing the bench here is what left it dead.
+   */
+  it("is allowed to bench the models it names", async () => {
+    const fetch: FetchLike = async () => new Response(JSON.stringify({ error: LIVE }), { status: 401 });
+    const events = await drain(new OmniRouteProvider({ baseUrl: "http://x", fetch }));
+    expect((events.at(-1) as { noBench?: boolean }).noBench).toBeUndefined();
+  });
+
+  /** An ordinary 401 still ends the call — the narrowness is the point. */
+  it("leaves a plain auth failure unretryable", async () => {
+    const fetch: FetchLike = async () => new Response(JSON.stringify({ error: "Invalid API key" }), { status: 401 });
+    const events = await drain(new OmniRouteProvider({ baseUrl: "http://x", fetch }));
+    expect(events.at(-1)).toMatchObject({ type: "error" });
+    expect((events.at(-1) as { retryable?: boolean }).retryable).toBeFalsy();
   });
 });
