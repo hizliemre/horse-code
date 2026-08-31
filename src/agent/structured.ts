@@ -45,7 +45,19 @@ export function whatWasWrong(issues: readonly z.core.$ZodIssue[], args: unknown)
      * to that says the same thing twice and reads like a stutter. The clause is for what the rule does NOT
      * state: the actual value, when there is one worth quoting.
      */
-    if (got === undefined && /received\s+(undefined|null|nothing)/i.test(i.message)) return head;
+    /**
+     * A MISSING field is a different mistake from a wrong one, and the model cannot see which it made.
+     *
+     * Measured live: the architect on T103 was rejected four times with `plan: Invalid input: expected
+     * array, received undefined` — the field was absent entirely, not malformed. The message described the
+     * field it wanted and never said what had actually arrived, so "you sent only rootCause" and "your plan
+     * is the wrong shape" read identically. Naming the keys that DID arrive turns it into one correction.
+     */
+    if (got === undefined && /received\s+(undefined|null|nothing)/i.test(i.message)) {
+      const parent = i.path.length > 1 ? valueAt(args, i.path.slice(0, -1)) : args;
+      const sent = parent && typeof parent === "object" ? Object.keys(parent as object) : [];
+      return sent.length ? `${head} — you sent only ${sent.map((k) => `\`${k}\``).join(", ")}` : head;
+    }
     // A value long enough to be the problem itself is truncated: the point is what it WAS, not all of it.
     return `${head} — got ${shown.length > 120 ? `${shown.slice(0, 120)}…` : shown}`;
   }).join("; ");

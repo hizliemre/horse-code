@@ -81,3 +81,39 @@ describe("not saying the same thing twice", () => {
     expect(text).toContain('got "not an array"');
   });
 });
+
+/**
+ * A missing field and a malformed one are different mistakes, and the model cannot see which it made.
+ *
+ * Measured live: the architect on T103 was rejected four times with `plan: Invalid input: expected array,
+ * received undefined`. The field was absent entirely — it had submitted a root cause and nothing else — and
+ * the message described what it wanted without saying what had arrived, so "you forgot a field" and "your
+ * field is the wrong shape" read identically.
+ */
+describe("a field that never arrived", () => {
+  const SCHEMA = z.object({ rootCause: z.string(), plan: z.array(z.string()) });
+
+  it("names the keys that were sent", async () => {
+    const text = await run(SCHEMA, { rootCause: "the mapping is wrong" });
+    expect(text).toContain("plan:");
+    expect(text).toContain("you sent only `rootCause`");
+  });
+
+  it("lists several when several arrived", async () => {
+    const text = await run(z.object({ a: z.string(), b: z.string(), c: z.string() }), { a: "x", b: "y" });
+    expect(text).toContain("`a`");
+    expect(text).toContain("`b`");
+  });
+
+  /** An empty submission has nothing to name, and must not claim it sent something. */
+  it("says nothing extra when nothing was sent", async () => {
+    const text = await run(SCHEMA, {});
+    expect(text).not.toContain("you sent only");
+  });
+
+  /** A field that arrived WRONG still gets its value quoted — that half must not regress. */
+  it("still quotes a value that is present but malformed", async () => {
+    const text = await run(SCHEMA, { rootCause: "x", plan: "do the thing" });
+    expect(text).toContain('got "do the thing"');
+  });
+});
