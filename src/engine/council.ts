@@ -9,9 +9,27 @@ import { worktreeState, hasWorkAgainst } from "./worktree-state.js";
 import { defaultGitRunner } from "../worktree/git.js";
 import { telemetry } from "../obs/telemetry.js";
 
+/**
+ * The two fields the architect is asked for, said in words rather than named and left.
+ *
+ * Measured live: the architect at the top of T001's ladder submitted five times in sixty seconds and was
+ * rejected every time with `plan: Invalid input: expected array, received undefined`. It had a root cause
+ * and it wrote one; `plan` is an ambiguous noun — a document, an approach, a list of steps — and nothing
+ * here said which. Every other structured schema in the pipeline describes its fields; this one, at the
+ * most expensive rung of the ladder, described neither.
+ *
+ * The lesson is the one the graph_trace description earned: an error teaches one agent after the fact, a
+ * description tells every agent before. A schema field is the last place to spend a turn on a guess.
+ */
 export const ArchitectPlanSchema = z.object({
-  rootCause: z.string(),
-  plan: z.array(z.string()),
+  rootCause: z.string().describe(
+    "Why the earlier attempts failed — the underlying reason, not a summary of what they tried. One "
+    + "paragraph, naming the file, symbol or assumption that is actually wrong."),
+  plan: z.array(z.string()).describe(
+    "The steps to fix it, as an ARRAY OF STRINGS — one instruction per element, in the order they should "
+    + "be carried out. Each names what to change and where, e.g. "
+    + "\"add IOrderDeliveryPipe to src/domain/Suppliers/Abstractions/\". Not prose, not a single string, "
+    + "not a document: the senior implementer executes these one at a time."),
 });
 
 /**

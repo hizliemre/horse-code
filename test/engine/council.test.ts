@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runEscalationCouncil } from "../../src/engine/council.js";
+import { runEscalationCouncil, ArchitectPlanSchema } from "../../src/engine/council.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 import { Telemetry, setTelemetry, NO_TELEMETRY } from "../../src/obs/telemetry.js";
 import { MemorySink } from "../../src/obs/sink.js";
@@ -173,5 +173,42 @@ describe("the council's review is measured too", () => {
       setTelemetry(NO_TELEMETRY);
       await rm(repo, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * The most expensive rung of the ladder described neither of the two fields it asks for.
+ *
+ * Measured live: the architect on T001 submitted five times in sixty seconds and was rejected every time
+ * with `plan: Invalid input: expected array, received undefined`. It had a root cause and wrote one. `plan`
+ * is an ambiguous noun — a document, an approach, a list of steps — and nothing in the schema said which.
+ *
+ * An error teaches one agent after the fact; a description tells every agent before. This asserts the
+ * description exists and says the thing the model kept getting wrong, in the same spirit as the test that
+ * holds `--help` to naming every flag.
+ */
+describe("what the architect is asked to submit", () => {
+  const shape = (ArchitectPlanSchema as unknown as {
+    shape: { rootCause: { description?: string }; plan: { description?: string } };
+  }).shape;
+
+  it("says plan is an array of steps, which is what kept being missed", () => {
+    const d = shape.plan.description ?? "";
+    expect(d).toMatch(/ARRAY OF STRINGS/);
+    expect(d).toContain("one instruction per element");
+    expect(d).toMatch(/not a single string|not prose/i);
+  });
+
+  it("says a root cause is a reason, not a summary of the attempts", () => {
+    const d = shape.rootCause.description ?? "";
+    expect(d).toContain("underlying reason");
+    expect(d).toMatch(/not a summary/i);
+  });
+
+  /** The schema still validates exactly what it did — describing a field must not loosen it. */
+  it("still refuses prose where the array belongs, and accepts the array", () => {
+    expect(ArchitectPlanSchema.safeParse({ rootCause: "x", plan: "do the thing" }).success).toBe(false);
+    expect(ArchitectPlanSchema.safeParse({ rootCause: "x" }).success).toBe(false);
+    expect(ArchitectPlanSchema.safeParse({ rootCause: "x", plan: ["a", "b"] }).success).toBe(true);
   });
 });
