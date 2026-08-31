@@ -133,6 +133,35 @@ export function isNonImplementing(description: string): boolean {
 
 /** How much of a skill's vocabulary a task has to hit before the skill is worth its place in the prompt. */
 export const MATCH_BAR = 3;
+
+/**
+ * …and a TRAILING slot must earn it: its hits have to be a real share of what the skill is about.
+ *
+ * A raw hit count rewards LENGTH. `android-tombstone-symbolication` describes itself in ninety words —
+ * .NET, runtime, source, file, line, crash, native — so a C# task scores against it by accident. Reported
+ * by the user from a live run on a .NET/Angular supplier feature: `senior-coder · test-gap-analysis,
+ * pr-review, android-tombstone-symbolication`. It scored 6 where the leaders scored 12 and 11, and the
+ * third slot took it anyway, because MAX_ROUTED is a count and a count does not ask how far behind.
+ *
+ * Density asks what the count cannot: of everything this skill says it is for, how much does this task
+ * touch? But it cannot be applied to the leader. A deliberately broad skill — `impeccable` lists every
+ * design concern there is — has low density even when it is exactly right, and gating the top match on it
+ * dropped `impeccable` from "make the pricing page bolder, fix the spacing and the colour contrast", which
+ * is precisely its work. That was measured too, by this repository's own tests failing.
+ *
+ * So the leader is exempt and the rest must qualify. Measured across all 124 cards of that board, routed as
+ * the implementer routes (title + acceptance + review notes), counting skills for mobile, iOS, Kubernetes
+ * and infrastructure as irrelevant to a supplier feature:
+ *
+ *   today                        →  25 irrelevant routed, 154 plausible
+ *   floor on every slot          →   1 irrelevant,  88 plausible — and it drops `impeccable`
+ *   floor on trailing slots only →   3 irrelevant, 117 plausible — 2 of the 3 are leaders, so exempt by rule
+ *
+ * The asymmetry is deliberate: a skill that leads its card has said something about the work, and being
+ * broad is not being wrong. A skill in third place at half the leader's score has said almost nothing, and
+ * what it costs is a whole document in the prompt plus a wrong idea about what kind of work this is.
+ */
+export const MIN_DENSITY = 0.1;
 /**
  * Never inline more than this many routed skills — each one is a full document in the prompt.
  *
@@ -238,6 +267,8 @@ export function routeSkills(
     // between them by name is picking at random: it is what kept `review-animations` out of an animation
     // review while `impeccable` — which lists every UI concern there is — took the slot on incidental hits.
     .sort((a, b) => b.score - a.score || b.density - a.density || a.name.localeCompare(b.name))
+    // The leader is exempt; every slot after it must clear MIN_DENSITY — see the constant for the measurement.
+    .filter((m, i) => i === 0 || m.density >= MIN_DENSITY)
     .slice(0, opts.max ?? MAX_ROUTED)
     // …and then by SIZE, best-scoring first, because what is inlined has to be readable to be useful.
     .filter((m) => {

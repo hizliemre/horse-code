@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { routeSkills, scoreSkill, isExplicitOnly, isNonImplementing, filesForTask, expandExtensions, MATCH_BAR, MAX_ROUTED } from "../../src/skills/route.js";
+import { routeSkills, scoreSkill, isExplicitOnly, isNonImplementing, filesForTask, expandExtensions, MATCH_BAR, MAX_ROUTED, MIN_DENSITY } from "../../src/skills/route.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 /** impeccable's real description, abridged — the text routing has to work against in practice. */
@@ -336,5 +336,57 @@ describe("short and abbreviated terms", () => {
     const r = new SkillRegistry();
     r.register({ name: "design", description: "Covers layout and colour", content: "b" });
     expect(routeSkills("migrate the queue runner", r, [], { role: "coder" })).toEqual([]);
+  });
+});
+
+/**
+ * A trailing slot must earn it — reported by the user from a live run.
+ *
+ * `senior-coder · test-gap-analysis, pr-review, android-tombstone-symbolication`, on a .NET/Angular
+ * supplier feature. The android skill describes itself in ninety words — .NET, runtime, source, file, line,
+ * crash — so a C# task hits it by accident. It scored 6 where the leaders scored 12 and 11, and the third
+ * slot took it anyway, because MAX_ROUTED is a count and a count does not ask how far behind.
+ */
+describe("what may fill a trailing routed slot", () => {
+  const reg = (skills: { name: string; description: string }[]): SkillRegistry => {
+    const r = new SkillRegistry();
+    for (const s of skills) r.register({ ...s, content: "x", dir: "/tmp" });
+    return r;
+  };
+
+  /** A long description picking up generic words is what the floor is for. */
+  it("drops a laundry-list skill that scored on incidental words", () => {
+    const r = reg([
+      { name: "tight-match", description: "supplier relationship domain entities and their persistence mapping" },
+      { name: "sprawling", description: "symbolicate the .NET runtime frames in a tombstone. Extracts BuildIds and "
+        + "PC offsets from the native backtrace, downloads debug symbols, runs llvm-symbolizer to produce "
+        + "function names with source file and line numbers, triaging a crash from logcat, resolving native "
+        + "frames to runtime source code, investigating signals originating from the runtime on a device" },
+    ]);
+    const routed = routeSkills("supplier relationship domain entities persistence mapping source file line", r, [], {});
+    expect(routed[0]?.name).toBe("tight-match");
+    expect(routed.map((m) => m.name)).not.toContain("sprawling");
+  });
+
+  /**
+   * …and the leader is exempt, because being broad is not being wrong.
+   *
+   * Gating every slot on density dropped `impeccable` — which lists every design concern there is — from a
+   * task about spacing and colour contrast, which is precisely its work. This repository's own tests caught
+   * that, and the asymmetry is the fix.
+   */
+  it("keeps a broad skill when it leads its card", () => {
+    const r = reg([
+      { name: "broad-design", description: "design, redesign, critique, polish, audit, clarify, harden, animate, "
+        + "colorize interfaces: websites, landing pages, dashboards, product UI, components, forms, settings, "
+        + "onboarding, empty states, visual hierarchy, cognitive load, accessibility, responsive behaviour, "
+        + "theming, typography, spacing, layout, alignment, colour, motion, micro-interactions, UX copy" },
+    ]);
+    const routed = routeSkills("fix the spacing, the layout and the colour contrast on the dashboard", r, [], {});
+    expect(routed.map((m) => m.name)).toContain("broad-design");
+  });
+
+  it("states the floor it applies, so the number is not folklore", () => {
+    expect(MIN_DENSITY).toBe(0.1);
   });
 });
