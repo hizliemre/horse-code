@@ -36,6 +36,14 @@ const READ_ONLY = new Set([
   "rev-parse", "rev-list", "merge-base", "name-rev", "describe", "symbolic-ref",
   "ls-files", "ls-tree", "cat-file", "count-objects", "show-ref", "for-each-ref", "ls-remote",
   /**
+   * `git grep` searches tracked content and has no writing form at all — the same standing as `log`.
+   *
+   * Left out, it was refused twice in one 36-minute run while agents fell back to `find | xargs grep`
+   * through the shell, which is slower on a repository this size and searches build output and
+   * `node_modules` unless every caller remembers to prune them. git already knows what is tracked.
+   */
+  "grep",
+  /**
    * `check-ignore` asks whether a path is ignored — it reads `.gitignore` and answers, and changes nothing.
    *
    * Left out, it was the one read-only verb agents had to reach for `shell` to run: four calls in one run,
@@ -67,7 +75,7 @@ const READ_ONLY_PAIRS = new Set([
    * write — `-d`, `-D`, `-m`, `-M`, `-c`, `-C`, `--delete`, `--move`, `--copy`, `--set-upstream-to`,
    * `--edit-description` — are still absent, and a first argument that is not a flag never reaches here.
    */
-  "branch --all", "branch --verbose", "branch --remotes", "branch --show-current",
+  "branch --all", "branch --verbose", "branch -vv", "branch --remotes", "branch --show-current",
   "branch --contains", "branch --no-contains", "branch --merged", "branch --no-merged", "branch --points-at",
   "tag --contains", "tag --no-contains", "tag --merged", "tag --points-at", "tag -n",
   "remote --verbose", "remote get-url", "stash show",
@@ -179,6 +187,26 @@ export function refuse(args: string[]): string | undefined {
   const [sub, second] = args;
   if (!sub || sub.startsWith("-")) return "The first argument must be a git subcommand, e.g. `status`.";
   if (READ_ONLY.has(sub)) return undefined;
+  /**
+   * Two subcommands whose read form is the DEFAULT and whose writing forms are named.
+   *
+   * A pair list cannot express either: `reflog -5` and `config core.ignorecase` both read, and neither has
+   * a fixed second word to match on. Written as rules rather than as more entries, because the entries
+   * would be endless — every count, every config key.
+   *
+   * Stated the safe way round: only the named writing forms are refused, and `config` needs its key alone.
+   * `git config a.b value` sets it, so a third argument is a write however innocent the key looks.
+   */
+  if (sub === "reflog") {
+    return second === "expire" || second === "delete"
+      ? `\`git reflog ${second}\` rewrites the reflog. Only reading it is allowed.` : undefined;
+  }
+  if (sub === "config") {
+    if (second !== undefined && !second.startsWith("-") && args.length === 2) return undefined;
+    if (args.length > 2 && !args.some((a) => a.startsWith("--get") || a === "--list")) {
+      return "`git config <key> <value>` writes configuration. Read one with `git config <key>`.";
+    }
+  }
   if (second && READ_ONLY_PAIRS.has(`${sub} ${second}`)) return undefined;
   return `\`git ${sub}\` is not available here — this tool reads history and state, it never changes them. `
     + `Available: ${[...READ_ONLY].sort().join(", ")}; also ${[...READ_ONLY_PAIRS].sort().join(", ")}.`;

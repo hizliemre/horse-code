@@ -289,3 +289,36 @@ describe("arguments packed into one string", () => {
     expect(refuse(["log", "--oneline", "--", "src/a.cs", "src/b.cs"])).toBeUndefined();
   });
 });
+
+/**
+ * Four more read-only calls that were refused in one 36-minute run.
+ *
+ * `git grep` twice — while agents fell back to `find | xargs grep` through the shell, which is slower on a
+ * repository this size and searches build output and node_modules unless every caller remembers to prune
+ * them. `reflog -5`, `branch -vv`, and `config core.ignorecase` each once. None of them writes anything.
+ */
+describe("read-only calls that were being refused", () => {
+  it("allows git grep, which has no writing form at all", () => {
+    expect(refuse(["grep", "-n", "SupplierRelation"])).toBeUndefined();
+    expect(refuse(["grep", "-l", "--", "src"])).toBeUndefined();
+  });
+
+  it("allows reading the reflog, and refuses the two forms that rewrite it", () => {
+    expect(refuse(["reflog"])).toBeUndefined();
+    expect(refuse(["reflog", "-5"])).toBeUndefined();
+    expect(refuse(["reflog", "show", "HEAD"])).toBeUndefined();
+    expect(refuse(["reflog", "expire", "--all"])).toContain("rewrites the reflog");
+    expect(refuse(["reflog", "delete", "HEAD@{0}"])).toContain("rewrites the reflog");
+  });
+
+  it("allows a bare config key, and refuses setting one", () => {
+    expect(refuse(["config", "core.ignorecase"])).toBeUndefined();
+    expect(refuse(["config", "--get", "core.ignorecase"])).toBeUndefined();
+    expect(refuse(["config", "user.name", "someone"])).toContain("writes configuration");
+    expect(refuse(["config", "--global", "user.name", "someone"])).toBeDefined();
+  });
+
+  it("allows branch -vv, which is branch -v twice over", () => {
+    expect(refuse(["branch", "-vv"])).toBeUndefined();
+  });
+});
