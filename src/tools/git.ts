@@ -169,6 +169,15 @@ export function answerOfOne(args: string[]): string {
  */
 const PACKED_PATHSPEC = /^--\s+\S/;
 
+/**
+ * …and the same mistake with the space left out: `--toucan/libs/beempa` instead of `--`, `toucan/…`.
+ *
+ * Read as a long option, so git answers `unrecognized argument` and says nothing about the shape. A long
+ * flag that carries a path always spells it with `=` (`--git-dir=/x`, `--src-prefix=a/`), so `--` followed
+ * by something holding a slash and no `=` is the separator glued to its first path, not an option.
+ */
+const GLUED_PATHSPEC = /^--[^\s=]*\/[^\s=]*$/;
+
 /** Query flags on `git branch` that consume the next argument, so its value is not a branch name. */
 const BRANCH_TAKES_VALUE = new Set([
   "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "--sort",
@@ -206,7 +215,7 @@ export function branchWrites(rest: string[]): string | undefined {
 }
 
 export function refuse(args: string[]): string | undefined {
-  const packed = args.find((a) => PACKED_PATHSPEC.test(a));
+  const packed = args.find((a) => PACKED_PATHSPEC.test(a) || GLUED_PATHSPEC.test(a));
   if (packed !== undefined) {
     const parts = packed.slice(2).trim().split(/\s+/);
     return "each argument must be its own element of the list — this one holds several: "

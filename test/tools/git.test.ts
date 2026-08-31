@@ -369,3 +369,36 @@ describe("git branch, judged by what it would change", () => {
     expect(refuse(["branch", "--points-at", "HEAD"])).toBeUndefined();
   });
 });
+
+/** The same mis-split with the space left out — `--toucan/libs/beempa` instead of `--`, `toucan/…`. */
+describe("a separator glued to its path", () => {
+  it("is named, with the list it should have been", () => {
+    const why = refuse(["diff", "--toucan/libs/beempa/suppliers/models"]);
+    expect(why).toContain("its own element");
+    expect(why).toContain('["--","toucan/libs/beempa/suppliers/models"]');
+  });
+
+  /** A long flag carrying a path always spells it with `=`, which is what keeps this tight. */
+  it("leaves real long options alone", () => {
+    for (const a of ["--src-prefix=a/", "--pretty=format:%h", "--stat", "--name-only", "--no-color"]) {
+      expect(refuse(["diff", a]), a).toBeUndefined();
+    }
+  });
+
+  /**
+   * `--git-dir=` and `--work-tree=` hold slashes and ARE refused — but for pointing git at another
+   * repository, which is a security boundary. Reporting them as a mis-split would send the model to fix
+   * its punctuation when the answer is that it may not do this at all.
+   */
+  it("does not relabel a security refusal as a formatting mistake", () => {
+    for (const a of ["--git-dir=/x/.git", "--work-tree=/x", "--output=/tmp/f"]) {
+      const why = refuse(["diff", a]);
+      expect(why, a).toBeDefined();
+      expect(why, a).not.toContain("its own element");
+    }
+  });
+
+  it("leaves a properly separated pathspec alone", () => {
+    expect(refuse(["diff", "--", "toucan/libs"])).toBeUndefined();
+  });
+});
