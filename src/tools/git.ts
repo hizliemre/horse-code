@@ -150,7 +150,27 @@ export function answerOfOne(args: string[]): string {
 }
 
 /** Why this invocation is not allowed, or undefined when it is. */
+/**
+ * A whole pathspec section packed into ONE argument, which git reads as one nonsensical revision.
+ *
+ * Measured live: `["log","-8","--oneline","--all","-- src/domain/Definitions/ChannelType.cs src/infra…"]`.
+ * git answers `fatal: unrecognized argument: -- src/... src/...`, which is true and tells the model
+ * nothing about the shape it got wrong — so it sent the same shape four more times, across two agents.
+ *
+ * Matched tightly: `-- ` with a space is unambiguously a separator that should have been its own element.
+ * `--grep=two words` and `--author=A B` are legitimate and do not match, because the space is not directly
+ * after the dashes.
+ */
+const PACKED_PATHSPEC = /^--\s+\S/;
+
 export function refuse(args: string[]): string | undefined {
+  const packed = args.find((a) => PACKED_PATHSPEC.test(a));
+  if (packed !== undefined) {
+    const parts = packed.slice(2).trim().split(/\s+/);
+    return "each argument must be its own element of the list — this one holds several: "
+      + `${JSON.stringify(packed).slice(0, 90)}. Send it as `
+      + `${JSON.stringify(["--", ...parts]).slice(0, 120)} instead.`;
+  }
   const bad = args.find((a) => REFUSED_ARG.test(a));
   if (bad) {
     return `\`${bad}\` is not allowed: it can write a file, run a program through git's configuration, or `

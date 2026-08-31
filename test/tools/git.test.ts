@@ -257,3 +257,35 @@ describe("the read-only forms of a subcommand that also writes", () => {
     expect(refuse(["branch", "new-feature"])).toBeDefined();
   });
 });
+
+/**
+ * A whole pathspec section packed into one argument, which git reads as one nonsensical revision.
+ *
+ * Measured live: `["log","-8","--oneline","--all","-- src/domain/Definitions/ChannelType.cs src/infra…"]`.
+ * git answers `fatal: unrecognized argument: -- src/... src/...` — true, and silent about the shape that
+ * was wrong. The model sent the same shape four more times, across two agents.
+ */
+describe("arguments packed into one string", () => {
+  it("says what the shape should have been", () => {
+    const why = refuse(["log", "--oneline", "-- src/a.cs src/b.cs"]);
+    expect(why).toContain("each argument must be its own element");
+    expect(why).toContain('["--","src/a.cs","src/b.cs"]');
+  });
+
+  it("catches it before the subcommand check, so the advice is about the real problem", () => {
+    expect(refuse(["log", "-- a b"])).toContain("its own element");
+    expect(refuse(["cherry-pick", "-- a b"])).toContain("its own element");
+  });
+
+  /** Flags whose VALUE contains a space are legitimate and must not be caught. */
+  it("leaves a flag value that contains spaces alone", () => {
+    for (const a of ["--grep=two words", "--author=A B", "--pretty=format:%h %s", "--date=format:%Y %m"]) {
+      expect(refuse(["log", a]), a).toBeUndefined();
+    }
+  });
+
+  /** A correctly split pathspec is the normal case and must stay silent. */
+  it("leaves a properly split pathspec alone", () => {
+    expect(refuse(["log", "--oneline", "--", "src/a.cs", "src/b.cs"])).toBeUndefined();
+  });
+});
