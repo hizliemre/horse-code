@@ -485,3 +485,37 @@ describe("a branch pattern given where a name goes", () => {
     expect(refuse(["branch", "--list", "-d", "x"])).toContain("changes a branch");
   });
 });
+
+/**
+ * The same mistake arrives in more than one shape, so the rule is stated once.
+ *
+ * Measured live, each costing turns before it was caught: `["log","--oneline","-- src/a.cs src/b.cs"]`,
+ * `["diff","--toucan/libs/beempa"]`, and `["show","2eab92b00 --stat"]`. Two were patched one shape at a
+ * time; the third arrival is the signal to say what is actually true — the list IS the argument vector, and
+ * one element is one argument.
+ */
+describe("several arguments welded into one element", () => {
+  it("catches a revision packed with a flag", () => {
+    const why = refuse(["show", "2eab92b00 --stat"]);
+    expect(why).toContain("ONE argument");
+    expect(why).toContain('["2eab92b00","--stat"]');
+  });
+
+  it("still catches the separator shapes it was first written for", () => {
+    expect(refuse(["log", "-- a b"])).toContain("its own element");
+    expect(refuse(["diff", "--toucan/libs/beempa"])).toContain("its own element");
+  });
+
+  /** A value introduced by `=` or `:` owns its spaces — these are legitimate and must pass. */
+  it("leaves flag values that legitimately contain spaces alone", () => {
+    for (const a of ["--pretty=format:%h %s", "--grep=two words", "--author=A B",
+      "--date=format:%Y %m %d", "--pretty=tformat:%an %ae"]) {
+      expect(refuse(["log", a]), a).toBeUndefined();
+    }
+  });
+
+  /** A lone value with a space and nothing argument-like after it is not a packing mistake. */
+  it("does not fire on an ordinary multi-word value", () => {
+    expect(refuse(["log", "--grep", "two words"])).toBeUndefined();
+  });
+});

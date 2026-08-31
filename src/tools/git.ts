@@ -171,24 +171,39 @@ export function answerOfOne(args: string[]): string {
 
 /** Why this invocation is not allowed, or undefined when it is. */
 /**
- * A whole pathspec section packed into ONE argument, which git reads as one nonsensical revision.
+ * Several arguments welded into ONE element of the list — in any of the shapes it arrives in.
  *
- * Measured live: `["log","-8","--oneline","--all","-- src/domain/Definitions/ChannelType.cs src/infra…"]`.
- * git answers `fatal: unrecognized argument: -- src/... src/...`, which is true and tells the model
- * nothing about the shape it got wrong — so it sent the same shape four more times, across two agents.
+ * The list IS the argument vector; each element is one argument. A model that writes a command line as a
+ * sentence packs them, and git's reply describes the resulting nonsense rather than the mistake. Three
+ * shapes measured live, each costing turns before this caught them:
  *
- * Matched tightly: `-- ` with a space is unambiguously a separator that should have been its own element.
- * `--grep=two words` and `--author=A B` are legitimate and do not match, because the space is not directly
- * after the dashes.
+ *   ["log", "--oneline", "-- src/a.cs src/b.cs"]   separator and paths, space-separated
+ *   ["diff", "--toucan/libs/beempa"]               separator welded to its first path
+ *   ["show", "2eab92b00 --stat"]                   a revision and a flag
+ *
+ * Patched one shape at a time twice; the third arrival is the signal to state the rule instead. A single
+ * argument does not contain a SPACE followed by another argument — and what makes that safe to say is that
+ * the legitimate exceptions all put their spaces inside a value introduced by `=` or `:`
+ * (`--pretty=format:%h %s`, `--grep=two words`, `--date=format:%Y %m`), which is exactly what is excluded.
  */
-const PACKED_PATHSPEC = /^--\s+\S/;
+export function packedArgument(a: string): string[] | undefined {
+  if (!/\s/.test(a)) return undefined;
+  // A value introduced by `=` or `:` owns everything after it, spaces included.
+  if (/^--?[\w-]+[=:]/.test(a)) return undefined;
+  const parts = a.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return undefined;
+  // A leading `--` settles it: everything after the separator is a pathspec, and a path can be a bare word.
+  if (parts[0] === "--") return parts;
+  // Otherwise only when a LATER part looks like an argument in its own right — a flag, a path, or `--`.
+  return parts.slice(1).some((p) => p === "--" || p.startsWith("-") || p.includes("/")) ? parts : undefined;
+}
 
 /**
- * …and the same mistake with the space left out: `--toucan/libs/beempa` instead of `--`, `toucan/…`.
+ * …and the separator welded to its first path, which has no space to give it away.
  *
- * Read as a long option, so git answers `unrecognized argument` and says nothing about the shape. A long
- * flag that carries a path always spells it with `=` (`--git-dir=/x`, `--src-prefix=a/`), so `--` followed
- * by something holding a slash and no `=` is the separator glued to its first path, not an option.
+ * `--toucan/libs/beempa` reads as a long option, so git answers `unrecognized argument`. A long flag that
+ * carries a path always spells it with `=` (`--git-dir=/x`, `--src-prefix=a/`), so `--` followed by
+ * something holding a slash and no `=` is the separator glued to its path, and nothing else is.
  */
 const GLUED_PATHSPEC = /^--[^\s=]*\/[^\s=]*$/;
 
@@ -253,9 +268,14 @@ export function branchWrites(rest: string[]): string | undefined {
 }
 
 export function refuse(args: string[]): string | undefined {
-  const packed = args.find((a) => PACKED_PATHSPEC.test(a) || GLUED_PATHSPEC.test(a));
+  const packed = args.find((a) => packedArgument(a) !== undefined || GLUED_PATHSPEC.test(a));
   if (packed !== undefined) {
-    const parts = packed.slice(2).trim().split(/\s+/).filter(Boolean);
+    const split = packedArgument(packed) ?? ["--", packed.slice(2)];
+    if (split[0] !== "--") {
+      return "each item in the list is ONE argument — this one holds several: "
+        + `${JSON.stringify([packed]).slice(0, 90)}. Send ${JSON.stringify(split).slice(0, 130)} instead.`;
+    }
+    const parts = split.slice(1);
     /**
      * Lead with the RULE about `--`, not with "this holds several".
      *
