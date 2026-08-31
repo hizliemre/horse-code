@@ -441,3 +441,47 @@ describe("a search that found nothing", () => {
     expect(answerOfOne(["merge-base", "--is-ancestor", "a", "b"])).toContain("not an ancestor");
   });
 });
+
+/**
+ * A glob is a search, not a name.
+ *
+ * Measured live: `git branch *30-Aug-2026-SUNDAY_01*`. Refusing it is right — git would try to create a ref
+ * by that literal name — but the agent wanted to FIND branches and was told only what it may not do.
+ * `--list` takes exactly this pattern, so the remedy is one word away.
+ */
+describe("a branch pattern given where a name goes", () => {
+  it("names --list rather than only refusing", () => {
+    const why = refuse(["branch", "*30-Aug-2026-SUNDAY_01*"]);
+    expect(why).toContain("--list");
+    expect(why).toContain("git branch --list *30-Aug-2026-SUNDAY_01*");
+  });
+
+  it("recognises the other glob characters too", () => {
+    for (const p of ["hc/*", "feat?x", "[abc]-branch"]) {
+      expect(refuse(["branch", p]), p).toContain("--list");
+    }
+  });
+
+  /** A plain name is still a creation, and must keep saying so. */
+  it("leaves the plain-name refusal alone", () => {
+    const why = refuse(["branch", "new-feature"]);
+    expect(why).toContain("creates a branch");
+    expect(why).not.toContain("--list");
+  });
+
+  /**
+   * …and the form it recommends must actually work. It did not: this test caught the guard refusing
+   * `git branch --list <pattern>`, the very command the message tells the agent to run. Recommending
+   * something the tool then rejects is worse than refusing plainly.
+   */
+  it("allows the form it recommends", () => {
+    expect(refuse(["branch", "--list", "hc/*"])).toBeUndefined();
+    expect(refuse(["branch", "-l", "hc/*"])).toBeUndefined();
+    expect(refuse(["branch", "--list"])).toBeUndefined();
+  });
+
+  /** A listing flag does not license a writer that follows it. */
+  it("still refuses a deletion hiding behind --list", () => {
+    expect(refuse(["branch", "--list", "-d", "x"])).toContain("changes a branch");
+  });
+});

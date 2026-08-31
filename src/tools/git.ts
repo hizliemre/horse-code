@@ -206,6 +206,18 @@ const BRANCH_WRITERS = new Set([
 ]);
 
 export function branchWrites(rest: string[]): string | undefined {
+  /**
+   * `--list` says the bare words that follow are PATTERNS, not names.
+   *
+   * Caught by its own test: the message above recommends `git branch --list <pattern>`, and this guard
+   * refused it — the pattern read as a positional argument, which is how a branch is created. Recommending
+   * a command the tool then rejects is worse than refusing plainly.
+   *
+   * Read as a flag ANYWHERE in the arguments rather than by stepping over the next token: `--list` does not
+   * consume its argument the way `--contains` does, and skipping blindly would step over a `-d` in
+   * `git branch --list -d x` and let a deletion through.
+   */
+  const listing = rest.some((a) => a === "--list" || a === "-l");
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === undefined) continue;
@@ -222,6 +234,18 @@ export function branchWrites(rest: string[]): string | undefined {
       if (bad) return `\`git branch -${bad}\` changes a branch. Only listing is allowed.`;
       if (BRANCH_TAKES_VALUE.has(a)) i++;
       continue;
+    }
+    /**
+     * A glob is a search, not a name — say how to run the search.
+     *
+     * Measured live: `git branch *30-Aug-2026-SUNDAY_01*`. Refusing it is right (git would try to create a
+     * ref by that literal name), but the agent wanted to FIND branches and was told only what it may not
+     * do. `--list` takes exactly this pattern, so the remedy is one word away and worth naming.
+     */
+    if (listing) continue;   // a bare word here is a pattern for --list, not a new branch's name
+    if (/[*?\[]/.test(a)) {
+      return `\`git branch ${a}\` would create a branch with that literal name. To search for branches, `
+        + `put the pattern after --list: \`git branch --list ${a}\`.`;
     }
     return `\`git branch ${a}\` creates a branch. Only listing is allowed — git_write owns the rest.`;
   }
