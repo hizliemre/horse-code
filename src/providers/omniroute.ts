@@ -110,7 +110,21 @@ export function isCapabilityError(message: string): boolean {
  * still right; writing this one off is not.
  */
 export function isUnknownModelError(message: string): boolean {
-  return /unable to determine provider for model|unknown model|model not found|no such model|invalid model/i.test(message);
+  return /unable to determine provider for model|unknown model|model not found|no such model|invalid model/i.test(message)
+    /**
+     * Listed and unroutable are different things, and the gateway says so in words this pattern did not know.
+     *
+     * Measured at the end of a 16-hour run: a fallback picked `opencode-go/hy3`, which IS in the catalog of
+     * 726 models, and the gateway answered 400 `invalid_request_error` — "Model 'hy3' is not available in
+     * the active live catalog for provider 'opencode-go'." A 400 is not a retryable status and none of the
+     * phrasings above match, so the chain stopped dead on a model it could simply have skipped, and the run
+     * ended on an error one line after delivering its work.
+     *
+     * Anchored on the catalog wording rather than on "not available" alone: "the long context beta is not
+     * yet available for this subscription" is a CAPABILITY refusal, which falls back without benching the
+     * model, and the two must not collapse into one.
+     */
+    || /not (?:currently )?available in the [^.]{0,40}catalog/i.test(message);
 }
 
 /** Best-effort extraction of a "path" field from partial tool-call JSON args (for live write progress). */
