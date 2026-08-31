@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitTool, refuse, howToNarrow } from "../../src/tools/git.js";
+import { gitTool, refuse, howToNarrow, answeredWithOne, answerOfOne } from "../../src/tools/git.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 
 let repo: string;
@@ -415,5 +415,29 @@ describe("a separator glued to its path", () => {
 
   it("leaves a properly separated pathspec alone", () => {
     expect(refuse(["diff", "--", "toucan/libs"])).toBeUndefined();
+  });
+});
+
+/**
+ * `git grep` says "no match" with exit 1 — an answer, not a fault.
+ *
+ * It was admitted to the read-only set earlier tonight and left out of ANSWERS_WITH_ONE, so a search that
+ * found nothing came back as `git failed with no output.` Measured live within minutes of the first fix:
+ * two `git grep` calls for a file that is not in the repository, both reported as failures.
+ */
+describe("a search that found nothing", () => {
+  it("is an answer, not a failure", () => {
+    expect(answeredWithOne(["grep", "-n", "nothing-here"], 1)).toBe(true);
+    expect(answerOfOne(["grep", "-n", "nothing-here"])).toContain("No match");
+  });
+
+  /** git's real faults keep their meaning: 128 and above are never answers. */
+  it("still treats a genuine git fault as one", () => {
+    expect(answeredWithOne(["grep", "-n", "x"], 128)).toBe(false);
+  });
+
+  it("leaves the other answer-with-one verbs saying their own thing", () => {
+    expect(answerOfOne(["check-ignore", "x"])).toContain("not ignored");
+    expect(answerOfOne(["merge-base", "--is-ancestor", "a", "b"])).toContain("not an ancestor");
   });
 });

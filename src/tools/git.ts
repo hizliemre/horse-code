@@ -110,7 +110,18 @@ export const GIT_PUSH_TIMEOUT_MS = 120_000;
  *
  * 128 and above are never answers: those are git's own faults (bad object, not a repository).
  */
-const ANSWERS_WITH_ONE = new Set(["diff", "diff-index", "diff-tree", "diff-files", "merge-base", "check-ignore"]);
+const ANSWERS_WITH_ONE = new Set([
+  "diff", "diff-index", "diff-tree", "diff-files", "merge-base", "check-ignore",
+  /**
+   * `grep` says "no match" with exit 1, exactly as the others say their own no.
+   *
+   * Admitted to the read-only set earlier tonight and left out of this one, so a search that found nothing
+   * came back as `git failed with no output.` — a fault where there was an answer. Measured live within
+   * minutes: `git grep -n -i ExportReportService.cs` twice, both reported as failures, for a file that
+   * simply is not in the repository.
+   */
+  "grep",
+]);
 
 export function answeredWithOne(args: string[], code: number): boolean {
   return code === 1 && ANSWERS_WITH_ONE.has(args[0] ?? "");
@@ -145,6 +156,9 @@ export function answerOfOne(args: string[]): string {
   const verb = args[0] ?? "";
   if (verb === "check-ignore") {
     return "No — that path is not ignored by this repository's rules. (git exit code 1, which is the answer here.)";
+  }
+  if (verb === "grep") {
+    return "No match — nothing in the tracked files matches that pattern. (git exit code 1, which is the answer here.)";
   }
   if (verb === "merge-base") {
     return args.includes("--is-ancestor")
