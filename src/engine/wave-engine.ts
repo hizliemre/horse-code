@@ -185,6 +185,23 @@ export async function runReady(
     const c = board.get(id);
     if (!c || c.attempts === 0) continue;
     board.resetAttempts(id);
+    /**
+     * …and the column has to agree, or the board reports a verdict it is no longer acting on.
+     *
+     * The resume in job.ts reopens an ABANDONED task only when `attempts === 0` — the mark of one blocked
+     * and never tried. It runs BEFORE this reset, so a task abandoned with a used-up ladder is left in
+     * ABANDONED and then handed a fresh ladder here.
+     *
+     * The work is not lost: `pending` is everything not MERGED, so those cards schedule and run regardless
+     * of the label. Measured live — T061 sat in ABANDONED at `attempts: 0` and was picked up two minutes
+     * later. What is wrong is the record. Four sibling cards read ABANDONED while the run was willing to
+     * retry them, and `tallyBoard` reads that column: a run summary would have called them failed or
+     * blocked when they were neither, which is the one number this pipeline promises to get right.
+     *
+     * Reopened here rather than by reordering job.ts, because the two rules are about different things and
+     * both are correct: that one is what a resume INHERITS, this one is what a new run is willing to retry.
+     */
+    if (c.column === "ABANDONED") board.reopen(id);
   }
   const busy = new Set<string>();                     // files held by a task that is running right now
   const running = new Map<number, Promise<number>>(); // slot → its task, resolving to the slot it frees

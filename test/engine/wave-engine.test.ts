@@ -855,3 +855,36 @@ describe("parking, and what wakes a parked task", () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 });
+
+/**
+ * A new run resets the ladder of everything unfinished — and the column has to agree.
+ *
+ * The resume in job.ts reopens an ABANDONED card only when `attempts === 0`, and it runs BEFORE the reset.
+ * So a card abandoned with a used-up ladder keeps the label and is then handed a fresh ladder.
+ *
+ * The work is not lost — `pending` is everything not MERGED, so those cards schedule anyway, and one did:
+ * T061 sat in ABANDONED at `attempts: 0` and ran two minutes later. What is wrong is the RECORD, and
+ * `tallyBoard` reads the column: the run summary would call a card failed or blocked while the engine was
+ * busy retrying it.
+ */
+describe("a card whose ladder a new run restarted", () => {
+  it("is put back to TODO, so the board says what the engine is doing", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const board = new Board();
+      board.addCard({ id: "t1", title: "was abandoned with a used ladder" });
+      for (let i = 0; i < 8; i++) board.incrementAttempts("t1");
+      board.move("t1", "ABANDONED", "team-lead");
+      board.addCard({ id: "t2", title: "already delivered" });
+      board.move("t2", "MERGED", "team-lead");
+
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      await runWaveEngine(edeps(mgr, fakeAdapter()), board, { fromBranch: "main", jobName: "job" });
+
+      expect(board.get("t1")?.attempts).toBe(0);
+      expect(board.get("t1")?.column).not.toBe("ABANDONED");
+      // …and a delivered card is untouched: the reset is for work that has not landed.
+      expect(board.get("t2")?.column).toBe("MERGED");
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  }, 60_000);
+});
