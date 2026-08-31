@@ -39,7 +39,14 @@ describe("git: what it refuses, and why", () => {
       ["branch", "-D", "main"], ["stash"], ["worktree", "add", "/tmp/x"], ["push"], ["rebase", "main"]]) {
       const res = await gitTool.run({ args }, ctx() as never);
       expect(res.isError, args.join(" ")).toBe(true);
-      expect(res.content, args.join(" ")).toMatch(/not available here|not allowed/);
+      /**
+       * Refused AND told which word did it — the property that matters, rather than one fixed phrase.
+       *
+       * This used to match `/not available here|not allowed/`. Per-subcommand rules say it differently
+       * ("`git branch -D` changes a branch. Only listing is allowed."), and rewording a refusal must not
+       * fail a test about refusing. What must stay true is that the message names the thing refused.
+       */
+      expect(res.content, args.join(" ")).toContain(args[0] as string);
     }
   });
 
@@ -320,5 +327,45 @@ describe("read-only calls that were being refused", () => {
 
   it("allows branch -vv, which is branch -v twice over", () => {
     expect(refuse(["branch", "-vv"])).toBeUndefined();
+  });
+});
+
+/**
+ * `branch` is enumerated by what WRITES, because what reads is combinatorial.
+ *
+ * The pair list grew twice in one evening — `--all`, `--show-current`, `--contains`, `-vv` — and then
+ * `-avv` arrived, which is `-a` and `-vv` in one token. There is no end to that: `-av`, `-rv`, `-vvr`,
+ * every ordering. The readers are open-ended; the writers are five verbs git has not added to in years.
+ */
+describe("git branch, judged by what it would change", () => {
+  it("allows the combinations that defeated the old list", () => {
+    for (const a of [["branch"], ["branch", "-a"], ["branch", "-v"], ["branch", "-vv"], ["branch", "-avv"],
+      ["branch", "-av"], ["branch", "-rv"], ["branch", "--all"], ["branch", "--show-current"],
+      ["branch", "--list"], ["branch", "--merged"], ["branch", "--contains", "HEAD"],
+      ["branch", "--format=%(refname)"], ["branch", "--sort", "-committerdate"]]) {
+      expect(refuse(a), a.join(" ")).toBeUndefined();
+    }
+  });
+
+  it("refuses every form that deletes, renames, copies or re-points", () => {
+    for (const a of [["branch", "-d", "x"], ["branch", "-D", "x"], ["branch", "--delete", "x"],
+      ["branch", "-m", "a", "b"], ["branch", "-M", "a", "b"], ["branch", "--move", "a"],
+      ["branch", "-c", "a"], ["branch", "--copy", "a"], ["branch", "--set-upstream-to=origin/x"],
+      ["branch", "--unset-upstream"], ["branch", "-f", "x", "HEAD"], ["branch", "--edit-description"]]) {
+      expect(refuse(a), a.join(" ")).toBeDefined();
+    }
+  });
+
+  /** Short flags combine, so each letter is judged on its own — that is what `-avv` taught. */
+  it("finds a writing letter inside a combined short flag", () => {
+    expect(refuse(["branch", "-avd", "x"])).toContain("changes a branch");
+    expect(refuse(["branch", "-Dv"])).toContain("changes a branch");
+  });
+
+  /** Creating has no flag: the bare name IS the command. */
+  it("refuses a bare branch name, and does not mistake a query's value for one", () => {
+    expect(refuse(["branch", "new-feature"])).toContain("creates a branch");
+    expect(refuse(["branch", "--contains", "some-ref"])).toBeUndefined();
+    expect(refuse(["branch", "--points-at", "HEAD"])).toBeUndefined();
   });
 });

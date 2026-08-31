@@ -60,7 +60,7 @@ const READ_ONLY = new Set([
  * the allowlist at all.
  */
 const READ_ONLY_PAIRS = new Set([
-  "worktree list", "branch --list", "branch -l", "branch -a", "branch -v", "branch -r",
+  "worktree list",
   "tag --list", "tag -l", "stash list", "remote -v", "remote show", "config --get", "config --list",
   /**
    * The long forms of what is already allowed, and the queries that only ask.
@@ -75,8 +75,6 @@ const READ_ONLY_PAIRS = new Set([
    * write — `-d`, `-D`, `-m`, `-M`, `-c`, `-C`, `--delete`, `--move`, `--copy`, `--set-upstream-to`,
    * `--edit-description` — are still absent, and a first argument that is not a flag never reaches here.
    */
-  "branch --all", "branch --verbose", "branch -vv", "branch --remotes", "branch --show-current",
-  "branch --contains", "branch --no-contains", "branch --merged", "branch --no-merged", "branch --points-at",
   "tag --contains", "tag --no-contains", "tag --merged", "tag --points-at", "tag -n",
   "remote --verbose", "remote get-url", "stash show",
 ]);
@@ -171,6 +169,42 @@ export function answerOfOne(args: string[]): string {
  */
 const PACKED_PATHSPEC = /^--\s+\S/;
 
+/** Query flags on `git branch` that consume the next argument, so its value is not a branch name. */
+const BRANCH_TAKES_VALUE = new Set([
+  "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--format", "--sort",
+  "--color", "--abbrev", "-u", "--set-upstream-to", "-t", "--track",
+]);
+
+/** Flags that make `git branch` change a ref rather than list them. */
+const BRANCH_WRITERS = new Set([
+  "-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
+  "--edit-description", "--set-upstream", "--set-upstream-to", "--unset-upstream", "-u",
+  "-t", "--track", "--no-track", "-f", "--force",
+]);
+
+export function branchWrites(rest: string[]): string | undefined {
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === undefined) continue;
+    if (a === "--") return "`git branch` with a pathspec is not a thing this tool needs to run.";
+    if (a.startsWith("--")) {
+      const name = a.split("=")[0] as string;
+      if (BRANCH_WRITERS.has(name)) return `\`git branch ${name}\` changes a branch. Only listing is allowed.`;
+      if (BRANCH_TAKES_VALUE.has(name) && !a.includes("=")) i++;   // its value is not a branch name
+      continue;
+    }
+    if (a.startsWith("-")) {
+      // Short flags combine: `-avv` is `-a -v -v`. Each letter is checked on its own.
+      const bad = [...a.slice(1)].find((c) => BRANCH_WRITERS.has(`-${c}`));
+      if (bad) return `\`git branch -${bad}\` changes a branch. Only listing is allowed.`;
+      if (BRANCH_TAKES_VALUE.has(a)) i++;
+      continue;
+    }
+    return `\`git branch ${a}\` creates a branch. Only listing is allowed — git_write owns the rest.`;
+  }
+  return undefined;
+}
+
 export function refuse(args: string[]): string | undefined {
   const packed = args.find((a) => PACKED_PATHSPEC.test(a));
   if (packed !== undefined) {
@@ -197,6 +231,20 @@ export function refuse(args: string[]): string | undefined {
    * Stated the safe way round: only the named writing forms are refused, and `config` needs its key alone.
    * `git config a.b value` sets it, so a third argument is a write however innocent the key looks.
    */
+  /**
+   * `branch` is enumerated by what WRITES, because what reads is combinatorial.
+   *
+   * The pair list above grew twice in one evening — `--all`, `--show-current`, `--contains`, `-vv` — and
+   * then `-avv` arrived, which is `-a` and `-vv` in one token. There is no end to that: `-av`, `-rv`,
+   * `-vvr`, every ordering. The file's own warning was right about flag lists and I was extending the wrong
+   * one: the readers are open-ended, the writers are five verbs git has not added to in years.
+   *
+   * So for this subcommand the rule is inverted, and only here. Anything that deletes, renames, copies,
+   * re-points or creates is refused; everything else lists. Creating is the one that has no flag — a bare
+   * name IS the command — so bare words are refused too, after stepping over the values that query flags
+   * legitimately take.
+   */
+  if (sub === "branch") return branchWrites(args.slice(1));
   if (sub === "reflog") {
     return second === "expire" || second === "delete"
       ? `\`git reflog ${second}\` rewrites the reflog. Only reading it is allowed.` : undefined;
