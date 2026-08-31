@@ -215,3 +215,49 @@ describe("a task the plan never asked for", () => {
     expect(r.findings).toEqual([]);
   });
 });
+
+/**
+ * The cheap check could veto the expensive one on the board that ships.
+ *
+ * Measured live, on the run that this whole audit was strengthened for: the regenerated 124-card board
+ * carried 11 structural findings — all of them "names no files", a blemish that does not prevent reading
+ * anything — and the reading question was therefore skipped on BOTH passes. The run then spent itself on
+ * tasks nobody had checked against the plan, which is the exact failure the question exists to catch.
+ *
+ * Skipping a model call on a board about to be rewritten is the right economy. Skipping it on the board
+ * that gets built is not.
+ */
+describe("asking the reading question on the board that will actually be built", () => {
+  const blemished = (): Board => {
+    const b = new Board();
+    b.addCard({ id: "T1", title: "Backend: Supplier entity model",
+      acceptance: ["src/domain/Supplier.cs defines Supplier"], files: [] }); // no files → structural finding
+    return b;
+  };
+
+  it("skips the call by default, while the board is still going back for repair", async () => {
+    const p = new MockProvider([submitTurn('{"missing":[],"weak":[],"fabricated":[]}')]);
+    const r = await auditBreakdown(opts(p), blemished(), "# plan");
+    expect(r.asked).toBe(false);
+    expect(p.requests).toHaveLength(0);
+    expect(r.findings.length).toBeGreaterThan(0);
+  });
+
+  it("asks anyway when told to, and finds what the structural pass cannot see", async () => {
+    const p = new MockProvider([submitTurn(JSON.stringify({
+      missing: [], weak: [],
+      fabricated: [{ task: "T1", issue: "invents a `Supplier` entity; the plan describes `SupplierRelationship`" }],
+    }))]);
+    const r = await auditBreakdown(opts(p), blemished(), "# plan", true);
+    expect(r.asked).toBe(true);
+    expect(r.findings.some((f) => f.issue.includes("the plan does not ask for this"))).toBe(true);
+  });
+
+  /** Both are true at once, and reporting only one of them would call a blemished board clean. */
+  it("carries the structural findings through alongside what it read", async () => {
+    const p = new MockProvider([submitTurn('{"missing":[],"weak":[],"fabricated":[]}')]);
+    const r = await auditBreakdown(opts(p), blemished(), "# plan", true);
+    expect(r.asked).toBe(true);
+    expect(r.findings.some((f) => f.issue.includes("names no files"))).toBe(true);
+  });
+});

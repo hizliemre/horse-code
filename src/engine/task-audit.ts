@@ -205,11 +205,26 @@ export interface TaskAudit {
  * `opts` may be undefined — a run whose config has no auditor role still gets the structural pass, because a
  * gate that cannot be configured away is worth more than one that takes the job down with it when it is.
  */
-export async function auditBreakdown(opts: RoleAgentOptions | undefined, board: Board, planText: string): Promise<TaskAudit> {
+export async function auditBreakdown(
+  opts: RoleAgentOptions | undefined, board: Board, planText: string,
+  /** Ask the reading question even with structural findings open — for the board that will actually be built. */
+  alwaysAsk = false,
+): Promise<TaskAudit> {
   const findings = structuralFindings(board);
-  // Already sending it back: the reading pass costs a call and would only lengthen a list that is acted on
-  // whole. It runs on the repaired board instead, where its answer still matters.
-  if (findings.length > 0 || !opts) return { findings, asked: false };
+  /**
+   * The structural pass gates the REPAIR, not the reading question — and conflating the two closed the gate
+   * that mattered.
+   *
+   * Skipping a model call on a board that is about to be rewritten is the right economy, and it is why this
+   * line exists. But `alwaysAsk` did not, so the reading question was skipped on the SECOND pass too — the
+   * one run against the board that actually gets built. Measured live: a 124-card board carried 11
+   * structural findings ("names no files"), a blemish that does not prevent reading anything, and the
+   * fabrication question was never asked in either pass. A run then spent itself on a task nothing had
+   * asked for.
+   *
+   * The cheap check must not be able to veto the expensive one on the board that ships.
+   */
+  if ((findings.length > 0 && !alwaysAsk) || !opts) return { findings, asked: false };
 
   const cards = board.list().map((c) =>
     `- ${c.id}: "${c.title}"\n  writes: ${c.files.join(", ") || "(none)"}\n  done when: ${c.acceptance.join("; ")}`).join("\n");
@@ -233,7 +248,10 @@ export async function auditBreakdown(opts: RoleAgentOptions | undefined, board: 
     const out = await runStructuredRole({ ...opts, messages: [...opts.messages, msg] }, CoverageSchema);
     return {
       asked: true,
+      // Structural findings are carried through: on the second pass they are still open and still true, and
+      // dropping them here would report a repaired board as clean.
       findings: [
+        ...findings,
         ...out.missing.map((m) => ({ issue: `the plan requires this and no task delivers it: ${m}` })),
         ...out.weak.filter((w) => board.get(w.task)).map((w) => ({ task: w.task, issue: w.issue })),
         // Filtered against the board like `weak`: an auditor naming a task that does not exist has answered

@@ -164,9 +164,15 @@ async function gateBreakdown(
     emit({ kind: "note", text: `⚠️ The repaired breakdown did not come back — continuing with the original.` });
     return board;
   }
-  // Reported, not re-gated: what survives one targeted repair is not going to fall to a second round, and
-  // the run's budget belongs to the implementation.
-  const left = await auditBreakdown(auditOpts(deps, workdir), board, planText);
+  /**
+   * Reported, not re-gated — but ASKED in full, which it was not.
+   *
+   * What survives one targeted repair is not going to fall to a second round, and the run's budget belongs
+   * to the implementation. That is why this result is reported rather than acted on. It is not a reason to
+   * skip the reading question: this is the board that gets built, and a task nothing asked for is the one
+   * finding here worth an entire run.
+   */
+  const left = await auditBreakdown(auditOpts(deps, workdir), board, planText, true);
   if (left.findings.length) {
     emit({ kind: "note", text: `🧾 ${left.findings.length} of those are still open after the repair — continuing anyway.` });
   }
