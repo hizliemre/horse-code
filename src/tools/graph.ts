@@ -282,13 +282,26 @@ export const graphOverviewTool = graphTool(
  */
 export const graphTraceTool: Tool = {
   name: "graph_trace",
+  /**
+   * The limit is stated HERE because this is the only place an agent reads before calling.
+   *
+   * Measured live in one run: four different lenses — `risk-judge`, `plan-observability`,
+   * `plan-architecture` and one more — each asked for a trace of `spec.md` or `plan.md`. The error they got
+   * back is a good one and says the failure is permanent, so none of them asked twice; but each learned it
+   * separately, at a turn apiece, because a lens has its own memo and cannot be told by the last one. An
+   * error teaches one agent after the fact. A description tells every agent before.
+   */
   description:
     "What a source file is responsible for and what to be careful of when changing it, in the product's " +
     "terms. Far cheaper than reading the file. Use it to orient before opening unfamiliar code. " +
+    "SOURCE CODE ONLY (.ts, .cs, .py, .go, …): a .md, .json or .txt path has no trace and never will — " +
+    "read documents with read_file. " +
     "Pass \"project\" instead of a path to get the project brief: what the product is, its domain vocabulary, " +
     "and the business rules the code must not violate. Read that FIRST in an unfamiliar codebase.",
   permissionLevel: "safe",
-  parameters: z.object({ file: z.string().describe("Repo-relative path, e.g. \"src/config/config.ts\"") }),
+  parameters: z.object({
+    file: z.string().describe("Repo-relative path to SOURCE code, e.g. \"src/config/config.ts\". Not a document."),
+  }),
   describe: (args) => ({ allowKey: "graph:trace", preview: `graph_trace ${JSON.stringify(args)}`.slice(0, 120) }),
   async run(args, ctx) {
     const file = String((args as { file?: unknown }).file ?? "");

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { graphImpactTool, graphFindTool, graphContextTool, graphOverviewTool, MAX_ROWS } from "../../src/tools/graph.js";
+import { graphImpactTool, graphFindTool, graphContextTool, graphOverviewTool, MAX_ROWS, graphTraceTool } from "../../src/tools/graph.js";
 import { parseGraph } from "../../src/engine/project-graph.js";
 
 let cwd: string;
@@ -334,5 +334,32 @@ describe("no graph yet", () => {
     for (const t of [graphImpactTool, graphFindTool, graphContextTool, graphOverviewTool]) {
       expect(t.permissionLevel).toBe("safe");
     }
+  });
+});
+
+/**
+ * A rule that only the error knows is a rule every agent pays to learn.
+ *
+ * Measured live in one run: four different lenses each asked for a trace of `spec.md` or `plan.md`. The
+ * error is a good one — it says the failure is permanent, so none of them asked twice — but each learned
+ * it separately, at a turn apiece, because a lens has its own memo and cannot be told by the last one.
+ * An error teaches one agent afterwards; a description tells every agent beforehand.
+ */
+describe("what graph_trace says about itself before it is called", () => {
+  it("states that documents have no trace, where an agent reads it in time", () => {
+    const d = graphTraceTool.description;
+    expect(d).toMatch(/SOURCE CODE ONLY/);
+    expect(d).toContain(".md");
+    expect(d).toContain("read_file");        // …and where to go instead
+  });
+
+  it("says it in the parameter too, which is what a model fills in", () => {
+    const shape = (graphTraceTool.parameters as unknown as { shape: { file: { description?: string } } }).shape;
+    expect(shape.file.description).toMatch(/SOURCE/);
+  });
+
+  /** The project brief is the one non-path argument and must survive the narrowing. */
+  it("still documents the project brief", () => {
+    expect(graphTraceTool.description).toContain("project brief");
   });
 });
