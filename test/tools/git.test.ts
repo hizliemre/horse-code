@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitTool, refuse } from "../../src/tools/git.js";
+import { gitTool, refuse, howToNarrow } from "../../src/tools/git.js";
 import { initTmpRepo } from "../worktree/helpers.js";
 
 let repo: string;
@@ -183,5 +183,41 @@ describe("asking whether a path is ignored", () => {
       expect(r.isError).toBe(false);
       expect(r.content).toMatch(/not ignored/);
     } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+/**
+ * A remedy the model cannot use is worse than silence — it will spend a turn discovering that.
+ *
+ * `--stat` belongs to `git diff` and was appended to every truncated result. Measured live: a lens ran
+ * `git ls-files -- *.slnx src toucan docs`, got 60,124 characters back, and was told to try a flag
+ * `ls-files` does not have.
+ */
+describe("what to do about output too big to return", () => {
+  it("keeps the --stat advice where it is true, including where the flag must go", () => {
+    const text = howToNarrow(["diff", "development...HEAD"]);
+    expect(text).toContain("--stat");
+    expect(text).toContain("directly after the subcommand");
+  });
+
+  it("does not offer --stat to a subcommand that has no such flag", () => {
+    for (const verb of ["ls-files", "log", "blame", "status"]) {
+      expect(howToNarrow([verb]), verb).not.toContain("--stat");
+    }
+  });
+
+  it("names the narrowing that actually fits each subcommand", () => {
+    expect(howToNarrow(["ls-files", "--", "src"])).toContain("pathspec");
+    expect(howToNarrow(["log"])).toContain("--oneline");
+    expect(howToNarrow(["blame", "a.ts"])).toContain("-L");
+  });
+
+  /** Leading flags come before the verb — the same misreading that let `git -c x commit` past a guard. */
+  it("finds the subcommand past leading options", () => {
+    expect(howToNarrow(["-c", "core.pager=cat", "diff"])).toContain("--stat");
+  });
+
+  it("still says something useful for a subcommand nobody anticipated", () => {
+    expect(howToNarrow(["cat-file", "-p", "HEAD"])).toContain("narrower");
   });
 });

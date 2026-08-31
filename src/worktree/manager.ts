@@ -3,7 +3,7 @@ import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, resolve, dirname, basename, sep } from "node:path";
 import { inheritFromRoot, topUpInherited, type Inherited } from "./inherit.js";
-import { defaultGitRunner, type GitRunner } from "./git.js";
+import { defaultGitRunner, gitVerb, type GitRunner } from "./git.js";
 import { toSlug, uniqueSlug } from "./slug.js";
 import { readCheckpoint, checkpointKey, isContinuePrompt, checkpointMtime } from "../engine/checkpoint.js";
 import { traceRootRel } from "../engine/trace.js";
@@ -136,25 +136,6 @@ export const FORBIDDEN_AT_ROOT = new Set([
  * written yet, and it throws rather than skipping: silently declining to do what a caller asked would hide
  * the bug instead of the damage.
  */
-/**
- * Git's global options come BEFORE the verb, and two of them take a separate value.
- *
- * "the first argument that is not a flag" is wrong for `git -c user.email=t@t commit`: the value is not a
- * flag either, so it is read as the verb and the commit goes through. The guard's own test caught that. The
- * `--opt=value` forms are one token and need no help; only these take the next one.
- */
-const TAKES_A_VALUE = new Set(["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
-
-export function gitVerb(args: string[]): string | undefined {
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === undefined) continue;
-    if (!a.startsWith("-")) return a;
-    if (TAKES_A_VALUE.has(a)) i++;
-  }
-  return undefined;
-}
-
 export function guardRoot(run: GitRunner, repoRoot: string): GitRunner {
   return async (args, cwd) => {
     const verb = gitVerb(args);

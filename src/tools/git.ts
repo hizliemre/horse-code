@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { z } from "zod";
 import type { Tool } from "../core/types.js";
 import { truncateSafe } from "../core/surrogates.js";
+import { gitVerb } from "../worktree/git.js";
 
 /**
  * Git, for reading only.
@@ -92,6 +93,30 @@ export function answeredWithOne(args: string[], code: number): boolean {
   return code === 1 && ANSWERS_WITH_ONE.has(args[0] ?? "");
 }
 
+/**
+ * How to ask for less — of THIS subcommand, not of the one the advice was written for.
+ *
+ * `--stat` belongs to `git diff` and to nothing else, and it was appended to every truncated result.
+ * Measured live: a lens ran `git ls-files -- *.slnx src toucan docs`, got 60,124 characters back, and was
+ * told to try `--stat` — a flag `ls-files` does not have. A remedy the model cannot use is worse than
+ * silence, because it will spend a turn discovering that.
+ *
+ * The earlier fix here was to say WHERE the flag goes, after a lens appended it past the paths and git
+ * answered `fatal: option '--stat' must come before non-option arguments`. That was right and is kept —
+ * for the one subcommand it is true of.
+ */
+export function howToNarrow(args: string[]): string {
+  const verb = gitVerb(args) ?? "";
+  if (verb === "diff" || verb === "show") {
+    return "narrow the range, or put `--stat` directly after the subcommand (git " + verb
+      + " --stat <rest>), which git requires";
+  }
+  if (verb === "log") return "ask for fewer commits (-n 20) or just their subjects (--oneline)";
+  if (verb === "ls-files" || verb === "ls-tree") return "narrow the pathspec to one directory at a time";
+  if (verb === "blame") return "limit it to a range of lines (-L 40,120)";
+  return "ask for a narrower part of it";
+}
+
 /** What exit 1 MEANS for this query, for the case where git printed nothing at all (`--quiet`). */
 export function answerOfOne(args: string[]): string {
   const verb = args[0] ?? "";
@@ -171,11 +196,7 @@ export const gitTool: Tool = {
       return { content: out.code === 0 ? "(no output)" : "git failed with no output.", isError: failed };
     }
     const clipped = out.text.length > MAX_GIT_OUTPUT
-      // The advice names WHERE the flag goes. Measured live: told only to "add --stat", a lens appended it
-      // after the paths and git answered `fatal: option '--stat' must come before non-option arguments` —
-      // a suggestion that produces a failure is worse than no suggestion.
-      ? `${truncateSafe(out.text, MAX_GIT_OUTPUT)}\n…[truncated — narrow the range, or put \`--stat\` `
-        + `directly after the subcommand (git diff --stat <rest>), which git requires]`
+      ? `${truncateSafe(out.text, MAX_GIT_OUTPUT)}\n…[truncated — ${howToNarrow(args)}]`
       : out.text;
     return { content: clipped, isError: failed };
   },
