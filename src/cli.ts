@@ -188,6 +188,29 @@ export function describeTraceFailures(failed: { file: string; error: string }[])
   return `⚠️ ${failed.length} failed:\n${rows.join("\n")}`;
 }
 
+/**
+ * …but a configured id the catalog has DROPPED is asked whether it still answers.
+ *
+ * The clause above assumed a dead configured model would be quarantined like any other. It is not:
+ * the health probe only RELEASES models already benched, so nothing ever questions one on its way
+ * into the pool. Reported live — a user disabled the `antigravity` provider at the gateway, its 704
+ * models became 0 antigravity, and `/roles adjust` kept offering them, because 58 of their roles
+ * still named them and that was read as evidence they work.
+ *
+ * Evidence expires. A model the catalog lists is not probed at all; one it no longer lists is asked
+ * once, and only kept if it answers. Failures are the cheap case here — a disabled provider refuses
+ * in milliseconds — and they are probed in parallel, so the cost falls on the rare survivor.
+ */
+export async function poolWithConfigured(
+  catalog: string[], configured: string[], probe: (model: string) => Promise<boolean>,
+): Promise<string[]> {
+  const known = new Set(catalog);
+  const orphaned = configured.filter((m) => !known.has(m));
+  if (!orphaned.length) return catalog;
+  const alive = await Promise.all(orphaned.map(async (m) => (await probe(m)) ? m : undefined));
+  return [...catalog, ...alive.filter((m): m is string => m !== undefined)];
+}
+
 export function renderResult(res: JobResult): string {
   /**
    * A model that emits its own `<think>` tags must not leak them into the answer.
@@ -474,26 +497,18 @@ export async function main(argv: string[]): Promise<void> {
        * That mattered because role assignment validates the tuner's picks against this list and DROPS
        * anything missing: a model the user had deliberately put in their config was silently deleted by the
        * next `/roles adjust`. A configured id is the user's own evidence that a model works, so it belongs in
-       * the pool; if it is in fact dead, the health probe quarantines it like any other.
+       * the pool — but only while it still answers, which is checked in `listModels` below.
        */
       const configuredModels = (): string[] =>
         [...new Set(Object.values(config.roles).flatMap((r) => r.models ?? []))].filter((m) => m && m !== "default");
-      const listModels = async (): Promise<string[]> => {
-        const catalog = await listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: sourcesRef.current });
-        const known = new Set(catalog);
-        return [...catalog, ...configuredModels().filter((m) => !known.has(m))];
-      };
-      const refreshSources = async (): Promise<string[]> => {
-        const catalog = await fetchCatalog({ baseUrl: config.baseUrl, apiKey: config.apiKey });
-        const found = await discoverSources({ catalog, probe: makeProbe({ baseUrl: config.baseUrl, apiKey: config.apiKey }) });
-        sourcesRef.current = found;
-        saveSourceCache(home, config.baseUrl, found);
-        return found;
-      };
-      const sourcesInfo = () => ({ sources: sourcesRef.current, manual: manualSources, needsDiscovery: !manualSources && sourcesRef.current.length === 0 });
-      // Strict health check for the model quarantine. makeProbe treats 429 as "routed" (the subscription
-      // exists), which is right for source discovery but wrong here — a rate-limited model is precisely what
-      // was quarantined. Only a real 200 releases it.
+      /**
+       * Strict health check: only a real 200 counts.
+       *
+       * `makeProbe` treats 429 as "routed" — right for discovering which sources a subscription has, wrong
+       * here. A rate-limited model is precisely what was quarantined, and a provider that has been disabled
+       * refuses rather than answers. Used for two questions now: releasing a benched model, and asking
+       * whether a configured id the catalog dropped is still real.
+       */
       const probeModel = async (model: string): Promise<boolean> => {
         try {
           const res = await fetch(`${config.baseUrl.replace(/\/$/, "")}/api/v1/chat/completions`, {
@@ -507,6 +522,18 @@ export async function main(argv: string[]): Promise<void> {
           return false;
         }
       };
+
+      const listModels = async (): Promise<string[]> => poolWithConfigured(
+        await listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: sourcesRef.current }),
+        configuredModels(), probeModel);
+      const refreshSources = async (): Promise<string[]> => {
+        const catalog = await fetchCatalog({ baseUrl: config.baseUrl, apiKey: config.apiKey });
+        const found = await discoverSources({ catalog, probe: makeProbe({ baseUrl: config.baseUrl, apiKey: config.apiKey }) });
+        sourcesRef.current = found;
+        saveSourceCache(home, config.baseUrl, found);
+        return found;
+      };
+      const sourcesInfo = () => ({ sources: sourcesRef.current, manual: manualSources, needsDiscovery: !manualSources && sourcesRef.current.length === 0 });
       // /skills — what is loaded and which roles it reaches; update re-installs the repo-sourced ones.
       // What a role EFFECTIVELY uses, which is not the defaults table: a role that declares its own list
       // overrides it, and declaring an empty list opts out entirely. Reporting the defaults here would have
