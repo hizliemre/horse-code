@@ -273,10 +273,25 @@ describe("the read-only forms of a subcommand that also writes", () => {
  * was wrong. The model sent the same shape four more times, across two agents.
  */
 describe("arguments packed into one string", () => {
-  it("says what the shape should have been", () => {
+  /**
+   * Leads with the rule about `--`, because the first wording sent the model the wrong way.
+   *
+   * It said "each argument must be its own element — this one holds several". Measured live, one turn
+   * later: the agent resent `["-- src/a.cs"]`, having dropped the second path and kept the packing. It
+   * fixed the count, which is the symptom. A remedy the model misreads costs the same turn as none.
+   */
+  it("names the separator first, then shows the exact correction", () => {
     const why = refuse(["log", "--oneline", "-- src/a.cs src/b.cs"]);
-    expect(why).toContain("each argument must be its own element");
+    expect(why).toMatch(/^`--` is the separator/);
     expect(why).toContain('["--","src/a.cs","src/b.cs"]');
+    expect(why).toContain("however many paths follow");
+  });
+
+  /** One path packed is the same fault as two, and must not read as a complaint about the count. */
+  it("says the same thing when only one path was packed", () => {
+    const why = refuse(["log", "-- src/a.cs"]);
+    expect(why).toMatch(/^`--` is the separator/);
+    expect(why).toContain('["--","src/a.cs"]');
   });
 
   it("catches it before the subcommand check, so the advice is about the real problem", () => {

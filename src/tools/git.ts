@@ -217,10 +217,22 @@ export function branchWrites(rest: string[]): string | undefined {
 export function refuse(args: string[]): string | undefined {
   const packed = args.find((a) => PACKED_PATHSPEC.test(a) || GLUED_PATHSPEC.test(a));
   if (packed !== undefined) {
-    const parts = packed.slice(2).trim().split(/\s+/);
-    return "each argument must be its own element of the list — this one holds several: "
-      + `${JSON.stringify(packed).slice(0, 90)}. Send it as `
-      + `${JSON.stringify(["--", ...parts]).slice(0, 120)} instead.`;
+    const parts = packed.slice(2).trim().split(/\s+/).filter(Boolean);
+    /**
+     * Lead with the RULE about `--`, not with "this holds several".
+     *
+     * The first version of this message said "each argument must be its own element — this one holds
+     * several". Measured live, one turn later: the agent resent `["--  src/a.cs"]` — it had dropped the
+     * SECOND path and kept the packing. It read "holds several" as a complaint about the count and fixed
+     * the count, which is the symptom; the fault is that `--` is a separator and was welded to a path.
+     *
+     * So the sentence now names `--` first and shows the exact before and after. A remedy the model
+     * misreads costs the same turn as no remedy at all.
+     */
+    return "`--` is the separator and must be its own element of the list — it is never part of a path. "
+      + `You sent ${JSON.stringify([packed]).slice(0, 90)}; send `
+      + `${JSON.stringify(["--", ...parts]).slice(0, 130)} instead `
+      + "(however many paths follow, they are separate elements too).";
   }
   const bad = args.find((a) => REFUSED_ARG.test(a));
   if (bad) {
