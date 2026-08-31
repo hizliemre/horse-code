@@ -11,6 +11,7 @@ import { compact } from "./compact.js";
 import { telemetry } from "../obs/telemetry.js";
 import { shieldToolOutput } from "../core/prompt-guard.js";
 import { elideInPlace } from "./elide.js";
+import { sessionBase } from "../engine/session-scope.js";
 
 export interface RoleAgentOptions {
   provider: Provider;
@@ -93,8 +94,24 @@ function fmtChars(n: number): string {
  * A checkout inside `.horsecode/worktrees/<slug>/base` is not somewhere an agent can guess it is.
  */
 export function workingDirectoryNote(cwd: string): string {
-  return `\n\n# Working directory\n\nYou are already in \`${cwd}\`. Every relative path resolves from here, `
+  const here = `\n\n# Working directory\n\nYou are already in \`${cwd}\`. Every relative path resolves from here, `
     + `and every tool runs here — do not \`cd\` elsewhere, and do not go looking for the repository.`;
+  /**
+   * …and what a fresh worktree does NOT have, which agents were left to discover by failing.
+   *
+   * A session worktree is a clean git checkout: everything git ignores is absent. `node_modules` is the one
+   * that costs, and it is deliberately not inherited — a blanket copy of ignored files would drag gigabytes
+   * into every session (see INHERITED_ASSETS). Measured live on a 124-task run: agents spent turns on
+   * `ls …/toucan/node_modules`, on a NuGet restore that could not find its lock file, and on a `find`
+   * pruning a directory that was not there.
+   *
+   * Stated, not prescribed. Whether to install anything is a judgement about this project and this task —
+   * eight parallel worktrees each running an install is its own kind of expensive — and an agent that knows
+   * the fact can weigh it. What it could not do before was know.
+   */
+  return sessionBase(cwd) === undefined ? here
+    : `${here}\n\nThis is a fresh git worktree, so everything git ignores is absent: no \`node_modules\`, `
+      + "no build output, no package caches. Source, tests and configuration are all here and current.";
 }
 
 /**
