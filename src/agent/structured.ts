@@ -40,6 +40,12 @@ export function whatWasWrong(issues: readonly z.core.$ZodIssue[], args: unknown)
     const got = valueAt(args, i.path);
     const shown = got === undefined ? "nothing" : JSON.stringify(got);
     const head = where ? `${where}: ${i.message}` : i.message;
+    /**
+     * Zod often names what arrived already — "expected array, received undefined". Appending "got nothing"
+     * to that says the same thing twice and reads like a stutter. The clause is for what the rule does NOT
+     * state: the actual value, when there is one worth quoting.
+     */
+    if (got === undefined && /received\s+(undefined|null|nothing)/i.test(i.message)) return head;
     // A value long enough to be the problem itself is truncated: the point is what it WAS, not all of it.
     return `${head} — got ${shown.length > 120 ? `${shown.slice(0, 120)}…` : shown}`;
   }).join("; ");

@@ -63,3 +63,21 @@ describe("what a rejected submit tells the model", () => {
     expect(text).toContain('got "two"');
   });
 });
+
+/**
+ * Zod frequently names what arrived — "expected array, received undefined" — and appending "got nothing" to
+ * that says it twice. Seen live: `plan: Invalid input: expected array, received undefined — got nothing`.
+ */
+describe("not saying the same thing twice", () => {
+  it("drops the got-clause when the rule already stated what arrived", async () => {
+    const text = await run(z.object({ plan: z.array(z.string()) }), {});
+    expect(text).toContain("plan:");
+    expect(text).not.toContain("got nothing");
+  });
+
+  /** …but a real value is exactly what the rule does not state, and must survive. */
+  it("keeps it when there is an actual value to name", async () => {
+    const text = await run(z.object({ plan: z.array(z.string()) }), { plan: "not an array" });
+    expect(text).toContain('got "not an array"');
+  });
+});
