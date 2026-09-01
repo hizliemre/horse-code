@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTaskWithEscalation, tierOf, autonomousAskHuman, noChangeStreak } from "../../src/engine/escalation.js";
+import { runTaskWithEscalation, tierOf, autonomousAskHuman, noChangeStreak, FREE_FLEET_RETRIES } from "../../src/engine/escalation.js";
 import type { EscalationDeps, AskHuman } from "../../src/engine/escalation.js";
 import type { Card } from "../../src/board/board.js";
 import type { Verdict } from "../../src/engine/task-types.js";
@@ -135,6 +135,61 @@ describe("runTaskWithEscalation", () => {
     expect(board.get("t1")!.column).toBe("DONE");
     const stages = board.get("t1")!.stageHistory;
     expect(stages.some((s) => s.action === "attempt-error" && /turn count/.test(s.note ?? ""))).toBe(true);
+  });
+
+  /**
+   * A task must not pay the ladder for a model it could never reach.
+   *
+   * Measured live: T002 spent all eight of its attempts inside four minutes on
+   * `muse-spark-1.2-contributor-xhigh`, a model the gateway lists and refuses to route to. Twenty-three
+   * parallel slots were re-assigned to it at once and every answer charged a task an attempt, so T002
+   * reached "ladder exhausted" and parked — with ninety-six dependent tasks behind it — without a single
+   * model having read the work.
+   */
+  it("does not spend an attempt when no model could be reached", async () => {
+    const unroutable = "Model 'muse-spark-1.2-contributor-xhigh' is not available in the active live catalog for provider 'opencode-go'.";
+    const p = new MockProvider([
+      submit('{"role":"coder"}'),          // route → coder
+      [{ type: "error", message: unroutable }],  // the fleet, not the work
+      noopImpl, ...codeReviewPass(),       // the retry reaches a model and passes
+    ]);
+    const board = boardWithTask();
+    const v = await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
+    expect(v.verdict).toBe("pass");
+    // Still tier 0: the ladder never advanced, because nothing about the task had been learned.
+    expect(board.get("t1")!.attempts).toBe(0);
+    const notes = board.get("t1")!.stageHistory.filter((s) => s.action === "attempt-error");
+    expect(notes.some((s) => /not available in the active live catalog/.test(s.note ?? ""))).toBe(true);
+  });
+
+  /** Free retries are bounded: an unreachable fleet everywhere must not become an unbounded loop. */
+  it("charges for the fleet once the free retries are spent", async () => {
+    const unroutable = "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'.";
+    const fleetTurn = [{ type: "error" as const, message: unroutable }];
+    const p = new MockProvider([
+      submit('{"role":"coder"}'),
+      fleetTurn, fleetTurn, fleetTurn,     // one more than FREE_FLEET_RETRIES
+      noopImpl, ...codeReviewPass(),
+    ]);
+    const board = boardWithTask();
+    await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
+    // The first two were forgiven; the third was charged, so the ladder moved exactly once.
+    expect(board.get("t1")!.attempts).toBe(1);
+  });
+
+  /** The advice has to match what happened: "work faster" is wrong when nothing was ever asked. */
+  it("does not tell the next attempt to hurry when no model answered", async () => {
+    const unroutable = "No active credentials for provider: antigravity";
+    const p = new MockProvider([
+      submit('{"role":"coder"}'),
+      [{ type: "error", message: unroutable }],
+      noopImpl, ...codeReviewPass(),
+    ]);
+    const board = boardWithTask();
+    await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
+    const sent = JSON.stringify(p.requests.map((r) => r.messages));
+    expect(sent).not.toContain("Complete the task within the turn budget");
+    expect(sent).toContain("never reached a model");
   });
 
   it("autonomousAskHuman: retries a bounded number of times with the notes, then abandons (no prompt)", async () => {

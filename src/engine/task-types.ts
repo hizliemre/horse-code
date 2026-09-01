@@ -126,6 +126,14 @@ export interface Verdict {
    * to improve, so repeating the same role with the same instruction is provably futile.
    */
   noProgress?: boolean;
+  /**
+   * The attempt failed for want of a MODEL, not for anything about the work.
+   *
+   * A catalog rejection, a provider with no credentials or no quota left — none of these say the task was
+   * attempted badly, or at all. Charging the ladder for them is how a task can exhaust itself without a
+   * single model ever having read it.
+   */
+  fleetFailure?: boolean;
   /** Medium/low review findings that did NOT block this task — carried to the PR revision pass, never dropped. */
   deferred?: string[];
   verdict: "pass" | "fail";

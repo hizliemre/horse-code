@@ -5,6 +5,7 @@ import { runEscalationCouncil } from "./council.js";
 import type { Verdict, RunnableRole } from "./task-types.js";
 import type { ReviewDeps } from "./review.js";
 import { telemetry } from "../obs/telemetry.js";
+import { isCatalogRejection, isProviderOutage, isUnknownModelError } from "../providers/omniroute.js";
 
 export type HumanDecision =
   | { action: "accept" }
@@ -65,16 +66,54 @@ export function tierOf(attempts: number, rounds: number): 0 | 1 | 2 {
 }
 
 /**
+ * The attempt died for want of a MODEL, not for anything about the work.
+ *
+ * Measured live: T002's whole ladder — eight attempts — was spent inside four minutes on
+ * `muse-spark-1.2-contributor-xhigh`, a model the gateway lists and refuses to route to. Twenty-three
+ * parallel slots were re-assigned to it at once, every call came back the same way, and each answer charged
+ * a task an attempt. T002 reached "ladder exhausted" and parked, and ninety-six tasks that depend on it
+ * parked behind it. No model had read the task.
+ *
+ * These are the failures the fleet already knows how to fix by itself: the model is benched and the role
+ * re-chained within seconds. The task only has to not be punished while that happens.
+ */
+export function isFleetFailure(message: string): boolean {
+  return isCatalogRejection(message) || isProviderOutage(message) || isUnknownModelError(message);
+}
+
+/**
+ * How many attempts a task may lose to the fleet before the ladder charges for them anyway.
+ *
+ * Not unbounded: if every model everywhere is unreachable, a free retry is a free infinite loop. Two is
+ * enough for the bench to take a dead model out of service and hand the role a different chain, which is the
+ * only thing a retry is waiting for.
+ */
+export const FREE_FLEET_RETRIES = 2;
+
+/** What this task has already been forgiven — read from the record, so it survives a restart. */
+function fleetRetriesSpent(board: Board, taskId: string): number {
+  return (board.get(taskId)?.stageHistory ?? [])
+    .filter((s) => s.action === "attempt-error" && isFleetFailure(s.note ?? "")).length;
+}
+
+/**
  * Records a thrown attempt (turn-count ceiling, non-retryable model error) as a failed verdict WITHOUT killing
  * the task, and feeds the error back as a review note so the next tier has context. The card is returned to
  * TODO (the throw may have left it mid-run in IN-PROGRESS/REVIEW). Returns a fail verdict for the caller.
  */
 function attemptError(board: Board, taskId: string, role: string, e: unknown): Verdict {
   const msg = e instanceof Error ? e.message : String(e);
+  const fleet = isFleetFailure(msg) && fleetRetriesSpent(board, taskId) < FREE_FLEET_RETRIES;
   board.appendStage(taskId, { role, action: "attempt-error", note: msg });
-  board.addReviewNote(taskId, `The previous attempt did not finish (${msg}). Complete the task within the turn budget.`);
+  /**
+   * Advice about the turn budget is worse than no advice when no model answered: it tells the next attempt
+   * to work faster about something it never did. Say what actually happened instead.
+   */
+  board.addReviewNote(taskId, fleet
+    ? `The previous attempt never reached a model (${msg}). Nothing is known about the work yet — start it fresh.`
+    : `The previous attempt did not finish (${msg}). Complete the task within the turn budget.`);
   board.move(taskId, "TODO", role);
-  return { verdict: "fail", notes: [msg] };
+  return { verdict: "fail", notes: [msg], ...(fleet && { fleetFailure: true }) };
 }
 
 /**
@@ -137,6 +176,12 @@ export async function runTaskWithEscalation(
         v = attemptError(board, taskId, role, e);
       }
       if (v.verdict === "pass") return v; // runCycleWithRole moved it to DONE
+      /**
+       * A task is not charged for a failure that was never about the task — see `isFleetFailure`. The bench
+       * takes the unreachable model out of service and the role is re-chained, so the retry is a different
+       * model given the same instruction, exactly as a same-tier retry already is.
+       */
+      if (v.fleetFailure) continue;
       if (v.noProgress) {
         /**
          * Nothing was written at all — but a same-tier retry is NOT a repeat.
