@@ -205,6 +205,18 @@ export type ChatEvent =
    */
   | { type: "error"; message: string; retryable?: boolean; capability?: boolean; noBench?: boolean };
 
+/**
+ * The one sentence a provider uses when a clock ran out, kept in one place so callers can recognise it.
+ *
+ * A provider is handed ONE composed signal and cannot see whose deadline is on it — the caller's outer
+ * budget, the chain's total, and the call's own clock all abort with a `TimeoutError`. So the provider says
+ * only that a deadline fired; naming the owner is the composer's job, and matching this constant is how it
+ * knows there is an owner to name. Three copies of this string used to be compared by eye.
+ */
+export const DEADLINE_MESSAGE = "the model did not answer within its deadline";
+/** Said instead when the clock that fired belonged to the whole chain walk, not to the model on the line. */
+export const CHAIN_BUDGET_MESSAGE = "the chain's total budget ran out before this model was given a fair turn";
+
 export interface Provider {
   chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent>;
 }

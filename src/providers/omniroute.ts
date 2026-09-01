@@ -1,4 +1,4 @@
-import type { ChatEvent, ChatRequest, Provider, ToolCall } from "../core/types.js";
+import { DEADLINE_MESSAGE, type ChatEvent, type ChatRequest, type Provider, type ToolCall } from "../core/types.js";
 import { parseSSE } from "./sse.js";
 import { toOpenAIBody, mapFinishReason } from "./openai.js";
 import { toAnthropicBody, isAnthropicModel, AnthropicDecoder } from "./anthropic.js";
@@ -309,7 +309,7 @@ export class OmniRouteProvider implements Provider {
       // The caller cancelling is not a failure of anything: no fallback, no benching.
       if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
       // A deadline is OURS. Another model in the chain may answer inside it, so this is retryable.
-      if (isDeadline(signal)) { yield { type: "error", message: "the model did not answer within its deadline", retryable: true }; return; }
+      if (isDeadline(signal)) { yield { type: "error", message: DEADLINE_MESSAGE, retryable: true }; return; }
       /**
        * Network/connection failure (DNS, refused, reset) — transient; a fallback may connect.
        *
@@ -481,7 +481,7 @@ export class OmniRouteProvider implements Provider {
     } catch (e) {
       if (isCallerAbort(signal)) { yield { type: "error", message: "cancelled", retryable: false }; return; }
       // A deadline is OURS. Another model in the chain may answer inside it, so this is retryable.
-      if (isDeadline(signal)) { yield { type: "error", message: "the model did not answer within its deadline", retryable: true }; return; }
+      if (isDeadline(signal)) { yield { type: "error", message: DEADLINE_MESSAGE, retryable: true }; return; }
       // Mid-stream failure or idle-timeout stall — transient; a fallback may complete. Same reason as above
       // for reading the cause: a connection reset mid-stream also arrives as the word "fetch".
       yield { type: "error", message: transportMessage(e, this.baseUrl), retryable: true };

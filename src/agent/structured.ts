@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Message, Tool } from "../core/types.js";
+import { CHAIN_BUDGET_MESSAGE, DEADLINE_MESSAGE, type Message, type Tool } from "../core/types.js";
 import { runRoleAgent, type RoleAgentOptions } from "./loop.js";
 import { ToolRegistry } from "../tools/registry.js";
 
@@ -206,9 +206,7 @@ export async function runStructuredRole<T>(
            * record, and telling them apart is the difference between "raise the model's budget" and "the
            * chain is being started too late" — a distinction a whole evening was spent guessing at.
            */
-          errored = total?.aborted
-            ? "the chain's total budget ran out before this model was given a fair turn"
-            : "the model did not answer within its deadline";
+          errored = total?.aborted ? CHAIN_BUDGET_MESSAGE : DEADLINE_MESSAGE;
           break;
         }
         // NB: runRoleAgent reports usage itself (it knows which chain link actually served the call), so

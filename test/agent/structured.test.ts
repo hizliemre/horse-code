@@ -7,7 +7,7 @@ import { MockProvider } from "../../src/providers/mock.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import { PermissionEngine } from "../../src/permission/engine.js";
 import type { RoleAgentOptions } from "../../src/agent/loop.js";
-import type { ChatEvent, Tool } from "../../src/core/types.js";
+import { CHAIN_BUDGET_MESSAGE, DEADLINE_MESSAGE, type ChatEvent, type Tool } from "../../src/core/types.js";
 
 const schema = z.object({ decision: z.enum(["pass", "fail"]) });
 
@@ -319,10 +319,16 @@ describe("a chain that has run out of time", () => {
     expect(src).toContain("the model chain did not produce a result within its total budget");
   });
 
-  /** The two clocks say different things and lead to different fixes; the record has to tell them apart. */
+  /**
+   * The two clocks say different things and lead to different fixes; the record has to tell them apart.
+   *
+   * The sentences themselves live in `core/types.ts` now — the provider emits one of them and cannot say
+   * whose clock fired, so the text has to be one shared constant rather than three copies compared by eye.
+   */
   it("names the chain's total separately from a model's own deadline", () => {
-    expect(src).toContain("the chain's total budget ran out before this model was given a fair turn");
-    expect(src).toContain("the model did not answer within its deadline");
+    expect(CHAIN_BUDGET_MESSAGE).not.toBe(DEADLINE_MESSAGE);
+    expect(src).toContain("CHAIN_BUDGET_MESSAGE");
+    expect(src).toContain("DEADLINE_MESSAGE");
     expect(src).toContain("total?.aborted");
   });
 
