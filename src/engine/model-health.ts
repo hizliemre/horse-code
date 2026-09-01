@@ -174,12 +174,28 @@ export class ModelHealth {
     for (const r of this.port.registries()) r.markExhausted(model, reason, this.now());
   }
 
-  /** Models that may be assigned right now: the catalog minus everything quarantined. */
+  /**
+   * Models that may be assigned right now: the catalog, minus everything quarantined, minus what no role has
+   * ever been configured with.
+   *
+   * The catalog is what the gateway LISTS, which is not what it will route to. Measured across a whole run:
+   * `opencode-go/muse-spark-1.2-contributor-xhigh` is in the catalog of 726 and answers every request with
+   * "not available in the active live catalog". It was in nobody's chain — `/roles adjust` had already
+   * dropped it — and re-assignment handed it out anyway, to twenty-three parallel slots at once. It took the
+   * ladders of twenty-one tasks and, through their dependencies, ninety-seven more.
+   *
+   * The configured set is the curated one: every model in it was chosen for a role and has been reached at
+   * least once. Preferring it costs nothing, because the wider catalog is still there when the curated pool
+   * is spent — which is the only situation that ever needed the breadth.
+   */
   async healthyModels(): Promise<string[]> {
     const dead = new Set(this.quarantined().map((q) => q.model));
     let all: string[];
     try { all = await this.listModels(); } catch { return []; }
-    return all.filter((m) => !dead.has(m));
+    const live = all.filter((m) => !dead.has(m));
+    const configured = new Set(this.port.registries().flatMap((r) => r.knownModels()));
+    const curated = live.filter((m) => configured.has(m));
+    return curated.length ? curated : live;
   }
 
   /**

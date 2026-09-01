@@ -150,7 +150,8 @@ export async function runReady(
    *   conflict  — its review passed but the merge clashed. Same waking rule, and the strongest case for it:
    *               the conflict IS the base having moved.
    */
-  type ParkReason = "waiting" | "exhausted" | "conflict";
+  /** `fleet` — no model could be reached. Not a fact about the task, so it must not read as one. */
+  type ParkReason = "waiting" | "exhausted" | "conflict" | "fleet";
   interface Parked { reason: ParkReason; on?: string; mergedAt: number; wakes: number }
   const parked = new Map<string, Parked>();
   /** Tasks whose merge has failed often enough to be rewritten, with the worktree to retire. */
@@ -233,7 +234,10 @@ export async function runReady(
     pending.delete(id);
     board.appendStage(id, {
       role: "team-lead", action: "parked",
-      note: reason === "waiting" ? `waiting for ${on}` : reason === "conflict" ? "merge conflicted" : "ladder exhausted",
+      note: reason === "waiting" ? `waiting for ${on}`
+        : reason === "conflict" ? "merge conflicted"
+        : reason === "fleet" ? "no model could be reached"
+        : "ladder exhausted",
     });
     board.move(id, "PARKED", "team-lead");
   };
@@ -384,7 +388,8 @@ export async function runReady(
               park(id, "conflict", undefined, mergedAtStart);
             }
           }
-          else park(id, res.status === "conflict" ? "conflict" : "exhausted", undefined, mergedAtStart);
+          else park(id, res.status === "conflict" ? "conflict" : res.status === "fleet-down" ? "fleet" : "exhausted",
+            undefined, mergedAtStart);
         } finally {
           for (const f of files) busy.delete(f);
           free.push(slot);
@@ -444,7 +449,12 @@ export async function runReady(
        * always claiming to be, and now it is earned rather than assumed.
        */
       for (const [id, p] of parked) {
-        (p.reason === "waiting" ? skipped : failed).push(id);
+        /**
+         * `fleet` counts as SKIPPED, not failed: no model ever read the task, so the run has no evidence
+         * either way. Counting it as a failure is the same misreport the column used to make, moved into
+         * the summary — and the summary is what a person reads to decide whether the plan was any good.
+         */
+        (p.reason === "waiting" || p.reason === "fleet" ? skipped : failed).push(id);
         board.appendStage(id, {
           role: "team-lead", action: "abandoned",
           note: p.wakes >= MAX_WAKES ? `out of wakes after ${p.wakes}` : `${p.reason}: nothing left that could change it`,

@@ -134,6 +134,14 @@ export interface Verdict {
    * single model ever having read it.
    */
   fleetFailure?: boolean;
+  /**
+   * The fleet stayed unreachable, so the task stopped waiting in place — it must PARK, not abandon.
+   *
+   * Parking says the true thing ("nothing this task can do until something changes") and is the only state
+   * the wave engine can wake from. Abandoning says the task was tried and found wanting, which is precisely
+   * what did not happen.
+   */
+  fleetDown?: boolean;
   /** Medium/low review findings that did NOT block this task — carried to the PR revision pass, never dropped. */
   deferred?: string[];
   verdict: "pass" | "fail";

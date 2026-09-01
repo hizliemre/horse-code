@@ -82,18 +82,36 @@ export function isFleetFailure(message: string): boolean {
 }
 
 /**
- * How many attempts a task may lose to the fleet before the ladder charges for them anyway.
+ * How many times in a row the fleet may fail this task before it stops waiting in place and parks.
  *
- * Not unbounded: if every model everywhere is unreachable, a free retry is a free infinite loop. Two is
- * enough for the bench to take a dead model out of service and hand the role a different chain, which is the
- * only thing a retry is waiting for.
+ * A quota of forgiven attempts was the first shape of this and it was measured wrong. Two were forgiven
+ * against a ladder of eight — but the twenty-one tasks caught by one unroutable model saw between NINE and
+ * FORTY-FIVE fleet failures each (479 of 721 attempt-errors across the run). Saving two attempts of eight
+ * changes nothing: every one of those tasks still exhausted its ladder and abandoned, and ninety-seven more
+ * abandoned behind them on dependencies alone.
+ *
+ * The ladder answers "is this task hard?" — a model that cannot be reached does not answer it, so it must
+ * never advance. The bound is therefore not a budget but patience: after this many consecutive fleet
+ * failures the task PARKS, which is the honest state (there is nothing it can do until something changes)
+ * and the one the wave engine can wake from.
  */
-export const FREE_FLEET_RETRIES = 2;
+export const FLEET_PATIENCE = 3;
 
-/** What this task has already been forgiven — read from the record, so it survives a restart. */
-function fleetRetriesSpent(board: Board, taskId: string): number {
-  return (board.get(taskId)?.stageHistory ?? [])
-    .filter((s) => s.action === "attempt-error" && isFleetFailure(s.note ?? "")).length;
+/** Fleet failures at the END of the record — a real attempt in between means the fleet came back. */
+function consecutiveFleetFailures(board: Board, taskId: string): number {
+  const h = board.get(taskId)?.stageHistory ?? [];
+  let n = 0;
+  for (let i = h.length - 1; i >= 0; i--) {
+    const { action, note } = h[i];
+    if (action === "attempt-error") {
+      if (!isFleetFailure(note ?? "")) break;
+      n += 1;
+      continue;
+    }
+    if (action.startsWith("→")) continue; // a column move says nothing either way
+    break;
+  }
+  return n;
 }
 
 /**
@@ -103,7 +121,7 @@ function fleetRetriesSpent(board: Board, taskId: string): number {
  */
 function attemptError(board: Board, taskId: string, role: string, e: unknown): Verdict {
   const msg = e instanceof Error ? e.message : String(e);
-  const fleet = isFleetFailure(msg) && fleetRetriesSpent(board, taskId) < FREE_FLEET_RETRIES;
+  const fleet = isFleetFailure(msg);
   board.appendStage(taskId, { role, action: "attempt-error", note: msg });
   /**
    * Advice about the turn budget is worse than no advice when no model answered: it tells the next attempt
@@ -113,7 +131,12 @@ function attemptError(board: Board, taskId: string, role: string, e: unknown): V
     ? `The previous attempt never reached a model (${msg}). Nothing is known about the work yet — start it fresh.`
     : `The previous attempt did not finish (${msg}). Complete the task within the turn budget.`);
   board.move(taskId, "TODO", role);
-  return { verdict: "fail", notes: [msg], ...(fleet && { fleetFailure: true }) };
+  if (!fleet) return { verdict: "fail", notes: [msg] };
+  // Out of patience → the task stops holding a slot and parks; the wave engine wakes it when a merge lands,
+  // which is the plainest evidence that models are answering again.
+  return consecutiveFleetFailures(board, taskId) >= FLEET_PATIENCE
+    ? { verdict: "fail", notes: [msg], fleetDown: true }
+    : { verdict: "fail", notes: [msg], fleetFailure: true };
 }
 
 /**
@@ -181,6 +204,11 @@ export async function runTaskWithEscalation(
        * takes the unreachable model out of service and the role is re-chained, so the retry is a different
        * model given the same instruction, exactly as a same-tier retry already is.
        */
+      /**
+       * Out of patience: hand the verdict back so the caller can PARK the task. Carrying on would spend the
+       * ladder on a question the fleet has not let anyone ask.
+       */
+      if (v.fleetDown) return v;
       if (v.fleetFailure) continue;
       if (v.noProgress) {
         /**

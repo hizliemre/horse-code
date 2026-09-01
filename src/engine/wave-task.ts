@@ -29,6 +29,8 @@ export interface WaveTaskDeps extends EscalationDeps {
 export type TaskResult =
   | { status: "merged"; task: TaskWorktree }
   | { status: "conflict"; files: string[]; task: TaskWorktree }
+  /** No model could be reached — the task is unproven, not failed, so the engine parks it rather than kill it. */
+  | { status: "fleet-down"; task: TaskWorktree }
   | { status: "task-failed"; task: TaskWorktree };
 
 /**
@@ -79,6 +81,18 @@ export async function runWaveTask(
     return { status: "task-failed", task: tw };
   }
   deps.signal.throwIfAborted(); // don't proceed to commit/merge if an abort came in during escalation
+
+  /**
+   * A task no model ever reached has not been tried, so it is not abandoned — it is parked.
+   *
+   * Measured: one unroutable model took the ladders of twenty-one tasks, and ninety-seven more abandoned
+   * behind them on dependencies alone. ABANDONED is a verdict about the work; none of those 118 had a
+   * verdict, and the column said otherwise for the rest of the run.
+   */
+  if (v.verdict === "fail" && v.fleetDown) {
+    board.appendStage(taskId, { role: "team-lead", action: "fleet-down", note: v.notes[0]?.slice(0, 200) });
+    return { status: "fleet-down", task: tw };
+  }
 
   if (v.verdict === "fail") {
     board.appendStage(taskId, { role: "team-lead", action: "task-failed" });

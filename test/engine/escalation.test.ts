@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTaskWithEscalation, tierOf, autonomousAskHuman, noChangeStreak, FREE_FLEET_RETRIES } from "../../src/engine/escalation.js";
+import { runTaskWithEscalation, tierOf, autonomousAskHuman, noChangeStreak, FLEET_PATIENCE } from "../../src/engine/escalation.js";
 import type { EscalationDeps, AskHuman } from "../../src/engine/escalation.js";
 import type { Card } from "../../src/board/board.js";
 import type { Verdict } from "../../src/engine/task-types.js";
@@ -162,19 +162,26 @@ describe("runTaskWithEscalation", () => {
     expect(notes.some((s) => /not available in the active live catalog/.test(s.note ?? ""))).toBe(true);
   });
 
-  /** Free retries are bounded: an unreachable fleet everywhere must not become an unbounded loop. */
-  it("charges for the fleet once the free retries are spent", async () => {
+  /**
+   * Patience is bounded, and running out means PARK, not abandon.
+   *
+   * A quota of two forgiven attempts was the first shape of this and the run disproved it: the twenty-one
+   * tasks caught by one unroutable model saw between nine and forty-five fleet failures each, so saving two
+   * of eight changed nothing. The bound has to end in the state that says "nothing this task can do until
+   * something changes" — which is the only state the wave engine can wake from.
+   */
+  it("gives up waiting after FLEET_PATIENCE consecutive fleet failures, without spending the ladder", async () => {
     const unroutable = "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'.";
     const fleetTurn = [{ type: "error" as const, message: unroutable }];
     const p = new MockProvider([
       submit('{"role":"coder"}'),
-      fleetTurn, fleetTurn, fleetTurn,     // one more than FREE_FLEET_RETRIES
-      noopImpl, ...codeReviewPass(),
+      ...Array.from({ length: FLEET_PATIENCE }, () => fleetTurn),
     ]);
     const board = boardWithTask();
-    await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
-    // The first two were forgiven; the third was charged, so the ladder moved exactly once.
-    expect(board.get("t1")!.attempts).toBe(1);
+    const v = await runTaskWithEscalation(edeps(p, { rounds: 1 }), board, "t1", dir);
+    expect(v.verdict).toBe("fail");
+    expect(v.fleetDown).toBe(true);          // the caller must park it, not abandon it
+    expect(board.get("t1")!.attempts).toBe(0); // and the ladder was never charged
   });
 
   /** The advice has to match what happened: "work faster" is wrong when nothing was ever asked. */

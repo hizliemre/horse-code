@@ -113,7 +113,39 @@ describe("ModelHealth.handleChainFailure", () => {
   it("healthyModels never offers a quarantined model", async () => {
     const { health } = setup();
     await health.handleChainFailure("code-security", "429");
-    expect(await health.healthyModels()).toEqual(["alive-1", "alive-2", "alive-3"]);
+    expect(await health.healthyModels()).not.toContain("dead-a");
+    expect(await health.healthyModels()).not.toContain("dead-b");
+  });
+
+  /**
+   * The catalog is what the gateway LISTS; it is not what the gateway will route to.
+   *
+   * This test used to assert the opposite — that `alive-2` and `alive-3`, in the catalog but in nobody's
+   * chain, were offered for re-assignment. A run showed what that costs.
+   * `opencode-go/muse-spark-1.2-contributor-xhigh` sits in a catalog of 726 and answers every request with
+   * "not available in the active live catalog". It was in no role's chain (`/roles adjust` had already
+   * dropped it) and re-assignment handed it to twenty-three parallel slots at once. It took the ladders of
+   * twenty-one tasks; ninety-seven more abandoned behind them on dependencies alone — 118 of 125.
+   *
+   * Every configured model was chosen for a role and has been reached at least once. Mid-run recovery is the
+   * wrong moment to gamble on one that has not.
+   */
+  it("offers only models some role is configured with, not every name in the catalog", async () => {
+    const { health } = setup();
+    const healthy = await health.healthyModels();
+    expect(healthy).toContain("alive-1");     // configured (judge, code-tests)
+    expect(healthy).not.toContain("alive-2"); // in the catalog, in nobody's chain
+    expect(healthy).not.toContain("alive-3");
+  });
+
+  /** Breadth is still there for the only case that ever needed it: nothing curated left standing. */
+  it("falls back to the whole catalog when every configured model is spent", async () => {
+    const { health, main, lenses } = setup();
+    for (const m of ["dead-a", "dead-b", "alive-1"]) {
+      main.markExhausted(m, "429");
+      lenses.markExhausted(m, "429");
+    }
+    expect(await health.healthyModels()).toEqual(["alive-2", "alive-3"]);
   });
 });
 
