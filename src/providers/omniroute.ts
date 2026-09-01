@@ -95,9 +95,15 @@ export function isRetryableStatus(status: number): boolean {
  * A 400 that reflects THIS model/subscription's capability limits rather than a malformed request — e.g.
  * "long context beta not available for this subscription", context-window overflow, or an unsupported feature.
  * A fallback model on a different subscription may well accept the same request, so treat these as retryable.
+ *
+ * The verb is matched in every form the gateway uses, because it does not use only one. Measured 20 minutes
+ * into a run: "This model does not support the effort parameter." is exactly this case — one model refusing
+ * one request field that a fallback would accept — and it matched nothing. `not supported` is a different
+ * string from `not support the`, so the 400 was neither retryable nor a capability refusal and the call died
+ * where it should have stepped sideways.
  */
 export function isCapabilityError(message: string): boolean {
-  return /long[- ]context|not (yet )?available for this subscription|context[- ](length|window)|too many tokens|maximum context|unsupported|not supported/i.test(message);
+  return /long[- ]context|not (yet )?available for this subscription|context[- ](length|window)|too many tokens|maximum context|unsupported|\bnot support(?:s|ed)?\b/i.test(message);
 }
 
 /**

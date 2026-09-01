@@ -21,6 +21,25 @@ describe("isCapabilityError", () => {
     expect(isCapabilityError("this feature is not supported")).toBe(true);
     expect(isCapabilityError("invalid request: empty messages")).toBe(false);
   });
+
+  /**
+   * The gateway does not use one form of the verb, and matching only `not supported` cost the call.
+   *
+   * Measured 20 minutes into a run: "This model does not support the effort parameter." — one model refusing
+   * one request field a fallback would accept. It is not a retryable status and matched no capability
+   * phrasing, so the call died instead of stepping sideways.
+   */
+  it("reads the verb in every form the gateway writes it", () => {
+    for (const m of ["This model does not support the effort parameter.",
+      "this feature is not supported", "the parameter is unsupported"]) {
+      expect(isCapabilityError(m), m).toBe(true);
+    }
+  });
+
+  it("still refuses a malformed request that merely mentions support", () => {
+    expect(isCapabilityError("invalid 'messages': empty")).toBe(false);
+    expect(isCapabilityError("contact support for details")).toBe(false);
+  });
 });
 
 describe("OmniRouteProvider error events carry `retryable`", () => {
