@@ -124,7 +124,21 @@ export function isCapabilityError(message: string): boolean {
  */
 export function isProviderOutage(message: string): boolean {
   return /no active credentials for provider:?\s*[\w.-]+/i.test(message)
-    || /provider\s+'?[\w.-]+'?\s+is not configured/i.test(message);
+    || /provider\s+'?[\w.-]+'?\s+is not configured/i.test(message)
+    /**
+     * A spent quota is a source-wide failure too, and it was the third phrasing to reach this the hard way.
+     *
+     * Measured two minutes into a run: "[antigravity/claude-sonnet-4-6-medium] All antigravity accounts have
+     * exhausted their quota (reset after 4h)" — six times across two models, with ZERO quarantine events. No
+     * credentials and no quota left are the same situation for a chain: this source cannot serve, another
+     * can. Matching only the credential wording meant every role holding an antigravity model would walk
+     * into the same wall for the whole four-hour window.
+     *
+     * The bench this opens is for the run, not for the stated reset window. That is deliberately pessimistic
+     * and deliberately simple; a run shorter than the reset loses nothing, and a longer one loses a source it
+     * would otherwise have spent the window rediscovering.
+     */
+    || /all\s+[\w.-]+\s+accounts have exhausted their quota/i.test(message);
 }
 
 /**

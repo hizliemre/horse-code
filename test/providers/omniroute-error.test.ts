@@ -189,6 +189,11 @@ describe("a provider whose credentials are gone", () => {
   it("is recognised", () => {
     expect(isProviderOutage(LIVE)).toBe(true);
     expect(isProviderOutage("Provider 'opencode-go' is not configured")).toBe(true);
+    /**
+     * A spent quota is the same fact about the same source. Measured two minutes into a run: six of these
+     * across two models and no quarantine at all, because only the credential wording was known.
+     */
+    expect(isProviderOutage("[antigravity/claude-sonnet-4-6-medium] All antigravity accounts have exhausted their quota (reset after 4h)")).toBe(true);
   });
 
   /** A 401 about the gateway key itself is not this: no fallback can fix it, and it must still end the call. */

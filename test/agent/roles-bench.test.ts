@@ -89,11 +89,35 @@ describe("a failure about the provider, not the model", () => {
     expect(providerOutage("No active credentials for provider: opencode-go")).toBe("opencode-go");
   });
 
+  /**
+   * No credentials and no quota left are the same situation for a chain: this source cannot serve, another
+   * can. Measured two minutes into a run — six of these across two models, and not one quarantine, because
+   * only the credential wording was known.
+   *
+   * The name comes from the sentence, not from the bracketed model prefix: the prefix is whichever model
+   * happened to ask, and the failure is not about that model.
+   */
+  it("reads a spent quota as the same source-wide failure", () => {
+    const live = "[antigravity/claude-sonnet-4-6-medium] All antigravity accounts have exhausted their quota (reset after 4h)";
+    expect(providerOutage(live)).toBe("antigravity");
+    expect(providerOutage("All opencode-go accounts have exhausted their quota")).toBe("opencode-go");
+  });
+
   it("is not confused by a failure that is about one model", () => {
     for (const m of ["Overloaded", "Shared egress IP quota exhausted (opencode-go)",
       "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'."]) {
       expect(providerOutage(m), m).toBeUndefined();
     }
+  });
+
+  it("benches the whole provider when a quota is spent, not just the model that asked", () => {
+    const r = registry();
+    const live = "[antigravity/claude-sonnet-5] All antigravity accounts have exhausted their quota (reset after 4h)";
+    const provider = providerOutage(live);
+    expect(provider).toBe("antigravity");
+    const hit = r.markProviderExhausted(provider as string, "antigravity/claude-sonnet-5", live);
+    expect(hit).toHaveLength(3);
+    expect(r.quarantined().map((q) => q.model)).not.toContain("cx/gpt-5.6-terra");
   });
 
   it("takes out every model of that provider at once, and leaves the others", () => {

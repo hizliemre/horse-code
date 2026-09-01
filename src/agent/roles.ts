@@ -37,7 +37,18 @@ export function isTransientFailure(reason: string): boolean {
  */
 export function providerOutage(reason: string): string | undefined {
   return /no active credentials for provider:?\s*([\w.-]+)/i.exec(reason)?.[1]
-    ?? /provider\s+'?([\w.-]+)'?\s+is not configured/i.exec(reason)?.[1];
+    ?? /provider\s+'?([\w.-]+)'?\s+is not configured/i.exec(reason)?.[1]
+    /**
+     * A spent quota is the same fact about the same source, and the message names it in the same breath:
+     * "[antigravity/claude-sonnet-4-6-medium] All antigravity accounts have exhausted their quota (reset
+     * after 4h)". Read the name from the sentence rather than from the bracketed model prefix — the prefix
+     * is the model that happened to ask, and this is not about that model.
+     *
+     * Measured two minutes into a run: six of these across two models and no quarantine at all, because the
+     * predicate above did not know the wording. Every role holding one of that provider's models was on
+     * course to discover the same exhausted account for the next four hours.
+     */
+    ?? /all\s+([\w.-]+)\s+accounts have exhausted their quota/i.exec(reason)?.[1];
 }
 
 export interface ResolvedRole {
