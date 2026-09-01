@@ -220,6 +220,10 @@ export class ModelHealth {
        * failure, and the next. Fifteen review lenses went down in a row over an id none of them was using.
        *
        * The role still needs a working chain, so it is re-assigned; nothing is taken out of service for it.
+       *
+       * A catalog rejection reads almost the same and means the opposite — it names a model the chain really
+       * holds, which is dead for the rest of the run — so it deliberately falls through to the quarantine
+       * below. See `isCatalogRejection`.
        */
       if (isUnknownModelError(reason)) {
         const healthy = await this.healthyModels();

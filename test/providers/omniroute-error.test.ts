@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readErrorMessage, isRetryableStatus, isCapabilityError, OmniRouteProvider, isUnknownModelError, isProviderOutage } from "../../src/providers/omniroute.js";
+import { readErrorMessage, isRetryableStatus, isCapabilityError, OmniRouteProvider, isUnknownModelError, isCatalogRejection, isProviderOutage } from "../../src/providers/omniroute.js";
 import type { FetchLike } from "../../src/providers/omniroute.js";
 
 describe("isRetryableStatus", () => {
@@ -87,7 +87,16 @@ describe("a model the catalog lists and the router refuses", () => {
   const LIVE = "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'.";
 
   it("recognises the gateway's own words for it", () => {
-    expect(isUnknownModelError(LIVE)).toBe(true);
+    expect(isCatalogRejection(LIVE)).toBe(true);
+  });
+
+  /**
+   * The two rejections read alike and mean opposite things, so each predicate must refuse the other's case.
+   * Folding the catalog wording into `isUnknownModelError` is what carried `noBench` onto a dead model.
+   */
+  it("is not the same thing as an id the gateway cannot resolve", () => {
+    expect(isUnknownModelError(LIVE)).toBe(false);
+    expect(isCatalogRejection("unable to determine provider for model 'default'")).toBe(false);
   });
 
   it("keeps recognising the phrasings it already knew", () => {
@@ -102,13 +111,41 @@ describe("a model the catalog lists and the router refuses", () => {
    * the model is fine and this request did not fit it. Collapsing the two would quarantine a healthy model.
    */
   it("does not swallow a capability refusal", () => {
-    expect(isUnknownModelError("The long context beta is not yet available for this subscription")).toBe(false);
-    expect(isUnknownModelError("This model does not support tool use")).toBe(false);
+    for (const m of ["The long context beta is not yet available for this subscription",
+      "This model does not support tool use"]) {
+      expect(isUnknownModelError(m), m).toBe(false);
+      expect(isCatalogRejection(m), m).toBe(false);
+    }
   });
 
   it("does not fire on ordinary trouble that happens to mention availability", () => {
-    expect(isUnknownModelError("Overloaded")).toBe(false);
-    expect(isUnknownModelError("upstream is not available right now, retry")).toBe(false);
+    for (const m of ["Overloaded", "upstream is not available right now, retry"]) {
+      expect(isUnknownModelError(m), m).toBe(false);
+      expect(isCatalogRejection(m), m).toBe(false);
+    }
+  });
+
+  /**
+   * The measured cost of getting this wrong: 212 of one 705-minute run's 557 model errors were catalog
+   * rejections across six models. The chain fell back every time and benched none of them, so every later
+   * role on every later task walked into the same six again. Retryable AND benchable is the whole fix.
+   */
+  it("is retryable and reaches the bench, unlike an unresolvable id", async () => {
+    const errorFor = async (message: string) => {
+      const fetch: FetchLike = async () => new Response(JSON.stringify({ error: { message } }), { status: 400 });
+      const p = new OmniRouteProvider({ baseUrl: "http://x", fetch });
+      const out = [];
+      for await (const e of p.chat({ model: "m", messages: [{ role: "user", content: "hi" }], tools: [] }, new AbortController().signal)) out.push(e);
+      return out.at(-1) as { retryable?: boolean; noBench?: boolean };
+    };
+
+    const catalog = await errorFor(LIVE);
+    expect(catalog.retryable).toBe(true);
+    expect(catalog.noBench).toBeUndefined();
+
+    const badId = await errorFor("Unable to determine provider for model 'default'");
+    expect(badId.retryable).toBe(true);
+    expect(badId.noBench).toBe(true);
   });
 });
 

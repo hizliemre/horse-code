@@ -131,21 +131,35 @@ export function isProviderOutage(message: string): boolean {
  * still right; writing this one off is not.
  */
 export function isUnknownModelError(message: string): boolean {
-  return /unable to determine provider for model|unknown model|model not found|no such model|invalid model/i.test(message)
-    /**
-     * Listed and unroutable are different things, and the gateway says so in words this pattern did not know.
-     *
-     * Measured at the end of a 16-hour run: a fallback picked `opencode-go/hy3`, which IS in the catalog of
-     * 726 models, and the gateway answered 400 `invalid_request_error` — "Model 'hy3' is not available in
-     * the active live catalog for provider 'opencode-go'." A 400 is not a retryable status and none of the
-     * phrasings above match, so the chain stopped dead on a model it could simply have skipped, and the run
-     * ended on an error one line after delivering its work.
-     *
-     * Anchored on the catalog wording rather than on "not available" alone: "the long context beta is not
-     * yet available for this subscription" is a CAPABILITY refusal, which falls back without benching the
-     * model, and the two must not collapse into one.
-     */
-    || /not (?:currently )?available in the [^.]{0,40}catalog/i.test(message);
+  return /unable to determine provider for model|unknown model|model not found|no such model|invalid model/i.test(message);
+}
+
+/**
+ * The gateway resolved the id, found the model in its catalog, and refused to route to it.
+ *
+ * "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'" arrives as a 400,
+ * which is not a retryable status, so the chain first stopped dead on a model it could simply have skipped —
+ * a 16-hour run ended on this error one line after delivering its work. Making it retryable fixed that.
+ *
+ * But it was folded into `isUnknownModelError`, and that carries `noBench`, which was the more expensive
+ * half of the mistake. The two rejections are opposites:
+ *
+ *   - an unresolvable id says nothing about any model's health, and the id is usually not even one of the
+ *     models the failing role holds — benching on it takes working models out of service;
+ *   - a catalog rejection names ONE specific model that a role's chain is really pointing at, and that model
+ *     is dead for the rest of the run. It is exactly what the bench is for.
+ *
+ * Measured over a 705-minute run: 212 of 557 model errors were this, spread across six models
+ * (`cx/codex-auto-review`, `opencode-go/hy3`, `hy3-none`, `hy3-high`, `muse-spark-1.2-contributor`,
+ * `-minimal`). The chain did fall back every time — and then every later role, on every later task, walked
+ * into the same six models again, because none of them was ever written off.
+ *
+ * Anchored on the catalog wording rather than on "not available" alone: "the long context beta is not yet
+ * available for this subscription" is a CAPABILITY refusal, which falls back without benching, and a healthy
+ * model must not be quarantined for a request that did not fit it.
+ */
+export function isCatalogRejection(message: string): boolean {
+  return /not (?:currently )?available in the [^.]{0,40}catalog/i.test(message);
 }
 
 /** Best-effort extraction of a "path" field from partial tool-call JSON args (for live write progress). */
@@ -291,12 +305,16 @@ export class OmniRouteProvider implements Provider {
       const message = await readErrorMessage(res);
       const capability = isCapabilityError(message);
       const unknownModel = isUnknownModelError(message);
+      const catalog = isCatalogRejection(message);
       const outage = isProviderOutage(message);
       // Only present when it IS one: the flag means something in the affirmative, and emitting it on every
       // error would put a field in the shape that says nothing.
+      //
+      // `catalog` is retryable alongside the rest and deliberately carries no `noBench` — see the predicate:
+      // it names one dead model that a chain really holds, which is the one case the bench exists for.
       yield {
         type: "error", message,
-        retryable: isRetryableStatus(res.status) || capability || unknownModel || outage,
+        retryable: isRetryableStatus(res.status) || capability || unknownModel || catalog || outage,
         ...(capability && { capability: true }),
         ...(unknownModel && { noBench: true }),
       };
