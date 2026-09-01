@@ -138,7 +138,13 @@ export function isProviderOutage(message: string): boolean {
      * and deliberately simple; a run shorter than the reset loses nothing, and a longer one loses a source it
      * would otherwise have spent the window rediscovering.
      */
-    || /all\s+[\w.-]+\s+accounts have exhausted their quota/i.test(message);
+    || /all\s+[\w.-]+\s+accounts have exhausted their quota/i.test(message)
+    /**
+     * A shared egress IP belongs to the source. Measured in 30 minutes of one run: twenty-three distinct
+     * models each discovered the same exhausted IP independently, across the whole of one provider's
+     * catalogue, with a reset roughly five days out. See `providerOutage` for the list.
+     */
+    || /shared egress ip quota exhausted/i.test(message);
 }
 
 /**

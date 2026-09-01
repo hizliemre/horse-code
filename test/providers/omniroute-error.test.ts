@@ -194,6 +194,11 @@ describe("a provider whose credentials are gone", () => {
      * across two models and no quarantine at all, because only the credential wording was known.
      */
     expect(isProviderOutage("[antigravity/claude-sonnet-4-6-medium] All antigravity accounts have exhausted their quota (reset after 4h)")).toBe(true);
+    /**
+     * And a shared egress IP is the source's too — measured across TWENTY-THREE models of one provider in
+     * half an hour, each rediscovering the same exhausted IP on its own. See `providerOutage`.
+     */
+    expect(isProviderOutage("[opencode-go/deepseek-v4-pro] Shared egress IP quota exhausted (opencode-go) (reset after 114h 2m)")).toBe(true);
   });
 
   /** A 401 about the gateway key itself is not this: no fallback can fix it, and it must still end the call. */
@@ -204,7 +209,7 @@ describe("a provider whose credentials are gone", () => {
   });
 
   it("is not confused by failures that are about one model", () => {
-    for (const m of ["Overloaded", "Shared egress IP quota exhausted (opencode-go)",
+    for (const m of ["Overloaded",
       "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'."]) {
       expect(isProviderOutage(m), m).toBe(false);
     }

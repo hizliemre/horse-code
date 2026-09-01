@@ -104,10 +104,25 @@ describe("a failure about the provider, not the model", () => {
   });
 
   it("is not confused by a failure that is about one model", () => {
-    for (const m of ["Overloaded", "Shared egress IP quota exhausted (opencode-go)",
+    for (const m of ["Overloaded",
       "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'."]) {
       expect(providerOutage(m), m).toBeUndefined();
     }
+  });
+
+  /**
+   * A shared egress IP belongs to the SOURCE, and this test used to assert the opposite.
+   *
+   * It listed the message among the model-scoped failures — a reasonable guess that the run disproved. In
+   * thirty minutes, twenty-three distinct models each discovered the same exhausted IP on their own:
+   * deepseek-v4 in five variants, qwen3.7-plus, glm-5/5.1/5.2, grok-4.5 in two, kimi-k3, mimo-v2 in four,
+   * minimax-m2.7. The word "Shared", the provider in the parenthesis, and a reset roughly five days out all
+   * say the same thing, and twenty-three models rediscovering one fact is the cost of not reading them.
+   */
+  it("reads a shared egress IP quota as the source's, not the model's", () => {
+    const live = "[opencode-go/deepseek-v4-pro] Shared egress IP quota exhausted (opencode-go) (reset after 114h 2m)";
+    expect(providerOutage(live)).toBe("opencode-go");
+    expect(providerOutage("Shared egress IP quota exhausted (opencode-go)")).toBe("opencode-go");
   });
 
   it("benches the whole provider when a quota is spent, not just the model that asked", () => {

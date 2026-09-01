@@ -48,7 +48,20 @@ export function providerOutage(reason: string): string | undefined {
      * predicate above did not know the wording. Every role holding one of that provider's models was on
      * course to discover the same exhausted account for the next four hours.
      */
-    ?? /all\s+([\w.-]+)\s+accounts have exhausted their quota/i.exec(reason)?.[1];
+    ?? /all\s+([\w.-]+)\s+accounts have exhausted their quota/i.exec(reason)?.[1]
+    /**
+     * A shared egress IP is the source's, not the model's — the fourth wording for one source-wide fact.
+     *
+     * "[opencode-go/deepseek-v4-pro] Shared egress IP quota exhausted (opencode-go) (reset after 114h)" was
+     * read as a single model's problem, and a test asserted that reading. The run disproved it: in 30 minutes
+     * TWENTY-THREE distinct models each discovered the same exhausted IP on their own — deepseek-v4 in five
+     * variants, qwen3.7-plus, glm-5/5.1/5.2, grok-4.5 in two, kimi-k3, mimo-v2 in four, minimax-m2.7. The
+     * word "Shared" and the ~5-day reset say it plainly, and the parenthesis names the PROVIDER, not a model.
+     *
+     * The name is read from the parenthesis for that reason; the bracketed prefix is only whichever model
+     * happened to ask.
+     */
+    ?? /shared egress ip quota exhausted\s*\(([\w.-]+)\)/i.exec(reason)?.[1];
 }
 
 export interface ResolvedRole {
