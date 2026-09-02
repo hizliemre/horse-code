@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runTaskWithEscalation, tierOf, autonomousAskHuman, noChangeStreak, FLEET_PATIENCE } from "../../src/engine/escalation.js";
+import { runTaskWithEscalation, tierOf, autonomousAskHuman, noChangeStreak, FLEET_PATIENCE, isFleetFailure } from "../../src/engine/escalation.js";
 import type { EscalationDeps, AskHuman } from "../../src/engine/escalation.js";
 import type { Card } from "../../src/board/board.js";
 import type { Verdict } from "../../src/engine/task-types.js";
@@ -73,6 +73,48 @@ function boardWithDesignTask(): Board {
 }
 const contents = (p: MockProvider): string[] =>
   p.requests.flatMap((r) => r.messages.map((m) => (typeof m.content === "string" ? m.content : "")));
+
+/**
+ * What the ladder must not be charged for, in the gateway's own words.
+ *
+ * The ladder answers one question — is this task hard? Every message here answers a different one, about a
+ * model or the gateway, and each was measured advancing a ladder it had no business advancing. Of 826
+ * attempt-errors in one run, 556 were the first three classes (already forgiven, and they abandoned
+ * nothing); 157 more were capacity asking for time, and ~57 were transport or a role pointed at an endpoint
+ * that cannot serve chat at all.
+ */
+describe("isFleetFailure — the fleet's problem, not the task's", () => {
+  it("reads every wording the gateway actually used", () => {
+    for (const m of [
+      "Model 'hy3' is not available in the active live catalog for provider 'opencode-go'.",
+      "No active credentials for provider: antigravity",
+      "[antigravity/claude-sonnet-4-6] All antigravity accounts have exhausted their quota (reset after 4h)",
+      "[opencode-go/deepseek-v4-pro] Shared egress IP quota exhausted (opencode-go) (reset after 114h)",
+      "Chat admission capacity is temporarily unavailable. Retry shortly.",
+      "Structurally heavy chat request capacity is busy; retry shortly.",
+      "http://localhost:20128 did not accept a connection in time (ETIMEDOUT)",
+      "[400]: Error from provider (Console Go): Upstream request failed",
+      "[403]: The latest version of this model is only available hosted",
+      "Model 'antigravity/gemini-3.1-flash-image' is an image-generation model",
+    ]) {
+      expect(isFleetFailure(m), m).toBe(true);
+    }
+  });
+
+  /**
+   * A task that ran out of time or turns WAS attempted — that is a fact about the work, and the ladder is
+   * exactly the right place to record it. Forgiving these would make the ladder unable to escalate at all.
+   */
+  it("still charges for failures that are about the work", () => {
+    for (const m of [
+      "the implementer ran past its 20-minute budget for a single attempt and was stopped",
+      "maximum turn count exceeded (200)",
+      "the model did not answer within its deadline",
+    ]) {
+      expect(isFleetFailure(m), m).toBe(false);
+    }
+  });
+});
 
 describe("tierOf", () => {
   it("attempts/rounds → tier", () => {

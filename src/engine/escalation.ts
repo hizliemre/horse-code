@@ -78,7 +78,26 @@ export function tierOf(attempts: number, rounds: number): 0 | 1 | 2 {
  * re-chained within seconds. The task only has to not be punished while that happens.
  */
 export function isFleetFailure(message: string): boolean {
-  return isCatalogRejection(message) || isProviderOutage(message) || isUnknownModelError(message);
+  return isCatalogRejection(message) || isProviderOutage(message) || isUnknownModelError(message)
+    /**
+     * The gateway saying "retry shortly" is the fleet asking for time, in its own words.
+     *
+     * Measured on the run after the first three classes were forgiven: of 826 attempt-errors, 556 were
+     * already covered and abandoned nothing — but 157 more were "Chat admission capacity is temporarily
+     * unavailable. Retry shortly." and "Structurally heavy chat request capacity is busy", and every one of
+     * them still advanced a ladder. Three tasks were six or seven attempts deep on nothing else.
+     */
+    || /capacity is (?:temporarily unavailable|busy)|retry shortly/i.test(message)
+    /**
+     * Nor is a request that never left the machine. The gateway refusing a connection, or a model that
+     * cannot serve chat at all, says nothing about whether the task is hard:
+     *   28× "[400] Error from provider (Console Go): Upstream request failed"
+     *   15× "[403] The latest version of this model is only available hosted…"
+     *    8× "…is an image-generation model" — a chat role pointed at an image endpoint
+     *    6× "did not accept a connection in time (ETIMEDOUT)"
+     */
+    || /did not accept a connection in time|upstream request failed/i.test(message)
+    || /is an image-generation model|only available hosted/i.test(message);
 }
 
 /**
