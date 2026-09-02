@@ -187,6 +187,17 @@ export class ModelHealth {
    * The configured set is the curated one: every model in it was chosen for a role and has been reached at
    * least once. Preferring it costs nothing, because the wider catalog is still there when the curated pool
    * is spent — which is the only situation that ever needed the breadth.
+   *
+   * That fallback is the door the herd came back through, so nothing walks through it unproven. Measured on
+   * the run after the preference was added: the curated pool emptied for about a minute, the catalog came
+   * back whole, and `muse-spark-1.2-contributor-xhigh` — ranked top by name alone — was handed to every role
+   * being re-assigned at the same instant. 204 calls left before the first answer could bench it. Its eight
+   * siblings each cost exactly ONE call, which is the bench working; the difference is only that they were
+   * not the head of the ranking.
+   *
+   * A probe is the cheapest thing that can tell "listed" from "routable", it runs only on this rare path, and
+   * `poolWithConfigured` already proves the same pattern at startup. Without one configured, the old
+   * behaviour stands rather than a guess.
    */
   async healthyModels(): Promise<string[]> {
     const dead = new Set(this.quarantined().map((q) => q.model));
@@ -195,7 +206,17 @@ export class ModelHealth {
     const live = all.filter((m) => !dead.has(m));
     const configured = new Set(this.port.registries().flatMap((r) => r.knownModels()));
     const curated = live.filter((m) => configured.has(m));
-    return curated.length ? curated : live;
+    if (curated.length) return curated;
+    const probe = this.probe;
+    if (!probe) return live;
+    const checked = await Promise.all(live.map(async (m) => ({ m, ok: await probe(m).catch(() => false) })));
+    const routable = checked.filter((c) => c.ok).map((c) => c.m);
+    const refused = checked.length - routable.length;
+    if (refused) {
+      this.note(`🔎 The configured models are all spent — probed ${checked.length} catalog model(s) and `
+        + `dropped ${refused} the gateway would not route to.`);
+    }
+    return routable;
   }
 
   /**

@@ -147,6 +147,34 @@ describe("ModelHealth.handleChainFailure", () => {
     }
     expect(await health.healthyModels()).toEqual(["alive-2", "alive-3"]);
   });
+
+  /**
+   * …and nothing walks through that door unproven, because the herd came back through it.
+   *
+   * Measured: the curated pool emptied for about a minute, the whole catalog came back, and
+   * `muse-spark-1.2-contributor-xhigh` — top of the ranking by name alone — went to every role being
+   * re-assigned at the same instant. 204 calls left before the first answer could bench it. Its eight
+   * siblings cost one call each, which is the bench working; the only difference was the ranking.
+   */
+  it("probes the catalog before handing it out, and drops what will not route", async () => {
+    const routable = new Set(["alive-3"]);
+    const { health, main, lenses } = setup({ probe: async (m) => routable.has(m) });
+    for (const m of ["dead-a", "dead-b", "alive-1"]) {
+      main.markExhausted(m, "429");
+      lenses.markExhausted(m, "429");
+    }
+    expect(await health.healthyModels()).toEqual(["alive-3"]); // alive-2 answers nothing → never assigned
+  });
+
+  /** With no probe configured there is nothing to check with, so the old behaviour stands rather than a guess. */
+  it("keeps the whole catalog when there is no probe to check it with", async () => {
+    const { health, main, lenses } = setup();
+    for (const m of ["dead-a", "dead-b", "alive-1"]) {
+      main.markExhausted(m, "429");
+      lenses.markExhausted(m, "429");
+    }
+    expect(await health.healthyModels()).toEqual(["alive-2", "alive-3"]);
+  });
 });
 
 describe("ModelHealth.refresh — a quota limit is temporary, not a life sentence", () => {
