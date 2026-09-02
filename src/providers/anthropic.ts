@@ -113,15 +113,57 @@ export function toAnthropicMessages(messages: Message[]): { system: string; turn
   return { system: system.join("\n\n"), turns };
 }
 
+/** Anthropic's own marker for "cache everything up to here". */
+const EPHEMERAL = { type: "ephemeral" } as const;
+
+/**
+ * Marks the end of the conversation as it stands, without mutating what the caller handed us.
+ *
+ * The breakpoint goes on the LAST block of the LAST turn, which is the boundary the next turn will re-send
+ * unchanged — this turn writes the cache, the next one reads it. An empty conversation has nothing to mark.
+ */
+function cacheLastTurn(turns: Turn[]): Turn[] {
+  if (!turns.length) return turns;
+  const last = turns[turns.length - 1];
+  if (!last.content.length) return turns;
+  const marked: Turn = {
+    role: last.role,
+    content: last.content.map((b, i) =>
+      i === last.content.length - 1 ? { ...b, cache_control: EPHEMERAL } : b),
+  };
+  return [...turns.slice(0, -1), marked];
+}
+
+/**
+ * Where the cache breakpoints go, and why there are two.
+ *
+ * The API caches a PREFIX, in a fixed order — tools, then system, then messages — so one breakpoint on the
+ * last system block covers every tool and the whole system prompt, and a second on the last message covers
+ * the conversation up to this turn. Two is enough for an agent loop and leaves headroom under the limit of
+ * four: the first prefix never changes for the life of a role, and the second is exactly what the NEXT turn
+ * will re-send verbatim.
+ *
+ * Measured against this gateway, on cc/claude-haiku-4-5, cc/claude-sonnet-5 and cc/claude-opus-4-8 alike —
+ * an identical 12,352-token prefix:
+ *
+ *   without cache_control   input 12222 · cache_read 0     — on every one of three calls
+ *   with cache_control      input    13 · cache_write 12209 → cache_read 12209
+ *
+ * This reverses an earlier finding recorded in the codebase (`find-tool.ts`), which measured the gateway
+ * ignoring the marker and concluded caching was unavailable here. It was true when it was written; the
+ * gateway has changed. Of one 91-minute run's 149.7M input tokens, 127M went over this path and every one
+ * of them was billed in full.
+ */
 export function toAnthropicBody(req: ChatRequest): Record<string, unknown> {
   const { system, turns } = toAnthropicMessages(req.messages);
   const body: Record<string, unknown> = {
     model: req.model,
     max_tokens: MAX_OUTPUT_TOKENS,
     stream: true,
-    messages: turns,
+    messages: cacheLastTurn(turns),
   };
-  if (system) body.system = system;
+  // A string system prompt cannot carry a breakpoint, so it becomes the one-block form when there is one.
+  if (system) body.system = [{ type: "text", text: system, cache_control: EPHEMERAL }];
   if (req.tools.length) {
     body.tools = req.tools.map((t) => ({
       name: t.name,

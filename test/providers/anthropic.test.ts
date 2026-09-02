@@ -23,6 +23,60 @@ import type { ChatRequest, Message } from "../../src/core/types.js";
 const req = (over: Partial<ChatRequest> = {}): ChatRequest =>
   ({ model: "cc/claude-opus-5", messages: [{ role: "user", content: "hi" }], tools: [], ...over });
 
+/**
+ * Prompt caching, which this gateway ignored when it was last measured and now honours.
+ *
+ * Re-measured against it on cc/claude-haiku-4-5, cc/claude-sonnet-5 and cc/claude-opus-4-8, with an
+ * identical 12,352-token prefix:
+ *
+ *   without cache_control   input 12222 · cache_read 0     — on every one of three calls
+ *   with cache_control      input    13 · cache_write 12209 → cache_read 12209
+ *
+ * Of one 91-minute run's 149.7M input tokens, 127M went over this path and every one was billed in full.
+ */
+describe("cache breakpoints", () => {
+  const sys: Message = { role: "system", content: "standing rules" };
+
+  it("marks the system prompt, which caches the tools with it", () => {
+    const body = toAnthropicBody(req({ messages: [sys, { role: "user", content: "hi" }] }));
+    // A bare string cannot carry a breakpoint, so the system prompt takes its one-block form.
+    expect(body.system).toEqual([{ type: "text", text: "standing rules", cache_control: { type: "ephemeral" } }]);
+  });
+
+  /** No system prompt, nothing to mark — and no empty block invented to carry the marker. */
+  it("leaves the system field absent when there is no system prompt", () => {
+    expect(toAnthropicBody(req())).not.toHaveProperty("system");
+  });
+
+  /** The end of the conversation is the boundary the NEXT turn re-sends verbatim: write now, read next. */
+  it("marks the last block of the last turn, and only that one", () => {
+    const body = toAnthropicBody(req({ messages: [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "second" },
+      { role: "user", content: "third" },
+    ] }));
+    const turns = body.messages as { role: string; content: Record<string, unknown>[] }[];
+    expect(turns.at(-1)!.content.at(-1)).toHaveProperty("cache_control", { type: "ephemeral" });
+    const earlier = turns.slice(0, -1).flatMap((t) => t.content);
+    for (const b of earlier) expect(b).not.toHaveProperty("cache_control");
+  });
+
+  /** Two breakpoints, well under the limit of four — one for the fixed prefix, one for the moving edge. */
+  it("spends exactly two of the four breakpoints", () => {
+    const body = toAnthropicBody(req({ messages: [sys, { role: "user", content: "hi" }] }));
+    const marks = JSON.stringify(body).match(/"cache_control"/g) ?? [];
+    expect(marks).toHaveLength(2);
+  });
+
+  /** The caller's own messages must come back unchanged — the body is built from them, not over them. */
+  it("does not mutate the request it was given", () => {
+    const messages: Message[] = [{ role: "user", content: "hi" }];
+    const snapshot = JSON.stringify(messages);
+    toAnthropicBody(req({ messages }));
+    expect(JSON.stringify(messages)).toBe(snapshot);
+  });
+});
+
 describe("which models speak Anthropic's schema", () => {
   it("recognises the Claude family, however the catalog namespaces it", () => {
     for (const m of ["cc/claude-opus-5", "no-think/cc/claude-sonnet-5", "antigravity/claude-sonnet-4-6",

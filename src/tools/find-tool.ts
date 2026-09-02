@@ -8,9 +8,13 @@ import type { ToolRegistry } from "./registry.js";
  * A tool's schema is re-sent on every turn of every agent that holds it, used or not. Measured across twelve
  * runs of a real project: the 49 MCP tool schemas came to 86,620 characters — ~21,655 tokens — and 242 model
  * calls carried them, which is ~5.2M of the 21.7M input tokens actually billed. In the same twelve runs those
- * 49 tools were called FIVE times, and only two of them were ever called at all. The gateway does not honour
- * prompt caching (measured: an identical 7,438-token prefix billed 5,438 tokens on four consecutive calls,
- * with and without `cache_control`), so every one of those tokens is paid in full, every turn.
+ * 49 tools were called FIVE times, and only two of them were ever called at all.
+ *
+ * This used to add that the gateway ignored prompt caching, so every one of those tokens was paid in full on
+ * every turn. That is no longer true — re-measured, the gateway honours `cache_control` (see
+ * `toAnthropicBody`), and the tool schemas now sit inside the cached prefix. Deferring them still pays: a
+ * cache READ is billed, only cheaply, and the first turn of every agent writes the whole prefix at a premium.
+ * The saving is smaller than it was and the reasoning is unchanged.
  *
  * What is NOT deferred is the catalogue: the system prompt already lists each project tool on one line, in
  * 900 characters. Knowing what exists is cheap; knowing how to call it is what costs, and that is the part
