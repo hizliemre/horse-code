@@ -589,10 +589,35 @@ export async function runJob(
       emit({ kind: "note", text: `📦 The work is on \`${wave.delivery.branch}\` — merge it when you are ready.` });
     }
 
-    await curate(deps, up.refinedPrompt ?? opts.prompt, board.list(), deferredAll, session.baseWorktree);
+    /**
+     * Past this line the work is DELIVERED, so nothing after it may report the run as failed.
+     *
+     * Both of these call models, and both were unguarded. Measured live: a run merged eleven tasks, printed
+     * its summary and its "work is kept at …" line, and then ended with
+     * `error: Model 'muse-spark-1.2-contributor-xhigh' is not available in the active live catalog` — the
+     * curation call had reached a model the fleet could not route to, and the outer catch turned a delivered
+     * run into an errored one. `recordTurn` below already had this guard; these two needed it for the same
+     * reason, in its words: bookkeeping must not fail a delivered run.
+     */
+    const afterDelivery = async (what: string, run: () => Promise<void>): Promise<void> => {
+      try { await run(); } catch (e) {
+        if (deps.signal.aborted) throw e; // a real cancel still ends the job
+        emit({ kind: "note", text: `⚠️ ${what} could not run (${e instanceof Error ? e.message : String(e)}). `
+          + `The delivered work is unaffected.` });
+      }
+    };
+
+    const live = session;   // narrowed once; the guarded closures below cannot re-narrow it themselves
+    await afterDelivery("Memory curation", () =>
+      curate(deps, up.refinedPrompt ?? opts.prompt, board.list(), deferredAll, live.baseWorktree));
 
     emit({ kind: "phase", phase: "report" });
-    const report = await runCoachReport(deps, session, board);
+    /**
+     * A report that could not be written is not a reason to withhold the delivery. The run still says what
+     * landed — the tally and the branch are printed either way.
+     */
+    let report = "";
+    await afterDelivery("The closing report", async () => { report = await runCoachReport(deps, live, board); });
     /**
      * Resume state is kept whenever anything is left undone.
      *

@@ -20,7 +20,7 @@ import { reviewBodies } from "../support/review-bodies.js";
 import { fakeSpecKit } from "../support/fake-speckit.js";
 
 // Content-based deterministic provider: responds based on the system prompt (role) + the task title in the message.
-function engineProvider(failTasks: string[] = []): Provider {
+function engineProvider(failTasks: string[] = [], fleetDownTasks: string[] = []): Provider {
   return {
     async *chat(req) {
       const sys = typeof req.messages[0]?.content === "string" ? req.messages[0].content : "";
@@ -30,6 +30,11 @@ function engineProvider(failTasks: string[] = []): Provider {
         yield { type: "done", finishReason: "tool_calls" } as const;
       };
       if (sys.includes("P-router")) { yield* emitSubmit('{"role":"coder"}'); return; }
+      // A model the gateway lists and refuses to route to — the failure that must never touch the ladder.
+      if (fleetDownTasks.some((t) => convo.includes(t)) && !sys.includes("P-router")) {
+        yield { type: "error", message: "Model 'muse-spark-1.2-contributor-xhigh' is not available in the active live catalog for provider 'opencode-go'.", retryable: true } as const;
+        return;
+      }
       if (sys.includes("P-architect")) { yield* emitSubmit('{"rootCause":"x","plan":["y"]}'); return; }
       // The review TEAM (one lens here) and the council judge: an assessment, not a verdict.
       if (sys.includes("code-correctness") || sys.includes("risk-judge") || sys.includes("logical correctness")
@@ -71,7 +76,7 @@ function fakeAdapter(): PRAdapter & { calls: number } {
   return a;
 }
 
-interface EOpts { failTasks?: string[]; askHuman?: AskHuman; signal?: AbortSignal; rounds?: number }
+interface EOpts { failTasks?: string[]; fleetDownTasks?: string[]; askHuman?: AskHuman; signal?: AbortSignal; rounds?: number }
 function edeps(mgr: WorktreeManager, prAdapter: PRAdapter, opts: EOpts = {}): WaveEngineDeps {
   const roles: Record<string, RoleConfig> = {
     router: { models: ["m"], systemPrompt: "P-router" },
@@ -82,7 +87,7 @@ function edeps(mgr: WorktreeManager, prAdapter: PRAdapter, opts: EOpts = {}): Wa
     "team-lead": { models: ["m"], systemPrompt: "P-teamlead" },
   };
   return {
-    provider: engineProvider(opts.failTasks),
+    provider: engineProvider(opts.failTasks, opts.fleetDownTasks),
     roleRegistry: new RoleRegistry(roles, {}, new SkillRegistry()),
     skillRegistry: new SkillRegistry(),
     permission: new PermissionEngine({ mode: "auto", allowlist: [] }),
@@ -823,6 +828,33 @@ describe("parking, and what wakes a parked task", () => {
       expect(o.merged).toContain("t2");
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
+
+  /**
+   * A fleet park cannot wait for a merge — a down fleet is exactly what stops merges happening.
+   *
+   * Measured on a real run: twenty tasks parked correctly with "no model could be reached" and every one of
+   * them abandoned at `wakes: 0`. The wake condition for every non-`waiting` reason was "something merged
+   * since", so when the fleet was what failed, nothing merged, nothing woke, and the park meant to save them
+   * held them until the final sweep. Three of the five root failures that blocked 108 tasks were this.
+   *
+   * The board here has ONE task and it cannot reach a model, so no merge can ever occur: if a wake needs a
+   * merge, this task is unreachable by construction.
+   */
+  it("retries a fleet-parked task even though nothing can merge to wake it", async () => {
+    const repo = await initTmpRepo();
+    try {
+      const mgr = new WorktreeManager({ repoRoot: repo });
+      const session = await mgr.openSession("main", "job");
+      const board = new Board();
+      board.addCard({ id: "t1", title: "task-a" });
+      await runReady(edeps(mgr, fakeAdapter(), { fleetDownTasks: ["task-a"] }), session, board);
+      const h = board.get("t1")!.stageHistory;
+      expect(h.find((e) => e.action === "parked")?.note).toContain("no model could be reached");
+      expect(h.filter((e) => e.action === "woken").length).toBeGreaterThan(0);
+      // Still bounded — a fleet that is genuinely gone must end the run rather than spin on it.
+      expect(h.filter((e) => e.action === "woken").length).toBeLessThanOrEqual(MAX_WAKES);
+    } finally { await rm(repo, { recursive: true, force: true }); }
+  }, 30_000);
 
   /** A bound on spend, not a verdict: waking already requires real progress elsewhere. */
   it("stops waking a task after the cap, and says that is why", async () => {

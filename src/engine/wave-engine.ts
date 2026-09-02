@@ -253,8 +253,21 @@ export async function runReady(
     let woken = 0;
     for (const [id, p] of [...parked]) {
       if (p.wakes >= MAX_WAKES) continue;
-      const ready = p.reason === "waiting"
-        ? p.on !== undefined && done.has(p.on)
+      /**
+       * A fleet park cannot wait for a merge, because a down fleet is exactly what stops merges happening.
+       *
+       * Measured: twenty tasks parked correctly with "no model could be reached" and then every one of them
+       * abandoned at `wakes: 0` — never woken, because the wake condition for every non-`waiting` reason is
+       * "something merged since". When the fleet is what failed, nothing merges, so nothing wakes, and the
+       * park that was meant to save them held them until the final sweep. Three of the five root failures
+       * that blocked 108 tasks were this.
+       *
+       * `wake()` runs after a merge AND whenever the engine has nothing left to run — and the second case is
+       * precisely the moment to ask the fleet again. Retrying costs one attempt and is the only way out;
+       * MAX_WAKES bounds it, so a fleet that is genuinely gone still ends the run rather than spinning.
+       */
+      const ready = p.reason === "waiting" ? p.on !== undefined && done.has(p.on)
+        : p.reason === "fleet" ? true
         : merged.length > p.mergedAt;   // something landed since it was parked
       if (!ready) continue;
       parked.delete(id);
