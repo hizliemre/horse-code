@@ -523,6 +523,13 @@ export async function main(argv: string[]): Promise<void> {
         }
       };
 
+      /**
+       * The same request, read one status wider: 429 means the gateway ROUTED and the model was busy, which
+       * is a yes to "can this serve?" and a no to "has this recovered?". `healthyModels` asks the first and
+       * runs when the fleet is at its busiest; given the strict probe it dropped all 78 catalog models.
+       */
+      const routableModel = makeProbe({ baseUrl: config.baseUrl, apiKey: config.apiKey });
+
       const listModels = async (): Promise<string[]> => poolWithConfigured(
         await listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: sourcesRef.current }),
         configuredModels(), probeModel);
@@ -704,6 +711,7 @@ export async function main(argv: string[]): Promise<void> {
         refreshSources,
         sourcesInfo,
         probeModel,
+        routableModel,
       });
       return;
     }

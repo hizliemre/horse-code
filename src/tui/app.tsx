@@ -93,6 +93,8 @@ export interface RunTuiReplOpts {
   planTraces?: () => Promise<{ summary: string; jobs: number }>; // /graph trace → the free estimate
   runTraces?: (onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void, provider?: Provider) => Promise<string>; // /graph trace, after consent
   probeModel?: (model: string) => Promise<boolean>; // strict health check → releases a recovered model from quarantine
+  /** 429-tolerant: "will the gateway route here?", not "has this recovered?" — see ModelHealthOpts.routable. */
+  routableModel?: (model: string) => Promise<boolean>;
   memStore?: MemoryStore; // shared memory store (rules are wired into every registry by buildJobDeps)
 }
 
@@ -175,6 +177,12 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     // STRICTER than source discovery, which counts 429 as "routed": a rate-limited model is exactly what was
     // quarantined, so only a real answer may release it.
     ...(opts.probeModel ? { probe: opts.probeModel } : {}),
+    /**
+     * …and the 429-tolerant one for the other question. `healthyModels` asks whether the gateway will ROUTE
+     * to a model, not whether a benched one has recovered, and it asks precisely when the fleet is busiest.
+     * Given the strict probe it dropped all 78 catalog models at once — see ModelHealthOpts.routable.
+     */
+    ...(opts.routableModel ? { routable: opts.routableModel } : {}),
     note: (m) => controller.note(m),
   });
   health.watch(); // any benched model → every role still holding it is re-assigned at once

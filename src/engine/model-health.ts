@@ -34,6 +34,16 @@ export interface ModelHealthOpts {
    * quarantined, so treating it as healthy would put it straight back into service.
    */
   probe?: (model: string) => Promise<boolean>;
+  /**
+   * "Will the gateway ROUTE to this model?" — a different question from `probe`, and it needs 429 to mean YES.
+   *
+   * `probe` answers "has this quarantined model recovered?", where a rate-limited answer must count as no —
+   * a rate limit is precisely what benched it. Re-using it to ask about routability inverts that: the
+   * curated pool empties under LOAD, which is when everything answers 429, so a strict probe rejects the
+   * whole catalog. Measured live: "probed 78 catalog model(s) and dropped 78", and the roles that needed a
+   * chain got nothing at all — worse than the dead-model hand-out it was added to prevent.
+   */
+  routable?: (model: string) => Promise<boolean>;
   note?: (msg: string) => void;
   now?: () => number;
 }
@@ -55,6 +65,8 @@ export class ModelHealth {
   private readonly fitness?: { unfit(role: string, model: string): boolean };
   private readonly listModels: () => Promise<string[]>;
   private readonly probe?: (model: string) => Promise<boolean>;
+  /** Routability, not recovery — see ModelHealthOpts.routable. */
+  private readonly routable?: (model: string) => Promise<boolean>;
   private readonly note: (msg: string) => void;
   private readonly now: () => number;
   /** Serializes healing: a whole review team failing at once must not trigger 14 concurrent re-assignments. */
@@ -151,6 +163,7 @@ export class ModelHealth {
     this.port = opts.port;
     this.listModels = opts.listModels;
     this.probe = opts.probe;
+    this.routable = opts.routable;
     this.note = opts.note ?? ((): void => {});
     this.now = opts.now ?? ((): number => Date.now());
     this.fitness = opts.fitness;
@@ -196,8 +209,15 @@ export class ModelHealth {
    * not the head of the ranking.
    *
    * A probe is the cheapest thing that can tell "listed" from "routable", it runs only on this rare path, and
-   * `poolWithConfigured` already proves the same pattern at startup. Without one configured, the old
-   * behaviour stands rather than a guess.
+   * `poolWithConfigured` already proves the same pattern at startup. It must be the ROUTABILITY probe (see
+   * `routable`): asking the recovery probe instead rejects everything the moment the fleet is busy, which is
+   * exactly when this path runs.
+   *
+   * And a probe that clears nothing does not get to strand every role. Measured live: "probed 78 catalog
+   * model(s) and dropped 78", then `No healthy model left to reassign code-data-integrity` — the lens kept
+   * its spent chain and returned UNVERIFIED, blocking the review. Handing back the unproven catalog risks
+   * one wasted call per model, which the bench ends and the ladder no longer charges for; handing back
+   * nothing leaves a role with no way to run at all. The first is recoverable, so it wins.
    */
   async healthyModels(): Promise<string[]> {
     const dead = new Set(this.quarantined().map((q) => q.model));
@@ -207,16 +227,21 @@ export class ModelHealth {
     const configured = new Set(this.port.registries().flatMap((r) => r.knownModels()));
     const curated = live.filter((m) => configured.has(m));
     if (curated.length) return curated;
-    const probe = this.probe;
-    if (!probe) return live;
-    const checked = await Promise.all(live.map(async (m) => ({ m, ok: await probe(m).catch(() => false) })));
-    const routable = checked.filter((c) => c.ok).map((c) => c.m);
-    const refused = checked.length - routable.length;
+    const routable = this.routable;
+    if (!routable || !live.length) return live;
+    const checked = await Promise.all(live.map(async (m) => ({ m, ok: await routable(m).catch(() => false) })));
+    const usable = checked.filter((c) => c.ok).map((c) => c.m);
+    if (!usable.length) {
+      this.note(`🔎 The configured models are all spent, and none of the ${checked.length} catalog model(s) `
+        + `answered a probe — offering them anyway rather than leaving roles with nothing.`);
+      return live;
+    }
+    const refused = checked.length - usable.length;
     if (refused) {
       this.note(`🔎 The configured models are all spent — probed ${checked.length} catalog model(s) and `
         + `dropped ${refused} the gateway would not route to.`);
     }
-    return routable;
+    return usable;
   }
 
   /**

@@ -6,7 +6,7 @@ import type { RoleConfig } from "../../src/config/config.js";
 const reg = (roles: Record<string, RoleConfig>): RoleRegistry => new RoleRegistry(roles);
 
 /** Two registries, mirroring the real split (main roles vs. review lenses) — a quarantine must span both. */
-function setup(opts: { models?: string[]; probe?: (m: string) => Promise<boolean> } = {}) {
+function setup(opts: { models?: string[]; probe?: (m: string) => Promise<boolean>; routable?: (m: string) => Promise<boolean> } = {}) {
   const main = reg({
     coach: { models: ["dead-a", "dead-b"], systemPrompt: "P" },
     judge: { models: ["dead-a", "alive-1"], systemPrompt: "P" },
@@ -24,6 +24,7 @@ function setup(opts: { models?: string[]; probe?: (m: string) => Promise<boolean
     },
     listModels: async () => opts.models ?? ["dead-a", "dead-b", "alive-1", "alive-2", "alive-3"],
     ...(opts.probe ? { probe: opts.probe } : {}),
+    ...(opts.routable ? { routable: opts.routable } : {}),
     note: (m) => notes.push(m),
     now: () => 1000,
   });
@@ -157,13 +158,34 @@ describe("ModelHealth.handleChainFailure", () => {
    * siblings cost one call each, which is the bench working; the only difference was the ranking.
    */
   it("probes the catalog before handing it out, and drops what will not route", async () => {
-    const routable = new Set(["alive-3"]);
-    const { health, main, lenses } = setup({ probe: async (m) => routable.has(m) });
+    const reachable = new Set(["alive-3"]);
+    const { health, main, lenses } = setup({ routable: async (m) => reachable.has(m) });
     for (const m of ["dead-a", "dead-b", "alive-1"]) {
       main.markExhausted(m, "429");
       lenses.markExhausted(m, "429");
     }
     expect(await health.healthyModels()).toEqual(["alive-3"]); // alive-2 answers nothing → never assigned
+  });
+
+  /**
+   * A probe that clears NOTHING does not get to strand every role.
+   *
+   * Measured live, and caused by the probe above being wired to the wrong question: "probed 78 catalog
+   * model(s) and dropped 78", then `No healthy model left to reassign code-data-integrity — every known
+   * model is quarantined`. The lens kept its spent chain and returned UNVERIFIED, which blocks the review.
+   *
+   * Handing back the unproven catalog risks one wasted call per model — the bench ends that, and the ladder
+   * no longer charges for it. Handing back nothing leaves a role with no way to run at all. The first is
+   * recoverable, so it wins.
+   */
+  it("offers the unproven catalog rather than stranding roles when the probe clears nothing", async () => {
+    const { health, main, lenses, notes } = setup({ routable: async () => false });
+    for (const m of ["dead-a", "dead-b", "alive-1"]) {
+      main.markExhausted(m, "429");
+      lenses.markExhausted(m, "429");
+    }
+    expect(await health.healthyModels()).toEqual(["alive-2", "alive-3"]);
+    expect(notes.join("\n")).toMatch(/offering them anyway rather than leaving roles with nothing/);
   });
 
   /** With no probe configured there is nothing to check with, so the old behaviour stands rather than a guess. */
