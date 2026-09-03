@@ -1,26 +1,71 @@
 import { describe, it, expect } from "vitest";
-import { cliModel, cliEffort, promptFor, cliFor, CliProvider } from "../../src/agents/cli-provider.js";
+import { promptFor, CliProvider } from "../../src/agents/cli-provider.js";
+import { cliFor, cliInvocation, cliCatalog } from "../../src/agents/cli-models.js";
 import type { ChatRequest } from "../../src/core/types.js";
 import { makeStreamReader, decodeClaudeEvent } from "../../src/agents/cli-agent.js";
 
 const req = (over: Partial<ChatRequest> = {}): ChatRequest =>
-  ({ model: "cc/claude-opus-5", messages: [{ role: "user", content: "hi" }], tools: [], ...over });
+  ({ model: "opus", messages: [{ role: "user", content: "hi" }], tools: [], ...over });
 
 /**
- * A horse-code id names a source, a model and often an effort level; the CLI's `--model` wants the model
- * alone. Getting this wrong is silent — the CLI falls back to its default and every role runs on the same
- * model, which is precisely the assignment the whole role registry exists to avoid.
+ * One horse-code id means two things — a family and how hard to work — and the CLIs take them separately.
+ *
+ * `codex` is the exception worth stating: it names the CLI's own DEFAULT, expressed by passing no model
+ * flag at all. Returning a name there would ask Codex for a model called "codex".
  */
-describe("mapping a horse-code model id onto the CLI's own", () => {
-  it("drops the source prefix and the effort suffix", () => {
-    expect(cliModel("cc/claude-opus-5-high")).toBe("claude-opus-5");
-    expect(cliModel("no-think/cc/claude-sonnet-5")).toBe("claude-sonnet-5");
-    expect(cliModel("cx/gpt-5.6-terra-max")).toBe("gpt-5.6-terra");
+describe("splitting an id into a model and an effort", () => {
+  it("separates the family from the level", () => {
+    expect(cliInvocation("opus-high")).toEqual({ model: "opus", effort: "high" });
+    expect(cliInvocation("sonnet")).toEqual({ model: "sonnet" });
+    expect(cliInvocation("gpt-5.6-terra-medium")).toEqual({ model: "gpt-5.6-terra", effort: "medium" });
   });
 
-  it("reads the level the id spells out", () => {
-    expect(cliEffort("cx/gpt-5.5-xhigh")).toBe("xhigh");
-    expect(cliEffort("cc/claude-opus-5")).toBeUndefined();
+  it("asks for no model when the id names the CLI's default", () => {
+    expect(cliInvocation("codex")).toEqual({});
+    expect(cliInvocation("codex-high")).toEqual({ effort: "high" });
+  });
+
+  /** A chain written before the prefixes went away must keep working rather than fail for nothing. */
+  it("still reads an id that carries an old source prefix", () => {
+    expect(cliInvocation("cc/opus-low")).toEqual({ model: "opus", effort: "low" });
+    expect(cliInvocation("no-think/cx/gpt-5.6-sol")).toEqual({ model: "gpt-5.6-sol" });
+  });
+});
+
+/**
+ * Which CLI serves a model, read from the name now that nothing carries a prefix.
+ *
+ * A prefix was the gateway's way of naming a subscription to bill; with one binary per family the name
+ * already says it. Anything unrecognised must fail rather than be guessed at — served quietly by a default,
+ * the answer would be attributed to a model that never ran.
+ */
+describe("choosing a CLI from the model name", () => {
+  it("routes each family to its binary", () => {
+    for (const m of ["fable", "opus", "sonnet", "haiku"]) expect(cliFor(m), m).toBe("claude");
+    for (const m of ["codex", "gpt-5.6-terra", "gpt-5.6-sol"]) expect(cliFor(m), m).toBe("codex");
+  });
+
+  it("still routes an id left over from the prefixed era", () => {
+    expect(cliFor("cc/claude-opus-5")).toBe("claude");
+    expect(cliFor("no-think/cx/gpt-5.5")).toBe("codex");
+  });
+
+  it("refuses a name nothing serves", () => {
+    expect(cliFor("antigravity/claude-sonnet-4-6")).toBeUndefined();
+    expect(cliFor("opencode-go/hy3")).toBeUndefined();
+  });
+
+  /**
+   * The catalog holds no dates and no version numbers, which is what stops it going stale.
+   *
+   * Measured, and the reason families won: `fable` served `claude-fable-5-1` — the model that returned 404
+   * through the gateway, whose own resolution of `claude-fable-5` pointed at a name that did not exist.
+   */
+  it("names families, never versions", () => {
+    for (const m of cliCatalog()) {
+      expect(m, m).not.toMatch(/\d{6,}/);
+      expect(m, m).not.toMatch(/-\d+-\d+$/);
+    }
   });
 });
 
@@ -60,30 +105,6 @@ describe("folding a conversation into one prompt", () => {
   it("skips empty turns", () => {
     const p = promptFor(req({ messages: [{ role: "user", content: "  " }, { role: "user", content: "real" }] }));
     expect(p.trim()).toBe("real");
-  });
-});
-
-/**
- * Which CLI serves a model, read from the id the role registry already uses.
- *
- * The catalog prefixes outlive the gateway: `cc/` was always Claude, `cx/` always Codex, and `sourceOf` has
- * normalised them that way since long before this transport. Reusing them is what lets a config of
- * sixty-four tuned role chains keep working instead of every model in it being renamed.
- */
-describe("choosing a CLI from the model id", () => {
-  it("routes the two sources that have a binary", () => {
-    expect(cliFor("cc/claude-opus-5")).toBe("claude");
-    expect(cliFor("no-think/cc/claude-sonnet-5")).toBe("claude");
-    expect(cliFor("cx/gpt-5.6-terra-high")).toBe("codex");
-  });
-
-  /**
-   * `antigravity/` was a gateway source and no binary serves it. A role still pointing at one must fail
-   * loudly — served quietly by a default CLI, the answer would be attributed to a model that never ran.
-   */
-  it("refuses a source no CLI can serve", () => {
-    expect(cliFor("antigravity/claude-sonnet-4-6")).toBeUndefined();
-    expect(cliFor("opencode-go/hy3")).toBeUndefined();
   });
 });
 

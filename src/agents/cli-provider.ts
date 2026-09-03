@@ -1,5 +1,6 @@
 import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
 import { runCliAgent, SYNTHETIC, type CliKind, type CliUsage } from "./cli-agent.js";
+import { cliFor, cliInvocation } from "./cli-models.js";
 
 /**
  * The official CLIs behind the `Provider` seam, for every role that wants an ANSWER rather than an agent.
@@ -19,20 +20,6 @@ import { runCliAgent, SYNTHETIC, type CliKind, type CliUsage } from "./cli-agent
  * the JSON directly and the existing salvage reads it. Second-class, but it is a road that was already built
  * and is already tested.
  */
-
-/** How a horse-code model id maps onto the CLI's own `--model`. `cc/claude-opus-5-high` → `claude-opus-5`. */
-export function cliModel(model: string): string | undefined {
-  const last = model.replace(/^no-think\//, "").split("/").pop();
-  if (!last) return undefined;
-  const base = last.replace(/-(ultra|max|xhigh|high|medium|low|minimal|none|free|thinking|preview)\b/g, "");
-  return base.replace(/-+$/, "") || undefined;
-}
-
-/** The effort suffix a horse-code id carries, when it carries one — the CLIs take it as its own flag. */
-export function cliEffort(model: string): string | undefined {
-  const m = /-(ultra|max|xhigh|high|medium|low|minimal)\b/.exec(model);
-  return m?.[1];
-}
 
 /**
  * The conversation as one prompt.
@@ -74,24 +61,6 @@ export interface CliProviderOptions {
   readOnly?: boolean;
 }
 
-/**
- * Which CLI serves a model, read from the id the role registry already uses.
- *
- * The catalog prefixes survive the gateway: `cc/` was always Claude and `cx/` always Codex, and
- * `sourceOf` has normalised them that way since long before this transport existed. Reusing them means a
- * config of sixty-four tuned role chains keeps working — the alternative was renaming every model in it.
- *
- * Anything else has no CLI. That is not a gap to paper over: `antigravity/` was a gateway source and there
- * is no binary that serves it, so a role still pointing at one must fail loudly rather than be quietly
- * served by whichever CLI happened to be default.
- */
-export function cliFor(model: string): CliKind | undefined {
-  const source = model.toLowerCase().replace(/^no-think\//, "").split("/")[0];
-  if (source === "cc" || source === "claude") return "claude";
-  if (source === "cx" || source === "codex") return "codex";
-  return undefined;
-}
-
 export class CliProvider implements Provider {
   private readonly fixed?: CliKind;
   private readonly readOnly: boolean;
@@ -113,7 +82,8 @@ export class CliProvider implements Provider {
       return;
     }
     const args: string[] = [];
-    const model = cliModel(req.model);
+    const { model, effort: named } = cliInvocation(req.model);
+    // No model flag means the CLI's own default, which is what `codex` names.
     if (model) args.push("--model", model);
     /**
      * The request's own effort first, the id's suffix second.
@@ -122,7 +92,7 @@ export class CliProvider implements Provider {
      * the level into the name (`cx/gpt-5.5-xhigh`). Reading only the name would drop every Claude role's
      * effort — the exact loss the native transport was built to stop.
      */
-    const effort = req.effort ?? cliEffort(req.model);
+    const effort = req.effort ?? named;
     if (effort && kind === "claude") args.push("--effort", effort);
     /**
      * A role that was asked for a verdict must not be able to edit the tree.
@@ -135,20 +105,36 @@ export class CliProvider implements Provider {
     if (this.readOnly && kind === "codex") args.push("--sandbox", "read-only");
 
     /**
-     * The CLI's own tool calls, collected as they arrive and replayed below.
+     * Streamed as it happens, not replayed at the end.
      *
-     * `chat` is an async generator and `runCliAgent` reports through a callback, so an event cannot be
-     * yielded from inside it — buffered here and emitted in order once the run returns. The row is late by
-     * one call rather than silent for the whole task, which is what it was.
+     * The first shape of this buffered the CLI's tool calls and yielded them after the process exited, on
+     * the reasoning that a generator cannot yield from inside a callback. It can, through a queue — and the
+     * difference is not cosmetic. A delegated implementation call runs for minutes: measured on a live run,
+     * eight consecutive minutes with no event of any kind, because everything the CLI reported was being
+     * held until it finished. The row a person watches was blank for the whole task, and the telemetry had
+     * nothing to say about it either.
      */
-    const activity: ChatEvent[] = [];
-    const res = await runCliAgent({
+    const queue: ChatEvent[] = [];
+    let notify: (() => void) | undefined;
+    const push = (ev: ChatEvent): void => { queue.push(ev); notify?.(); };
+    const done = runCliAgent({
       kind, cwd: process.cwd(), prompt: promptFor(req), signal, args,
       onEvent: (ev) => {
-        if (ev.tool) activity.push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}) });
+        if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}) });
+        if (ev.text) push({ type: "text-delta", text: ev.text });
       },
     });
-    for (const ev of activity) yield ev;
+    let finished = false;
+    void done.then(() => { finished = true; notify?.(); }, () => { finished = true; notify?.(); });
+    while (!finished || queue.length) {
+      if (!queue.length) {
+        await new Promise<void>((resolve) => { notify = resolve; });
+        notify = undefined;
+        continue;
+      }
+      yield queue.shift()!;
+    }
+    const res = await done;
 
     /**
      * A rate limit is the fleet's, not the task's — surfaced as a retryable error so it reaches the same
@@ -179,7 +165,6 @@ export class CliProvider implements Provider {
       yield { type: "error", message: `${kind} CLI: ${res.error}`, retryable: res.exitCode !== 0 };
       return;
     }
-    if (res.text) yield { type: "text-delta", text: res.text };
     if (res.usage) yield usageEvent(res.usage);
     yield { type: "done", finishReason: "stop" };
   }
