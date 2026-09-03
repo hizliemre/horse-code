@@ -35,6 +35,44 @@ export function isTransientFailure(reason: string): boolean {
  * Benching one model at a time is right when the model is the problem. When the account is, it is a way of
  * discovering the same fact six times at a task's expense.
  */
+/**
+ * The gateway's admission queue is full — a fact about the SUBSCRIPTION, not about the model that asked.
+ *
+ * "Chat admission capacity is temporarily unavailable. Retry shortly." and "Structurally heavy chat request
+ * capacity is busy" name no provider, so unlike every other source-wide failure the name cannot be read from
+ * the sentence; it has to come from the model that ran into it.
+ *
+ * Measured over one run — 50 refusals across SEVENTEEN different models, and the rate is a property of the
+ * subscription rather than of any of them:
+ *
+ *   cc            910 calls    5 refusals   0.5%
+ *   cx            432 calls   41 refusals   9.5%
+ *   antigravity    85 calls    4 refusals   4.7%
+ *
+ * Benching one model for it moved fourteen roles onto another model of the SAME congested source, and a
+ * visible fallback went the wrong way outright: `cc/claude-sonnet-4-5-…-high → cx/gpt-5.6-luna-low`, from
+ * the source refusing one call in two hundred to the one refusing one in ten.
+ *
+ * The bench this opens is short by construction: "temporarily unavailable" is a transient failure, so
+ * `markExhausted` gives it the transient window rather than the rest of the run. That is the whole point —
+ * step off a busy subscription for two minutes, not write it off.
+ */
+export function isSourceCapacity(reason: string): boolean {
+  return /capacity is (?:temporarily unavailable|busy)/i.test(reason);
+}
+
+/**
+ * The subscription prefix as the catalogue writes it — `cc`, `cx`, `antigravity`.
+ *
+ * `no-think/` is a routing wrapper, not a source: `no-think/cc/claude-sonnet-5` is served by the same
+ * subscription as `cc/claude-sonnet-5` and must be benched with it.
+ */
+export function sourcePrefix(model: string): string | undefined {
+  const s = model.replace(/^no-think\//, "");
+  const i = s.indexOf("/");
+  return i > 0 ? s.slice(0, i) : undefined;
+}
+
 export function providerOutage(reason: string): string | undefined {
   return /no active credentials for provider:?\s*([\w.-]+)/i.exec(reason)?.[1]
     ?? /provider\s+'?([\w.-]+)'?\s+is not configured/i.exec(reason)?.[1]
@@ -192,7 +230,9 @@ export class RoleRegistry {
    * single model when the pool names none of that provider — an unknown provider is still a real failure.
    */
   markProviderExhausted(provider: string, model: string, reason: string, now = Date.now()): string[] {
-    const hit = this.knownModels().filter((m) => m.startsWith(`${provider}/`));
+    // Matched on the SOURCE, so a `no-think/cc/…` wrapper is benched with the rest of `cc` — same
+    // subscription, same outage. Comparing the raw prefix left those models behind on every source-wide bench.
+    const hit = this.knownModels().filter((m) => sourcePrefix(m) === provider);
     for (const m of hit) this.markExhausted(m, reason, now);
     if (!hit.length) { this.markExhausted(model, reason, now); return [model]; }
     return hit;
@@ -388,8 +428,12 @@ export class RoleRegistry {
       fallbacks: chain.slice(1),
       onExhausted: (m, reason) => {
         const why = reason ?? "unavailable";
-        const provider = providerOutage(why);
-        if (provider) this.markProviderExhausted(provider, m, why);
+        /**
+         * Whose failure is it? A message that NAMES a provider says so itself; a full admission queue does
+         * not, so the source comes from the model that ran into it — see `isSourceCapacity`.
+         */
+        const source = providerOutage(why) ?? (isSourceCapacity(why) ? sourcePrefix(m) : undefined);
+        if (source) this.markProviderExhausted(source, m, why);
         else this.markExhausted(m, why);
       },
       onStructuralFailure: (m, reason) => this.markStructuralFailure(m, reason, roleName),

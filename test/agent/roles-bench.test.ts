@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { RoleRegistry, providerOutage } from "../../src/agent/roles.js";
+import { RoleRegistry, providerOutage, isSourceCapacity, sourcePrefix } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 const reg = (): RoleRegistry => new RoleRegistry({
@@ -153,5 +153,91 @@ describe("a failure about the provider, not the model", () => {
     const hit = r.markProviderExhausted("someone-else", "someone-else/m", "No active credentials");
     expect(hit).toEqual(["someone-else/m"]);
     expect(r.quarantined().map((q) => q.model)).toEqual(["someone-else/m"]);
+  });
+});
+
+/**
+ * A full admission queue belongs to the SUBSCRIPTION, and it is the one source-wide failure that does not
+ * say so in words.
+ *
+ * "Chat admission capacity is temporarily unavailable. Retry shortly." names no provider, so the source has
+ * to be read off the model that ran into it. Measured over one run — 50 refusals across SEVENTEEN models,
+ * with the rate a property of the subscription rather than of any of them:
+ *
+ *   cc            910 calls    5 refusals   0.5%
+ *   cx            432 calls   41 refusals   9.5%
+ *   antigravity    85 calls    4 refusals   4.7%
+ *
+ * Benching one model for it moved fourteen roles onto another model of the same congested source, and one
+ * observed fallback went `cc/claude-sonnet-4-5-…-high → cx/gpt-5.6-luna-low` — off the source refusing one
+ * call in two hundred, onto the one refusing one in ten.
+ */
+describe("a full admission queue is the subscription's, not the model's", () => {
+  it("recognises the gateway's two wordings, and nothing else", () => {
+    expect(isSourceCapacity("Chat admission capacity is temporarily unavailable. Retry shortly.")).toBe(true);
+    expect(isSourceCapacity("Structurally heavy chat request capacity is busy; retry shortly.")).toBe(true);
+    // A model's own refusal is not the queue's — it must still bench just that model.
+    expect(isSourceCapacity("This model does not support the effort parameter.")).toBe(false);
+    expect(isSourceCapacity("Overloaded")).toBe(false);
+  });
+
+  /** `no-think/` is a routing wrapper, not a subscription — it is served by the source it wraps. */
+  it("reads the source off the model id, wrapper and all", () => {
+    expect(sourcePrefix("cx/gpt-5.6-luna-low")).toBe("cx");
+    expect(sourcePrefix("no-think/cc/claude-sonnet-5")).toBe("cc");
+    expect(sourcePrefix("bare-model-id")).toBeUndefined();
+  });
+
+  it("benches the whole source, including its no-think wrappers", () => {
+    const r = new RoleRegistry({
+      coder: { models: ["cx/gpt-5.6-luna-low", "no-think/cx/gpt-5.6-terra", "cc/claude-sonnet-5"] },
+    } as never, {} as never);
+    const hit = r.markProviderExhausted("cx", "cx/gpt-5.6-luna-low",
+      "Chat admission capacity is temporarily unavailable. Retry shortly.");
+    expect(hit.sort()).toEqual(["cx/gpt-5.6-luna-low", "no-think/cx/gpt-5.6-terra"]);
+    expect(r.isQuarantined("cc/claude-sonnet-5")).toBe(false); // the healthy subscription is untouched
+  });
+
+  /** Short by construction: "temporarily unavailable" is transient, so the bench is a step aside, not a verdict. */
+  it("benches for the transient window rather than the rest of the run", () => {
+    vi.useFakeTimers();
+    try {
+      const r = new RoleRegistry({ coder: { models: ["cx/a", "cc/b"] } } as never, {} as never);
+      r.markProviderExhausted("cx", "cx/a", "Chat admission capacity is temporarily unavailable.");
+      expect(r.isQuarantined("cx/a")).toBe(true);
+      vi.advanceTimersByTime(RoleRegistry.TRANSIENT_BENCH_MS + 1);
+      expect(r.isQuarantined("cx/a")).toBe(false);   // the queue drains; the subscription comes back
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+/**
+ * …and the wiring, which is where the decision is actually made.
+ *
+ * The predicates above can both be right while the callback still benches one model: `onExhausted` reads the
+ * source from the MESSAGE, and a full admission queue does not name one. Without the fallback to the model's
+ * own prefix, the fourteen roles on that subscription are re-chained onto another of its models.
+ */
+describe("onExhausted routes a capacity refusal to the whole source", () => {
+  const roles = {
+    coder: { models: ["cx/gpt-5.6-luna-low", "cc/claude-sonnet-5"], systemPrompt: "c" },
+    judge: { models: ["cx/gpt-5.6-terra", "cc/claude-opus-5"], systemPrompt: "j" },
+  };
+
+  it("benches every model of the congested subscription, not just the one that asked", () => {
+    const r = new RoleRegistry(roles as never, {} as never, new SkillRegistry());
+    r.resolve("coder").onExhausted?.("cx/gpt-5.6-luna-low",
+      "Chat admission capacity is temporarily unavailable. Retry shortly.");
+    expect(r.isQuarantined("cx/gpt-5.6-luna-low")).toBe(true);
+    expect(r.isQuarantined("cx/gpt-5.6-terra")).toBe(true);   // the other role's cx model goes too
+    expect(r.isQuarantined("cc/claude-sonnet-5")).toBe(false); // the healthy subscription is left alone
+  });
+
+  /** A refusal that is genuinely about one model must still bench only that model. */
+  it("leaves the rest of the source alone for a model's own refusal", () => {
+    const r = new RoleRegistry(roles as never, {} as never, new SkillRegistry());
+    r.resolve("coder").onExhausted?.("cx/gpt-5.6-luna-low", "Overloaded");
+    expect(r.isQuarantined("cx/gpt-5.6-luna-low")).toBe(true);
+    expect(r.isQuarantined("cx/gpt-5.6-terra")).toBe(false);
   });
 });
