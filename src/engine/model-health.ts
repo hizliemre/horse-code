@@ -10,7 +10,7 @@
 // back into the pool instead of being written off for the whole session.
 
 import type { RoleRegistry } from "../agent/roles.js";
-import { isUnknownModelError } from "../providers/omniroute.js";
+import { isUnknownModelError } from "../core/failures.js";
 import { adjustRoleModels } from "../tui/role-models.js";
 import { telemetry } from "../obs/telemetry.js";
 

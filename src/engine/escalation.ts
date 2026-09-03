@@ -5,7 +5,7 @@ import { runEscalationCouncil } from "./council.js";
 import type { Verdict, RunnableRole } from "./task-types.js";
 import type { ReviewDeps } from "./review.js";
 import { telemetry } from "../obs/telemetry.js";
-import { isCatalogRejection, isProviderOutage, isUnknownModelError } from "../providers/omniroute.js";
+import { isCatalogRejection, isProviderOutage, isUnknownModelError } from "../core/failures.js";
 
 export type HumanDecision =
   | { action: "accept" }
