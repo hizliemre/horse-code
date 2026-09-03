@@ -22,9 +22,22 @@ describe("splitting an id into a model and an effort", () => {
     expect(cliInvocation("gpt-5.6-terra-medium")).toEqual({ model: "gpt-5.6-terra", effort: "medium" });
   });
 
-  it("asks for no model when the id names the CLI's default", () => {
-    expect(cliInvocation("codex")).toEqual({});
-    expect(cliInvocation("codex-high")).toEqual({ effort: "high" });
+  /**
+   * `codex` is not a model, and passing no `--model` at all was how it used to be honoured. It named
+   * nothing — 27 calls on a live board were recorded against an id that does not exist, and the Codex
+   * stream never says what served. A chain written before it was removed resolves to a real name instead
+   * of spending an attempt being refused.
+   */
+  it("always names a model, resolving the id that named none", () => {
+    expect(cliInvocation("codex")).toEqual({ model: "gpt-5.6-terra" });
+    expect(cliInvocation("codex-high")).toEqual({ model: "gpt-5.6-terra", effort: "high" });
+    expect(cliInvocation("cx/codex")).toEqual({ model: "gpt-5.6-terra" });
+  });
+
+  it("no longer offers it as something a role can be assigned", () => {
+    expect(cliCatalog()).not.toContain("codex");
+    // The three tiers that DO exist were each asked for and answered.
+    expect(cliCatalog()).toEqual(expect.arrayContaining(["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"]));
   });
 
   /** A chain written before the prefixes went away must keep working rather than fail for nothing. */

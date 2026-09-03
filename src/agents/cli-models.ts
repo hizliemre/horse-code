@@ -27,16 +27,35 @@ import type { CliKind } from "./cli-agent.js";
 export const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"] as const;
 
 /**
- * Codex's models. These are TIERS rather than versions — terra, sol and luna name sizes of the same
- * generation, so dropping them would leave one model and nothing for the band logic to spread a chain
- * across. `gpt-5.5` is the one genuine version here, and it goes.
+ * Codex's models. Every one of these was asked for and answered.
  *
- * `codex` is the CLI's own default, invoked by passing no model at all: the closest thing it has to an
- * alias, and current by construction. Its own alias scheme, if it has one, is not documented and the probe
- * that would have settled it did not return in time — so this is stated as what was verified, not as the
- * whole truth.
+ * These are TIERS rather than versions — terra, sol and luna name sizes of the same generation, so dropping
+ * them would leave nothing for the band logic to spread a chain across. Worth stating plainly: the
+ * capability scorer gives all three the same number, so nothing here ranks them; they are three names that
+ * work, and which suits a role is a question only a run can answer.
+ *
+ * `codex` used to sit at the head of this list, meaning "pass no `--model` at all and take the CLI's
+ * default". It is gone, and it should never have been here: it is not a model. It named nothing, so 27 calls
+ * on a live board were recorded against an id that does not exist, and the Codex stream does not report what
+ * served — `codex doctor` itself only says `model <default> · openai`. It also occupied a chain slot
+ * indistinguishable from its own resolution, so a chain could hold the same model twice with the second
+ * copy as dead fallback weight.
+ *
+ * Measured while removing it: an unknown name is REFUSED by Codex with an error, which is the opposite of
+ * Claude Code, where a bogus `--model` answers anyway and reports `<synthetic>`. So on this side a wrong
+ * name fails honestly, and no `<synthetic>`-style guard is needed for it.
  */
-export const CODEX_MODELS = ["codex", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"] as const;
+export const CODEX_MODELS = ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"] as const;
+
+/**
+ * What a chain written before `codex` was removed should run instead.
+ *
+ * 32 role chains named it. Left alone each would spend an attempt being refused before sliding on, once per
+ * call, so it resolves to a real name here instead. `gpt-5.6-terra` is not a judgement — the scorer rates
+ * all three tiers identically — it is the least surprising substitution, being the one those chains already
+ * led with and the one that served most of the last run. `/roles adjust` replaces it with a real assignment.
+ */
+const CODEX_DEFAULT = "gpt-5.6-terra";
 
 /** The whole assignable catalog. `adjustRoleModels` does its own ranking, so this order decides nothing. */
 export function cliCatalog(): string[] {
@@ -69,8 +88,11 @@ export function cliInvocation(model: string): { model?: string; effort?: string 
   const bare = model.replace(/^no-think\//, "").replace(/^(cc|claude|cx|codex)\//, "");
   const effort = /-(ultra|max|xhigh|high|medium|low|minimal)$/.exec(bare)?.[1];
   const name = effort ? bare.slice(0, -(effort.length + 1)) : bare;
+  // Always a name. Passing no `--model` ran whatever the CLI felt like and reported it as a model called
+  // `codex`, which is not one — see CODEX_MODELS. A bare `codex` from an older chain resolves instead.
+  const resolved = name === "codex" ? CODEX_DEFAULT : name;
   return {
-    ...(name && name !== "codex" ? { model: name } : {}),
+    ...(resolved ? { model: resolved } : {}),
     ...(effort ? { effort } : {}),
   };
 }
