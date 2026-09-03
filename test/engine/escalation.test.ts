@@ -96,8 +96,27 @@ describe("isFleetFailure — the fleet's problem, not the task's", () => {
       "[400]: Error from provider (Console Go): Upstream request failed",
       "[403]: The latest version of this model is only available hosted",
       "Model 'antigravity/gemini-3.1-flash-image' is an image-generation model",
+      /**
+       * The sentence that ended a 119-minute run. Every one of its five root tasks exhausted its ladder on
+       * this and nothing else — T013 saw it 31 times, T055 43 — and those five blocked 101 more, leaving 19
+       * of 125 merged. Probed straight afterwards the same model answered the same request in 200: the
+       * gateway rotates between two accounts and one lacks the beta, so the task was charged for which
+       * account it landed on.
+       */
+      "The long context beta is not yet available for this subscription.",
     ]) {
       expect(isFleetFailure(m), m).toBe(true);
+    }
+  });
+
+  /**
+   * Context OVERFLOW is the opposite case and must keep charging: the prompt really was too big, so the
+   * task learned something about itself and the ladder is the right place to record it. `isCapabilityError`
+   * covers both wordings; only the subscription one is the fleet's.
+   */
+  it("still charges when the request itself was too big", () => {
+    for (const m of ["context length exceeded", "too many tokens", "maximum context reached"]) {
+      expect(isFleetFailure(m), m).toBe(false);
     }
   });
 

@@ -97,7 +97,25 @@ export function isFleetFailure(message: string): boolean {
      *    6× "did not accept a connection in time (ETIMEDOUT)"
      */
     || /did not accept a connection in time|upstream request failed/i.test(message)
-    || /is an image-generation model|only available hosted/i.test(message);
+    || /is an image-generation model|only available hosted/i.test(message)
+    /**
+     * A feature the SUBSCRIPTION lacks is the account's problem, not the task's — and it ended a run.
+     *
+     * "The long context beta is not yet available for this subscription." killed every one of the five root
+     * tasks in a 119-minute run: T013 saw it 31 times, T021 25, T055 43, T057 36, T079 13, and each of them
+     * exhausted its ladder on it. Those five blocked 101 more, so 106 of 125 tasks ended abandoned with 19
+     * merged. The attempt-error entries that spent the ladders are that sentence, verbatim, and nothing else.
+     *
+     * It is transient and account-shaped rather than request-shaped: probed directly afterwards, the same
+     * model answered the same request in 200. The gateway rotates between two Claude accounts and one of
+     * them lacks the beta, so a task charged for it is charged for which account it happened to land on.
+     *
+     * Deliberately narrow. `isCapabilityError` also matches context OVERFLOW — "context length exceeded",
+     * "too many tokens" — and those ARE about the request: the prompt really was too big, the task really
+     * did learn something, and the ladder is the right place to record it. Only the subscription wording
+     * moves here.
+     */
+    || /not (?:yet )?available for this subscription/i.test(message);
 }
 
 /**
