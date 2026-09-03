@@ -244,7 +244,26 @@ export async function runImplementer(
    * inlined, a queue-migration task does not.
    */
   const attached = deps.roleRegistry.skillsFor(role);
-  const subject = `${task.title} ${task.acceptance.join(" ")} ${task.reviewNotes.join(" ")}`;
+  /**
+   * What the task IS, not what went wrong with it.
+   *
+   * `reviewNotes` used to be in here, and a task's own failure history was then read as evidence about what
+   * KIND of work it is. Measured on T013, "Backend: MirrorOrder entity modeli" — a C# EF Core entity:
+   *
+   *   title alone                    terraform-skill scores 0, matches nothing
+   *   title + 13 accumulated notes   scores 4, clears MATCH_BAR, and is attached
+   *
+   * The four terms that carried it — `reviewing`, `open`, `state`, `mode` — come from none of the work. They
+   * come from "15 of 15 lens(es) never returned a verdict", from an `EACCES … open '/Users/…'`, from the
+   * words this session's own error messages happen to use. A 34-character title was outvoted by 3,025
+   * characters of failure history, so the more a task struggled the more irrelevant its skills became.
+   *
+   * The notes still reach the implementer — they are review feedback and it must act on them — and they
+   * still steer `memoryHints` above, where "what went wrong here before" is exactly the right question. They
+   * are only wrong as evidence of DOMAIN: a finding about a missing index does not make a database task into
+   * something else, and the title and acceptance already say what it is.
+   */
+  const subject = `${task.title} ${task.acceptance.join(" ")}`;
   const routed = routeSkills(subject, deps.skillRegistry, attached, {
     role,
     implementing: true,

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { routeSkills, scoreSkill, isExplicitOnly, isNonImplementing, filesForTask, expandExtensions, MATCH_BAR, MAX_ROUTED, MIN_DENSITY } from "../../src/skills/route.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
@@ -388,5 +389,87 @@ describe("what may fill a trailing routed slot", () => {
 
   it("states the floor it applies, so the number is not folklore", () => {
     expect(MIN_DENSITY).toBe(0.1);
+  });
+});
+
+/**
+ * A task's failure history is not evidence about what KIND of work it is.
+ *
+ * Measured on T013, "Backend: MirrorOrder entity modeli" — a C# EF Core entity that had struggled and
+ * collected thirteen review notes. Scoring `terraform-skill` against that card, piece by piece:
+ *
+ *   title                 0
+ *   + acceptance          2   `state` from Status, `mode` from FulfillmentMode — real words of the work,
+ *                             and below MATCH_BAR, so nothing is attached
+ *   + the failure notes   4   `reviewing` from "the review ran", `open` from **opencode**-go
+ *
+ * The notes contribute exactly the two hits that clear the bar, and both are the harness talking about its
+ * own trouble — a provider name inside a fleet-failure message is not a fact about C# entities. A user saw
+ * `senior-coder · terraform-skill` on that task and reasonably asked why.
+ *
+ * The notes still reach the implementer, and still steer memory recall, where "what went wrong here before"
+ * is the right question. They are only wrong as evidence of DOMAIN.
+ */
+describe("routing reads what the task is, not what went wrong with it", () => {
+  const TERRAFORM =
+    "Use when writing, reviewing, or debugging Terraform/OpenTofu modules, tests, CI, scans, or state ops - " +
+    "diagnoses failure mode (identity churn, secrets, blast radius, CI drift, state corruption) with " +
+    "version-aware guards.";
+  const TITLE = "Backend: MirrorOrder entity modeli";
+  /** The card's own acceptance, verbatim — the source of the two legitimate hits. */
+  const ACCEPTANCE = "src/domain/suppliers/models/MirrorOrder.cs dosyası mevcut "
+    + "SupplierCompanyId, SourceOrderId, ChannelReference, Status (Accepted, Rejected, Shipped, Cancelled), "
+    + "FulfillmentMode, MirrorLines, CreatedAt, UpdatedAt alanları tanımlanmış";
+  /** One of its thirteen notes, verbatim — written by this harness, about this harness. */
+  const NOTE = "The previous attempt never reached a model (Model 'muse-spark-1.2-contributor-xhigh' is not "
+    + "available in the active live catalog for provider 'opencode-go'.). Nothing is known about the work "
+    + "yet — start it fresh. 15 of 15 lens(es) never returned a verdict — too little of the review ran.";
+
+  const registry = (): SkillRegistry => {
+    const r = new SkillRegistry();
+    r.register({ name: "terraform-skill", description: TERRAFORM, content: "terraform guidance" });
+    return r;
+  };
+  const route = (subject: string) =>
+    routeSkills(subject, registry(), [], { role: "senior-coder", implementing: true });
+
+  it("attaches nothing to a C# entity task", () => {
+    expect(route(`${TITLE} ${ACCEPTANCE}`)).toEqual([]);
+  });
+
+  it("would have attached an infrastructure skill if the failure notes counted", () => {
+    expect(route(`${TITLE} ${ACCEPTANCE} ${NOTE}`).map((m) => m.name)).toContain("terraform-skill");
+  });
+
+  /** The two extra hits are the harness's own vocabulary, not the task's. */
+  it("shows exactly which words the notes contribute", () => {
+    const own = scoreSkill(`${TITLE} ${ACCEPTANCE}`, TERRAFORM);
+    const withNotes = scoreSkill(`${TITLE} ${ACCEPTANCE} ${NOTE}`, TERRAFORM);
+    expect(own.score).toBeLessThan(MATCH_BAR);
+    expect(withNotes.score).toBeGreaterThanOrEqual(MATCH_BAR);
+    const added = withNotes.hits.filter((h) => !own.hits.includes(h));
+    expect(added).toContain("open");        // ← "opencode-go"
+    expect(added).toContain("reviewing");   // ← "the review ran"
+  });
+});
+
+/**
+ * …and the implementer must not hand routing that history in the first place.
+ *
+ * The subject is built in `runImplementer`; this pins the shape of it, because the defect above is not in
+ * the router — the router scored exactly what it was given — but in what was given.
+ */
+describe("the implementer's routing subject", () => {
+  const src = readFileSync("src/engine/implementer.ts", "utf8");
+
+  it("routes on title and acceptance, never on reviewNotes", () => {
+    const line = /const subject = `\$\{task\.title\}[^`]*`/.exec(src)?.[0] ?? "";
+    expect(line).toContain("task.acceptance");
+    expect(line).not.toContain("reviewNotes");
+  });
+
+  /** The notes still reach memory recall, where "what went wrong here before" is the right question. */
+  it("keeps the notes in the memory-hint subject", () => {
+    expect(src).toMatch(/memoryHints\(deps, `\$\{task\.title\} \$\{task\.reviewNotes\.join/);
   });
 });
