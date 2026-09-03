@@ -6,7 +6,9 @@ import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
-import { AccountPool } from "./agents/cli-accounts.js";
+import { AccountPool, fileUsageStore, summarizeAccounts } from "./agents/cli-accounts.js";
+import { addProvider } from "./agents/add-provider.js";
+import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
 import { cliCatalog } from "./agents/cli-models.js";
 import { stripThinking } from "./tui/format.js";
@@ -304,6 +306,35 @@ export async function main(argv: string[]): Promise<void> {
     } finally { close(); }
     return;
   }
+  /**
+   * Answered here, beside `init`, and for the same reason: it is setup, not work.
+   *
+   * It must not need a project, a worktree, a provider or a network — someone runs this BECAUSE a
+   * subscription is exhausted, which is exactly when the ordinary startup path is least likely to get far.
+   */
+  if (argv[0] === "add-provider") {
+    const kind = argv[1];
+    if (kind !== "claude" && kind !== "codex") {
+      console.error(`add-provider needs a CLI to connect: \`hcode add-provider claude\` or \`hcode add-provider codex\`${kind ? ` (got "${kind}")` : ""}`);
+      process.exitCode = 1;
+      return;
+    }
+    const path = `${process.env.HOME ?? ""}/.horsecode/config.json`;
+    process.exitCode = addProvider(kind, {
+      home: process.env.HOME ?? "",
+      readConfig: () => {
+        try {
+          const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+          return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+        } catch { return {}; }
+      },
+      writeConfig: (c) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(c, null, 2) + "\n"); },
+      login: runLogin,
+      check: checkProfile,
+      log: (line) => console.log(line),
+    });
+    return;
+  }
   const cwd = process.cwd();
   const config = loadConfig({
     cwd,
@@ -431,7 +462,12 @@ export async function main(argv: string[]): Promise<void> {
    * copy would learn only from its own calls and both would keep pushing into a limit the other had already
    * been told about.
    */
-  const accounts = new AccountPool(config.claudeAccounts);
+  const accounts = new AccountPool(config.accounts, fileUsageStore(home));
+  /**
+   * Printed before any work starts, because this is the moment it can change a decision: a run committed to
+   * a subscription with nothing left is a run that parks halfway through. Silent when nothing is connected.
+   */
+  for (const line of summarizeAccounts(accounts.usage())) console.log(line);
   const raw = new CliProvider({ readOnly: false, accounts });
   const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();

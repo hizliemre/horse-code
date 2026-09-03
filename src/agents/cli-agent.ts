@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { profileEnv } from "./cli-auth.js";
 
 /**
  * Running an official coding CLI as the agent, instead of calling a model API.
@@ -92,9 +93,10 @@ export interface CliRun {
   /**
    * Which logged-in profile runs this call — a directory, not a credential.
    *
-   * Claude Code keeps its session under a config directory, and `CLAUDE_CONFIG_DIR` chooses which one.
-   * Verified: pointed at a fresh directory it answers "Not logged in · Please run /login" and builds its own
-   * tree there, so a second subscription is a second directory that has been logged into once, by hand.
+   * Each CLI keeps its session under a directory of its own — `CLAUDE_CONFIG_DIR` for Claude Code,
+   * `CODEX_HOME` for Codex — and the variable chooses which one. Verified against both: pointed at a fresh
+   * directory each reports itself logged out and builds its own tree there, so a second subscription is a
+   * second directory that has been logged into once, by hand. See `profileEnv`.
    *
    * Nothing about a credential passes through here. horse-code names a profile; the CLI reads its own
    * session from it, exactly as it does when a person runs it.
@@ -320,7 +322,7 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
        */
       child = spawn(run.kind, args, {
         cwd: run.cwd, signal: run.signal, stdio: ["ignore", "pipe", "pipe"],
-        ...(run.configDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: run.configDir } } : {}),
+        ...(run.configDir ? { env: { ...process.env, ...profileEnv(run.kind, run.configDir) } } : {}),
       });
     } catch (e) {
       resolve({ text: "", error: e instanceof Error ? e.message : String(e), exitCode: -1 });

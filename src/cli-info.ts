@@ -34,6 +34,7 @@ export function usage(): string {
     "  hcode                      start the REPL",
     "  hcode \"<request>\"          run one request to completion, then report where the work landed",
     "  hcode init                 write .horsecode/ for this project and ask for the essentials",
+    "  hcode add-provider <cli>   connect one more claude or codex subscription, through that CLI's own sign-in",
     "",
     "OPTIONS",
     "  -b, --branch <name>        branch the session's worktree from this ref (default: current branch)",

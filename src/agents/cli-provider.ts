@@ -79,9 +79,11 @@ export interface CliProviderOptions {
    */
   cwd?: string;
   /**
-   * More than one logged-in Claude profile to spill across. Omitted, calls run under the ambient login.
+   * The logged-in profiles to spill across. Omitted, calls run under the ambient login.
    *
-   * Claude only: `CLAUDE_CONFIG_DIR` is Claude Code's, and Codex keeps its own session elsewhere.
+   * The pool holds both CLIs' profiles and hands out only the kind being called: a Claude profile says
+   * nothing about a Codex subscription, and offering one to the other would point a binary at a directory
+   * belonging to something else entirely.
    */
   accounts?: AccountPool;
 }
@@ -198,7 +200,7 @@ export class CliProvider implements Provider {
      * call, so the very next one can act on it. Decided once at startup, a run would keep pushing into a
      * limit it had already been told about.
      */
-    const account = kind === "claude" ? this.accounts?.pick() : undefined;
+    const account = this.accounts?.pick(kind);
 
     let res!: Awaited<ReturnType<typeof runCliAgent>>;
     yield* streamWhileRunning<ChatEvent>((push) =>
@@ -209,7 +211,7 @@ export class CliProvider implements Provider {
           if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}), ...(ev.tool.ok === false ? { ok: false } : {}) });
           if (ev.text) push({ type: "text-delta", text: ev.text });
           // Every call carries one of these, so the pool learns what this profile has left at no extra cost.
-          if (ev.quota && account) this.accounts?.record(account.name, ev.quota.windows);
+          if (ev.quota && account) this.accounts?.record(kind, account.name, ev.quota.windows);
         },
       }).then((r) => { res = r; }));
 
@@ -246,7 +248,7 @@ export class CliProvider implements Provider {
       yield {
         type: "error", retryable: true,
         message: loggedOut
-          ? `${kind} CLI is not logged in${account ? ` under profile "${account.name}" (${account.configDir})` : ""} — run \`claude /login\` there once`
+          ? `${kind} CLI is not logged in${account ? ` under profile "${account.name}"` : ""} — run \`hcode add-provider ${kind}\` to sign it in again`
           : `${kind} CLI did not recognise ${req.model} and answered without a model`,
       };
       return;
