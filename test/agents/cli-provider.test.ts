@@ -239,3 +239,24 @@ describe("what a delegated agent may do", () => {
     expect(src).not.toContain("danger-full-access");
   });
 });
+
+/**
+ * A person pressing Ctrl+C is not a model failure.
+ *
+ * An aborted spawn returns `{ error: "The operation was aborted", exitCode: -1 }`, and -1 is not zero — so
+ * it was reported as retryable. The chain slid to the next model, started another CLI, and the ladder
+ * climbed: every interrupt bought a fresh agent instead of stopping one. Reported as "I can no longer stop
+ * a run with Ctrl+C".
+ */
+describe("a cancelled call", () => {
+  it("ends the chain instead of sliding to the next model", async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const out = [];
+    for await (const ev of new CliProvider({ kind: "claude" }).chat(req({ model: "haiku" }), ac.signal)) {
+      out.push(ev);
+    }
+    const err = out.find((e) => e.type === "error");
+    expect(err).toMatchObject({ type: "error", message: "cancelled", retryable: false });
+  });
+});

@@ -208,6 +208,21 @@ export class CliProvider implements Provider {
       };
       return;
     }
+    /**
+     * A person pressing Ctrl+C is not a model failure, and calling it one made the run unstoppable.
+     *
+     * An aborted spawn comes back as `{ error: "The operation was aborted", exitCode: -1 }`, and -1 is not
+     * zero — so it was reported as RETRYABLE. The chain slid to the next model, started another CLI, and the
+     * ladder climbed: every interrupt bought a fresh agent instead of stopping one. Reported as "I can no
+     * longer stop a run with Ctrl+C", and correctly.
+     *
+     * The old transport drew this line and this one had lost it: a caller's cancellation ends the call, and
+     * nothing about it says another model would do better.
+     */
+    if (signal.aborted) {
+      yield { type: "error", message: "cancelled", retryable: false };
+      return;
+    }
     if (res.error && !res.text.trim()) {
       yield { type: "error", message: `${kind} CLI: ${res.error}`, retryable: res.exitCode !== 0 };
       return;
