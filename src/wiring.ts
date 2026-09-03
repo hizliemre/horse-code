@@ -79,6 +79,15 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     roles[name] = { ...(cfg ?? { models: sessionChain }), ...(skills.length ? { skills } : { skills: [] }) };
   }
   const roleRegistry = new RoleRegistry(roles, DEFAULT_PROMPTS, opts.skillRegistry);
+  /**
+   * How many accounts each subscription has, so the head rotation spreads waves in proportion to what is
+   * actually paying for them. Read live rather than copied: `count` reflects the pool this session built,
+   * and connecting an account has to change the share rather than only the fallbacks.
+   */
+  if (opts.accounts) {
+    const pool = opts.accounts;
+    roleRegistry.setSourceWeights(() => ({ claude: pool.count("claude"), codex: pool.count("codex") }));
+  }
 
   /**
    * A review lens takes its chain from `config.roles` when its own team entry does not carry one.

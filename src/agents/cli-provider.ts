@@ -1,5 +1,6 @@
 import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
 import { runCliAgent, SYNTHETIC, type CliKind, type CliUsage } from "./cli-agent.js";
+import { isCallerAbort, isDeadline } from "../agent/deadline.js";
 import { AccountPool } from "./cli-accounts.js";
 import { cliFor, cliInvocation } from "./cli-models.js";
 
@@ -264,8 +265,23 @@ export class CliProvider implements Provider {
      * The old transport drew this line and this one had lost it: a caller's cancellation ends the call, and
      * nothing about it says another model would do better.
      */
-    if (signal.aborted) {
+    /**
+     * A person pressing Ctrl+C and a deadline of ours running out both abort this signal, and they call for
+     * opposite answers. Collapsing them into "cancelled, not retryable" — which this did — made every
+     * expired deadline end its chain instead of sliding to the next model.
+     *
+     * Measured on a live board: 17 code-review calls died at exactly 180_433ms and upward, all of them the
+     * `SHORT_CALL_MS` budget expiring, none of them anybody's Ctrl+C. Each one ended a chain that had two
+     * more models to try.
+     *
+     * The gateway transport drew this line and this one had to be taught it again — see `isCallerAbort`.
+     */
+    if (isCallerAbort(signal)) {
       yield { type: "error", message: "cancelled", retryable: false };
+      return;
+    }
+    if (isDeadline(signal)) {
+      yield { type: "error", message: `${kind} CLI: deadline expired`, retryable: true };
       return;
     }
     if (res.error && !res.text.trim()) {

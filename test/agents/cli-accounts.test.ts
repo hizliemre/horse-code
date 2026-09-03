@@ -22,23 +22,24 @@ describe("with no profiles configured", () => {
 });
 
 /**
- * Spillover, not rotation: the first subscription is used until it is nearly out, and only then does the
- * next take over. Alternating between two would make two limits behave like one bigger one; this keeps a
- * run on one subscription and reaches for another when the first genuinely cannot serve.
+ * Accounts of one kind take turns, and a spent one steps out.
+ *
+ * The first design drained one subscription before starting the next. Turns are better over a long run: two
+ * accounts used alternately drain their windows at the same rate, so both refill in parallel. Spillover
+ * empties one window while the other sits full — the same capacity, arranged to run out sooner.
  */
 describe("choosing which subscription serves a call", () => {
-  it("stays on the first while it still has room", () => {
+  it("takes turns between the accounts of one kind", () => {
     const p = pool();
     expect(p.pick("claude")?.name).toBe("main");
-    p.record("claude", "main", { five_hour: 0.4, seven_day: 0.1 });
-    expect(p.pick("claude")?.name).toBe("main");
-    p.record("claude", "main", { five_hour: 0.9, seven_day: 0.2 });
+    expect(p.pick("claude")?.name).toBe("second");
     expect(p.pick("claude")?.name).toBe("main");
   });
 
-  it("moves to the next once the first is spent", () => {
+  it("drops a spent account out of the rotation", () => {
     const p = pool();
     p.record("claude", "main", { five_hour: SPENT, seven_day: 0.2 });
+    expect(p.pick("claude")?.name).toBe("second");
     expect(p.pick("claude")?.name).toBe("second");
   });
 
@@ -52,16 +53,25 @@ describe("choosing which subscription serves a call", () => {
     expect(p.pick("claude")?.name).toBe("second");
   });
 
+  /** A reading that says there is room again puts an account straight back into the rotation. */
+  it("lets a recovered account rejoin", () => {
+    const p = pool();
+    p.record("claude", "main", { five_hour: 1 });
+    expect(p.pick("claude")?.name).toBe("second");
+    p.record("claude", "main", { five_hour: 0.1 });
+    const seen = new Set([p.pick("claude")?.name, p.pick("claude")?.name]);
+    expect(seen).toEqual(new Set(["main", "second"]));
+  });
+
   /**
    * With everything spent there is no good answer, and refusing to name one would fail the call here — on a
-   * reading that is only ever "as of that profile's last call". The limit itself is a better judge, and it
-   * answers precisely; the pool's guess should not pre-empt it.
+   * reading that is only ever "as of that profile's last call". The limit itself is a better judge.
    */
   it("still names one when every profile looks spent", () => {
     const p = pool();
     p.record("claude", "main", { five_hour: 1 });
     p.record("claude", "second", { five_hour: 1 });
-    expect(p.pick("claude")?.name).toBe("second");
+    expect(p.pick("claude")).toBeDefined();
   });
 });
 
@@ -89,6 +99,20 @@ describe("keeping the two CLIs' profiles apart", () => {
     expect(p.pick("codex")?.name).toBe("oai");
   });
 
+  /** Turns are per source: taking a Claude turn must not advance Codex's place in its own rotation. */
+  it("keeps each kind's turn separate", () => {
+    const p = new AccountPool([
+      { kind: "claude", name: "c1", configDir: "/1" },
+      { kind: "claude", name: "c2", configDir: "/2" },
+      { kind: "codex", name: "x1", configDir: "/3" },
+      { kind: "codex", name: "x2", configDir: "/4" },
+    ]);
+    expect(p.pick("claude")?.name).toBe("c1");
+    expect(p.pick("codex")?.name).toBe("x1");
+    expect(p.pick("claude")?.name).toBe("c2");
+    expect(p.pick("codex")?.name).toBe("x2");
+  });
+
   it("counts profiles overall and per CLI", () => {
     expect(mixed().count()).toBe(2);
     expect(mixed().count("claude")).toBe(1);
@@ -107,7 +131,7 @@ describe("readings that survive between sessions", () => {
     return box;
   };
 
-  it("starts from what the last session measured", () => {
+  it("skips an account the last session measured as spent", () => {
     const store = fake({ [readingKey("claude", "main")]: { spent: 0.99, at: 1_000 } });
     const p = new AccountPool(
       [

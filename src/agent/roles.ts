@@ -1,3 +1,4 @@
+import { sourceOf } from "../tui/role-models.js";
 import { cliFor } from "../agents/cli-models.js";
 import type { AgentEvent, Provider } from "../core/types.js";
 import type { RoleConfig } from "../config/config.js";
@@ -97,6 +98,26 @@ export function sourcePrefix(model: string): string | undefined {
  * prefixes. Anything unrecognised is left as it is: a real source this does not know about must still be
  * able to match itself.
  */
+/**
+ * A turn order over sources, each appearing once per account it has, interleaved rather than blocked.
+ *
+ * Blocked — `[claude, claude, codex]` — three consecutive workers would put two on the same subscription
+ * before touching the other, which is the pile-up the rotation exists to prevent. Interleaved gives
+ * `[claude, codex, claude]`: the same 2:1 share, spread.
+ *
+ * A source with no stated weight counts as one, so a chain naming a subscription nobody has connected still
+ * takes its turn rather than vanishing.
+ */
+export function weightedCycle(sources: readonly string[], weights: Record<string, number>): string[] {
+  const queues = sources.map((s) => Array<string>(Math.max(1, weights[s] ?? 1)).fill(s));
+  const out: string[] = [];
+  for (let more = true; more; ) {
+    more = false;
+    for (const q of queues) { const m = q.shift(); if (m !== undefined) { out.push(m); more = true; } }
+  }
+  return out;
+}
+
 export function canonicalSource(name: string): string {
   const s = name.toLowerCase().replace(/^no-think\//, "");
   if (s === "cc" || s === "claude") return "claude";
@@ -428,8 +449,43 @@ export class RoleRegistry {
    */
   chainFor(roleName: string, slot = 0): string[] {
     const c = this.chain(roleName);
-    const k = c.length ? ((slot % c.length) + c.length) % c.length : 0;
+    if (c.length < 2) return c;
+
+    /**
+     * Rotating by CHAIN POSITION spreads workers evenly over the chain, which is not the same as spreading
+     * them evenly over the subscriptions paying for them. A chain of `terra → sonnet → sol` sends two workers
+     * in three to Codex and one to Claude — a 2:1 split decided by how many Codex models happened to land in
+     * one role's chain, and unchanged by connecting a second Claude subscription.
+     *
+     * So the rotation runs over SOURCES, each appearing as many times as it has accounts connected, and the
+     * head becomes the chain's first model from the source whose turn it is. Two Claude accounts against one
+     * Codex means Claude leads two waves in three, which is what "connecting an account adds capacity" has
+     * to mean. Interleaved rather than repeated in a block, so a run of three workers uses all three
+     * subscriptions rather than the same one twice and then the other.
+     *
+     * The chain KEEPS its full fallback set behind whichever head is chosen, so spreading load still costs
+     * no resilience — the reason the original rotation was written this way.
+     */
+    const order: string[] = [];
+    for (const m of c) { const s = sourceOf(m); if (!order.includes(s)) order.push(s); }
+    const cycle = weightedCycle(order, this.sourceWeights?.() ?? {});
+    if (cycle.length) {
+      const want = cycle[(((slot % cycle.length) + cycle.length) % cycle.length)];
+      const i = c.findIndex((m) => sourceOf(m) === want);
+      // A source with nothing live left in this chain simply does not lead; the plain rotation still applies.
+      if (i > 0) return [c[i], ...c.filter((_, j) => j !== i)];
+      if (i === 0) return c;
+    }
+    const k = ((slot % c.length) + c.length) % c.length;
     return k === 0 ? c : [...c.slice(k), ...c.slice(0, k)];
+  }
+
+  /** How many accounts each source has connected — set at the composition root; equal weights without it. */
+  private sourceWeights?: () => Record<string, number>;
+
+  /** Wire the account weights (called once the pool exists). */
+  setSourceWeights(fn: () => Record<string, number>): void {
+    this.sourceWeights = fn;
   }
 
   /** The model a role would use next (chain head), for UI display only. */

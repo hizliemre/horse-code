@@ -45,3 +45,25 @@ export const LONG_CALL_MS = 15 * 60 * 1000;
 export function callSignal(signal: AbortSignal, ms = SHORT_CALL_MS): AbortSignal {
   return AbortSignal.any([signal, AbortSignal.timeout(ms)]);
 }
+
+/**
+ * A caller's cancellation, as distinct from a deadline of ours running out.
+ *
+ * Both abort the same signal, and treating them alike is wrong in two ways at once: our own deadline gets
+ * reported as "cancelled" — a word that says a person did it — and marked NON-retryable, so the chain never
+ * tries the next model even though another one might answer in time.
+ *
+ * Every deadline in the pipeline arrives this way: `callSignal` composes each one onto the caller's signal,
+ * so read carelessly every single one of them looks like the user pressing Ctrl+C.
+ *
+ * `AbortSignal.any` keeps the reason of whichever source fired, which is what makes them separable at all:
+ * a timeout leaves a `TimeoutError`, a caller's `abort()` leaves an `AbortError`.
+ */
+export function isCallerAbort(signal: AbortSignal): boolean {
+  return signal.aborted && (signal.reason as { name?: string } | undefined)?.name !== "TimeoutError";
+}
+
+/** Our own deadline, not the caller's decision — worth saying differently, and worth retrying elsewhere. */
+export function isDeadline(signal: AbortSignal): boolean {
+  return signal.aborted && (signal.reason as { name?: string } | undefined)?.name === "TimeoutError";
+}

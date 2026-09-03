@@ -10,10 +10,13 @@ import type { CliKind } from "./cli-agent.js";
  * directory each reports itself logged out and builds its own tree there. So a second subscription is a
  * second directory, and no credential is stored, passed, or read here; this file only ever names a path.
  *
- * The rule is SPILLOVER, not rotation. The first profile of a kind serves until its own limit is nearly
- * spent, and only then does the next take over. That distinction is the whole design: a run stays on one
- * subscription and reaches for another when the first is genuinely out, rather than alternating to make two
- * limits behave like one bigger limit.
+ * Accounts of one kind take TURNS, and a spent one steps out of the rotation.
+ *
+ * The first design here was spillover — drain one subscription, then start the next — and turns are better
+ * for the reason that matters over a long run: two accounts used alternately drain their windows at the same
+ * rate, so both refill in parallel and neither is the one thing standing between a board and a stall.
+ * Spillover empties one window completely while the other sits full, which is the same total capacity
+ * arranged so that it runs out sooner.
  *
  * With no profiles configured — the ordinary case — nothing changes: `pick` returns undefined and each CLI
  * runs under whatever the person is already logged into.
@@ -43,7 +46,7 @@ export interface CliAccount {
 }
 
 /**
- * How spent a window has to be before the next profile of the same kind takes over.
+ * How spent a window has to be before a profile steps out of its kind's rotation.
  *
  * Readings arrive one per call, so between two of them utilization can only move by a single call's worth;
  * five points is room enough for that unless one call is enormous. Set lower and a subscription is abandoned
@@ -125,16 +128,27 @@ export class AccountPool {
   /**
    * The profile a call of this kind should run under, or undefined to run under the ambient login.
    *
-   * The first one not yet spent wins, which is what makes this spillover: a profile keeps its place in line
-   * for as long as it can still serve. When every profile of a kind is spent the last one is returned anyway
-   * — there is nothing better to do with the call, and the limit itself will say so far more precisely than
-   * this guess can.
+   * Round-robin over the accounts that still have room, so two subscriptions drain together rather than one
+   * after the other. A spent one drops out of the rotation and rejoins the moment a reading says it can
+   * serve again.
    */
   pick(kind: CliKind): CliAccount | undefined {
     const mine = this.accounts.filter((a) => a.kind === kind);
     if (!mine.length) return undefined;
-    return mine.find((a) => (this.readings[readingKey(kind, a.name)]?.spent ?? 0) < SPENT) ?? mine.at(-1);
+    const live = mine.filter((a) => (this.readings[readingKey(kind, a.name)]?.spent ?? 0) < SPENT);
+    /**
+     * Everything spent still names one. There is nothing better to do with the call, and the reading this
+     * would refuse on is only ever "as of that profile's last call" — the limit itself answers far more
+     * precisely, so this guess must not pre-empt it.
+     */
+    const pool = live.length ? live : mine;
+    const n = this.turn.get(kind) ?? 0;
+    this.turn.set(kind, n + 1);
+    return pool[n % pool.length];
   }
+
+  /** Whose turn it is, per kind. Turns are per SOURCE: Claude's rotation says nothing about Codex's. */
+  private readonly turn = new Map<CliKind, number>();
 
   /**
    * File a quota reading against a profile.

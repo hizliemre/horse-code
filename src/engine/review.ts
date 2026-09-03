@@ -240,8 +240,18 @@ export const REVIEW_MAX_TURNS = 15;
  * Wall-clock ceiling for one reviewer. The team runs in parallel, so a round lasts as long as its SLOWEST
  * member: without this, one stuck reviewer holds every finished one hostage indefinitely (observed: three
  * lenses done in 2-8 min, four still running at 17.5 min with no way out).
+ *
+ * Raised from three minutes when the reviewers moved onto the CLIs, which is a slower transport for the same
+ * work: a delegated lens pays process start-up and then runs its own agent loop, where the gateway answered
+ * one HTTP request. Measured over 105 review calls on a live board — p50 46s, p90 144s — against a 180s
+ * ceiling, so the ninetieth percentile of HEALTHY work sat at eighty per cent of the budget and 17 calls
+ * were killed at the wall for being ordinary.
+ *
+ * Five minutes puts the ceiling well clear of that distribution while staying a ceiling, and it is what the
+ * code reviewer next door already allows (`CODE_REVIEW_TIMEOUT_MS`). The hostage problem it was written for
+ * is unchanged: a lens that is genuinely stuck still ends, five minutes later instead of three.
  */
-export const REVIEW_TIMEOUT_MS = 3 * 60 * 1000;
+export const REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * A per-reviewer signal that trips on the job being cancelled OR on the reviewer running out of time. Both

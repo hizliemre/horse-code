@@ -1,3 +1,4 @@
+import { isCallerAbort, isDeadline } from "../../src/agent/deadline.js";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { promptFor, CliProvider, streamWhileRunning, isLoggedOut } from "../../src/agents/cli-provider.js";
@@ -274,5 +275,48 @@ describe("telling a logged-out profile from a model that does not exist", () => 
   it("does not claim a logged-out profile from an ordinary answer", () => {
     expect(isLoggedOut("ok")).toBe(false);
     expect(isLoggedOut("I logged the request and moved on")).toBe(false);
+  });
+});
+
+/**
+ * A person pressing Ctrl+C and a deadline of ours running out both abort the same signal, and they call for
+ * opposite answers: a cancellation ends the chain, an expired deadline is exactly when another model should
+ * be tried.
+ *
+ * Collapsing them into "cancelled, not retryable" cost a live board 17 code-review calls, each dying at the
+ * `SHORT_CALL_MS` wall with two more models left untried, and none of them anybody's Ctrl+C.
+ */
+describe("telling a caller's cancellation from a deadline", () => {
+  const abortedWith = (reason: unknown): AbortSignal => {
+    const ac = new AbortController();
+    ac.abort(reason);
+    return ac.signal;
+  };
+
+  it("reads a timeout as ours, not the caller's", () => {
+    const s = abortedWith(new DOMException("timed out", "TimeoutError"));
+    expect(isDeadline(s)).toBe(true);
+    expect(isCallerAbort(s)).toBe(false);
+  });
+
+  it("reads a plain abort as the caller's", () => {
+    const s = abortedWith(new DOMException("aborted", "AbortError"));
+    expect(isCallerAbort(s)).toBe(true);
+    expect(isDeadline(s)).toBe(false);
+  });
+
+  it("says nothing about a signal that has not aborted", () => {
+    const live = new AbortController().signal;
+    expect(isCallerAbort(live)).toBe(false);
+    expect(isDeadline(live)).toBe(false);
+  });
+
+  /** The transport has to ASK, and it stopped asking once — which is how the two were conflated. */
+  it("is what the CLI transport actually consults", () => {
+    const src = readFileSync("src/agents/cli-provider.ts", "utf8");
+    expect(src).toContain("if (isCallerAbort(signal))");
+    expect(src).toContain("if (isDeadline(signal))");
+    // A deadline must leave the chain able to try the next model.
+    expect(src).toContain('message: `${kind} CLI: deadline expired`, retryable: true');
   });
 });

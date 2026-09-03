@@ -1,3 +1,4 @@
+import { sourceOf } from "../../src/tui/role-models.js";
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import { RoleRegistry, runRole } from "../../src/agent/roles.js";
@@ -352,5 +353,62 @@ describe("a role's effort", () => {
     reg.setRoleEffort("coder", "xhigh");
     reg.setRoleEffort("coder", undefined);
     expect(reg.fallbackOpts("coder")).not.toHaveProperty("effort");
+  });
+});
+
+/**
+ * Spreading workers over the CHAIN is not the same as spreading them over the subscriptions paying for them.
+ *
+ * A chain of `terra → sonnet → sol` sends two workers in three to Codex and one to Claude — a 2:1 split
+ * decided by how many Codex models happened to land in one role's chain, and unchanged by connecting a
+ * second Claude subscription. Measured on the live board that was the whole picture: every implementer ran
+ * on Codex while a Claude plan went unspent.
+ */
+describe("RoleRegistry.chainFor — waves spread in proportion to accounts connected", () => {
+  const chain = ["gpt-5.6-terra", "sonnet", "gpt-5.6-sol"];
+  const reg = (weights: Record<string, number>): RoleRegistry => {
+    const r = new RoleRegistry({ coder: { models: chain } } as never, {} as never);
+    r.setSourceWeights(() => weights);
+    return r;
+  };
+  const share = (weights: Record<string, number>, waves = 12): Record<string, number> => {
+    const r = reg(weights);
+    const out: Record<string, number> = {};
+    for (let s = 0; s < waves; s++) {
+      const src = sourceOf(r.chainFor("coder", s)[0]);
+      out[src] = (out[src] ?? 0) + 1;
+    }
+    return out;
+  };
+
+  it("splits evenly when each CLI has one account", () => {
+    expect(share({ claude: 1, codex: 1 })).toEqual({ claude: 6, codex: 6 });
+  });
+
+  /** The point of connecting an account: it has to change the SHARE, not only the fallbacks. */
+  it("leans on the CLI with more accounts, in proportion", () => {
+    expect(share({ claude: 2, codex: 1 })).toEqual({ claude: 8, codex: 4 });
+    expect(share({ claude: 3, codex: 1 })).toEqual({ claude: 9, codex: 3 });
+    expect(share({ claude: 1, codex: 2 })).toEqual({ claude: 4, codex: 8 });
+  });
+
+  /** Interleaved, not blocked: three consecutive workers must not pile onto one subscription first. */
+  it("alternates rather than draining one subscription first", () => {
+    const r = reg({ claude: 2, codex: 1 });
+    const heads = [0, 1, 2].map((s) => sourceOf(r.chainFor("coder", s)[0]));
+    expect(new Set(heads).size).toBe(2);
+  });
+
+  /** Whatever leads, the full fallback set stays behind it — spreading load must cost no resilience. */
+  it("keeps every model in the chain behind the chosen head", () => {
+    const r = reg({ claude: 2, codex: 1 });
+    for (let s = 0; s < 6; s++) expect([...r.chainFor("coder", s)].sort()).toEqual([...chain].sort());
+  });
+
+  /** Nothing wired: the plain chain rotation still applies, so this cannot strand a run that has no pool. */
+  it("falls back to rotating the chain when no weights are set", () => {
+    const r = new RoleRegistry({ coder: { models: chain } } as never, {} as never);
+    expect(r.chainFor("coder", 0)[0]).toBe("gpt-5.6-terra");
+    expect([...r.chainFor("coder", 1)].sort()).toEqual([...chain].sort());
   });
 });
