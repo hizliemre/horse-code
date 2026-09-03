@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { promptFor, CliProvider } from "../../src/agents/cli-provider.js";
+import { promptFor, CliProvider, streamWhileRunning } from "../../src/agents/cli-provider.js";
 import { cliFor, cliInvocation, cliCatalog } from "../../src/agents/cli-models.js";
 import type { ChatRequest } from "../../src/core/types.js";
 import { makeStreamReader, decodeClaudeEvent } from "../../src/agents/cli-agent.js";
@@ -144,5 +144,69 @@ describe("reporting what the CLI's own agent did", () => {
     const reader = makeStreamReader(decodeClaudeEvent, (ev) => { if (ev.tool) events.push(`${ev.tool.name}:${ev.tool.target}`); });
     reader.push(stream); reader.end();
     expect(events).toEqual(["Write:src/a.ts"]);
+  });
+});
+
+/**
+ * A delegated call is minutes long, and everything it reports must arrive WHILE it is happening.
+ *
+ * The first shape of this buffered: collect everything the CLI reports, yield after the process exits, on
+ * the reasoning that a generator cannot yield from inside a callback. Measured on a live run — eight
+ * consecutive minutes with no event of any kind, because a delegated implementation call runs that long and
+ * everything it said was being held to the end. The row a person watches was blank for the whole task.
+ */
+describe("streaming what a run reports while it runs", () => {
+  const collect = async (it: AsyncIterable<number>) => {
+    const out: number[] = [];
+    for await (const v of it) out.push(v);
+    return out;
+  };
+
+  it("yields each event as it is pushed, not in a batch at the end", async () => {
+    const seenAt: number[] = [];
+    const t0 = Date.now();
+    for await (const v of streamWhileRunning<number>(async (push) => {
+      push(1); await new Promise((r) => setTimeout(r, 20));
+      push(2); await new Promise((r) => setTimeout(r, 20));
+      push(3);
+    })) { seenAt.push(Date.now() - t0); void v; }
+    expect(seenAt).toHaveLength(3);
+    // The first arrived while the run still had 40ms of work left — not batched at the end.
+    expect(seenAt[0]).toBeLessThan(seenAt[2] - 20);
+  });
+
+  /**
+   * The termination cases, which is where a stream bridge hangs if it hangs at all.
+   *
+   * A run that reports nothing and returns immediately is the sharpest of them: there is no event to wake
+   * the loop, only the completion, so the loop has to notice that on its own.
+   */
+  it("ends when the run ends, even with nothing pushed", async () => {
+    const finished = await Promise.race([
+      collect(streamWhileRunning<number>(async () => { /* reports nothing at all */ })).then(() => "done"),
+      new Promise((r) => setTimeout(() => r("HUNG"), 500)),
+    ]);
+    expect(finished).toBe("done");
+  });
+
+  it("ends when the run finishes in the same tick as its last push", async () => {
+    const finished = await Promise.race([
+      collect(streamWhileRunning<number>(async (push) => { push(1); push(2); })).then((v) => v.join(",")),
+      new Promise((r) => setTimeout(() => r("HUNG"), 500)),
+    ]);
+    expect(finished).toBe("1,2");
+  });
+
+  /** What the run managed to report before it failed is still worth having, so it drains before it throws. */
+  it("yields what was pushed, then rethrows the failure", async () => {
+    const seen: number[] = [];
+    await expect((async () => {
+      for await (const v of streamWhileRunning<number>(async (push) => {
+        push(7);
+        await new Promise((r) => setTimeout(r, 5));
+        throw new Error("the CLI died");
+      })) seen.push(v);
+    })()).rejects.toThrow("the CLI died");
+    expect(seen).toEqual([7]);
   });
 });

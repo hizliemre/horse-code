@@ -61,6 +61,41 @@ export interface CliProviderOptions {
   readOnly?: boolean;
 }
 
+/**
+ * Yields what a callback-driven run reports, WHILE it runs.
+ *
+ * A generator cannot yield from inside a callback, and the first shape of this concluded it therefore had to
+ * buffer: collect everything, yield after the process exits. Measured on a live run, that meant eight
+ * consecutive minutes with no event of any kind, because a delegated implementation call is minutes long and
+ * everything it said was being held to the end. The row a person watches was blank for the whole task.
+ *
+ * `waiter` is read at the await and nowhere earlier, which matters because `yield` suspends: between the
+ * top of an iteration and the bottom, any number of events can arrive and the run can end. Reading the
+ * freshest promise at the moment of waiting is what makes that safe. An earlier version captured it at the
+ * top of the loop, on a theory about a lost wake-up — there is no such window, since nothing runs between
+ * the `finished` check and the `await`, and capturing early would have meant waiting on a promise the
+ * yields had already made stale.
+ */
+export async function* streamWhileRunning<E>(
+  start: (push: (ev: E) => void) => Promise<unknown>,
+): AsyncIterable<E> {
+  const queue: E[] = [];
+  let finished = false;
+  let wake: () => void = () => {};
+  let waiter = new Promise<void>((r) => { wake = r; });
+  const bump = (): void => { const w = wake; waiter = new Promise<void>((r) => { wake = r; }); w(); };
+  const done = start((ev) => { queue.push(ev); bump(); });
+  let failure: unknown;
+  void done.then(() => { finished = true; bump(); }, (e: unknown) => { failure = e; finished = true; bump(); });
+  for (;;) {
+    while (queue.length) yield queue.shift()!;
+    if (finished) break;
+    await waiter;
+  }
+  // Drained first, then rethrown: what the run managed to report before it failed is still worth having.
+  if (failure) throw failure;
+}
+
 export class CliProvider implements Provider {
   private readonly fixed?: CliKind;
   private readonly readOnly: boolean;
@@ -114,27 +149,16 @@ export class CliProvider implements Provider {
      * held until it finished. The row a person watches was blank for the whole task, and the telemetry had
      * nothing to say about it either.
      */
-    const queue: ChatEvent[] = [];
-    let notify: (() => void) | undefined;
-    const push = (ev: ChatEvent): void => { queue.push(ev); notify?.(); };
-    const done = runCliAgent({
-      kind, cwd: process.cwd(), prompt: promptFor(req), signal, args,
-      onEvent: (ev) => {
-        if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}) });
-        if (ev.text) push({ type: "text-delta", text: ev.text });
-      },
-    });
-    let finished = false;
-    void done.then(() => { finished = true; notify?.(); }, () => { finished = true; notify?.(); });
-    while (!finished || queue.length) {
-      if (!queue.length) {
-        await new Promise<void>((resolve) => { notify = resolve; });
-        notify = undefined;
-        continue;
-      }
-      yield queue.shift()!;
-    }
-    const res = await done;
+    let res!: Awaited<ReturnType<typeof runCliAgent>>;
+    yield* streamWhileRunning<ChatEvent>((push) =>
+      runCliAgent({
+        kind, cwd: process.cwd(), prompt: promptFor(req), signal, args,
+        onEvent: (ev) => {
+          if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}) });
+          if (ev.text) push({ type: "text-delta", text: ev.text });
+        },
+      }).then((r) => { res = r; }));
+
 
     /**
      * A rate limit is the fleet's, not the task's — surfaced as a retryable error so it reaches the same
