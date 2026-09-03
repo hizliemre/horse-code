@@ -6,6 +6,7 @@ import { buildRememberTool } from "../tools/remember.js";
 import { buildAskUserTool } from "./writer-registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
+import { reconcileTouched } from "./touched.js";
 import { memoryHints, reinforceTouched, reinforceUsed } from "./memory-inject.js";
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { adjudicateSkills } from "../skills/adjudicate.js";
@@ -464,6 +465,19 @@ export async function runImplementer(
     if (deps.signal.aborted || !budget.aborted) throw e; // a real cancel, or a real error → unchanged
     throw new Error(overran);
   } finally {
+    /**
+     * What git says changed, folded in before anything is credited.
+     *
+     * `onWrite` fires for `write_file` and `edit_file` and for nothing else, so a file produced by a `shell`
+     * call — a generator, a formatter, a migration tool — was invisible: never credited to the memory that
+     * predicted it, and never checkpointed, so an attempt stopped at its deadline lost exactly the work no
+     * tool personally wrote. Asking git is also what lets a DELEGATED implementer be credited at all, since
+     * an official CLI writing in the worktree fires no `onWrite` in this process. See `reconcileTouched`.
+     */
+    const alsoChanged = await reconcileTouched(deps, cwd, touched);
+    if (alsoChanged.length) {
+      deps.note?.(`📝 ${alsoChanged.length} file(s) changed outside a write tool — checkpointed and credited.`);
+    }
     // In `finally` because a failed attempt still consumed the memory: an implementer that ran out of time
     // in the right file was helped by the hint that sent it there, and crediting only the attempts that
     // succeed would score memories on the model's luck rather than on their own usefulness.
