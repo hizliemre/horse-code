@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cliArgs, decodeClaudeEvent, decodeCodexEvent, makeStreamReader } from "../../src/agents/cli-agent.js";
+import { cliArgs, decodeClaudeEvent, decodeCodexEvent, makeStreamReader, SYNTHETIC } from "../../src/agents/cli-agent.js";
 import type { CliEvent } from "../../src/agents/cli-agent.js";
 
 /**
@@ -173,5 +173,32 @@ describe("reading a chunked stream", () => {
     const seen = collect([`${CLAUDE.hook}\n`, "\n", "not json\n", `${CLAUDE.quotaRefused}\n`]);
     expect(seen).toHaveLength(1);
     expect(seen[0].rateLimited).toMatch(/rejected/);
+  });
+});
+
+/**
+ * Claude Code does not validate `--model`.
+ *
+ * Measured: `--model definitely-not-a-model` exits 0 with `subtype: "success"` and a plausible answer, while
+ * `message.model` reads `<synthetic>` — no model ran and the text was produced locally. Nothing else in the
+ * stream says so. Unchecked, a typo in one chain link becomes an invented answer recorded as that model's
+ * work: the fitness store learns from it, the review counts it, a role is judged on a turn that never
+ * happened.
+ *
+ * The same field is what shows an alias resolving — `opus` served `claude-opus-5`, `claude-haiku-4-5` served
+ * `claude-haiku-4-5-20251001` — so reading it is worth doing for its own sake.
+ */
+describe("which model actually served the turn", () => {
+  const served = (model: string) =>
+    decodeClaudeEvent(`{"type":"assistant","message":{"model":"${model}",` +
+      `"role":"assistant","content":[{"type":"text","text":"ok"}]}}`)?.served;
+
+  it("reports the model the CLI resolved to, not the one asked for", () => {
+    expect(served("claude-opus-5")).toBe("claude-opus-5");
+    expect(served("claude-haiku-4-5-20251001")).toBe("claude-haiku-4-5-20251001");
+  });
+
+  it("surfaces the placeholder that means no model ran", () => {
+    expect(served("<synthetic>")).toBe(SYNTHETIC);
   });
 });

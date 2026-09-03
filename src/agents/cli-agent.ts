@@ -45,6 +45,8 @@ export interface CliEvent {
   quota?: CliQuota;
   /** A failure the CLI reported, verbatim. */
   error?: string;
+  /** The model that ACTUALLY served the turn, as the CLI names it — see `SYNTHETIC`. */
+  served?: string;
 }
 
 /**
@@ -88,6 +90,8 @@ export interface CliResult {
   usage?: CliUsage;
   rateLimited?: string;
   quota?: CliQuota;
+  /** The model that actually served the turn. `SYNTHETIC` means none did — see the constant. */
+  served?: string;
   error?: string;
   exitCode: number;
 }
@@ -129,7 +133,7 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
       : { quota, rateLimited: `${status} — ${describeWindows(windows)}` };
   }
   if (type === "assistant") {
-    const msg = (e as { message?: { content?: unknown[] } }).message;
+    const msg = (e as { message?: { content?: unknown[]; model?: string } }).message;
     const parts = Array.isArray(msg?.content) ? msg.content : [];
     const text = parts
       .filter((b): b is { type: string; text: string } =>
@@ -139,6 +143,7 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
       typeof b === "object" && b !== null && (b as { type?: string }).type === "tool_use");
     return {
       ...(text ? { text } : {}),
+      ...(msg?.model ? { served: msg.model } : {}),
       ...(tool ? { tool: { name: tool.name, ...(targetOf(tool.input) ? { target: targetOf(tool.input) } : {}) } } : {}),
     };
   }
@@ -211,6 +216,19 @@ function describeWindows(windows: Record<string, number>): string {
   return parts.length ? parts.join(", ") : "no window reported";
 }
 
+/**
+ * What the CLI reports as the model when it did not call one.
+ *
+ * Claude Code does not validate `--model`. Measured: `--model definitely-not-a-model` exits 0 with
+ * `subtype: "success"` and a plausible-looking answer — and `message.model` reads `<synthetic>`, meaning no
+ * model ran and the text was produced locally. Nothing else in the stream says so.
+ *
+ * Unchecked, a typo in one chain link becomes an invented answer that horse-code records as that model's
+ * work: the fitness store learns from it, the review counts it, and a role is judged on a turn that never
+ * happened. It is treated as a model failure so the chain slides and the bench takes the bad name out.
+ */
+export const SYNTHETIC = "<synthetic>";
+
 /** The file a tool call is about, when its input names one — for the activity strip. */
 function targetOf(input: Record<string, unknown> | undefined): string | undefined {
   for (const k of ["file_path", "path", "filePath", "notebook_path"]) {
@@ -276,6 +294,7 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
     let text = "";
     let usage: CliUsage | undefined;
     let rateLimited: string | undefined;
+    let served: string | undefined;
     let quota: CliQuota | undefined;
     let error: string | undefined;
     let stderr = "";
@@ -283,6 +302,7 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
       if (ev.text) text += ev.text;
       if (ev.usage) usage = ev.usage;
       if (ev.rateLimited) rateLimited = ev.rateLimited;
+      if (ev.served) served = ev.served;
       if (ev.quota) quota = ev.quota;
       if (ev.error) error = ev.error;
       run.onEvent?.(ev);
@@ -297,6 +317,7 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
         ...(usage ? { usage } : {}),
         ...(rateLimited ? { rateLimited } : {}),
         ...(quota ? { quota } : {}),
+        ...(served ? { served } : {}),
         // stderr only becomes the error when nothing better was said — a CLI that warns on stderr and
         // succeeds must not be read as having failed.
         ...(error ?? (code !== 0 && stderr.trim()) ? { error: error ?? stderr.trim().slice(0, 500) } : {}),

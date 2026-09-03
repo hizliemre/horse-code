@@ -1,5 +1,5 @@
 import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
-import { runCliAgent, type CliKind, type CliUsage } from "./cli-agent.js";
+import { runCliAgent, SYNTHETIC, type CliKind, type CliUsage } from "./cli-agent.js";
 
 /**
  * The official CLIs behind the `Provider` seam, for every role that wants an ANSWER rather than an agent.
@@ -145,6 +145,22 @@ export class CliProvider implements Provider {
      */
     if (res.rateLimited) {
       yield { type: "error", message: `${kind} CLI: ${res.rateLimited}`, retryable: true };
+      return;
+    }
+    /**
+     * A name the CLI did not recognise produces an answer anyway — and it is not a model's.
+     *
+     * Claude Code does not validate `--model`: a bogus name exits 0 with `subtype: "success"` and text that
+     * reads like a reply, while `message.model` says `<synthetic>`. Passed on, horse-code would record a
+     * fabricated turn as that model's work — the fitness store learning from it, a review counting it, a
+     * role judged on a turn that never happened. Retryable, so the chain slides and the bench removes the
+     * name that cannot be served.
+     */
+    if (res.served === SYNTHETIC) {
+      yield {
+        type: "error", retryable: true,
+        message: `${kind} CLI did not recognise ${req.model} and answered without a model`,
+      };
       return;
     }
     if (res.error && !res.text.trim()) {

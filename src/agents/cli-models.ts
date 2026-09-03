@@ -18,7 +18,14 @@ import { cliFor } from "./cli-provider.js";
  * run 118 of its 125 tasks.
  */
 
-/** Claude Code's models, newest first within each band. Effort travels as a flag, not in the name. */
+/**
+ * Claude Code's models, newest first within each band. Effort travels as a flag, not in the name.
+ *
+ * Every one of these was asked for and answered by a model of that name — the check that matters, because
+ * the CLI does not validate `--model` and an unknown name returns a `<synthetic>` answer instead of an
+ * error. `claude-haiku-4-5` resolves to the dated build, which is why the bare form is listed: it is the
+ * name that keeps working when the date moves.
+ */
 export const CLAUDE_MODELS = [
   "cc/claude-fable-5",
   "cc/claude-opus-5",
@@ -26,6 +33,19 @@ export const CLAUDE_MODELS = [
   "cc/claude-sonnet-5",
   "cc/claude-sonnet-4-6",
   "cc/claude-haiku-4-5",
+] as const;
+
+/**
+ * The CLI's own aliases, which always name its current best of that family.
+ *
+ * Verified to resolve rather than assumed: `opus` served `claude-opus-5`, and an alias that stops being
+ * recognised would answer `<synthetic>` rather than fail, so these are worth re-checking when a family
+ * moves. They earn their place by not going stale — the list above names versions, and versions age.
+ */
+export const CLAUDE_ALIASES = [
+  "cc/opus",
+  "cc/sonnet",
+  "cc/haiku",
 ] as const;
 
 /** Codex's models. The level IS the name here, which is why these read differently from the Claude ids. */
@@ -43,7 +63,7 @@ export const CODEX_MODELS = [
  * spreads chains across sources, so this order decides nothing on its own.
  */
 export function cliCatalog(): string[] {
-  return [...CLAUDE_MODELS, ...CODEX_MODELS];
+  return [...CLAUDE_MODELS, ...CLAUDE_ALIASES, ...CODEX_MODELS];
 }
 
 /**
