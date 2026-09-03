@@ -35,8 +35,15 @@ export type CliKind = "claude" | "codex";
 export interface CliEvent {
   /** Assistant prose as it arrives — the live row and the transcript read this. */
   text?: string;
-  /** A tool the CLI's own agent ran. Reported for the activity strip; horse-code does not execute it. */
-  tool?: { name: string; target?: string };
+  /**
+   * A tool the CLI's own agent used. Reported for the activity strip; horse-code does not execute it.
+   *
+   * `ok` is false when the CLI reported the call as an error — a denied write, a failed command. Without it
+   * the row shows what the agent ASKED for and calls it done: measured, a write refused with "Claude
+   * requested permissions to edit … which is a sensitive file" appeared as `Write hello.txt` while no file
+   * was created. An attempt and an outcome are not the same claim.
+   */
+  tool?: { name: string; target?: string; ok?: boolean };
   /** Terminal usage for the whole run. */
   usage?: CliUsage;
   /** The CLI REFUSED the call for quota. Mapped onto the same bench the API path uses. */
@@ -146,6 +153,20 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
       ...(msg?.model ? { served: msg.model } : {}),
       ...(tool ? { tool: { name: tool.name, ...(targetOf(tool.input) ? { target: targetOf(tool.input) } : {}) } } : {}),
     };
+  }
+  /**
+   * The OUTCOME of a tool the CLI ran, which arrives as a user turn carrying `tool_result`.
+   *
+   * `tool_use` is the model asking; this is what happened. Only failures are reported — a successful call
+   * was already announced when it was requested, and saying it twice would double every row.
+   */
+  if (type === "user") {
+    const parts = (e as { message?: { content?: unknown[] } }).message?.content;
+    const failed = (Array.isArray(parts) ? parts : []).find(
+      (b): b is { type: string; is_error?: boolean; content?: unknown } =>
+        typeof b === "object" && b !== null && (b as { type?: string }).type === "tool_result"
+        && (b as { is_error?: boolean }).is_error === true);
+    return failed ? { tool: { name: "tool", ok: false } } : undefined;
   }
   if (type === "result") {
     const u = (e as { usage?: Record<string, number> }).usage ?? {};

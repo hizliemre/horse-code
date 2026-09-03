@@ -15,6 +15,8 @@ import { loadGraphSync } from "./project-graph.js";
 import { constitutionNote } from "./constitution-store.js";
 import { applySkills } from "../skills/apply.js";
 import { contextTools, projectToolsNote, BATCH_TOOLS_NOTE } from "./task-types.js";
+import { CliProvider } from "../agents/cli-provider.js";
+import { cliFor } from "../agents/cli-models.js";
 import { handedOver } from "../agent/attach.js";
 import type { TaskCycleDeps, RunnableRole } from "./task-types.js";
 import { telemetry } from "../obs/telemetry.js";
@@ -347,7 +349,23 @@ export async function runImplementer(
     ? await constitutionNote({ ...deps, home: deps.home, note: deps.note }, cwd,
       { role, files: task.files, title: task.title })
     : "";
-  const systemPrompt = withSkills + law + projectToolsNote(tools.list(), !!loadGraphSync(cwd)) + BATCH_TOOLS_NOTE;
+  /**
+   * Delegation: the agent is an official CLI working in the worktree with its OWN tools.
+   *
+   * Everything above this line is unchanged and that is the point — the memory hints, the routed skills, the
+   * constitution and the task brief are composed once and mean the same thing whichever agent reads them.
+   * horse-code keeps the orchestration it is good at; what moves is only who holds the tools.
+   *
+   * Two things must change together. The provider runs in the task's WORKTREE rather than this process's
+   * directory, or an implementer edits horse-code's own checkout. And the system prompt must not advertise
+   * tools that do not exist for this agent: `projectToolsNote` lists what this process offers, and a
+   * delegated agent has a different set entirely — naming ours would send it reaching for tools it cannot
+   * call.
+   */
+  const delegate = deps.delegateTo ? cliFor(chain[0] ?? "") ?? deps.delegateTo : undefined;
+  const systemPrompt = withSkills + law
+    + (delegate ? "" : projectToolsNote(tools.list(), !!loadGraphSync(cwd)))
+    + BATCH_TOOLS_NOTE;
 
   // A timeout here is NOT a cancellation: the job is fine, this one attempt ran too long. The two are
   // distinguished below so a genuine Ctrl-C still propagates as a cancellation.
@@ -384,7 +402,12 @@ export async function runImplementer(
     return note;
   };
   const opts: RoleAgentOptions = {
-    provider: deps.provider,
+    /**
+     * A delegated implementer gets a provider bound to its worktree and allowed to write; every other role
+     * keeps the one the composition root built. Per call rather than shared, because the worktree differs
+     * per task and a provider shared across parallel implementers could only hold one of them.
+     */
+    provider: delegate ? new CliProvider({ kind: delegate, readOnly: false, cwd }) : deps.provider,
     ...resolved,
     systemPrompt,
     ...(chain.length ? { model: chain[0], fallbacks: chain.slice(1) } : {}),

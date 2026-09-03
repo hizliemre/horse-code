@@ -81,6 +81,19 @@ export interface TaskCycleDeps {
    */
   askUser?: import("./review.js").AskUser;
   /**
+   * Run implementers as an official CLI in their worktree, instead of driving a model turn by turn here.
+   *
+   * Only the implementers. A review lens wants an ANSWER and already fits a headless call; an implementer
+   * wants TOOLS, and bridging a tool loop across a process boundary is the one part of this that would have
+   * to be rebuilt rather than reused — so the CLI keeps its own tools and horse-code keeps the board, the
+   * dependency graph, the review and the ladder.
+   *
+   * What it costs is per-turn control: no compaction, no tool restriction, no `onWrite`. The last of those
+   * is why `reconcileTouched` exists — git is the one question whose answer is the same whichever agent did
+   * the work.
+   */
+  delegateTo?: import("../agents/cli-agent.js").CliKind;
+  /**
    * The session's base worktree once one is open, and `undefined` when the run is over.
    *
    * Anything that writes project state — memory above all — is built when the process starts, and the only

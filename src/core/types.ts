@@ -198,7 +198,7 @@ export type ChatEvent =
    * whole life while its clock and token count climbed beside it — the one row a person watches to know
    * what is happening, saying nothing at all.
    */
-  | { type: "activity"; tool: string; target?: string }
+  | { type: "activity"; tool: string; target?: string; ok?: boolean }
   | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens?: number; cacheWriteTokens?: number }
   | { type: "done"; finishReason: "stop" | "tool_calls" | "length" }
   /**

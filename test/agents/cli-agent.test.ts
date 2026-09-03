@@ -202,3 +202,25 @@ describe("which model actually served the turn", () => {
     expect(served("<synthetic>")).toBe(SYNTHETIC);
   });
 });
+
+/**
+ * A tool the CLI asked for and a tool that worked are different claims.
+ *
+ * `tool_use` is the model requesting; the outcome arrives later as a user turn carrying `tool_result`.
+ * Measured: a write refused with "Claude requested permissions to edit … which is a sensitive file"
+ * appeared on the row as `Write hello.txt` while no file was created. The row said the work was done.
+ */
+describe("the outcome of a tool the CLI ran", () => {
+  const failed = '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1",'
+    + '"is_error":true,"content":"Claude requested permissions to edit /x/hello.txt which is a sensitive file."}]}}';
+  const ok = '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}';
+
+  it("reports a failed call as failed", () => {
+    expect(decodeClaudeEvent(failed)?.tool).toEqual({ name: "tool", ok: false });
+  });
+
+  /** A success was already announced when it was requested; saying it twice would double every row. */
+  it("says nothing for a call that worked", () => {
+    expect(decodeClaudeEvent(ok)).toBeUndefined();
+  });
+});

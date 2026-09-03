@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { promptFor, CliProvider, streamWhileRunning } from "../../src/agents/cli-provider.js";
 import { cliFor, cliInvocation, cliCatalog } from "../../src/agents/cli-models.js";
 import type { ChatRequest } from "../../src/core/types.js";
@@ -208,5 +209,33 @@ describe("streaming what a run reports while it runs", () => {
       })) seen.push(v);
     })()).rejects.toThrow("the CLI died");
     expect(seen).toEqual([7]);
+  });
+});
+
+/**
+ * What a delegated agent is allowed to do, stated as flags because the tools belong to the CLI.
+ *
+ * The API path enforced this by handing a role a read-only registry. Here the limit has to be restated, and
+ * in both directions: a review lens with a full editor in a tree it was only meant to read is one failure,
+ * and an implementer that stalls at a permission prompt nobody will answer is the other — a headless run has
+ * no one at the keyboard, so it simply waits until its deadline.
+ */
+describe("what a delegated agent may do", () => {
+  const src = readFileSync("src/agents/cli-provider.ts", "utf8");
+
+  it("keeps a reader out of the editor", () => {
+    expect(src).toContain('this.readOnly && kind === "claude") args.push("--disallowed-tools"');
+    expect(src).toContain('this.readOnly && kind === "codex") args.push("--sandbox", "read-only")');
+  });
+
+  it("lets a writer write, without asking anyone", () => {
+    expect(src).toContain('!this.readOnly && kind === "claude") args.push("--permission-mode", "acceptEdits")');
+    expect(src).toContain('!this.readOnly && kind === "codex") args.push("--sandbox", "workspace-write")');
+  });
+
+  /** Neither CLI's fully permissive mode: an implementer edits its worktree, it does not reach outside it. */
+  it("never asks for unrestricted access", () => {
+    expect(src).not.toContain("bypassPermissions");
+    expect(src).not.toContain("danger-full-access");
   });
 });

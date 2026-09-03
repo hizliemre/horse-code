@@ -291,7 +291,7 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
         } else if (ev.type === "activity") {
           // Attribution comes from `opts.onActivity`, which the implementer has already bound to its card —
           // the provider knows what was done, not who did it.
-          opts.onActivity?.({ tool: ev.tool, target: ev.target ?? "", lines: 0, ok: true });
+          opts.onActivity?.({ tool: ev.tool, target: ev.target ?? "", lines: 0, ok: ev.ok !== false });
         } else if (ev.type === "usage") {
           yield { type: "usage", promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
           opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, model: activeModel });

@@ -59,6 +59,14 @@ export interface CliProviderOptions {
   kind?: CliKind;
   /** Tools the delegated agent may NOT use. A role that wants an answer has no business writing files. */
   readOnly?: boolean;
+  /**
+   * Where the CLI runs — a task's worktree, not this process's directory.
+   *
+   * The default is `process.cwd()`, which is right for a role that only reads and wrong for anything that
+   * writes: an implementer left on it would edit horse-code's own checkout instead of the worktree its task
+   * was derived into. Every writing caller passes this.
+   */
+  cwd?: string;
 }
 
 /**
@@ -99,10 +107,12 @@ export async function* streamWhileRunning<E>(
 export class CliProvider implements Provider {
   private readonly fixed?: CliKind;
   private readonly readOnly: boolean;
+  private readonly cwd?: string;
 
   constructor(opts: CliProviderOptions = {}) {
     this.fixed = opts.kind;
     this.readOnly = opts.readOnly ?? true;
+    this.cwd = opts.cwd;
   }
 
   async *chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent> {
@@ -138,6 +148,19 @@ export class CliProvider implements Provider {
      */
     if (this.readOnly && kind === "claude") args.push("--disallowed-tools", "Write", "Edit", "NotebookEdit");
     if (this.readOnly && kind === "codex") args.push("--sandbox", "read-only");
+    /**
+     * A writing agent has to be allowed to write, and nobody is there to be asked.
+     *
+     * A headless run has no one at the keyboard, so a CLI that pauses for permission simply stalls until its
+     * deadline. `acceptEdits` and `workspace-write` are the narrowest settings that let the work happen:
+     * both confine it to the directory the call runs in, which is the task's own worktree — derived for this
+     * task, thrown away after it, and never the developer's checkout.
+     *
+     * Deliberately NOT the fully permissive settings either CLI offers. An implementer needs to edit its
+     * worktree, not to reach outside it.
+     */
+    if (!this.readOnly && kind === "claude") args.push("--permission-mode", "acceptEdits");
+    if (!this.readOnly && kind === "codex") args.push("--sandbox", "workspace-write");
 
     /**
      * Streamed as it happens, not replayed at the end.
@@ -152,9 +175,9 @@ export class CliProvider implements Provider {
     let res!: Awaited<ReturnType<typeof runCliAgent>>;
     yield* streamWhileRunning<ChatEvent>((push) =>
       runCliAgent({
-        kind, cwd: process.cwd(), prompt: promptFor(req), signal, args,
+        kind, cwd: this.cwd ?? process.cwd(), prompt: promptFor(req), signal, args,
         onEvent: (ev) => {
-          if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}) });
+          if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}), ...(ev.tool.ok === false ? { ok: false } : {}) });
           if (ev.text) push({ type: "text-delta", text: ev.text });
         },
       }).then((r) => { res = r; }));
