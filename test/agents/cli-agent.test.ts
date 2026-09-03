@@ -19,7 +19,12 @@ const CLAUDE = {
     + '"output_tokens":4}}',
   init: '{"type":"system","subtype":"init","session_id":"d3b6cf44"}',
   hook: '{"type":"system","subtype":"hook_started","hook_name":"SessionStart:startup"}',
-  rate: '{"type":"rate_limit_event","message":"5-hour limit reached; resets at 21:00"}',
+  // Real: a SUCCESSFUL call carries one of these too. Status is the field that matters, not the presence.
+  quotaOk: '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1788471000,'
+    + '"rateLimitType":"five_hour","unifiedWindows":{"five_hour":{"utilization":0.27},'
+    + '"seven_day":{"utilization":0.05}}}}',
+  quotaRefused: '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1788471000,'
+    + '"unifiedWindows":{"five_hour":{"utilization":1},"seven_day":{"utilization":0.41}}}}',
 };
 
 describe("the headless argv for each CLI", () => {
@@ -59,11 +64,28 @@ describe("decoding Claude Code's stream", () => {
   });
 
   /**
-   * The signal the whole bench/park machinery is built around. Swallowed as an unknown event type, a
-   * throttled subscription would look like a task failing.
+   * `rate_limit_event` is quota TELEMETRY, not a failure — and reading it as one aborts every call.
+   *
+   * Caught live: the first structured role sent through this provider came back refused for no reason,
+   * because a successful call carries this event too, with `status: "allowed"` and the utilization of each
+   * window. Only a non-allowed status is a refusal.
    */
-  it("surfaces a rate limit as a rate limit", () => {
-    expect(decodeClaudeEvent(CLAUDE.rate)?.rateLimited).toMatch(/5-hour limit/);
+  it("reads an allowed quota report as telemetry, not as a refusal", () => {
+    const ev = decodeClaudeEvent(CLAUDE.quotaOk);
+    expect(ev?.rateLimited).toBeUndefined();
+    expect(ev?.quota).toEqual({
+      status: "allowed", resetsAt: 1788471000, windows: { five_hour: 0.27, seven_day: 0.05 },
+    });
+  });
+
+  /**
+   * …and a refusal IS the signal the bench/park machinery is built around, carrying the numbers a person
+   * can act on rather than a bare "rate limited".
+   */
+  it("surfaces a refusal as a rate limit, with the windows spelled out", () => {
+    const ev = decodeClaudeEvent(CLAUDE.quotaRefused);
+    expect(ev?.rateLimited).toBe("rejected — five_hour 100%, seven_day 41%");
+    expect(ev?.quota?.status).toBe("rejected");
   });
 
   /** The stream is mostly hooks and framing — anything without meaning here must decode to nothing. */
@@ -122,8 +144,8 @@ describe("reading a chunked stream", () => {
   });
 
   it("survives interleaved framing and junk", () => {
-    const seen = collect([`${CLAUDE.hook}\n`, "\n", "not json\n", `${CLAUDE.rate}\n`]);
+    const seen = collect([`${CLAUDE.hook}\n`, "\n", "not json\n", `${CLAUDE.quotaRefused}\n`]);
     expect(seen).toHaveLength(1);
-    expect(seen[0].rateLimited).toMatch(/5-hour/);
+    expect(seen[0].rateLimited).toMatch(/rejected/);
   });
 });

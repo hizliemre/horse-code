@@ -39,10 +39,29 @@ export interface CliEvent {
   tool?: { name: string; target?: string };
   /** Terminal usage for the whole run. */
   usage?: CliUsage;
-  /** The CLI said it is rate-limited. Mapped onto the same bench the API path uses. */
+  /** The CLI REFUSED the call for quota. Mapped onto the same bench the API path uses. */
   rateLimited?: string;
+  /** How much of each usage window is spent. Reported on every call, refused or not — see `decodeClaudeEvent`. */
+  quota?: CliQuota;
   /** A failure the CLI reported, verbatim. */
   error?: string;
+}
+
+/**
+ * What the subscription has left, as the CLI reports it on every call.
+ *
+ * `rate_limit_event` is quota TELEMETRY, not a failure: a successful call carries one too, with
+ * `status: "allowed"` and the utilization of each window. Read as an error — which it was, until a live call
+ * came back refused for no reason — every single call aborts. Read properly it is the one thing a
+ * subscription-backed run most needs: how close the limit is, before it is hit rather than after.
+ */
+export interface CliQuota {
+  /** The CLI's own word: "allowed" means this call went through. */
+  status: string;
+  /** Fraction of each named window already spent, e.g. `{ five_hour: 0.27, seven_day: 0.05 }`. */
+  windows: Record<string, number>;
+  /** When the window that is furthest along resets, in epoch seconds. */
+  resetsAt?: number;
 }
 
 export interface CliUsage {
@@ -68,6 +87,7 @@ export interface CliResult {
   text: string;
   usage?: CliUsage;
   rateLimited?: string;
+  quota?: CliQuota;
   error?: string;
   exitCode: number;
 }
@@ -92,7 +112,19 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
   try { e = JSON.parse(line) as Record<string, unknown>; } catch { return undefined; }
   const type = e.type;
   if (type === "rate_limit_event") {
-    return { rateLimited: String((e as { message?: unknown }).message ?? "rate limited by the CLI") };
+    const info = (e as { rate_limit_info?: Record<string, unknown> }).rate_limit_info ?? {};
+    const status = String(info.status ?? "unknown");
+    const raw = (info.unifiedWindows ?? {}) as Record<string, { utilization?: number }>;
+    const windows: Record<string, number> = {};
+    for (const [name, w] of Object.entries(raw)) windows[name] = w?.utilization ?? 0;
+    const quota: CliQuota = {
+      status, windows,
+      ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
+    };
+    // "allowed" is the successful case and by far the common one; only a refusal is a rate limit.
+    return status === "allowed"
+      ? { quota }
+      : { quota, rateLimited: `${status} — ${describeWindows(windows)}` };
   }
   if (type === "assistant") {
     const msg = (e as { message?: { content?: unknown[] } }).message;
@@ -148,6 +180,12 @@ export function decodeCodexEvent(line: string): CliEvent | undefined {
     };
   }
   return undefined;
+}
+
+/** "five_hour 98%, seven_day 41%" — the shape a person can act on. */
+function describeWindows(windows: Record<string, number>): string {
+  const parts = Object.entries(windows).map(([k, v]) => `${k} ${Math.round(v * 100)}%`);
+  return parts.length ? parts.join(", ") : "no window reported";
 }
 
 /** The file a tool call is about, when its input names one — for the activity strip. */
@@ -207,12 +245,14 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
     let text = "";
     let usage: CliUsage | undefined;
     let rateLimited: string | undefined;
+    let quota: CliQuota | undefined;
     let error: string | undefined;
     let stderr = "";
     const reader = makeStreamReader(decode, (ev) => {
       if (ev.text) text += ev.text;
       if (ev.usage) usage = ev.usage;
       if (ev.rateLimited) rateLimited = ev.rateLimited;
+      if (ev.quota) quota = ev.quota;
       if (ev.error) error = ev.error;
       run.onEvent?.(ev);
     });
@@ -225,6 +265,7 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
         text,
         ...(usage ? { usage } : {}),
         ...(rateLimited ? { rateLimited } : {}),
+        ...(quota ? { quota } : {}),
         // stderr only becomes the error when nothing better was said — a CLI that warns on stderr and
         // succeeds must not be read as having failed.
         ...(error ?? (code !== 0 && stderr.trim()) ? { error: error ?? stderr.trim().slice(0, 500) } : {}),
