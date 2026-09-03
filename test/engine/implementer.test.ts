@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runImplementer, deadlineWarning, attemptBudget, DEADLINE_WARNING_AT, MAX_BUDGET_EXTENSIONS } from "../../src/engine/implementer.js";
@@ -306,5 +307,60 @@ describe("attemptBudget", () => {
   /** A turn-count ceiling or a model error is a different failure — more minutes would not have helped. */
   it("does not extend for an error that is not about time", () => {
     expect(attemptBudget(withHistory(hist(["attempt-error", "maximum turn count exceeded (200)"])), BASE)).toBe(BASE);
+  });
+});
+
+/**
+ * The implementer had no way to ask, and it showed.
+ *
+ * Measured on T017: an agent traced a real conflict to its root — the compiled EF config was already in the
+ * base from a sibling branch, so this task's diff held nothing but a "REFERENCE ONLY — NOT COMPILED" stub —
+ * set out three ways forward with their trade-offs, and ended by asking which to take. With no tool to ask
+ * through, the question went out as prose in the chat: nothing blocked, nobody was asked, and it carried on
+ * past a decision it had correctly identified as not its own. Across two runs, twenty-one distinct tools were
+ * called by implementers and `ask_user` was not among them, because it was never offered.
+ */
+describe("an implementer can ask, when there is someone to answer", () => {
+  const toolNames = (p: MockProvider): string[] => p.requests[0].tools.map((t) => t.name);
+
+  it("offers ask_user when the run has a user", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer({ ...deps(p), askUser: async () => "B" }, "coder", card(), dir);
+    expect(toolNames(p)).toContain("ask_user");
+  });
+
+  /** A headless run has nobody to answer, so the tool is not offered — never a question nobody will hear. */
+  it("does not offer it when the run is headless", async () => {
+    const p = new MockProvider(writeThenDone());
+    await runImplementer(deps(p), "coder", card(), dir);
+    expect(toolNames(p)).not.toContain("ask_user");
+  });
+
+  /** And the answer comes back to the agent, so the decision can actually be acted on. */
+  it("returns the user's answer to the agent", async () => {
+    const asked: string[] = [];
+    const p = new MockProvider([
+      [{ type: "tool-call", toolCall: { id: "q", name: "ask_user", arguments: '{"question":"A, B or C?"}' } },
+       { type: "done", finishReason: "tool_calls" }],
+      [{ type: "text-delta", text: "done" }, { type: "done", finishReason: "stop" }],
+    ]);
+    await runImplementer({ ...deps(p), askUser: async (q) => { asked.push(q); return "B"; } },
+      "coder", card(), dir);
+    expect(asked).toEqual(["A, B or C?"]);
+    expect(JSON.stringify(p.requests[1].messages)).toContain("B");
+  });
+});
+
+/**
+ * …and the wiring, which is where the channel was actually broken.
+ *
+ * `askUser` was a job OPTION, so the wave engine, the ladder and the implementer never saw it. The tool
+ * could be registered correctly and still never appear, because nothing handed the channel down.
+ */
+describe("the ask channel reaches the task stages", () => {
+  const src = readFileSync("src/engine/job.ts", "utf8");
+
+  it("folds askUser into the deps the wave engine runs on", () => {
+    expect(src).toMatch(/runWaves\(\{ \.\.\.deps, askUser: opts\.askUser \}/);
   });
 });

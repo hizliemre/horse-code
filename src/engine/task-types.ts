@@ -68,6 +68,19 @@ export interface TaskCycleDeps {
   /** remember_fact tool sink: persist a durable fact the model learned from a tool result. */
   rememberFact?: (fact: string) => void;
   /**
+   * The channel an agent uses to ASK, when a decision is genuinely the user's.
+   *
+   * The implementer had none, and it showed. On T017 an agent traced a real conflict to its root — the
+   * compiled EF config was already in the base from a sibling branch, so this task's diff held only a
+   * "REFERENCE ONLY — NOT COMPILED" stub — laid out three ways forward, and ended "hangisini istersiniz".
+   * With no tool to ask through, the question went out as prose in the chat: nothing blocked, nobody was
+   * asked, and the agent carried on past a decision it had correctly identified as not its own.
+   *
+   * Optional, because a headless run has nobody to ask. Absent, the tool is simply not offered — an agent is
+   * never handed a way to ask a question that cannot be answered.
+   */
+  askUser?: import("./review.js").AskUser;
+  /**
    * The session's base worktree once one is open, and `undefined` when the run is over.
    *
    * Anything that writes project state — memory above all — is built when the process starts, and the only

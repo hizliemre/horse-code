@@ -3,6 +3,7 @@ import { runToCompletion, type RoleAgentOptions } from "../agent/loop.js";
 import { withDeadline } from "../agent/deadline.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildRememberTool } from "../tools/remember.js";
+import { buildAskUserTool } from "./writer-registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
 import { memoryHints, reinforceTouched, reinforceUsed } from "./memory-inject.js";
@@ -138,6 +139,21 @@ export async function runImplementer(
   for (const t of contextTools(deps)) tools.register(t);
   // …and what it learns on the way, kept for the next agent that opens this area.
   tools.register(buildRememberTool(deps.rememberFact));
+  /**
+   * A way to ASK, for the decisions that are genuinely the user's.
+   *
+   * Measured on T017: an agent traced a real conflict to its root — the compiled EF config was already in
+   * the base from a sibling branch, so this task's diff held nothing but a "REFERENCE ONLY — NOT COMPILED"
+   * stub — set out three ways forward with their trade-offs, and ended by asking which one to take. It had
+   * no tool to ask through, so the question went out as prose in the chat: nothing blocked, nobody was
+   * asked, and it carried on past a decision it had correctly identified as not its own. Across two runs,
+   * twenty-one distinct tools were called by implementers and `ask_user` was not among them, because it was
+   * never offered.
+   *
+   * Only when there is someone to answer. A headless run leaves `askUser` unset and the tool is not
+   * registered at all — an agent is never handed a way to ask a question nobody will hear.
+   */
+  if (deps.askUser) tools.register(buildAskUserTool(deps.askUser));
 
   const returning = task.reviewNotes.length > 0;
   /**

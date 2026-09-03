@@ -503,7 +503,15 @@ export async function runJob(
     board.onMove = (card, _from, to, actor) => emit({ kind: "note", text: moveNote(card, to, actor) });
 
     emit({ kind: "phase", phase: "waves" });
-    const wave = await runWaves(deps, session, board, { base: opts.fromBranch, prTitle: opts.prTitle, request: opts.prompt });
+    /**
+     * The ask channel reaches the implementers from here, and only from here.
+     *
+     * `askUser` is a job OPTION, so the wave engine, the ladder and the implementer never saw it — which is
+     * why an agent that hit a real decision could only write it into the chat. Folded into `deps` it reaches
+     * every stage that runs a task, and stays absent in a headless run, where the tool is not offered at all.
+     */
+    const wave = await runWaves({ ...deps, askUser: opts.askUser }, session, board,
+      { base: opts.fromBranch, prTitle: opts.prTitle, request: opts.prompt });
     emit({ kind: "phase", phase: "waves-done", detail: wave.status });
 
     let revision: RevisionResult | undefined;
