@@ -467,7 +467,15 @@ export async function main(argv: string[]): Promise<void> {
    * Printed before any work starts, because this is the moment it can change a decision: a run committed to
    * a subscription with nothing left is a run that parks halfway through. Silent when nothing is connected.
    */
-  for (const line of summarizeAccounts(accounts.usage())) console.log(line);
+  /**
+   * Each CLI the pool holds no profile for is asked directly, because its signed-in default is what a run
+   * will use there. Measured at 180ms for both together — cheap enough to answer honestly at startup, and
+   * the alternative is a person with two working logins being shown nothing and concluding they have none.
+   */
+  const ambient = (["claude", "codex"] as const)
+    .filter((k) => accounts.count(k) === 0)
+    .map((kind) => ({ kind, status: checkProfile(kind) }));
+  for (const line of summarizeAccounts(accounts.usage(), ambient)) console.log(line);
   const raw = new CliProvider({ readOnly: false, accounts });
   const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();

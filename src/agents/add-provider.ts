@@ -120,6 +120,15 @@ export function addProvider(kind: CliKind, io: AddProviderIO): number {
   const r = io.login(kind, dir);
   if (!r.ok) {
     io.log(`\n${kind} sign-in did not complete${r.error ? `: ${r.error}` : ""}. Nothing was changed.`);
+    /**
+     * The reason is in the BROWSER, not here, and saying so is the difference between a useful failure and a
+     * dead end. The sign-in refusal comes back on the OAuth callback — a real one read
+     * `error=access_denied&error_description=account_on_hold` — while the CLI reports only that no code
+     * arrived, and horse-code, which never sees that exchange, can say even less. Someone told "did not
+     * complete" starts debugging this command; the answer was in the address bar the whole time.
+     */
+    io.log(`If a browser page opened, its address holds the reason — an \`error=\` there is the account being refused, not this command failing.`);
+    io.log(`Nothing needs cleaning up: ${dir} holds no session, and running this again reuses it.`);
     return 1;
   }
 

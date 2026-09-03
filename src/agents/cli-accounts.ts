@@ -172,31 +172,54 @@ export function ageOf(at: number, now: number): string {
 }
 
 /**
- * The startup summary: how many subscriptions are connected, who they are, and what each had left.
+ * The startup summary: what a run will actually use, who it belongs to, and what each had left.
  *
- * Silent when nothing is configured. That is the ordinary case — the ambient login works and the person
- * never opted into any of this — and a line printed on every single run to say so would be pure noise.
+ * "Will actually use" rather than "is configured" is the correction that matters. The first version listed
+ * only POOLED profiles, so someone signed into both CLIs and perfectly able to run saw nothing at all and
+ * reasonably concluded no account was connected. The signed-in default is an account in use; leaving it out
+ * described the bookkeeping instead of the situation.
+ *
+ * A CLI nobody is signed into is worth a line too, and it is the most useful line here: every call routed to
+ * it will fail, and that is far better learned before a run than during one.
  *
  * Every figure carries its age, because none of them is current: a reading arrives with a call and says
  * nothing about what happened after it. Printed bare, "42%" would read as a fact about now rather than about
- * whenever that profile was last used, which for a second subscription can be days.
+ * whenever that profile was last used, which for a spare subscription can be days.
  */
 export function summarizeAccounts(
   usage: { account: CliAccount; reading?: Reading }[],
+  ambient: { kind: CliKind; status: { loggedIn: boolean; email?: string; plan?: string } }[] = [],
   now = Date.now(),
 ): string[] {
-  if (!usage.length) return [];
-  const byKind = new Map<CliKind, number>();
-  for (const { account } of usage) byKind.set(account.kind, (byKind.get(account.kind) ?? 0) + 1);
-  const counts = [...byKind].map(([k, n]) => `${n} ${k}`).join(" · ");
+  const row = (kind: string, who: string, right: string): string =>
+    `   ${kind.padEnd(6)} ${who.padEnd(34)} ${right}`;
 
-  const rows = usage.map(({ account, reading }) => {
-    const who = account.email ?? account.name;
-    const plan = account.plan ? ` (${account.plan})` : "";
-    const left = reading
-      ? `${Math.round(reading.spent * 100)}% used · ${ageOf(reading.at, now)} ago`
-      : "not used yet";
-    return `   ${account.kind.padEnd(6)} ${`${who}${plan}`.padEnd(34)} ${left}`;
+  const pooled = usage.map(({ account, reading }) =>
+    row(
+      account.kind,
+      `${account.email ?? account.name}${account.plan ? ` (${account.plan})` : ""}`,
+      reading ? `${Math.round(reading.spent * 100)}% used · ${ageOf(reading.at, now)} ago` : "not used yet",
+    ));
+
+  const loose = ambient.map(({ kind, status }) => {
+    if (!status.loggedIn) return row(kind, "not signed in", `every ${kind} call will fail`);
+    // Codex names the method and no address, so there the plan IS the identity — "signed in (ChatGPT)"
+    // beside a column already reading "in use" says the same thing twice.
+    const who = status.email
+      ? `${status.email}${status.plan ? ` (${status.plan})` : ""}`
+      : status.plan ?? "signed in";
+    return row(kind, who, "in use");
   });
-  return [`🔑 ${counts} account${usage.length === 1 ? "" : "s"} connected`, ...rows];
+
+  const rows = [...pooled, ...loose];
+  if (!rows.length) return [];
+
+  const counts = new Map<string, number>();
+  for (const { account } of usage) counts.set(account.kind, (counts.get(account.kind) ?? 0) + 1);
+  for (const { kind, status } of ambient) if (status.loggedIn) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  const head = counts.size
+    ? `🔑 ${[...counts].map(([k, n]) => `${n} ${k}`).join(" · ")} account${total === 1 ? "" : "s"} connected`
+    : `🔑 no CLI is signed in`;
+  return [head, ...rows];
 }

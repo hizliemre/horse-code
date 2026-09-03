@@ -125,6 +125,19 @@ describe("connecting a subscription", () => {
     expect(io.written).toBeUndefined();
   });
 
+  /**
+   * A real refusal came back as `error=access_denied&error_description=account_on_hold` on the OAuth
+   * callback — visible only in the browser. The CLI reported just that no code arrived, and horse-code sees
+   * even less. Without this line someone debugs the command while the answer sits in the address bar.
+   */
+  it("says where the reason for a refused sign-in actually is", () => {
+    const io = fake({ login: () => ({ ok: false }) });
+    addProvider("claude", io);
+    const said = io.lines.join("\n");
+    expect(said).toContain("address holds the reason");
+    expect(said).toContain("Nothing needs cleaning up");
+  });
+
   it("changes nothing when the CLI still reports no session afterwards", () => {
     const io = fake({ status: {} });
     expect(addProvider("claude", io)).toBe(1);
@@ -186,8 +199,44 @@ describe("reading what a CLI says about its session", () => {
 describe("the startup summary", () => {
   const now = 10_000_000;
 
-  it("says nothing when no subscription is connected", () => {
+  it("says nothing when there is nothing to say at all", () => {
     expect(summarizeAccounts([])).toEqual([]);
+  });
+
+  /**
+   * The correction this replaced: listing only POOLED profiles showed nothing to someone signed into both
+   * CLIs and perfectly able to run, who reasonably concluded no account was connected. The signed-in default
+   * IS an account in use.
+   */
+  it("shows the signed-in default of a CLI with no pooled profile", () => {
+    const out = summarizeAccounts([], [{ kind: "claude", status: { loggedIn: true, email: "a@x.com", plan: "max" } }], now);
+    expect(out[0]).toBe("🔑 1 claude account connected");
+    expect(out[1]).toContain("a@x.com (max)");
+    expect(out[1]).toContain("in use");
+  });
+
+  /** The most useful line here: every call routed there fails, and that is better learned before a run. */
+  it("says plainly when a CLI has nobody signed in", () => {
+    const out = summarizeAccounts([], [{ kind: "codex", status: { loggedIn: false } }], now);
+    expect(out[0]).toBe("🔑 no CLI is signed in");
+    expect(out[1]).toContain("not signed in");
+    expect(out[1]).toContain("every codex call will fail");
+  });
+
+  /** Codex reports a method and no address, so the method is the only identity there is to print. */
+  it("names a CLI that reports no address by what it signed in with", () => {
+    const out = summarizeAccounts([], [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }], now);
+    expect(out[1]).toContain("ChatGPT");
+    expect(out[1]).not.toContain("signed in (");
+  });
+
+  it("counts pooled profiles and signed-in defaults together", () => {
+    const out = summarizeAccounts(
+      [{ account: { kind: "claude", name: "a", configDir: "/1", email: "a@x.com" } }],
+      [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }],
+      now,
+    );
+    expect(out[0]).toBe("🔑 1 claude · 1 codex accounts connected");
   });
 
   it("counts each CLI and dates every figure", () => {
@@ -197,6 +246,7 @@ describe("the startup summary", () => {
         { account: { kind: "claude", name: "b", configDir: "/2", email: "b@x.com", plan: "max" } },
         { account: { kind: "codex", name: "c", configDir: "/3", plan: "ChatGPT" }, reading: { spent: 0.08, at: now - 7_200_000 } },
       ],
+      [],
       now,
     );
     expect(out[0]).toBe("🔑 2 claude · 1 codex accounts connected");
