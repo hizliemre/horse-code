@@ -1,5 +1,6 @@
+import { cliCatalog } from "../../src/agents/cli-models.js";
 import { describe, it, expect } from "vitest";
-import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily, versionlessId, newestPrimary, strongestPrimary, DURABLE_ROLES } from "../../src/tui/role-models.js";
+import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily, versionlessId, newestPrimary, strongestPrimary, DURABLE_ROLES, sourceOf } from "../../src/tui/role-models.js";
 
 const ALL = [
   "cc/claude-opus-4-8",
@@ -475,5 +476,52 @@ describe("where /roles adjust puts the level", () => {
     const s = await src("src/config/save-roles.ts");
     expect(s).toContain("if (effort) next.effort = effort;");
     expect(s).toContain("else delete next.effort;");
+  });
+});
+
+/**
+ * Subscription diversity, which stopped happening without one test failing.
+ *
+ * `sourceOf` read the catalogue prefix (`cc/`, `cx/`). When those went away it began returning the whole
+ * model name, so every model became its own source — `interleaveBySource` turned into a no-op and
+ * `pickFallbacks`' "distinct source" test became true of everything. Both guarantees were gone silently.
+ *
+ * Measured at that point on the live catalogue: `coder` held `gpt-5.6-terra → gpt-5.6-sol → gpt-5.6-luna`,
+ * with `designer` and `code-reviewer` the same — every role that writes code sat on one subscription end to
+ * end, so a Claude plan went unspent while Codex carried the whole board.
+ */
+describe("which subscription serves a model", () => {
+  it("reads it from the name, now that nothing carries a prefix", () => {
+    expect(sourceOf("opus")).toBe("claude");
+    expect(sourceOf("sonnet")).toBe("claude");
+    expect(sourceOf("gpt-5.6-terra")).toBe("codex");
+    expect(sourceOf("codex")).toBe("codex");
+  });
+
+  it("still resolves an id written before the prefixes went away", () => {
+    expect(sourceOf("cc/opus")).toBe("claude");
+    expect(sourceOf("no-think/cx/gpt-5.6-sol")).toBe("codex");
+  });
+});
+
+describe("spreading a board across both subscriptions", () => {
+  /**
+   * The regression itself: a chain confined to one CLI leaves the other subscription unspent, and has no
+   * live link anywhere in it when that CLI is rate-limited — the exact failure a fallback chain exists for.
+   */
+  it("gives every role a chain that reaches both CLIs", () => {
+    const roles = ["coder", "senior-coder", "designer", "code-reviewer", "principal-coder", "judge", "coach"];
+    for (const { role, models } of adjustRoleModels(roles, cliCatalog())) {
+      const sources = new Set(models.map(sourceOf));
+      expect(sources, `${role}: ${models.join(" → ")}`).toContain("claude");
+      expect(sources, `${role}: ${models.join(" → ")}`).toContain("codex");
+    }
+  });
+
+  /** Heads too: every role leading with the same CLI would spend one subscription and idle the other. */
+  it("does not lead every role with the same CLI", () => {
+    const roles = ["coder", "senior-coder", "designer", "code-reviewer", "principal-coder", "judge", "coach"];
+    const heads = adjustRoleModels(roles, cliCatalog()).map((r) => sourceOf(r.models[0]));
+    expect(new Set(heads).size).toBeGreaterThan(1);
   });
 });

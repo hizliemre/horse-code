@@ -1,3 +1,4 @@
+import { cliFor } from "../agents/cli-models.js";
 import { SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "../prompts.js";
 import { isAnthropicModel, type Effort } from "../providers/anthropic.js";
 // Role-aware model selection: the /roles setmodel picker filters models to fit a role, and /roles adjust
@@ -343,11 +344,27 @@ function dedupBest(models: string[]): string[] {
   return [...best.values()].sort((a, b) => capabilityScore(b) - capabilityScore(a));
 }
 
-/** The underlying subscription source of a model (for chain/source diversity). Normalizes cc→claude, cx→codex. */
+/**
+ * The subscription a model is served by — what chain and head diversity are spread ACROSS.
+ *
+ * Read from the name, by the same routing the transport uses to choose a binary. It used to be read from the
+ * catalogue prefix (`cc/`, `cx/`), and when those went away this silently began returning the whole model
+ * name: every model became its own source, which made `interleaveBySource` a no-op and `pickFallbacks`'
+ * "distinct source" test true of everything. Both guarantees of subscription diversity were gone without a
+ * single failure anywhere.
+ *
+ * Measured on the live catalogue at that point: `coder` held `gpt-5.6-terra → gpt-5.6-sol → gpt-5.6-luna`,
+ * `designer` and `code-reviewer` likewise — every role that writes code was on one subscription end to end,
+ * so a Claude plan went unspent while Codex carried the board, and a Codex outage left those roles with no
+ * live link anywhere in their chain.
+ *
+ * `cliFor` is the one place that answers this, so asking it keeps assignment and execution from drifting
+ * apart. A name it does not recognise keeps its own leading segment, which is what a legacy prefixed id
+ * (`cc/…`) needs and is a harmless singleton for anything else.
+ */
 export function sourceOf(model: string): string {
-  const s = model.toLowerCase().replace(/^no-think\//, ""); // no-think/cc/… → its real source is claude
-  const p = s.split("/")[0];
-  return p === "cc" ? "claude" : p === "cx" ? "codex" : p;
+  const s = model.toLowerCase().replace(/^no-think\//, "");
+  return cliFor(s) ?? s.split("/")[0];
 }
 
 /** Round-robins a capability-sorted pool across its sources, so consecutive picks rotate subscriptions. */

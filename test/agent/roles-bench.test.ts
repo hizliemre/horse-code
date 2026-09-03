@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { RoleRegistry, providerOutage, isSourceCapacity, sourcePrefix } from "../../src/agent/roles.js";
+import { RoleRegistry, providerOutage, isSourceCapacity, sourcePrefix, canonicalSource } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 const reg = (): RoleRegistry => new RoleRegistry({
@@ -181,11 +181,26 @@ describe("a full admission queue is the subscription's, not the model's", () => 
     expect(isSourceCapacity("Overloaded")).toBe(false);
   });
 
-  /** `no-think/` is a routing wrapper, not a subscription — it is served by the source it wraps. */
+  /**
+   * `no-think/` is a routing wrapper, not a subscription — it is served by the source it wraps.
+   *
+   * The answer is the CANONICAL source rather than the literal prefix, so that an id naming `cx` and one
+   * naming `codex` bench together. They are one subscription and always were; only the spelling differed.
+   */
   it("reads the source off the model id, wrapper and all", () => {
-    expect(sourcePrefix("cx/gpt-5.6-luna-low")).toBe("cx");
-    expect(sourcePrefix("no-think/cc/claude-sonnet-5")).toBe("cc");
+    expect(sourcePrefix("cx/gpt-5.6-luna-low")).toBe("codex");
+    expect(sourcePrefix("no-think/cc/claude-sonnet-5")).toBe("claude");
     expect(sourcePrefix("bare-model-id")).toBeUndefined();
+  });
+
+  /** A message may name the source either way; both have to reach the same bench. */
+  it("answers to either spelling of a subscription", () => {
+    expect(canonicalSource("cx")).toBe("codex");
+    expect(canonicalSource("codex")).toBe("codex");
+    expect(canonicalSource("cc")).toBe("claude");
+    expect(canonicalSource("claude")).toBe("claude");
+    // Unknown is left alone: a real source this does not know must still match itself.
+    expect(canonicalSource("antigravity")).toBe("antigravity");
   });
 
   it("benches the whole source, including its no-think wrappers", () => {
@@ -239,5 +254,33 @@ describe("onExhausted routes a capacity refusal to the whole source", () => {
     r.resolve("coder").onExhausted?.("cx/gpt-5.6-luna-low", "Overloaded");
     expect(r.isQuarantined("cx/gpt-5.6-luna-low")).toBe(true);
     expect(r.isQuarantined("cx/gpt-5.6-terra")).toBe(false);
+  });
+});
+
+/**
+ * A subscription-wide bench that never fired.
+ *
+ * `sourcePrefix` read the catalogue prefix, and when those went away it returned undefined for every id in
+ * the current catalogue — which is the "no source known" answer. `markProviderExhausted` then matched
+ * nothing and fell back to benching a single model, and the capacity path never named a source at all. With
+ * two CLIs that is the difference between stepping off an exhausted subscription and walking into it once
+ * per model.
+ */
+describe("naming the subscription behind a model", () => {
+  it("reads it from the name, now that nothing carries a prefix", () => {
+    expect(sourcePrefix("opus")).toBe("claude");
+    expect(sourcePrefix("sonnet")).toBe("claude");
+    expect(sourcePrefix("gpt-5.6-terra")).toBe("codex");
+    expect(sourcePrefix("codex")).toBe("codex");
+  });
+
+  it("still resolves an id written before the prefixes went away", () => {
+    expect(sourcePrefix("cc/opus")).toBe("claude");
+    expect(sourcePrefix("no-think/cx/gpt-5.6-sol")).toBe("codex");
+  });
+
+  /** Unknown stays undefined: an unrecognised name must bench itself, not a subscription it may not belong to. */
+  it("says nothing about a name it does not recognise", () => {
+    expect(sourcePrefix("weird")).toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+import { cliFor } from "../agents/cli-models.js";
 import type { AgentEvent, Provider } from "../core/types.js";
 import type { RoleConfig } from "../config/config.js";
 import { runRoleAgent, type RoleAgentOptions } from "./loop.js";
@@ -69,8 +70,38 @@ export function isSourceCapacity(reason: string): boolean {
  */
 export function sourcePrefix(model: string): string | undefined {
   const s = model.replace(/^no-think\//, "");
+  /**
+   * Read from the NAME first, because the prefix it used to read is gone.
+   *
+   * This returned undefined for every id in the current catalogue, and undefined is the "no source known"
+   * answer — so a subscription-wide bench never fired. `markProviderExhausted` matched nothing and fell back
+   * to benching one model, and the capacity path below never even named a source. With two CLIs that is the
+   * difference between stepping off an exhausted subscription and walking into it once per model.
+   *
+   * `cliFor` is the one place that answers which subscription serves a name, and using it here keeps
+   * benching aligned with what actually ran. The legacy prefix still resolves behind it, for a chain written
+   * before the prefixes went away.
+   */
+  const cli = cliFor(s);
+  if (cli) return cli;
   const i = s.indexOf("/");
   return i > 0 ? s.slice(0, i) : undefined;
+}
+
+/**
+ * One name for a subscription, whoever is doing the naming.
+ *
+ * The two sides of a source-wide bench are written by different authors: `sourcePrefix` reads a model id,
+ * while the provider comes out of an error MESSAGE, which may say `cx` or `codex` for the same thing. Compare
+ * them raw and a bench matches nothing — which is what happened, silently, when ids stopped carrying
+ * prefixes. Anything unrecognised is left as it is: a real source this does not know about must still be
+ * able to match itself.
+ */
+export function canonicalSource(name: string): string {
+  const s = name.toLowerCase().replace(/^no-think\//, "");
+  if (s === "cc" || s === "claude") return "claude";
+  if (s === "cx") return "codex";
+  return sourcePrefix(s) ?? s;
 }
 
 export function providerOutage(reason: string): string | undefined {
@@ -232,7 +263,10 @@ export class RoleRegistry {
   markProviderExhausted(provider: string, model: string, reason: string, now = Date.now()): string[] {
     // Matched on the SOURCE, so a `no-think/cc/…` wrapper is benched with the rest of `cc` — same
     // subscription, same outage. Comparing the raw prefix left those models behind on every source-wide bench.
-    const hit = this.knownModels().filter((m) => sourcePrefix(m) === provider);
+    // Both sides canonicalised, because a message may name `cx` for what an id calls `codex` — see
+    // `canonicalSource`. Compared raw, the bench matched nothing and quietly fell back to one model.
+    const want = canonicalSource(provider);
+    const hit = this.knownModels().filter((m) => sourcePrefix(m) === want);
     for (const m of hit) this.markExhausted(m, reason, now);
     if (!hit.length) { this.markExhausted(model, reason, now); return [model]; }
     return hit;
