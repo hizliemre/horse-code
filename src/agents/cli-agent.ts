@@ -97,7 +97,9 @@ export function cliArgs(kind: CliKind, prompt: string, extra: string[] = []): st
   return kind === "claude"
     // `--verbose` is required for stream-json to emit the per-turn events rather than only the result.
     ? ["-p", prompt, "--output-format", "stream-json", "--verbose", ...extra]
-    : ["exec", "--json", prompt, ...extra];
+    // `--skip-git-repo-check`: a task worktree IS a repo, but the base and the scratch cases are not, and
+    // Codex refuses outright rather than degrading — measured: "Not inside a trusted directory".
+    : ["exec", "--json", "--skip-git-repo-check", prompt, ...extra];
 }
 
 /**
@@ -158,26 +160,47 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
   return undefined;
 }
 
-/** Codex's `exec --json`, decoded into the same vocabulary. */
+/**
+ * Codex's `exec --json`, decoded into the same vocabulary.
+ *
+ * Captured from the real binary, because two guesses about this shape were wrong. The message text is nested
+ * under `item`, not at the top level — reading `e.text` returns nothing and every Codex turn comes back
+ * silent. And Codex DOES report cache writes, in `cache_write_input_tokens`; an earlier comment here said it
+ * did not, which would have made every Codex run look free next to a Claude one.
+ *
+ *   {"type":"thread.started","thread_id":"…"}
+ *   {"type":"turn.started"}
+ *   {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}
+ *   {"type":"turn.completed","usage":{"input_tokens":15448,"cached_input_tokens":11136,
+ *                                     "cache_write_input_tokens":0,"output_tokens":5}}
+ */
 export function decodeCodexEvent(line: string): CliEvent | undefined {
   let e: Record<string, unknown>;
   try { e = JSON.parse(line) as Record<string, unknown>; } catch { return undefined; }
   const type = String(e.type ?? "");
   if (/rate.?limit/i.test(type)) return { rateLimited: String(e.message ?? "rate limited by the CLI") };
-  if (type === "item.completed" || type === "message") {
-    const text = String((e as { text?: unknown }).text ?? (e as { message?: unknown }).message ?? "");
-    return text ? { text } : undefined;
+  if (type === "item.completed") {
+    const item = (e as { item?: { type?: string; text?: string; name?: string } }).item;
+    if (item?.type === "agent_message" && item.text) return { text: item.text };
+    // Anything else it completed is a step it took — reported for the activity strip, not executed here.
+    if (item?.type && item.type !== "agent_message") {
+      return { tool: { name: item.name ?? item.type } };
+    }
+    return undefined;
   }
-  if (type === "turn.completed" || type === "usage") {
+  if (type === "turn.completed") {
     const u = (e as { usage?: Record<string, number> }).usage ?? {};
     return {
       usage: {
         freshTokens: u.input_tokens ?? 0,
         cachedTokens: u.cached_input_tokens ?? 0,
-        cacheWriteTokens: 0,   // Codex does not report a write figure; absent is honest, zero is not a claim
+        cacheWriteTokens: u.cache_write_input_tokens ?? 0,
         outputTokens: u.output_tokens ?? 0,
       },
     };
+  }
+  if (type === "turn.failed" || type === "error") {
+    return { error: String((e as { message?: unknown }).message ?? "codex reported an error") };
   }
   return undefined;
 }
@@ -237,7 +260,15 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
   return new Promise<CliResult>((resolve) => {
     let child;
     try {
-      child = spawn(run.kind, args, { cwd: run.cwd, signal: run.signal });
+      /**
+       * stdin is CLOSED, not merely unused.
+       *
+       * Codex reads extra instructions from stdin when it is piped — "Reading additional input from
+       * stdin…" — and a pipe nobody writes to never ends, so the process waits for input that is not
+       * coming. Measured: a four-minute timeout on a call that should take seconds. `ignore` gives the
+       * child no stdin at all, which is the honest description of a headless run.
+       */
+      child = spawn(run.kind, args, { cwd: run.cwd, signal: run.signal, stdio: ["ignore", "pipe", "pipe"] });
     } catch (e) {
       resolve({ text: "", error: e instanceof Error ? e.message : String(e), exitCode: -1 });
       return;

@@ -34,8 +34,10 @@ describe("the headless argv for each CLI", () => {
     expect(a).toEqual(["-p", "do the thing", "--output-format", "stream-json", "--verbose"]);
   });
 
-  it("uses Codex's own non-interactive verb", () => {
-    expect(cliArgs("codex", "do the thing")).toEqual(["exec", "--json", "do the thing"]);
+  /** Codex refuses outright outside a trusted directory — "Not inside a trusted directory", measured. */
+  it("uses Codex's own non-interactive verb and does not trip its repo check", () => {
+    expect(cliArgs("codex", "do the thing"))
+      .toEqual(["exec", "--json", "--skip-git-repo-check", "do the thing"]);
   });
 
   it("passes the caller's extra arguments through, after the prompt", () => {
@@ -96,14 +98,38 @@ describe("decoding Claude Code's stream", () => {
   });
 });
 
+/**
+ * Every line here is real output from `codex exec --json`, and two guesses about this shape were wrong
+ * before it was captured. The text is nested under `item`, not at the top level — reading `e.text` returns
+ * nothing and every Codex turn comes back silent. And Codex DOES report cache writes, which an earlier
+ * comment denied; believing that would have made every Codex run look free beside a Claude one.
+ */
 describe("decoding Codex's stream", () => {
-  it("reads a completed message and a usage turn", () => {
-    expect(decodeCodexEvent('{"type":"item.completed","text":"done"}')?.text).toBe("done");
-    expect(decodeCodexEvent('{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":2}}')?.usage)
-      .toEqual({ freshTokens: 10, cachedTokens: 4, cacheWriteTokens: 0, outputTokens: 2 });
+  const CODEX = {
+    message: '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}',
+    usage: '{"type":"turn.completed","usage":{"input_tokens":15448,"cached_input_tokens":11136,'
+      + '"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}',
+    started: '{"type":"thread.started","thread_id":"01a068bb"}',
+    turn: '{"type":"turn.started"}',
+  };
+
+  it("reads the message from where it actually is", () => {
+    expect(decodeCodexEvent(CODEX.message)?.text).toBe("ok");
   });
 
-  it("surfaces its rate limit too", () => {
+  it("reads the full usage, cache writes included", () => {
+    expect(decodeCodexEvent(CODEX.usage)?.usage).toEqual({
+      freshTokens: 15448, cachedTokens: 11136, cacheWriteTokens: 0, outputTokens: 5,
+    });
+  });
+
+  it("ignores its framing", () => {
+    expect(decodeCodexEvent(CODEX.started)).toBeUndefined();
+    expect(decodeCodexEvent(CODEX.turn)).toBeUndefined();
+  });
+
+  it("surfaces a failure and a rate limit", () => {
+    expect(decodeCodexEvent('{"type":"turn.failed","message":"boom"}')?.error).toBe("boom");
     expect(decodeCodexEvent('{"type":"rate_limit","message":"slow down"}')?.rateLimited).toBe("slow down");
   });
 });
