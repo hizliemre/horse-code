@@ -380,7 +380,7 @@ describe("an implementer delegated to a CLI", () => {
 
   /** The worktree, not this process's directory — or the implementer edits horse-code's own checkout. */
   it("runs the CLI in the task's worktree", () => {
-    expect(src).toContain("new CliProvider({ kind: delegate, readOnly: false, cwd })");
+    expect(src).toContain("new CliProvider({ kind: delegate, readOnly: false, cwd,");
   });
 
   /**

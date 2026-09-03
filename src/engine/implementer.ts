@@ -407,7 +407,7 @@ export async function runImplementer(
      * keeps the one the composition root built. Per call rather than shared, because the worktree differs
      * per task and a provider shared across parallel implementers could only hold one of them.
      */
-    provider: delegate ? new CliProvider({ kind: delegate, readOnly: false, cwd }) : deps.provider,
+    provider: delegate ? new CliProvider({ kind: delegate, readOnly: false, cwd, ...(deps.accounts ? { accounts: deps.accounts } : {}) }) : deps.provider,
     ...resolved,
     systemPrompt,
     ...(chain.length ? { model: chain[0], fallbacks: chain.slice(1) } : {}),

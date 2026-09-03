@@ -89,6 +89,17 @@ export interface CliRun {
   signal: AbortSignal;
   /** Extra arguments the caller wants, e.g. `--add-dir`. Never credentials. */
   args?: string[];
+  /**
+   * Which logged-in profile runs this call — a directory, not a credential.
+   *
+   * Claude Code keeps its session under a config directory, and `CLAUDE_CONFIG_DIR` chooses which one.
+   * Verified: pointed at a fresh directory it answers "Not logged in · Please run /login" and builds its own
+   * tree there, so a second subscription is a second directory that has been logged into once, by hand.
+   *
+   * Nothing about a credential passes through here. horse-code names a profile; the CLI reads its own
+   * session from it, exactly as it does when a person runs it.
+   */
+  configDir?: string;
   onEvent?: (ev: CliEvent) => void;
 }
 
@@ -307,7 +318,10 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
        * coming. Measured: a four-minute timeout on a call that should take seconds. `ignore` gives the
        * child no stdin at all, which is the honest description of a headless run.
        */
-      child = spawn(run.kind, args, { cwd: run.cwd, signal: run.signal, stdio: ["ignore", "pipe", "pipe"] });
+      child = spawn(run.kind, args, {
+        cwd: run.cwd, signal: run.signal, stdio: ["ignore", "pipe", "pipe"],
+        ...(run.configDir ? { env: { ...process.env, CLAUDE_CONFIG_DIR: run.configDir } } : {}),
+      });
     } catch (e) {
       resolve({ text: "", error: e instanceof Error ? e.message : String(e), exitCode: -1 });
       return;

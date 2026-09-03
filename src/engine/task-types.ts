@@ -93,6 +93,8 @@ export interface TaskCycleDeps {
    * the work.
    */
   delegateTo?: import("../agents/cli-agent.js").CliKind;
+  /** Shared across every role, so what one call learns about a subscription the next one can act on. */
+  accounts?: import("../agents/cli-accounts.js").AccountPool;
   /**
    * The session's base worktree once one is open, and `undefined` when the run is over.
    *

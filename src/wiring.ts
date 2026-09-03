@@ -35,6 +35,8 @@ export interface BuildJobDepsOpts {
    * it defaults to delegating, because the provider this ships with is a CLI.
    */
   delegateTo?: import("./agents/cli-agent.js").CliKind | null;
+  /** The one pool every delegated call shares. Omitted, calls run under the ambient login. */
+  accounts?: import("./agents/cli-accounts.js").AccountPool;
   skillRegistry: SkillRegistry;
   manager: WorktreeManager;
   prAdapter: RevisionPRAdapter;
@@ -153,6 +155,7 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
      * `gpt-*` model runs Codex.
      */
     ...(opts.delegateTo === null ? {} : { delegateTo: opts.delegateTo ?? "claude" }),
+    ...(opts.accounts ? { accounts: opts.accounts } : {}),
     roleRegistry,
     fitness,
     skillRegistry: opts.skillRegistry,

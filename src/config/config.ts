@@ -58,6 +58,14 @@ export interface ResolvedConfig {
    *  subscriptions, e.g. ["antigravity","claude","codex","opencode-go"] — excludes combos + unofficial sources. */
   modelSources: string[];
   /**
+   * Logged-in Claude Code profiles to spill across, in the order they should be used.
+   *
+   * Each entry names a `CLAUDE_CONFIG_DIR` that its holder has already logged into by hand, through the
+   * official flow — a directory, never a credential. Empty (the ordinary case) means calls run under the
+   * ambient login and nothing about this exists. See `AccountPool` for why the order matters.
+   */
+  claudeAccounts: { name: string; configDir: string }[];
+  /**
    * Where `/graph trace` writes, repo-relative. Empty = `.horsecode/traces`.
    *
    * A project whose generated file-documentation already has a home points this at it, so the two kinds do
@@ -112,6 +120,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   specKit: { version: "v0.13.2" },
   mcp: {},
   modelSources: [],
+  claudeAccounts: [],
   traceDir: "",
   /**
    * Shipped as a REFERENCE, not a copy, for the reasons skills/README.md gives for exactly this shape: it is
@@ -162,6 +171,8 @@ const fileSchema = z
     council: z.object({ members: z.array(reviewerSchema) }).optional(),
     specKit: z.object({ version: z.string() }).optional(),
     modelSources: z.array(z.string()).optional(),
+    // Logged-in profile directories, in spill order. A path each, never a credential.
+    claudeAccounts: z.array(z.object({ name: z.string(), configDir: z.string() })).optional(),
     traceDir: z.string().optional(), // where /graph trace writes; empty = .horsecode/traces
     mainBranch: z.string().optional(), // the branch a resumed session syncs from; asked once, then remembered
     // Bounded: below 1 nothing runs; above 32 the git merge lock, not the models, becomes the limit.
@@ -228,6 +239,14 @@ export function loadConfig(opts: LoadOptions): ResolvedConfig {
 
   // modelSources: "most specific wins" (project's if present).
   merged.modelSources = projectSafe.modelSources ?? global.modelSources ?? [];
+  /**
+   * Profiles come from the GLOBAL config only, never the project's.
+   *
+   * A profile is one person's own logged-in subscription. Read from a checked-in project file it would name
+   * paths on a machine it was not written for, and a repository would be carrying a statement about whose
+   * subscriptions run its work — so the project layer has no say here.
+   */
+  merged.claudeAccounts = global.claudeAccounts ?? [];
 
   // maxParallel: most specific wins — a heavy project may want a different number from the machine default.
   merged.maxParallel = projectSafe.maxParallel ?? global.maxParallel ?? DEFAULT_CONFIG.maxParallel;

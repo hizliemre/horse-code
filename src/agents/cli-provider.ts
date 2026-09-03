@@ -1,5 +1,6 @@
 import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
 import { runCliAgent, SYNTHETIC, type CliKind, type CliUsage } from "./cli-agent.js";
+import { AccountPool } from "./cli-accounts.js";
 import { cliFor, cliInvocation } from "./cli-models.js";
 
 /**
@@ -54,6 +55,16 @@ export function promptFor(req: ChatRequest): string {
   return parts.join("\n\n");
 }
 
+/**
+ * The answer of a CLI whose profile has no session.
+ *
+ * Measured against the real binary: a call under a `CLAUDE_CONFIG_DIR` never logged into exits 0, reports
+ * `<synthetic>` for the model, and says exactly "Not logged in · Please run /login".
+ */
+export function isLoggedOut(text: string): boolean {
+  return /not logged in|please run \/login/i.test(text);
+}
+
 export interface CliProviderOptions {
   /** Fixed CLI, when the caller knows which. Omitted, each request picks by its model id — see `cliFor`. */
   kind?: CliKind;
@@ -67,6 +78,12 @@ export interface CliProviderOptions {
    * was derived into. Every writing caller passes this.
    */
   cwd?: string;
+  /**
+   * More than one logged-in Claude profile to spill across. Omitted, calls run under the ambient login.
+   *
+   * Claude only: `CLAUDE_CONFIG_DIR` is Claude Code's, and Codex keeps its own session elsewhere.
+   */
+  accounts?: AccountPool;
 }
 
 /**
@@ -108,11 +125,13 @@ export class CliProvider implements Provider {
   private readonly fixed?: CliKind;
   private readonly readOnly: boolean;
   private readonly cwd?: string;
+  private readonly accounts?: AccountPool;
 
   constructor(opts: CliProviderOptions = {}) {
     this.fixed = opts.kind;
     this.readOnly = opts.readOnly ?? true;
     this.cwd = opts.cwd;
+    this.accounts = opts.accounts;
   }
 
   async *chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent> {
@@ -172,13 +191,25 @@ export class CliProvider implements Provider {
      * held until it finished. The row a person watches was blank for the whole task, and the telemetry had
      * nothing to say about it either.
      */
+    /**
+     * Which subscription serves this call, decided per call rather than per run.
+     *
+     * Per call is what makes it spillover: the reading that moves a run onto the next profile arrives WITH a
+     * call, so the very next one can act on it. Decided once at startup, a run would keep pushing into a
+     * limit it had already been told about.
+     */
+    const account = kind === "claude" ? this.accounts?.pick() : undefined;
+
     let res!: Awaited<ReturnType<typeof runCliAgent>>;
     yield* streamWhileRunning<ChatEvent>((push) =>
       runCliAgent({
         kind, cwd: this.cwd ?? process.cwd(), prompt: promptFor(req), signal, args,
+        ...(account ? { configDir: account.configDir } : {}),
         onEvent: (ev) => {
           if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}), ...(ev.tool.ok === false ? { ok: false } : {}) });
           if (ev.text) push({ type: "text-delta", text: ev.text });
+          // Every call carries one of these, so the pool learns what this profile has left at no extra cost.
+          if (ev.quota && account) this.accounts?.record(account.name, ev.quota.windows);
         },
       }).then((r) => { res = r; }));
 
@@ -202,9 +233,21 @@ export class CliProvider implements Provider {
      * name that cannot be served.
      */
     if (res.served === SYNTHETIC) {
+      /**
+       * A profile with no session answers the same way, and the remedy is the opposite one.
+       *
+       * Measured: a call under a `CLAUDE_CONFIG_DIR` that was never logged into exits 0, reports
+       * `<synthetic>`, and its whole answer is "Not logged in · Please run /login". Reported as an
+       * unrecognised model it would bench a model that is perfectly fine — and the bench is fleet-wide, so
+       * one expired login would take that model away from every profile that CAN still serve it. Sessions do
+       * expire, so this path is not hypothetical.
+       */
+      const loggedOut = isLoggedOut(res.text);
       yield {
         type: "error", retryable: true,
-        message: `${kind} CLI did not recognise ${req.model} and answered without a model`,
+        message: loggedOut
+          ? `${kind} CLI is not logged in${account ? ` under profile "${account.name}" (${account.configDir})` : ""} — run \`claude /login\` there once`
+          : `${kind} CLI did not recognise ${req.model} and answered without a model`,
       };
       return;
     }

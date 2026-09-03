@@ -6,6 +6,7 @@ import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
+import { AccountPool } from "./agents/cli-accounts.js";
 import { CliProvider } from "./agents/cli-provider.js";
 import { cliCatalog } from "./agents/cli-models.js";
 import { stripThinking } from "./tui/format.js";
@@ -422,7 +423,16 @@ export async function main(argv: string[]): Promise<void> {
    * worktree. The read-only limit belongs to the roles that only ever wanted an answer, and is applied
    * where those roles are built rather than blanket here.
    */
-  const raw = new CliProvider({ readOnly: false });
+  /**
+   * ONE pool for the whole session, built here because both users of it must be the same object.
+   *
+   * The pool's worth is entirely in what it accumulates: a reading arrives with a call, and the call that
+   * acts on it is a different role's. Built twice — once for this provider, once inside the job deps — each
+   * copy would learn only from its own calls and both would keep pushing into a limit the other had already
+   * been told about.
+   */
+  const accounts = new AccountPool(config.claudeAccounts);
+  const raw = new CliProvider({ readOnly: false, accounts });
   const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();
   // Built-ins FIRST, the project's own second: the registry is keyed by name, so a project skill with the
@@ -472,7 +482,7 @@ export async function main(argv: string[]): Promise<void> {
   const rules = (): string[] => memStore.all().filter((m) => m.kind === "rule").map((m) => m.text);
   const buildDeps = (read: LineReader): Promise<JobDeps> =>
     buildJobDeps({
-      config, provider, skillRegistry, manager, prAdapter, rules,
+      config, provider, skillRegistry, manager, prAdapter, rules, accounts,
       // Autonomous by default: a task that exhausts the escalation ladder is auto-retried (then abandoned) so
       // an unattended run finishes on its own instead of blocking on an interactive per-failure human prompt.
       askHuman: autonomousAskHuman(),

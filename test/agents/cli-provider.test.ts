@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { promptFor, CliProvider, streamWhileRunning } from "../../src/agents/cli-provider.js";
+import { promptFor, CliProvider, streamWhileRunning, isLoggedOut } from "../../src/agents/cli-provider.js";
 import { cliFor, cliInvocation, cliCatalog } from "../../src/agents/cli-models.js";
 import type { ChatRequest } from "../../src/core/types.js";
 import { makeStreamReader, decodeClaudeEvent } from "../../src/agents/cli-agent.js";
@@ -258,5 +258,21 @@ describe("a cancelled call", () => {
     }
     const err = out.find((e) => e.type === "error");
     expect(err).toMatchObject({ type: "error", message: "cancelled", retryable: false });
+  });
+});
+
+/**
+ * A logged-out profile and an unrecognised model produce the SAME `<synthetic>` answer, and they call for
+ * opposite remedies. Told apart wrongly, an expired login benches a model that is perfectly fine — and the
+ * bench is fleet-wide, so it would be taken away from every profile that can still serve it.
+ */
+describe("telling a logged-out profile from a model that does not exist", () => {
+  it("recognises the CLI's own words for no session", () => {
+    expect(isLoggedOut("Not logged in \u00b7 Please run /login")).toBe(true);
+  });
+
+  it("does not claim a logged-out profile from an ordinary answer", () => {
+    expect(isLoggedOut("ok")).toBe(false);
+    expect(isLoggedOut("I logged the request and moved on")).toBe(false);
   });
 });
