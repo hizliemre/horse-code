@@ -190,6 +190,15 @@ export type ChatEvent =
   // Live progress while the model is STILL generating a tool call's arguments (e.g. a large write_file body),
   // so the UI can show "writing <path> · N chars" instead of a silent multi-minute wait.
   | { type: "tool-progress"; name: string; chars: number; path?: string }
+  /**
+   * A tool the PROVIDER's own agent ran, in its own process — reported, never executed here.
+   *
+   * A delegated agent does its work through the CLI's tools, so nothing in this process sees a write. The
+   * live row reads the tool calls the executor recorded, so a delegated agent showed "starting up…" for its
+   * whole life while its clock and token count climbed beside it — the one row a person watches to know
+   * what is happening, saying nothing at all.
+   */
+  | { type: "activity"; tool: string; target?: string }
   | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens?: number; cacheWriteTokens?: number }
   | { type: "done"; finishReason: "stop" | "tool_calls" | "length" }
   /**

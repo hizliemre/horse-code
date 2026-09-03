@@ -134,9 +134,21 @@ export class CliProvider implements Provider {
     if (this.readOnly && kind === "claude") args.push("--disallowed-tools", "Write", "Edit", "NotebookEdit");
     if (this.readOnly && kind === "codex") args.push("--sandbox", "read-only");
 
+    /**
+     * The CLI's own tool calls, collected as they arrive and replayed below.
+     *
+     * `chat` is an async generator and `runCliAgent` reports through a callback, so an event cannot be
+     * yielded from inside it — buffered here and emitted in order once the run returns. The row is late by
+     * one call rather than silent for the whole task, which is what it was.
+     */
+    const activity: ChatEvent[] = [];
     const res = await runCliAgent({
       kind, cwd: process.cwd(), prompt: promptFor(req), signal, args,
+      onEvent: (ev) => {
+        if (ev.tool) activity.push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}) });
+      },
     });
+    for (const ev of activity) yield ev;
 
     /**
      * A rate limit is the fleet's, not the task's — surfaced as a retryable error so it reaches the same

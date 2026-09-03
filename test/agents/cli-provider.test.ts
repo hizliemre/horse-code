@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { cliModel, cliEffort, promptFor, cliFor, CliProvider } from "../../src/agents/cli-provider.js";
 import type { ChatRequest } from "../../src/core/types.js";
+import { makeStreamReader, decodeClaudeEvent } from "../../src/agents/cli-agent.js";
 
 const req = (over: Partial<ChatRequest> = {}): ChatRequest =>
   ({ model: "cc/claude-opus-5", messages: [{ role: "user", content: "hi" }], tools: [], ...over });
@@ -97,5 +98,30 @@ describe("a model with no CLI", () => {
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ type: "error", retryable: true });
     expect(out[0].type === "error" && out[0].message).toMatch(/no CLI serves/);
+  });
+});
+
+/**
+ * A delegated agent showed "starting up…" for its whole life.
+ *
+ * The live row's activity line reads the tool calls this process's executor recorded, and a delegated agent
+ * runs its tools in another one — so the row said nothing while its clock and token count climbed beside it.
+ * That row is the one thing a person watches to know what is happening.
+ *
+ * The provider knows WHAT was done; the loop knows WHO did it, because the implementer binds the sink to its
+ * card. So the provider reports the call and the loop attributes it.
+ */
+describe("reporting what the CLI's own agent did", () => {
+  it("turns the CLI's tool calls into activity events", async () => {
+    const events: string[] = [];
+    const stream = [
+      '{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"tool_use","id":"t1",'
+        + '"name":"Write","input":{"file_path":"src/a.ts"}}]}}',
+      '{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"text","text":"done"}]}}',
+      '{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}',
+    ].join("\n");
+    const reader = makeStreamReader(decodeClaudeEvent, (ev) => { if (ev.tool) events.push(`${ev.tool.name}:${ev.tool.target}`); });
+    reader.push(stream); reader.end();
+    expect(events).toEqual(["Write:src/a.ts"]);
   });
 });

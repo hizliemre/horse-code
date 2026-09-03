@@ -288,6 +288,10 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
           // what made the progress indicator itself appear to stutter. Those tools now report into the chat
           // once they have actually run, which is the record worth keeping anyway.
           if (ev.path) opts.onLiveActivity?.(`writing ${ev.path.split("/").pop()} · ${fmtChars(ev.chars)}`);
+        } else if (ev.type === "activity") {
+          // Attribution comes from `opts.onActivity`, which the implementer has already bound to its card —
+          // the provider knows what was done, not who did it.
+          opts.onActivity?.({ tool: ev.tool, target: ev.target ?? "", lines: 0, ok: true });
         } else if (ev.type === "usage") {
           yield { type: "usage", promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
           opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, model: activeModel });
