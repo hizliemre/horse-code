@@ -358,7 +358,7 @@ export class OmniRouteProvider implements Provider {
     const lastProgress = new Map<number, number>(); // per tool-call: last arg length we emitted progress for
     let finishReason: "stop" | "tool_calls" | "length" = "stop";
     let sawText = false;
-    let usage: { promptTokens: number; completionTokens: number; cachedTokens: number } | undefined;
+    let usage: { promptTokens: number; completionTokens: number; cachedTokens: number; cacheWriteTokens?: number } | undefined;
     // omniroute appends the REAL billed token counts as trailing SSE comments (":
     // x-omniroute-tokens-in=48"). The stream's own usage chunk counts the full prompt the model saw —
     // including the large Claude Code system prompt omniroute injects for cc/claude providers, most of
@@ -530,7 +530,8 @@ export class OmniRouteProvider implements Provider {
     if (billed.in !== undefined || billed.out !== undefined) {
       yield { type: "usage", promptTokens: billed.in ?? 0, completionTokens: billed.out ?? 0 };
     } else if (usage) {
-      yield { type: "usage", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, cachedTokens: usage.cachedTokens };
+      yield { type: "usage", promptTokens: usage.promptTokens, completionTokens: usage.completionTokens,
+        cachedTokens: usage.cachedTokens, ...(usage.cacheWriteTokens !== undefined && { cacheWriteTokens: usage.cacheWriteTokens }) };
     } else {
       const inHeader = res.headers.get("X-OmniRoute-Tokens-In");
       const outHeader = res.headers.get("X-OmniRoute-Tokens-Out");

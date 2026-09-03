@@ -190,7 +190,7 @@ export type ChatEvent =
   // Live progress while the model is STILL generating a tool call's arguments (e.g. a large write_file body),
   // so the UI can show "writing <path> · N chars" instead of a silent multi-minute wait.
   | { type: "tool-progress"; name: string; chars: number; path?: string }
-  | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens?: number }
+  | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens?: number; cacheWriteTokens?: number }
   | { type: "done"; finishReason: "stop" | "tool_calls" | "length" }
   /**
    * `retryable` = a fallback model may succeed with the same request.
@@ -234,7 +234,7 @@ export type AgentEvent =
       permissionLevel: PermissionLevel;
       preview: string;
     }
-  | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens?: number }
+  | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens?: number; cacheWriteTokens?: number }
   | { type: "error"; message: string; retryable?: boolean }
   | { type: "abort" };
 

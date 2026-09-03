@@ -52,6 +52,7 @@ async function* stream(
   let promptTokens: number | undefined;
   let completionTokens: number | undefined;
   let cachedTokens: number | undefined;
+  let cacheWriteTokens: number | undefined;
   let finish: string | undefined;
   let failure: string | undefined;
   let toolCalls = 0;
@@ -62,6 +63,7 @@ async function* stream(
         promptTokens = ev.promptTokens;
         completionTokens = ev.completionTokens;
         cachedTokens = ev.cachedTokens;
+        cacheWriteTokens = ev.cacheWriteTokens;
       } else if (ev.type === "tool-call") toolCalls++;
       else if (ev.type === "text-delta") textChars += ev.text.length;
       else if (ev.type === "done") finish = ev.finishReason;
@@ -80,6 +82,14 @@ async function* stream(
       "gen_ai.usage.input_tokens": promptTokens,
       "gen_ai.usage.output_tokens": completionTokens,
       "gen_ai.usage.cached_tokens": cachedTokens,
+      /**
+       * What the cache COST, beside what it saved.
+       *
+       * A read is billed at a fraction and a write at a premium, so a run that reports only reads reads as
+       * pure profit — the first turn of every agent, which fills the cache, would cost nothing on paper.
+       * The true prompt spend is fresh + read + write, and this is the third.
+       */
+      "gen_ai.usage.cache_write_tokens": cacheWriteTokens,
       "gen_ai.response.finish_reason": finish,
       "hc.duration_ms": Date.now() - started,
       "hc.tools_requested": toolCalls,

@@ -77,6 +77,37 @@ describe("cache breakpoints", () => {
   });
 });
 
+/**
+ * A cache read is billed at a fraction and a WRITE at a premium, so reporting only reads reads as pure
+ * profit — the first turn of every agent, the one that fills the cache, would cost nothing on paper. The
+ * true prompt spend is fresh + read + write, and only two of the three were being recorded.
+ */
+describe("usage accounting for the cache", () => {
+  const start = (usage: Record<string, number>) =>
+    ({ type: "message_start", message: { usage } });
+
+  it("records what the cache cost as well as what it saved", () => {
+    const d = new AnthropicDecoder();
+    d.push(start({ input_tokens: 13, cache_read_input_tokens: 0, cache_creation_input_tokens: 12209 }));
+    d.push({ type: "message_delta", usage: { output_tokens: 4 } });
+    expect(d.usage()).toEqual({ promptTokens: 13, completionTokens: 4, cachedTokens: 0, cacheWriteTokens: 12209 });
+  });
+
+  it("reports a cache READ turn with nothing written", () => {
+    const d = new AnthropicDecoder();
+    d.push(start({ input_tokens: 13, cache_read_input_tokens: 12209, cache_creation_input_tokens: 0 }));
+    d.push({ type: "message_delta", usage: { output_tokens: 4 } });
+    expect(d.usage()).toMatchObject({ cachedTokens: 12209, cacheWriteTokens: 0 });
+  });
+
+  /** A response from before caching, or from a model that ignores it, must still account to zero — not NaN. */
+  it("treats an absent cache field as zero", () => {
+    const d = new AnthropicDecoder();
+    d.push(start({ input_tokens: 900 }));
+    expect(d.usage()).toMatchObject({ promptTokens: 900, cachedTokens: 0, cacheWriteTokens: 0 });
+  });
+});
+
 describe("which models speak Anthropic's schema", () => {
   it("recognises the Claude family, however the catalog namespaces it", () => {
     for (const m of ["cc/claude-opus-5", "no-think/cc/claude-sonnet-5", "antigravity/claude-sonnet-4-6",
@@ -245,7 +276,8 @@ describe("decoding Anthropic's event stream", () => {
     const d = new AnthropicDecoder();
     ev(d, { type: "message_start", message: { usage: { input_tokens: 33, cache_read_input_tokens: 12 } } });
     ev(d, { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 4 } });
-    expect(d.usage()).toEqual({ promptTokens: 33, completionTokens: 4, cachedTokens: 12 });
+    // cacheWriteTokens joins the shape: what the cache cost, beside what it saved. See the usage suite above.
+    expect(d.usage()).toEqual({ promptTokens: 33, completionTokens: 4, cachedTokens: 12, cacheWriteTokens: 0 });
     expect(d.finishReason()).toBe("tool_calls");
   });
 

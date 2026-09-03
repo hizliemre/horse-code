@@ -209,6 +209,15 @@ export class AnthropicDecoder {
   private inTokens = 0;
   private outTokens = 0;
   private cachedTokens = 0;
+  /**
+   * Tokens written INTO the cache, billed at a premium — invisible until now, which made the saving
+   * unmeasurable in the direction that matters.
+   *
+   * `cache_read_input_tokens` alone says what was reused; without `cache_creation_input_tokens` the first
+   * turn of every agent — the one that pays 1.25x to fill the cache — is recorded as if it cost nothing at
+   * all. A run's true prompt cost is fresh + read + write, and two of the three were being reported.
+   */
+  private cacheWriteTokens = 0;
   private sawUsage = false;
 
   push(chunk: unknown): ChatEvent[] {
@@ -229,6 +238,7 @@ export class AnthropicDecoder {
           this.sawUsage = true;
           this.inTokens = u.input_tokens ?? 0;
           this.cachedTokens = u.cache_read_input_tokens ?? 0;
+          this.cacheWriteTokens = u.cache_creation_input_tokens ?? 0;
         }
         break;
       }
@@ -284,9 +294,10 @@ export class AnthropicDecoder {
   }
 
   /** Usage as the transport should report it, or undefined when the stream never said. */
-  usage(): { promptTokens: number; completionTokens: number; cachedTokens: number } | undefined {
+  usage(): { promptTokens: number; completionTokens: number; cachedTokens: number; cacheWriteTokens: number } | undefined {
     return this.sawUsage
-      ? { promptTokens: this.inTokens, completionTokens: this.outTokens, cachedTokens: this.cachedTokens }
+      ? { promptTokens: this.inTokens, completionTokens: this.outTokens,
+          cachedTokens: this.cachedTokens, cacheWriteTokens: this.cacheWriteTokens }
       : undefined;
   }
 
