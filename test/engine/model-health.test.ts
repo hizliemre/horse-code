@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { ModelHealth } from "../../src/engine/model-health.js";
 import { RoleRegistry } from "../../src/agent/roles.js";
 import type { RoleConfig } from "../../src/config/config.js";
@@ -355,5 +356,39 @@ describe("when a bench lapses", () => {
     main.markExhausted("dead-a", "Overloaded", Date.now(), Date.now() + 30);
     await new Promise((r) => setTimeout(r, 70));
     expect(notes.join("\n")).toMatch(/Back in service/);
+  });
+});
+
+/**
+ * Which pool an assignment drew from, in the record.
+ *
+ * A run handed `opencode-go/muse-spark-1.2-contributor-xhigh` to four roles at once — 403 calls over
+ * fifteen minutes — and afterwards nothing could say how it got in. It is in no role's config; the
+ * routability probe rejects it (HTTP 400); `/roles adjust` draws from this same function; a catalog
+ * rejection benches permanently, and the call histogram (119, 100, 67, 39, 24, 24 per minute) shows the
+ * bench working. Every branch was ruled out on paper and one of them still happened, because none of them
+ * was written down — so the question could be argued but not answered.
+ *
+ * Asserted on the source, as the other telemetry contracts in this repo are: what matters is that the
+ * branch cannot be taken silently.
+ */
+describe("the pool decision is recorded", () => {
+  const src = readFileSync("src/engine/model-health.ts", "utf8");
+
+  it("names which pool an assignment came from", () => {
+    expect(src).toContain('telemetry().event("decision.pool"');
+    expect(src).toContain('"hc.pool.source": curated.length ? "curated" : "fallback"');
+  });
+
+  /** The two ways past the curated pool are exactly the two that were unexplainable afterwards. */
+  it("records the unscreened fallback and the probed one separately", () => {
+    expect(src).toContain('"hc.pool.source": "unscreened"');
+    expect(src).toContain('"hc.pool.source": "probed"');
+  });
+
+  /** And what a re-assignment actually installed, so a chain can be traced back to its decision. */
+  it("records the chain a role was moved onto", () => {
+    expect(src).toContain('telemetry().event("decision.rechain"');
+    expect(src).toContain('"hc.chain.before"');
   });
 });

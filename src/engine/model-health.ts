@@ -12,6 +12,7 @@
 import type { RoleRegistry } from "../agent/roles.js";
 import { isUnknownModelError } from "../providers/omniroute.js";
 import { adjustRoleModels } from "../tui/role-models.js";
+import { telemetry } from "../obs/telemetry.js";
 
 /** The role↔registry map, supplied by the composition root (roles live in several separate registries). */
 export interface RoleModelPort {
@@ -226,9 +227,29 @@ export class ModelHealth {
     const live = all.filter((m) => !dead.has(m));
     const configured = new Set(this.port.registries().flatMap((r) => r.knownModels()));
     const curated = live.filter((m) => configured.has(m));
+    /**
+     * Which pool an assignment came from, in the record.
+     *
+     * A run handed `opencode-go/muse-spark-1.2-contributor-xhigh` to four roles at once, 403 calls over
+     * fifteen minutes, and afterwards nothing could say how it got in: it is in no role's config, the
+     * routability probe rejects it (HTTP 400), `/roles adjust` draws from this same function, and the bench
+     * is permanent for a catalog rejection. Every branch below was ruled out on paper and one of them still
+     * happened. None of them was recorded, so the question could only be argued, not answered.
+     */
+    telemetry().event("decision.pool", {
+      "hc.decision": "pool", "hc.pool.catalog": all.length, "hc.pool.live": live.length,
+      "hc.pool.configured": configured.size, "hc.pool.curated": curated.length,
+      "hc.pool.source": curated.length ? "curated" : "fallback",
+    });
     if (curated.length) return curated;
     const routable = this.routable;
-    if (!routable || !live.length) return live;
+    if (!routable || !live.length) {
+      telemetry().event("decision.pool", {
+        "hc.decision": "pool", "hc.pool.source": "unscreened",
+        "hc.pool.live": live.length, "hc.pool.reason": routable ? "no live models" : "no routability probe",
+      });
+      return live;
+    }
     const checked = await Promise.all(live.map(async (m) => ({ m, ok: await routable(m).catch(() => false) })));
     const usable = checked.filter((c) => c.ok).map((c) => c.m);
     if (!usable.length) {
@@ -237,6 +258,10 @@ export class ModelHealth {
       return live;
     }
     const refused = checked.length - usable.length;
+    telemetry().event("decision.pool", {
+      "hc.decision": "pool", "hc.pool.source": "probed",
+      "hc.pool.probed": checked.length, "hc.pool.refused": refused, "hc.pool.usable": usable.length,
+    });
     if (refused) {
       this.note(`🔎 The configured models are all spent — probed ${checked.length} catalog model(s) and `
         + `dropped ${refused} the gateway would not route to.`);
@@ -333,6 +358,10 @@ export class ModelHealth {
       const reg = this.port.registryFor(role);
       const before = [...reg.rawChain(role)];   // …so a bench that lapses can put the role back. See revive.
       reg.setRoleModel(role, chain);
+      telemetry().event("decision.rechain", {
+        "hc.decision": "rechain", "hc.role": role,
+        "hc.chain": chain.join(","), "hc.chain.before": before.join(","),
+      });
       out.push({ role, chain, before });
     }
     return out;
