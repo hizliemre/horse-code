@@ -68,21 +68,50 @@ export function promptFor(req: ChatRequest): string {
 }
 
 export interface CliProviderOptions {
-  kind: CliKind;
+  /** Fixed CLI, when the caller knows which. Omitted, each request picks by its model id — see `cliFor`. */
+  kind?: CliKind;
   /** Tools the delegated agent may NOT use. A role that wants an answer has no business writing files. */
   readOnly?: boolean;
 }
 
+/**
+ * Which CLI serves a model, read from the id the role registry already uses.
+ *
+ * The catalog prefixes survive the gateway: `cc/` was always Claude and `cx/` always Codex, and
+ * `sourceOf` has normalised them that way since long before this transport existed. Reusing them means a
+ * config of sixty-four tuned role chains keeps working — the alternative was renaming every model in it.
+ *
+ * Anything else has no CLI. That is not a gap to paper over: `antigravity/` was a gateway source and there
+ * is no binary that serves it, so a role still pointing at one must fail loudly rather than be quietly
+ * served by whichever CLI happened to be default.
+ */
+export function cliFor(model: string): CliKind | undefined {
+  const source = model.toLowerCase().replace(/^no-think\//, "").split("/")[0];
+  if (source === "cc" || source === "claude") return "claude";
+  if (source === "cx" || source === "codex") return "codex";
+  return undefined;
+}
+
 export class CliProvider implements Provider {
-  private readonly kind: CliKind;
+  private readonly fixed?: CliKind;
   private readonly readOnly: boolean;
 
-  constructor(opts: CliProviderOptions) {
-    this.kind = opts.kind;
+  constructor(opts: CliProviderOptions = {}) {
+    this.fixed = opts.kind;
     this.readOnly = opts.readOnly ?? true;
   }
 
   async *chat(req: ChatRequest, signal: AbortSignal): AsyncIterable<ChatEvent> {
+    const kind = this.fixed ?? cliFor(req.model);
+    if (!kind) {
+      /**
+       * Said as a model failure, so the chain slides to the next link and the bench takes this one out.
+       * A role left pointing at a gateway-only source is exactly the case the fleet taxonomy handles; what
+       * it must not do is silently run on some default CLI and report the answer as that model's.
+       */
+      yield { type: "error", message: `no CLI serves ${req.model} — it is not available in this catalog`, retryable: true };
+      return;
+    }
     const args: string[] = [];
     const model = cliModel(req.model);
     if (model) args.push("--model", model);
@@ -94,7 +123,7 @@ export class CliProvider implements Provider {
      * effort — the exact loss the native transport was built to stop.
      */
     const effort = req.effort ?? cliEffort(req.model);
-    if (effort && this.kind === "claude") args.push("--effort", effort);
+    if (effort && kind === "claude") args.push("--effort", effort);
     /**
      * A role that was asked for a verdict must not be able to edit the tree.
      *
@@ -102,11 +131,11 @@ export class CliProvider implements Provider {
      * so the same limit has to be stated as a flag. Without it a review lens has a full editor in a worktree
      * it was only meant to read.
      */
-    if (this.readOnly && this.kind === "claude") args.push("--disallowed-tools", "Write", "Edit", "NotebookEdit");
-    if (this.readOnly && this.kind === "codex") args.push("--sandbox", "read-only");
+    if (this.readOnly && kind === "claude") args.push("--disallowed-tools", "Write", "Edit", "NotebookEdit");
+    if (this.readOnly && kind === "codex") args.push("--sandbox", "read-only");
 
     const res = await runCliAgent({
-      kind: this.kind, cwd: process.cwd(), prompt: promptFor(req), signal, args,
+      kind, cwd: process.cwd(), prompt: promptFor(req), signal, args,
     });
 
     /**
@@ -115,11 +144,11 @@ export class CliProvider implements Provider {
      * answered with nonsense.
      */
     if (res.rateLimited) {
-      yield { type: "error", message: `${this.kind} CLI: ${res.rateLimited}`, retryable: true };
+      yield { type: "error", message: `${kind} CLI: ${res.rateLimited}`, retryable: true };
       return;
     }
     if (res.error && !res.text.trim()) {
-      yield { type: "error", message: `${this.kind} CLI: ${res.error}`, retryable: res.exitCode !== 0 };
+      yield { type: "error", message: `${kind} CLI: ${res.error}`, retryable: res.exitCode !== 0 };
       return;
     }
     if (res.text) yield { type: "text-delta", text: res.text };

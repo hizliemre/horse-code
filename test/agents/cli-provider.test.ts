@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cliModel, cliEffort, promptFor } from "../../src/agents/cli-provider.js";
+import { cliModel, cliEffort, promptFor, cliFor, CliProvider } from "../../src/agents/cli-provider.js";
 import type { ChatRequest } from "../../src/core/types.js";
 
 const req = (over: Partial<ChatRequest> = {}): ChatRequest =>
@@ -59,5 +59,43 @@ describe("folding a conversation into one prompt", () => {
   it("skips empty turns", () => {
     const p = promptFor(req({ messages: [{ role: "user", content: "  " }, { role: "user", content: "real" }] }));
     expect(p.trim()).toBe("real");
+  });
+});
+
+/**
+ * Which CLI serves a model, read from the id the role registry already uses.
+ *
+ * The catalog prefixes outlive the gateway: `cc/` was always Claude, `cx/` always Codex, and `sourceOf` has
+ * normalised them that way since long before this transport. Reusing them is what lets a config of
+ * sixty-four tuned role chains keep working instead of every model in it being renamed.
+ */
+describe("choosing a CLI from the model id", () => {
+  it("routes the two sources that have a binary", () => {
+    expect(cliFor("cc/claude-opus-5")).toBe("claude");
+    expect(cliFor("no-think/cc/claude-sonnet-5")).toBe("claude");
+    expect(cliFor("cx/gpt-5.6-terra-high")).toBe("codex");
+  });
+
+  /**
+   * `antigravity/` was a gateway source and no binary serves it. A role still pointing at one must fail
+   * loudly — served quietly by a default CLI, the answer would be attributed to a model that never ran.
+   */
+  it("refuses a source no CLI can serve", () => {
+    expect(cliFor("antigravity/claude-sonnet-4-6")).toBeUndefined();
+    expect(cliFor("opencode-go/hy3")).toBeUndefined();
+  });
+});
+
+/** …and the refusal reaches the chain as a model failure, so the bench and the fallback both apply. */
+describe("a model with no CLI", () => {
+  it("errors retryably instead of running on whichever CLI was default", async () => {
+    const p = new CliProvider();
+    const out = [];
+    for await (const ev of p.chat(req({ model: "antigravity/claude-sonnet-4-6" }), new AbortController().signal)) {
+      out.push(ev);
+    }
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ type: "error", retryable: true });
+    expect(out[0].type === "error" && out[0].message).toMatch(/no CLI serves/);
   });
 });

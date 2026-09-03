@@ -6,8 +6,8 @@ import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
-import { OmniRouteProvider } from "./providers/omniroute.js";
-import { listOmniRouteModels } from "./providers/models.js";
+import { CliProvider } from "./agents/cli-provider.js";
+import { cliCatalog } from "./agents/cli-models.js";
 import { stripThinking } from "./tui/format.js";
 import { SkillRegistry } from "./skills/registry.js";
 import { registerBuiltinSkills } from "./skills/builtin.js";
@@ -415,7 +415,14 @@ export async function main(argv: string[]): Promise<void> {
   }
   // Where the log is has to be discoverable, or a log nobody can find is a log nobody reads.
   const telemetryNote = sink ? `📈 Telemetry → \`${sink.path}\` (one JSON object per line)` : undefined;
-  const raw = new OmniRouteProvider({ baseUrl: config.baseUrl, apiKey: config.apiKey });
+  /**
+   * The official CLIs, picked per request from the model id — see `cliFor`.
+   *
+   * Not read-only: this provider serves every role, and the implementers among them write in their
+   * worktree. The read-only limit belongs to the roles that only ever wanted an answer, and is applied
+   * where those roles are built rather than blanket here.
+   */
+  const raw = new CliProvider({ readOnly: false });
   const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();
   // Built-ins FIRST, the project's own second: the registry is keyed by name, so a project skill with the
@@ -530,9 +537,15 @@ export async function main(argv: string[]): Promise<void> {
        */
       const routableModel = makeProbe({ baseUrl: config.baseUrl, apiKey: config.apiKey });
 
-      const listModels = async (): Promise<string[]> => poolWithConfigured(
-        await listOmniRouteModels({ baseUrl: config.baseUrl, apiKey: config.apiKey, sources: sourcesRef.current }),
-        configuredModels(), probeModel);
+      /**
+       * Declared, not discovered.
+       *
+       * The gateway's catalog listed 726 models and lied about which of them it would route to, which is
+       * why the pool had to be probed, benched and re-probed. A CLI serves a set it knows or rejects
+       * outright, so the list is stated — and a role can no longer be handed a name nothing can serve,
+       * which is what cost one run 118 of its 125 tasks.
+       */
+      const listModels = async (): Promise<string[]> => cliCatalog();
       const refreshSources = async (): Promise<string[]> => {
         const catalog = await fetchCatalog({ baseUrl: config.baseUrl, apiKey: config.apiKey });
         const found = await discoverSources({ catalog, probe: makeProbe({ baseUrl: config.baseUrl, apiKey: config.apiKey }) });
