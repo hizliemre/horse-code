@@ -191,25 +191,20 @@ export function ageOf(at: number, now: number): string {
  */
 export function accountsLine(
   usage: { account: CliAccount; reading?: Reading }[],
-  ambient: { kind: CliKind; status: { loggedIn: boolean; email?: string; plan?: string } }[] = [],
+  notSignedIn: readonly CliKind[] = [],
   now = Date.now(),
 ): string | undefined {
-  const parts: string[] = [];
-
-  for (const { account, reading } of usage) {
-    const who = `${account.email ?? account.name}${account.plan ? ` (${account.plan})` : ""}`;
+  const parts = usage.map(({ account, reading }) => {
+    /**
+     * Codex names the method it signed in with and no address, so there the plan IS the identity. The `name`
+     * behind it is the fallback for a profile that answered with neither.
+     */
+    const who = `${account.email ?? account.plan ?? account.name}${account.email && account.plan ? ` (${account.plan})` : ""}`;
     const left = reading ? ` ${Math.round(reading.spent * 100)}% used ${ageOf(reading.at, now)} ago` : "";
-    parts.push(`${account.kind} ${who}${left}`);
-  }
-
-  for (const { kind, status } of ambient) {
-    if (!status.loggedIn) { parts.push(`${kind} NOT signed in — every ${kind} call will fail`); continue; }
-    // Codex names the method and no address, so there the method is the only identity there is to print.
-    const who = status.email
-      ? `${status.email}${status.plan ? ` (${status.plan})` : ""}`
-      : status.plan ?? "signed in";
-    parts.push(`${kind} ${who}`);
-  }
-
+    return `${account.kind} ${who}${left}`;
+  });
+  // Stated, not omitted: every call routed to a CLI nobody is signed into will fail, and that is far better
+  // learned before a run than during one.
+  for (const kind of notSignedIn) parts.push(`${kind} NOT signed in — every ${kind} call will fail`);
   return parts.length ? parts.join(" · ") : undefined;
 }

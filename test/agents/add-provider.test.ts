@@ -219,30 +219,33 @@ describe("the start-up account line", () => {
   });
 
   /**
-   * The correction this replaced: the signed-in default each CLI actually uses appeared nowhere, and it is
-   * precisely the account every call was about to go to.
+   * The signed-in default is an ordinary pool member with no directory, which is what lets its readings be
+   * kept. Held outside the pool, every reading a run produced was discarded and the line could never show
+   * what any subscription had left — most of what it exists for.
    */
-  it("shows the signed-in default of a CLI with no pooled profile", () => {
-    const out = accountsLine([], [{ kind: "claude", status: { loggedIn: true, email: "a@x.com", plan: "max" } }], now);
+  it("shows a signed-in default, which is a pooled profile with no directory", () => {
+    const out = accountsLine([{ account: { kind: "claude", name: "a@x.com", email: "a@x.com", plan: "max" } }], [], now);
     expect(out).toBe("claude a@x.com (max)");
   });
 
   /** The most useful entry here: every call routed there fails, and that is better learned before a run. */
   it("says plainly when a CLI has nobody signed in", () => {
-    expect(accountsLine([], [{ kind: "codex", status: { loggedIn: false } }], now))
-      .toBe("codex NOT signed in — every codex call will fail");
+    expect(accountsLine([], ["codex"], now)).toBe("codex NOT signed in — every codex call will fail");
   });
 
-  /** Codex reports a method and no address, so the method is the only identity there is to print. */
+  /** Codex reports a method and no address, so there the method is the only identity there is to print. */
   it("names a CLI that reports no address by what it signed in with", () => {
-    expect(accountsLine([], [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }], now))
+    expect(accountsLine([{ account: { kind: "codex", name: "codex-default", plan: "ChatGPT" } }], [], now))
       .toBe("codex ChatGPT");
   });
 
-  it("puts pooled profiles and signed-in defaults on one line", () => {
+  it("puts every subscription on one line", () => {
     const out = accountsLine(
-      [{ account: { kind: "claude", name: "a", configDir: "/1", email: "a@x.com" } }],
-      [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }],
+      [
+        { account: { kind: "claude", name: "a", configDir: "/1", email: "a@x.com" } },
+        { account: { kind: "codex", name: "codex-default", plan: "ChatGPT" } },
+      ],
+      [],
       now,
     );
     expect(out).toBe("claude a@x.com · codex ChatGPT");

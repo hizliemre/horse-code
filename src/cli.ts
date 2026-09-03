@@ -462,24 +462,46 @@ export async function main(argv: string[]): Promise<void> {
    * copy would learn only from its own calls and both would keep pushing into a limit the other had already
    * been told about.
    */
-  const accounts = new AccountPool(config.accounts, fileUsageStore(home));
   /**
-   * Printed before any work starts, because this is the moment it can change a decision: a run committed to
-   * a subscription with nothing left is a run that parks halfway through. Silent when nothing is connected.
-   */
-  /**
-   * Each CLI the pool holds no profile for is asked directly, because its signed-in default is what a run
-   * will use there. Measured at 180ms for both together — cheap enough to answer honestly at startup, and
-   * the alternative is a person with two working logins being shown nothing and concluding they have none.
+   * Each CLI with no configured profile is asked directly, because its signed-in default is what a run will
+   * use there. Measured at 180ms for both together — cheap enough to answer honestly at startup, and the
+   * alternative is a person with two working logins being shown nothing and concluding they have none.
    *
    * Asked once and remembered: a sign-in does not change mid-session, and the panel repaints often enough
    * that spawning both CLIs on every repaint would be paid for repeatedly and silently.
    */
   const ambientLogins = (["claude", "codex"] as const)
-    .filter((k) => accounts.count(k) === 0)
+    .filter((k) => !config.accounts.some((a) => a.kind === k))
     .map((kind) => ({ kind, status: checkProfile(kind) }));
+  /**
+   * A signed-in default goes INTO the pool, as a profile with no directory.
+   *
+   * Not cosmetic. Quota readings are only filed against a profile the pool handed out, so with the ambient
+   * login sitting outside it every reading a run produced was discarded — `usage.json` stayed empty, and the
+   * start-up line could never show what any subscription had left, which is most of what it is for. Holding
+   * it as an ordinary member fixes that and changes nothing about the call: no directory means no variable
+   * is set, which is exactly how the default is addressed.
+   */
+  const accounts = new AccountPool(
+    [
+      ...config.accounts,
+      ...ambientLogins.filter((a) => a.status.loggedIn).map(({ kind, status }) => ({
+        kind,
+        name: status.email ?? `${kind}-default`,
+        ...(status.email ? { email: status.email } : {}),
+        ...(status.plan ? { plan: status.plan } : {}),
+      })),
+    ],
+    fileUsageStore(home),
+  );
+  /** Reported but never pooled: a CLI nobody is signed into cannot serve, so it must not be handed out. */
+  const notSignedIn = ambientLogins.filter((a) => !a.status.loggedIn).map((a) => a.kind);
+  /**
+   * Printed before any work starts, because this is the moment it can change a decision: a run committed to
+   * a subscription with nothing left is a run that parks halfway through. Silent when nothing is connected.
+   */
   /** Read on every repaint, so a reading taken during the run replaces the one it started with. */
-  const accountsNote = (): string | undefined => accountsLine(accounts.usage(), ambientLogins);
+  const accountsNote = (): string | undefined => accountsLine(accounts.usage(), notSignedIn);
   const raw = new CliProvider({ readOnly: false, accounts });
   const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();
