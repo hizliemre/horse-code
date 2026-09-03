@@ -28,6 +28,13 @@ export interface BuildJobDepsOpts {
   rules?: () => string[];
   config: ResolvedConfig;
   provider: Provider;
+  /**
+   * Which CLI runs the implementers, or `null` to drive them through this process's own tool loop.
+   *
+   * `null` is what a caller injecting a non-CLI provider wants — a test with a mock, above all. Left unset
+   * it defaults to delegating, because the provider this ships with is a CLI.
+   */
+  delegateTo?: import("./agents/cli-agent.js").CliKind | null;
   skillRegistry: SkillRegistry;
   manager: WorktreeManager;
   prAdapter: RevisionPRAdapter;
@@ -130,6 +137,22 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
 
   return {
     provider: opts.provider,
+    /**
+     * Implementers run as the CLI, because with a CLI provider nothing else can write.
+     *
+     * A CLI answers with TEXT. It never emits a tool call — it ran its tools itself, in its own process — so
+     * an implementer driven through this process's loop would receive prose, execute nothing, and report
+     * `no_changes` for every task on the board. This is not a choice between two working paths.
+     *
+     * It belongs HERE and not inside `runJob`, because it is a property of the provider that was chosen. Set
+     * in the pipeline it would override every caller that injected one: the job tests hand in a mock and
+     * would have spawned the real binary instead, which is exactly how it was first written and exactly how
+     * the tests caught it.
+     *
+     * `claude` is the fallback, not the decision — `cliFor` reads each role's own chain head, so a role on a
+     * `gpt-*` model runs Codex.
+     */
+    ...(opts.delegateTo === null ? {} : { delegateTo: opts.delegateTo ?? "claude" }),
     roleRegistry,
     fitness,
     skillRegistry: opts.skillRegistry,

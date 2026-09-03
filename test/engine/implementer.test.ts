@@ -360,7 +360,70 @@ describe("an implementer can ask, when there is someone to answer", () => {
 describe("the ask channel reaches the task stages", () => {
   const src = readFileSync("src/engine/job.ts", "utf8");
 
+  /** Pinned by what it must carry, not by the exact shape — the object grows as more travels with it. */
   it("folds askUser into the deps the wave engine runs on", () => {
-    expect(src).toMatch(/runWaves\(\{ \.\.\.deps, askUser: opts\.askUser \}/);
+    const call = /runWaves\(\{([^}]*)\}/.exec(src)?.[1] ?? "";
+    expect(call).toContain("...deps");
+    expect(call).toContain("askUser: opts.askUser");
+  });
+});
+
+/**
+ * Delegation is not one of two working paths — it is the only one, now that the provider is a CLI.
+ *
+ * A CLI answers with TEXT. It never emits a tool call, because it ran its tools itself in its own process.
+ * An implementer driven through this process's loop would receive prose, execute nothing, and report
+ * `no_changes` for every task on the board.
+ */
+describe("an implementer delegated to a CLI", () => {
+  const src = readFileSync("src/engine/implementer.ts", "utf8");
+
+  /** The worktree, not this process's directory — or the implementer edits horse-code's own checkout. */
+  it("runs the CLI in the task's worktree", () => {
+    expect(src).toContain("new CliProvider({ kind: delegate, readOnly: false, cwd })");
+  });
+
+  /**
+   * `projectToolsNote` lists what THIS process offers. A delegated agent has a different set entirely, so
+   * naming ours would send it reaching for tools it cannot call.
+   */
+  it("does not advertise this process's tools to an agent that cannot call them", () => {
+    expect(src).toContain('(delegate ? "" : projectToolsNote(');
+  });
+
+  /** The role's own chain decides which binary; the dep is only the fallback for a name neither serves. */
+  it("picks the CLI from the role's chain, not from the switch", () => {
+    expect(src).toContain('cliFor(chain[0] ?? "") ?? deps.delegateTo');
+  });
+
+  /** Everything above the execution step is shared, which is what keeps the two paths one pipeline. */
+  it("composes memory hints and skills before the split", () => {
+    expect(src.indexOf("const hints = memoryHints(")).toBeLessThan(src.indexOf("const delegate ="));
+    expect(src.indexOf("const routed = routeSkills(")).toBeLessThan(src.indexOf("const delegate ="));
+  });
+});
+
+/**
+ * …and the composition root turns it on, because with a CLI provider nothing would implement anything.
+ *
+ * It belongs there and not in the pipeline: set inside `runJob` it overrode every caller that injected a
+ * provider, so the job tests handed in a mock and spawned the real binary instead. That is how it was first
+ * written, and how those tests caught it — six of them timing out at five seconds.
+ */
+describe("the composition root delegates its implementers", () => {
+  const wiring = readFileSync("src/wiring.ts", "utf8");
+
+  it("defaults to delegating", () => {
+    expect(wiring).toContain('opts.delegateTo ?? "claude"');
+  });
+
+  /** A caller that injects its own provider must be able to say so, and a test is the first such caller. */
+  it("lets a caller opt out with null", () => {
+    expect(wiring).toContain("opts.delegateTo === null ? {}");
+  });
+
+  /** The pipeline must not decide this for the caller. */
+  it("is not forced on inside runJob", () => {
+    expect(readFileSync("src/engine/job.ts", "utf8")).not.toContain("delegateTo");
   });
 });
