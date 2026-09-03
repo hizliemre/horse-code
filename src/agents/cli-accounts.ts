@@ -172,54 +172,44 @@ export function ageOf(at: number, now: number): string {
 }
 
 /**
- * The startup summary: what a run will actually use, who it belongs to, and what each had left.
+ * The start-up account line: what a run will use, whose it is, and what each had left.
  *
- * "Will actually use" rather than "is configured" is the correction that matters. The first version listed
- * only POOLED profiles, so someone signed into both CLIs and perfectly able to run saw nothing at all and
- * reasonably concluded no account was connected. The signed-in default is an account in use; leaving it out
- * described the bookkeeping instead of the situation.
+ * "Will use" rather than "is configured" is the correction that matters. A first version listed only POOLED
+ * profiles, so someone signed into both CLIs and perfectly able to run saw nothing and reasonably concluded
+ * no account was connected — the signed-in default each CLI actually uses appeared nowhere, and it is
+ * precisely the account every call was about to go to.
  *
- * A CLI nobody is signed into is worth a line too, and it is the most useful line here: every call routed to
- * it will fail, and that is far better learned before a run than during one.
+ * A CLI nobody is signed into is the most useful entry here: every call routed there will fail, and that is
+ * far better learned before a run than during one. Absences are stated rather than omitted, which is the
+ * rule the rest of this panel already follows.
  *
- * Every figure carries its age, because none of them is current: a reading arrives with a call and says
- * nothing about what happened after it. Printed bare, "42%" would read as a fact about now rather than about
- * whenever that profile was last used, which for a spare subscription can be days.
+ * A figure carries its age, because none of them is current: a reading arrives with a call and says nothing
+ * about what happened after. Printed bare, "42%" would read as a fact about now rather than about whenever
+ * that profile was last used — which for a spare subscription can be days.
+ *
+ * One renderer, for the panel and for the plain-output path both. Undefined when there is nothing to say.
  */
-export function summarizeAccounts(
+export function accountsLine(
   usage: { account: CliAccount; reading?: Reading }[],
   ambient: { kind: CliKind; status: { loggedIn: boolean; email?: string; plan?: string } }[] = [],
   now = Date.now(),
-): string[] {
-  const row = (kind: string, who: string, right: string): string =>
-    `   ${kind.padEnd(6)} ${who.padEnd(34)} ${right}`;
+): string | undefined {
+  const parts: string[] = [];
 
-  const pooled = usage.map(({ account, reading }) =>
-    row(
-      account.kind,
-      `${account.email ?? account.name}${account.plan ? ` (${account.plan})` : ""}`,
-      reading ? `${Math.round(reading.spent * 100)}% used · ${ageOf(reading.at, now)} ago` : "not used yet",
-    ));
+  for (const { account, reading } of usage) {
+    const who = `${account.email ?? account.name}${account.plan ? ` (${account.plan})` : ""}`;
+    const left = reading ? ` ${Math.round(reading.spent * 100)}% used ${ageOf(reading.at, now)} ago` : "";
+    parts.push(`${account.kind} ${who}${left}`);
+  }
 
-  const loose = ambient.map(({ kind, status }) => {
-    if (!status.loggedIn) return row(kind, "not signed in", `every ${kind} call will fail`);
-    // Codex names the method and no address, so there the plan IS the identity — "signed in (ChatGPT)"
-    // beside a column already reading "in use" says the same thing twice.
+  for (const { kind, status } of ambient) {
+    if (!status.loggedIn) { parts.push(`${kind} NOT signed in — every ${kind} call will fail`); continue; }
+    // Codex names the method and no address, so there the method is the only identity there is to print.
     const who = status.email
       ? `${status.email}${status.plan ? ` (${status.plan})` : ""}`
       : status.plan ?? "signed in";
-    return row(kind, who, "in use");
-  });
+    parts.push(`${kind} ${who}`);
+  }
 
-  const rows = [...pooled, ...loose];
-  if (!rows.length) return [];
-
-  const counts = new Map<string, number>();
-  for (const { account } of usage) counts.set(account.kind, (counts.get(account.kind) ?? 0) + 1);
-  for (const { kind, status } of ambient) if (status.loggedIn) counts.set(kind, (counts.get(kind) ?? 0) + 1);
-  const total = [...counts.values()].reduce((a, b) => a + b, 0);
-  const head = counts.size
-    ? `🔑 ${[...counts].map(([k, n]) => `${n} ${k}`).join(" · ")} account${total === 1 ? "" : "s"} connected`
-    : `🔑 no CLI is signed in`;
-  return [head, ...rows];
+  return parts.length ? parts.join(" · ") : undefined;
 }

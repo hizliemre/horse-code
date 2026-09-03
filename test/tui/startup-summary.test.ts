@@ -210,3 +210,23 @@ describe("work a previous run left behind", () => {
     expect(src).toContain("...(unfinished.length ? { unfinished } : {})");
   });
 });
+
+/**
+ * This line was previously printed with `console.log` before the panel rendered — which the TUI then
+ * cleared, so a person with two working logins was shown nothing at all and reported the accounts missing.
+ */
+describe("the subscriptions a run will spend", () => {
+  const facts = {
+    rules: 0, memory: { total: 0, rules: 0, lessons: 0, facts: 0 }, skills: 0,
+    traceRoot: "docs/architecture", constitution: true, graph: { built: true, nodes: 1 },
+  };
+
+  it("appears in the panel when there is something to say", () => {
+    const out = startupSummary({ ...facts, accounts: "claude a@x.com (max) · codex ChatGPT" });
+    expect(out).toContain("- Accounts: claude a@x.com (max) · codex ChatGPT");
+  });
+
+  it("takes no line at all when there is nothing to say", () => {
+    expect(startupSummary(facts)).not.toContain("Accounts:");
+  });
+});

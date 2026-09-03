@@ -78,6 +78,8 @@ export interface RunTuiReplOpts {
   refreshSources?: () => Promise<string[]>; // probe omniroute → your connected model sources (cached)
   sourcesInfo?: () => { sources: string[]; manual: boolean; needsDiscovery: boolean }; // current source allowlist
   listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
+  /** The subscriptions a run will spend, already rendered — read on each repaint so a reading updates it. */
+  accountsNote?: () => string | undefined;
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   /** Re-reads `.horsecode/skills` — migration writes there mid-session and nothing else would notice. */
@@ -672,6 +674,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
       constitution: existsSync(join(process.cwd(), ".specify", "memory", "constitution.md")),
       graph: { built: false, nodes: 0 },
       traceRoot: traceRootRel(),
+      ...((): { accounts?: string } => { const a = opts.accountsNote?.(); return a ? { accounts: a } : {}; })(),
       ...(unfinished.length ? { unfinished } : {}),
       ...startupExtra,
     };

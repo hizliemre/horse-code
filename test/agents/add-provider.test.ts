@@ -3,7 +3,7 @@ import { addProvider, withAmbient, freshDir, accountsIn } from "../../src/agents
 import type { AddProviderIO, AccountEntry } from "../../src/agents/add-provider.js";
 import type { AuthStatus } from "../../src/agents/cli-auth.js";
 import { readAuthStatus } from "../../src/agents/cli-auth.js";
-import { summarizeAccounts, ageOf } from "../../src/agents/cli-accounts.js";
+import { accountsLine, ageOf } from "../../src/agents/cli-accounts.js";
 
 const HOME = "/home/u";
 
@@ -192,68 +192,60 @@ describe("reading what a CLI says about its session", () => {
 });
 
 /**
- * Every figure carries its age, because none of them is current: a reading arrives with a call and says
- * nothing about what happened after. Printed bare, "42%" reads as a fact about now rather than about
- * whenever that profile was last used — which for a spare subscription can be days.
+ * The line answers what a run will USE. A first version listed only pooled profiles, so someone signed into
+ * both CLIs and perfectly able to run saw nothing and reasonably concluded no account was connected.
+ *
+ * Every figure carries its age, because none is current: a reading arrives with a call and says nothing about
+ * what happened after. Printed bare, "42%" reads as a fact about now rather than about whenever that profile
+ * was last used — which for a spare subscription can be days.
  */
-describe("the startup summary", () => {
+describe("the start-up account line", () => {
   const now = 10_000_000;
 
   it("says nothing when there is nothing to say at all", () => {
-    expect(summarizeAccounts([])).toEqual([]);
+    expect(accountsLine([])).toBeUndefined();
   });
 
-  /**
-   * The correction this replaced: listing only POOLED profiles showed nothing to someone signed into both
-   * CLIs and perfectly able to run, who reasonably concluded no account was connected. The signed-in default
-   * IS an account in use.
-   */
-  it("shows the signed-in default of a CLI with no pooled profile", () => {
-    const out = summarizeAccounts([], [{ kind: "claude", status: { loggedIn: true, email: "a@x.com", plan: "max" } }], now);
-    expect(out[0]).toBe("🔑 1 claude account connected");
-    expect(out[1]).toContain("a@x.com (max)");
-    expect(out[1]).toContain("in use");
-  });
-
-  /** The most useful line here: every call routed there fails, and that is better learned before a run. */
-  it("says plainly when a CLI has nobody signed in", () => {
-    const out = summarizeAccounts([], [{ kind: "codex", status: { loggedIn: false } }], now);
-    expect(out[0]).toBe("🔑 no CLI is signed in");
-    expect(out[1]).toContain("not signed in");
-    expect(out[1]).toContain("every codex call will fail");
-  });
-
-  /** Codex reports a method and no address, so the method is the only identity there is to print. */
-  it("names a CLI that reports no address by what it signed in with", () => {
-    const out = summarizeAccounts([], [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }], now);
-    expect(out[1]).toContain("ChatGPT");
-    expect(out[1]).not.toContain("signed in (");
-  });
-
-  it("counts pooled profiles and signed-in defaults together", () => {
-    const out = summarizeAccounts(
-      [{ account: { kind: "claude", name: "a", configDir: "/1", email: "a@x.com" } }],
-      [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }],
-      now,
-    );
-    expect(out[0]).toBe("🔑 1 claude · 1 codex accounts connected");
-  });
-
-  it("counts each CLI and dates every figure", () => {
-    const out = summarizeAccounts(
+  it("names each pooled profile and dates its figure", () => {
+    const out = accountsLine(
       [
         { account: { kind: "claude", name: "a", configDir: "/1", email: "a@x.com", plan: "max" }, reading: { spent: 0.42, at: now - 720_000 } },
         { account: { kind: "claude", name: "b", configDir: "/2", email: "b@x.com", plan: "max" } },
-        { account: { kind: "codex", name: "c", configDir: "/3", plan: "ChatGPT" }, reading: { spent: 0.08, at: now - 7_200_000 } },
       ],
       [],
       now,
     );
-    expect(out[0]).toBe("🔑 2 claude · 1 codex accounts connected");
-    expect(out[1]).toContain("a@x.com (max)");
-    expect(out[1]).toContain("42% used · 12m ago");
-    expect(out[2]).toContain("not used yet");
-    expect(out[3]).toContain("8% used · 2h ago");
+    expect(out).toBe("claude a@x.com (max) 42% used 12m ago · claude b@x.com (max)");
+  });
+
+  /**
+   * The correction this replaced: the signed-in default each CLI actually uses appeared nowhere, and it is
+   * precisely the account every call was about to go to.
+   */
+  it("shows the signed-in default of a CLI with no pooled profile", () => {
+    const out = accountsLine([], [{ kind: "claude", status: { loggedIn: true, email: "a@x.com", plan: "max" } }], now);
+    expect(out).toBe("claude a@x.com (max)");
+  });
+
+  /** The most useful entry here: every call routed there fails, and that is better learned before a run. */
+  it("says plainly when a CLI has nobody signed in", () => {
+    expect(accountsLine([], [{ kind: "codex", status: { loggedIn: false } }], now))
+      .toBe("codex NOT signed in — every codex call will fail");
+  });
+
+  /** Codex reports a method and no address, so the method is the only identity there is to print. */
+  it("names a CLI that reports no address by what it signed in with", () => {
+    expect(accountsLine([], [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }], now))
+      .toBe("codex ChatGPT");
+  });
+
+  it("puts pooled profiles and signed-in defaults on one line", () => {
+    const out = accountsLine(
+      [{ account: { kind: "claude", name: "a", configDir: "/1", email: "a@x.com" } }],
+      [{ kind: "codex", status: { loggedIn: true, plan: "ChatGPT" } }],
+      now,
+    );
+    expect(out).toBe("claude a@x.com · codex ChatGPT");
   });
 
   it("scales an age to something a person reads at a glance", () => {

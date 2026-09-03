@@ -40,6 +40,13 @@ export interface StartupFacts {
   /** Connected servers, once they answer — undefined while still connecting. */
   mcp?: { name: string; tools: number }[];
   /**
+   * The subscriptions a run will spend, already rendered — see `accountsLine`.
+   *
+   * Rendered elsewhere because it is the composition root that knows which CLIs are configured and which
+   * have to be asked. This panel only places it.
+   */
+  accounts?: string;
+  /**
    * Sessions left with work in them, newest first — one line each.
    *
    * The most actionable thing on the screen when it is not empty, and it was the one thing the screen never
@@ -103,6 +110,12 @@ export function startupSummary(f: StartupFacts): string {
     `- Rules: ${f.rules} active${f.rules ? " (`/memories` to read them)" : ""}`,
     `- Memory: ${plural(m.total, "entry", "entries")}${kinds ? ` — ${kinds}` : ""}`,
     `- Skills: ${plural(f.skills, "available", "available")}`,
+    /**
+     * The one line about what the work will be CHARGED to, so it sits with the rest of what the session has
+     * to work with. It was previously printed with `console.log` before this panel rendered — which the TUI
+     * then cleared, so a person with two working logins was shown nothing at all.
+     */
+    ...(f.accounts ? [`- Accounts: ${f.accounts}`] : []),
     /**
      * "traces" is named precisely, because the word is taken.
      *

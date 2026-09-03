@@ -6,7 +6,7 @@ import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
-import { AccountPool, fileUsageStore, summarizeAccounts } from "./agents/cli-accounts.js";
+import { AccountPool, fileUsageStore, accountsLine } from "./agents/cli-accounts.js";
 import { addProvider } from "./agents/add-provider.js";
 import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
@@ -471,11 +471,15 @@ export async function main(argv: string[]): Promise<void> {
    * Each CLI the pool holds no profile for is asked directly, because its signed-in default is what a run
    * will use there. Measured at 180ms for both together — cheap enough to answer honestly at startup, and
    * the alternative is a person with two working logins being shown nothing and concluding they have none.
+   *
+   * Asked once and remembered: a sign-in does not change mid-session, and the panel repaints often enough
+   * that spawning both CLIs on every repaint would be paid for repeatedly and silently.
    */
-  const ambient = (["claude", "codex"] as const)
+  const ambientLogins = (["claude", "codex"] as const)
     .filter((k) => accounts.count(k) === 0)
     .map((kind) => ({ kind, status: checkProfile(kind) }));
-  for (const line of summarizeAccounts(accounts.usage(), ambient)) console.log(line);
+  /** Read on every repaint, so a reading taken during the run replaces the one it started with. */
+  const accountsNote = (): string | undefined => accountsLine(accounts.usage(), ambientLogins);
   const raw = new CliProvider({ readOnly: false, accounts });
   const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();
@@ -758,6 +762,7 @@ export async function main(argv: string[]): Promise<void> {
       await runTuiRepl({
         buildDeps,
         memStore,
+        accountsNote,
         listSkills,
         updateSkills,
         addSkill,
