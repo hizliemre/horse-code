@@ -29,7 +29,12 @@ import { taskDiff, describeDiff } from "./task-diff.js";
  */
 export const CODE_REVIEW_MAX_TURNS = 25;
 /** Wall-clock ceiling, so one stuck reviewer cannot hold a task open indefinitely. */
-export const CODE_REVIEW_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * Raised with the review lenses next door, and on direct evidence rather than by association: a call died at
+ * exactly 300s against this ceiling in the run that prompted the change. A code review reads a whole diff
+ * and, delegated to a CLI, runs its own agent loop to do it — five minutes was a gateway-era number.
+ */
+export const CODE_REVIEW_TIMEOUT_MS = 10 * 60 * 1000;
 
 export const VerdictSchema = z.object({
   verdict: z.enum(["pass", "fail"]).describe(

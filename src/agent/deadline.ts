@@ -30,9 +30,13 @@ function expired(signal: AbortSignal, message: string): Promise<never> {
  * stayed at DONE without ever merging, and TEN tasks queued behind it never started. One request stalled the
  * whole run, and only the in-flight counter could say so.
  *
- * These are generous: a sentence written from a diff that takes three minutes has already gone wrong.
+ * Raised to five when these calls moved onto the CLIs. The reasoning above still holds — a sentence written
+ * from a diff really has gone wrong by then — but the floor moved: a delegated call pays process start-up
+ * and an agent loop before it writes anything. Measured over 19 such calls, p50 8s and p90 15s, so the
+ * ceiling is far above ordinary work and only ever catches a hang; one call still hit it, which is the whole
+ * argument for leaving that much room.
  */
-export const SHORT_CALL_MS = 3 * 60 * 1000;
+export const SHORT_CALL_MS = 5 * 60 * 1000;
 /** A judgement over a whole change — bigger input, same principle. */
 export const LONG_CALL_MS = 15 * 60 * 1000;
 
