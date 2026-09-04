@@ -118,12 +118,24 @@ export interface CliResult {
 
 /** The argv for a headless run, per CLI. Kept in one place so the two shapes can be read side by side. */
 export function cliArgs(kind: CliKind, prompt: string, extra: string[] = []): string[] {
+  /**
+   * The prompt goes LAST, behind a `--`, because a prompt is text and text can start with a dash.
+   *
+   * Both CLIs parse a leading `-` as an option and refuse the call outright — measured on each:
+   * `error: unknown option '---` from Claude, `error: unexpected argument '---` from Codex. It is not a
+   * corner case: every spec-kit command document opens with YAML front matter, so `---` is the first thing
+   * on the line, and delegating any spec-kit phase failed before a model was reached. A `--` ends option
+   * parsing, and both accept it.
+   *
+   * Flags therefore have to come before it, which is why `extra` is spliced in ahead of the prompt rather
+   * than appended as it was.
+   */
   return kind === "claude"
     // `--verbose` is required for stream-json to emit the per-turn events rather than only the result.
-    ? ["-p", prompt, "--output-format", "stream-json", "--verbose", ...extra]
+    ? ["--output-format", "stream-json", "--verbose", ...extra, "-p", "--", prompt]
     // `--skip-git-repo-check`: a task worktree IS a repo, but the base and the scratch cases are not, and
     // Codex refuses outright rather than degrading — measured: "Not inside a trusted directory".
-    : ["exec", "--json", "--skip-git-repo-check", prompt, ...extra];
+    : ["exec", "--json", "--skip-git-repo-check", ...extra, "--", prompt];
 }
 
 /**

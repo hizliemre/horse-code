@@ -30,18 +30,36 @@ const CLAUDE = {
 describe("the headless argv for each CLI", () => {
   /** `--verbose` is not decoration: without it stream-json emits only the result, and every turn is lost. */
   it("asks Claude Code for the per-turn stream, not just the result", () => {
-    const a = cliArgs("claude", "do the thing");
-    expect(a).toEqual(["-p", "do the thing", "--output-format", "stream-json", "--verbose"]);
+    expect(cliArgs("claude", "do the thing"))
+      .toEqual(["--output-format", "stream-json", "--verbose", "-p", "--", "do the thing"]);
   });
 
   /** Codex refuses outright outside a trusted directory — "Not inside a trusted directory", measured. */
   it("uses Codex's own non-interactive verb and does not trip its repo check", () => {
     expect(cliArgs("codex", "do the thing"))
-      .toEqual(["exec", "--json", "--skip-git-repo-check", "do the thing"]);
+      .toEqual(["exec", "--json", "--skip-git-repo-check", "--", "do the thing"]);
   });
 
-  it("passes the caller's extra arguments through, after the prompt", () => {
-    expect(cliArgs("claude", "p", ["--add-dir", "/w"])).toContain("--add-dir");
+  it("passes the caller's extra arguments through, ahead of the prompt", () => {
+    const a = cliArgs("claude", "p", ["--add-dir", "/w"]);
+    expect(a).toContain("--add-dir");
+    expect(a.indexOf("--add-dir")).toBeLessThan(a.indexOf("--"));
+  });
+
+  /**
+   * A prompt is TEXT, and text can start with a dash. Both CLIs parsed a leading `-` as an option and
+   * refused the call before a model was reached — `error: unknown option '---` from Claude, `error:
+   * unexpected argument '---` from Codex, each measured against the real binary.
+   *
+   * Not a corner case: every spec-kit command document opens with YAML front matter, so `---` is the first
+   * thing on the line and delegating ANY spec-kit phase failed outright.
+   */
+  it("survives a prompt that begins with a dash", () => {
+    for (const kind of ["claude", "codex"] as const) {
+      const a = cliArgs(kind, "---\ntitle: x\n---\ndo the thing");
+      expect(a.at(-1)).toBe("---\ntitle: x\n---\ndo the thing");
+      expect(a.at(-2)).toBe("--");
+    }
   });
 });
 
