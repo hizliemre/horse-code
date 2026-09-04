@@ -261,12 +261,6 @@ export class Board {
     this.onChange?.();
   }
 
-  /** Forget them — a card whose work restarts from scratch has nothing left approved. */
-  clearLenses(id: string): void {
-    this.require(id).clearedLenses = [];
-    this.onChange?.();
-  }
-
   /**
    * Starts the escalation ladder over for one card, keeping its history.
    *

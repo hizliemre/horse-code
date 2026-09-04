@@ -140,8 +140,12 @@ export async function runCycleWithRole(
    * What the review settled, kept on the card so the next attempt can skip it.
    *
    * Written even when the verdict is `fail`: a lens that approved this attempt is exactly the one there is
-   * no point re-asking, and that is the whole saving. A card that goes back to TODO for a fresh start clears
-   * them instead — see `clearLenses`.
+   * no point re-asking, and that is the whole saving.
+   *
+   * They are NOT cleared when a new run restarts the ladder: `resetAttempts` puts the tier back, not the
+   * code, so the approvals still describe what is on disk. Every attempt makes them a little staler than
+   * that — an approval is about the code as it stood — and what contains it is the revision pass over the
+   * merged result, not a reset.
    */
   const approved = v.approvedLenses ?? [];
   if (approved.length) board.markLensesCleared(taskId, approved);
