@@ -13,6 +13,14 @@ import { shieldToolOutput } from "../core/prompt-guard.js";
 import { elideInPlace } from "./elide.js";
 import { sessionBase } from "../engine/session-scope.js";
 
+/**
+ * One vocabulary for both CLIs, so a watched row reads the same whichever served it.
+ *
+ * Codex names its file write `file_change`; Claude calls the same act `Write`. Passed through raw, a board
+ * showed two names for one thing and neither matched the other agent's rows.
+ */
+const DELEGATED_TOOL_NAMES: Record<string, string> = { file_change: "Write", command_execution: "Bash" };
+
 export interface RoleAgentOptions {
   provider: Provider;
   /**
@@ -302,10 +310,11 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
            */
           const what = ev.target ? ev.target.split("/").pop() ?? ev.target : "";
           opts.onActivity?.({
-            tool: ev.tool,
+            tool: DELEGATED_TOOL_NAMES[ev.tool] ?? ev.tool,
             target: what,
             lines: 0,
-            summary: ev.ok === false ? "failed" : "done",
+            // Only a failure is worth a suffix. "done" on every row is the bullet said twice.
+            summary: ev.ok === false ? "failed" : "",
             ok: ev.ok !== false,
           });
         } else if (ev.type === "usage") {
