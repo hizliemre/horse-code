@@ -292,3 +292,31 @@ describe("a quota warning on a call that was served", () => {
     expect(out?.rateLimited).toContain("five_hour 91%");
   });
 });
+
+/**
+ * A watched row has to say WHICH file changed, and Codex puts that in `changes`, not in a `path` field.
+ *
+ * Captured from the binary: `{"type":"file_change","changes":[{"path":"…/hello.txt","kind":"add"}]}`. Read as
+ * a bare type name it lost the only detail worth showing, so every write on a live board said merely that
+ * something had been written.
+ */
+describe("what Codex says it changed", () => {
+  const ev = (item: unknown): string => JSON.stringify({ type: "item.completed", item });
+
+  it("names the file from the change list", () => {
+    const out = decodeCodexEvent(ev({ id: "i1", type: "file_change", changes: [{ path: "/w/hello.txt", kind: "add" }] }));
+    expect(out?.tool).toEqual({ name: "file_change", target: "/w/hello.txt" });
+  });
+
+  it("counts the rest when a turn changed several", () => {
+    const out = decodeCodexEvent(ev({
+      type: "file_change",
+      changes: [{ path: "/w/a.ts", kind: "add" }, { path: "/w/b.ts", kind: "edit" }, { path: "/w/c.ts", kind: "add" }],
+    }));
+    expect(out?.tool?.target).toBe("/w/a.ts +2");
+  });
+
+  it("still reports a tool that named no file", () => {
+    expect(decodeCodexEvent(ev({ type: "command_execution" }))?.tool).toEqual({ name: "command_execution" });
+  });
+});

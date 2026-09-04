@@ -289,9 +289,25 @@ export async function* runRoleAgent(opts: RoleAgentOptions): AsyncGenerator<Agen
           // once they have actually run, which is the record worth keeping anyway.
           if (ev.path) opts.onLiveActivity?.(`writing ${ev.path.split("/").pop()} · ${fmtChars(ev.chars)}`);
         } else if (ev.type === "activity") {
-          // Attribution comes from `opts.onActivity`, which the implementer has already bound to its card —
-          // the provider knows what was done, not who did it.
-          opts.onActivity?.({ tool: ev.tool, target: ev.target ?? "", lines: 0, ok: ev.ok !== false });
+          /**
+           * Attribution comes from `opts.onActivity`, which the implementer has already bound to its card —
+           * the provider knows what was done, not who did it.
+           *
+           * A `summary` is what makes this render as an ACTIVITY rather than a file diff, and its absence was
+           * a real misreport: without it the row takes the write rendering, so a delegated agent's every
+           * read, search and command was drawn as `Write() · 0 lines`. Watching a live board that meant
+           * dozens of writes each claiming to have written nothing, and no way to tell a read from a write.
+           * The zero was never measured — a CLI does not report how many lines its tool touched, and stating
+           * a number we do not have is worse than stating none.
+           */
+          const what = ev.target ? ev.target.split("/").pop() ?? ev.target : "";
+          opts.onActivity?.({
+            tool: ev.tool,
+            target: what,
+            lines: 0,
+            summary: ev.ok === false ? "failed" : "done",
+            ok: ev.ok !== false,
+          });
         } else if (ev.type === "usage") {
           yield { type: "usage", promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
           opts.onUsage?.({ promptTokens: ev.promptTokens, completionTokens: ev.completionTokens, model: activeModel });

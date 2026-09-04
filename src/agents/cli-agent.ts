@@ -257,7 +257,22 @@ export function decodeCodexEvent(line: string): CliEvent | undefined {
     if (item?.type === "agent_message" && item.text) return { text: item.text };
     // Anything else it completed is a step it took — reported for the activity strip, not executed here.
     if (item?.type && item.type !== "agent_message") {
-      return { tool: { name: item.name ?? item.type } };
+      /**
+       * Codex names a file change in `changes`, not in a `path` field.
+       *
+       * Measured against the binary: `{"type":"file_change","changes":[{"path":"…/hello.txt","kind":"add"}]}`.
+       * Read as a bare name it lost the one detail worth showing — WHICH file — so every write on a watched
+       * row said only that something had been written.
+       */
+      const changes = (item as { changes?: { path?: string }[] }).changes;
+      const first = Array.isArray(changes) ? changes.find((c) => typeof c?.path === "string")?.path : undefined;
+      const more = Array.isArray(changes) && changes.length > 1 ? ` +${changes.length - 1}` : "";
+      return {
+        tool: {
+          name: item.name ?? item.type,
+          ...(first ? { target: `${first}${more}` } : {}),
+        },
+      };
     }
     return undefined;
   }
