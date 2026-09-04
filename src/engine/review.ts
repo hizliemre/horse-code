@@ -10,6 +10,7 @@ import type { TaskCycleDeps, Verdict } from "./task-types.js";
 import type { ReviewerConfig, RoleConfig } from "../config/config.js";
 import type { ProgressEvent } from "./progress.js";
 import { workingTreeDiff, taskDiff, diffSince, describeDiff } from "./task-diff.js";
+import { subjectOf } from "./group-notes.js";
 import { telemetry } from "../obs/telemetry.js";
 import { BATCH_TOOLS_NOTE } from "./task-types.js";
 
@@ -703,6 +704,40 @@ export async function runJudge(
 const TEAM_CONSENSUS = 0.7;
 
 /**
+ * The team size at which a lone critical stops being enough to send a task back.
+ *
+ * Set from the shape of the problem rather than a preference: with fifteen lenses each raising a critical
+ * about 7.5% of the time — the rate implied by one board's attempt counts of 1, 2, 3, 4 and 6 — a clean
+ * round is a one-in-three event, and the cost is attempts times team size. At four lenses the same rate
+ * gives a clean round three times in four, so the veto is not what is holding the task up and taking it
+ * away would only lose findings. Five is the first size where a second opinion is both possible and worth
+ * asking for.
+ */
+export const CORROBORATION_FLOOR = 5;
+
+/**
+ * How many critical findings a SECOND lens agrees about — the number that decides whether a task goes back.
+ *
+ * Two findings corroborate when they name the same subject: the same file, type or method. That is what the
+ * board's own notes look like when several lenses see one defect — `UpdateCompanyDetails` drew criticals
+ * from error-handling, concurrency and tests, all describing a commit followed by an unhandled send.
+ *
+ * Below `CORROBORATION_FLOOR` lenses there is no second opinion to be had, so every critical counts: asked
+ * for corroboration a three-lens team could never block, and the gate would be off entirely.
+ */
+export function corroboratedCriticals(assessments: readonly { name: string; findings: readonly { severity: string; note: string }[] }[]): number {
+  const criticals = assessments.flatMap((a) => a.findings.filter((f) => f.severity === "critical").map((f) => ({ lens: a.name, note: f.note })));
+  if (assessments.length < CORROBORATION_FLOOR) return criticals.length;
+  const bySubject = new Map<string, Set<string>>();
+  for (const c of criticals) {
+    // No recognisable subject → it can only corroborate itself, so key it uniquely.
+    const key = subjectOf(c.note) ?? `${c.lens}:${c.note.slice(0, 40)}`;
+    (bySubject.get(key) ?? bySubject.set(key, new Set()).get(key)!).add(c.lens);
+  }
+  return [...bySubject.values()].filter((lenses) => lenses.size > 1).length;
+}
+
+/**
  * How much of a round's blocking findings reaches the record.
  *
  * Enough to tell one round's objections from the next one's, which is the whole question; short of copying
@@ -1026,13 +1061,35 @@ export async function runCodeReview(
   deps: ReviewDeps, workdir: string, taskTitle: string, request?: string,
   emit: (ev: ProgressEvent) => void = () => {},
   attempt = 0, // how many times this task has already been reviewed+revised → drives the tiered bar
+  /**
+   * Lenses that already approved this task on an earlier attempt, and are not asked again.
+   *
+   * A returning task re-ran the whole team, so a lens that had nothing to say said nothing again — fifteen
+   * calls to learn what fourteen of them had already answered. Measured on one board: 3.2 attempts per task
+   * at fifteen lenses each, ~48 review calls, where the lenses actually raising anything were two or three.
+   *
+   * The trade is real and worth stating: a lens approved the code as it stood, not as it stands after the
+   * fix, so a fix that breaks its dimension will not be caught here. This codebase has seen that happen —
+   * tasks sent back for mediums returned with FRESH criticals. What contains it is that deferred notes are
+   * adjudicated on the merged result by the revision pass, which reviews everything once at the end.
+   */
+  cleared: readonly string[] = [],
 ): Promise<Verdict> {
   // Scaled to the change: the review a three-line config edit needs is not the review a new module needs.
   // No baseRef means the work is in the working tree, not on a branch — the small-change path. Its size is
   // knowable either way, and an unknown size is what made the cheapest path convene the whole team.
   const diff = await changeUnderReview(deps, workdir);
-  const team = lensesFor(deps.teams.code, diff);
+  const scoped = lensesFor(deps.teams.code, diff);
+  // Never strand: if every lens has already approved, there is nothing left to ask and the task passes.
+  const team = cleared.length ? scoped.filter((c) => !cleared.includes(c.name)) : scoped;
   const scaled = team.length < deps.teams.code.length;
+  if (!team.length) {
+    emit({ kind: "note", text: `✅ **Team** — every lens had already approved this change.` });
+    return { verdict: "pass", notes: [], approvedLenses: [...cleared] };
+  }
+  if (cleared.length) {
+    emit({ kind: "note", text: `👥 **Team** — ${team.length} lens(es) to re-run; ${cleared.length} approved on an earlier attempt.` });
+  }
   telemetry().event("decision.review_scale", {
     "hc.decision": "review_scale",
     "hc.changed_lines": changedLines(diff),
@@ -1071,6 +1128,14 @@ export async function runCodeReview(
    * Caught by an existing test the moment this was missed: a single-lens team whose one lens never produced a
    * valid verdict went from `fail` to `pass`.
    */
+  /**
+   * Who is satisfied, so the next attempt need not ask them again: a lens that ran, returned a verdict, and
+   * raised no critical. Its mediums are deferred either way, so they do not keep it in the rotation.
+   */
+  const approvedLenses = [
+    ...cleared,
+    ...assessments.filter((a) => !a.unverified && !a.findings.some((f) => f.severity === "critical")).map((a) => a.name),
+  ];
   const cover = coverage(assessments);
   if (!cover.enough) {
     const why = `${cover.unverified} of ${assessments.length} lens(es) never returned a verdict — too little of `
@@ -1078,14 +1143,45 @@ export async function runCodeReview(
     emit({ kind: "note", text: `⚠️ **Code review** — ${why}` });
     return { verdict: "fail", notes: [why] };
   }
-  if (crit === 0) {
-    const deferred = nonBlockingNotes(assessments, "code");
+  /**
+   * A critical needs CORROBORATION to block, because fifteen independent vetoes make passing improbable.
+   *
+   * The rule was `crit === 0`, so one lens out of fifteen was enough to convene the council and send the
+   * task back — and all fifteen then re-ran. Measured across one board's tasks, attempts ran 1, 2, 3, 4 and
+   * 6, which implies each lens raises a critical about 7.5% of the time. That is a reasonable rate for a
+   * specialist; fifteen of them make a clean round a one-in-three event, and the cost is attempts TIMES
+   * team size, so it compounds from both ends.
+   *
+   * What the same board says about corroboration: its 11 criticals were 6 distinct defects, and 3 of those
+   * were named by two or more lenses. Requiring a second lens on the SAME subject therefore keeps the
+   * defects several lenses can see, and stops one lens's judgement standing alone against a change.
+   *
+   * A solo critical is deferred, not dropped — the same treatment mediums already get, for the same reason
+   * recorded there: every rework round is another chance to break something that already worked, and the
+   * revision pass adjudicates deferred notes on the MERGED result in one sweep.
+   */
+  const corroborated = corroboratedCriticals(assessments);
+  if (crit > 0 && corroborated === 0) {
+    emit({ kind: "note", text: `✅ **Team** — ${crit} critical finding(s), none corroborated by a second lens → deferred to the revision pass.` });
+  }
+
+  if (corroborated === 0) {
+    /**
+     * An uncorroborated critical is DEFERRED, and that has to be literally true.
+     *
+     * The first version of this said so and did not do it: `nonBlockingNotes` collects medium and low, so a
+     * critical that failed to find a second lens went nowhere at all — the message claimed a deferral the
+     * code never performed. Caught by a test asserting the note survived, which it did not.
+     *
+     * They lead the list, because a critical nobody corroborated is still the most serious thing anyone saw.
+     */
+    const deferred = [...findingNotes(assessments, "code", ["critical"]), ...nonBlockingNotes(assessments, "code")];
     if (!deferred.length) {
       // A split team on an otherwise clean review is still a disagreement worth the council's time, and on
       // the first pass that judgement is the thorough one this stage is for.
       if (attempt > 0 || !assessments.length || approve / assessments.length >= TEAM_CONSENSUS) {
         emit({ kind: "note", text: `✅ **Team** — nothing to fix → the code passed.` });
-        return { verdict: "pass", notes: [] };
+        return { verdict: "pass", notes: [], approvedLenses };
       }
     }
     /**
@@ -1101,8 +1197,8 @@ export async function runCodeReview(
      * adjudicates them on the MERGED result — one pass over everything, and one that cannot regress a task
      * which has already landed.
      */
-    emit({ kind: "note", text: `✅ **Team** — no critical findings; ${deferred.length} medium/low note(s) deferred to the revision pass.` });
-    return { verdict: "pass", notes: [], deferred };
+    emit({ kind: "note", text: `✅ **Team** — nothing corroborated; ${deferred.length} note(s) deferred to the revision pass.` });
+    return { verdict: "pass", notes: [], deferred, approvedLenses };
   }
 
   const reason = crit || med ? `surfaced ${crit} critical / ${med} medium finding(s)` : `is split (${approve}/${assessments.length} approve)`;
@@ -1116,7 +1212,7 @@ export async function runCodeReview(
 
   if (tally === "pass") {
     emit({ kind: "note", text: `✅ **Council** voted to approve (${passVotes}/${votes.length} pass) → the code passed.` });
-    return { verdict: "pass", notes: [] };
+    return { verdict: "pass", notes: [], approvedLenses };
   }
   if (tally === "revise") {
     emit({ kind: "note", text: `🔄 **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the code back.` });
@@ -1124,6 +1220,6 @@ export async function runCodeReview(
   }
   emit({ kind: "note", text: `🔨 **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
   const d = await runJudge(deps, "code", workdir, taskTitle, assessments, votes, request, emit);
-  if (d.decision === "pass") return { verdict: "pass", notes: [] };
+  if (d.decision === "pass") return { verdict: "pass", notes: [], approvedLenses };
   return { verdict: "fail", notes: d.feedback.length ? d.feedback : blocking };
 }

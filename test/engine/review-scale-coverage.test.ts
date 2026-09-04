@@ -96,7 +96,9 @@ describe("the single-shot code review has the same floor", () => {
   it("refuses to pass a change whose review never ran", async () => {
     const src = await (await import("node:fs/promises")).readFile("src/engine/review.ts", "utf8");
     const guard = src.indexOf("const cover = coverage(assessments);\n  if (!cover.enough) {");
-    const decision = src.indexOf("if (crit === 0) {\n    const deferred = nonBlockingNotes(assessments, \"code\");");
+    // The pass decision is now gated on corroboration rather than on `crit === 0`; what this test pins is
+    // that the coverage floor is still checked BEFORE whichever gate decides.
+    const decision = src.indexOf("if (corroborated === 0) {");
     expect(guard).toBeGreaterThan(0);
     expect(decision).toBeGreaterThan(guard);      // the floor is checked BEFORE the pass decision
   });

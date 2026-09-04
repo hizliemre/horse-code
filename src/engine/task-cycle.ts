@@ -110,7 +110,12 @@ export async function runCycleWithRole(
   const card = board.get(taskId)!;
   // `attempts` drives the tiered bar: the first review of a task is the thorough pass, later attempts (the code
   // has already been revised for reviewer notes) are blocked only by CRITICAL findings.
-  const review = () => runCodeReview(rdeps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); }, card.attempts);
+  const review = () => runCodeReview(
+    rdeps, cwd, card.title, undefined, (ev) => { if (ev.kind === "note") deps.note?.(ev.text); },
+    card.attempts,
+    // Only what objected last time is asked again — see `runCodeReview`'s `cleared`.
+    card.clearedLenses ?? [],
+  );
   let v: Verdict;
   try {
     v = await telemetry().span("stage.code_review", { "hc.stage": "code review", "hc.task.id": taskId },
@@ -129,7 +134,17 @@ export async function runCycleWithRole(
     board.addReviewNote(taskId, note);
     board.appendStage(taskId, { role: "code-reviewer", action: "reviewed:cancelled", note });
     return { verdict: "fail", notes: [note] };
+
   }
+  /**
+   * What the review settled, kept on the card so the next attempt can skip it.
+   *
+   * Written even when the verdict is `fail`: a lens that approved this attempt is exactly the one there is
+   * no point re-asking, and that is the whole saving. A card that goes back to TODO for a fresh start clears
+   * them instead — see `clearLenses`.
+   */
+  const approved = v.approvedLenses ?? [];
+  if (approved.length) board.markLensesCleared(taskId, approved);
   // The review says the code is GOOD; the gate says the code does WHAT WAS ASKED. A task that quietly
   // implemented half the requirement passes review — only the criteria catch that.
   if (v.verdict === "pass") {

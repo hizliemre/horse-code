@@ -60,7 +60,7 @@ describe("who tells the review where the work started", () => {
     const s = await src("src/engine/task-cycle.ts");
     expect(s).toContain('const startedAt = before?.split("|")[0];');
     expect(s).toContain("deps.baseRef || !startedAt ? deps : { ...deps, inPlaceBase: startedAt }");
-    expect(s).toContain("runCodeReview(rdeps,");
+    expect(s).toMatch(/runCodeReview\(\s*rdeps,/);
     expect(s).toContain("verifyAcceptance(rdeps,");
   });
 

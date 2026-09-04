@@ -56,6 +56,13 @@ export interface Card {
    */
   files: string[];
   reviewNotes: string[];
+  /**
+   * Review lenses that have already approved this card, carried across attempts.
+   *
+   * A returning card re-ran the whole team, so a lens with nothing to say was asked again anyway. Kept on
+   * the card because attempts are what it survives — the review itself is stateless.
+   */
+  clearedLenses?: string[];
   attempts: number;
   stageHistory: StageEvent[];
   model?: string; // the model of the implementer currently working this card (for the live-agents UI)
@@ -82,6 +89,9 @@ const cardSchema = z.object({
   acceptance: z.array(z.string()).default([]), // default: boards persisted before the gate existed still load
   files: z.array(z.string()).default([]),       // ditto — a board written before file lists existed still loads
   reviewNotes: z.array(z.string()),
+  // Optional rather than defaulted: a board written before this existed must round-trip unchanged, and an
+  // empty list is the same statement as no list at all.
+  clearedLenses: z.array(z.string()).optional(),
   attempts: z.number(),
   stageHistory: z.array(stageEventSchema),
 });
@@ -111,6 +121,7 @@ function cloneCard(c: Card): Card {
     acceptance: [...c.acceptance],
     files: [...c.files],
     reviewNotes: [...c.reviewNotes],
+    ...(c.clearedLenses?.length ? { clearedLenses: [...c.clearedLenses] } : {}),
     stageHistory: c.stageHistory.map((e) => ({ ...e })),
   };
 }
@@ -240,6 +251,19 @@ export class Board {
 
   clearReviewNotes(id: string): void {
     this.require(id).reviewNotes = [];
+    this.onChange?.();
+  }
+
+  /** Remember which lenses approved, so the next attempt does not ask them again. */
+  markLensesCleared(id: string, lenses: readonly string[]): void {
+    const c = this.require(id);
+    c.clearedLenses = [...new Set([...(c.clearedLenses ?? []), ...lenses])];
+    this.onChange?.();
+  }
+
+  /** Forget them — a card whose work restarts from scratch has nothing left approved. */
+  clearLenses(id: string): void {
+    this.require(id).clearedLenses = [];
     this.onChange?.();
   }
 

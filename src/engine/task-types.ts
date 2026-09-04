@@ -150,6 +150,12 @@ export type RunnableRole = ImplementerRole | "senior-coder" | "senior-designer";
 
 export interface Verdict {
   /**
+   * Review lenses that approved this change and need not be asked again on the next attempt.
+   *
+   * Accumulated across attempts on the card, so a returning task re-runs only what actually objected.
+   */
+  approvedLenses?: string[];
+  /**
    * The attempt changed NOTHING — no file was written at all. Distinct from a failed review: there is no work
    * to improve, so repeating the same role with the same instruction is provably futile.
    */
