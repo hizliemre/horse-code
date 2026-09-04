@@ -86,8 +86,24 @@ describe("decoding Claude Code's stream", () => {
    */
   it("surfaces a refusal as a rate limit, with the windows spelled out", () => {
     const ev = decodeClaudeEvent(CLAUDE.quotaRefused);
-    expect(ev?.rateLimited).toBe("rejected — five_hour 100%, seven_day 41%");
+    expect(ev?.rateLimited).toContain("rejected — five_hour 100%, seven_day 41%");
     expect(ev?.quota?.status).toBe("rejected");
+  });
+
+  /**
+   * The reset instant rides along, because a spent window REOPENS. Without it the only safe bench is the
+   * rest of the run, which on a ten-hour board writes off a subscription for hours after it recovered.
+   */
+  it("says when the spent window reopens, when the CLI says so", () => {
+    const ev = decodeClaudeEvent(JSON.stringify({
+      type: "rate_limit_event",
+      rate_limit_info: {
+        status: "rejected",
+        resetsAt: Math.floor(Date.parse("2026-09-04T05:30:00.000Z") / 1000),
+        unifiedWindows: { five_hour: { utilization: 1 } },
+      },
+    }));
+    expect(ev?.rateLimited).toContain("(resets 2026-09-04T05:30:00.000Z)");
   });
 
   /** The stream is mostly hooks and framing — anything without meaning here must decode to nothing. */
@@ -222,5 +238,39 @@ describe("the outcome of a tool the CLI ran", () => {
   /** A success was already announced when it was requested; saying it twice would double every row. */
   it("says nothing for a call that worked", () => {
     expect(decodeClaudeEvent(ok)).toBeUndefined();
+  });
+});
+
+/**
+ * A quota WARNING is not a refusal, and reading it as one throws away work that was already done.
+ *
+ * Measured on a live board: near its limit the CLI began reporting `allowed_warning` — the call was served —
+ * and each was read as a rate limit, so a finished answer was discarded and the chain spent another call
+ * getting it again, at 91% and 93% of the five-hour window. Nine calls, at exactly the moment when spending
+ * them twice is worst.
+ */
+describe("a quota warning on a call that was served", () => {
+  const evt = (status: string): string => JSON.stringify({
+    type: "rate_limit_event",
+    rate_limit_info: { status, unifiedWindows: { five_hour: { utilization: 0.91 }, seven_day: { utilization: 0.2 } } },
+  });
+
+  it("does not call a warning a rate limit", () => {
+    const out = decodeClaudeEvent(evt("allowed_warning"));
+    expect(out?.rateLimited).toBeUndefined();
+    expect(out?.quota?.status).toBe("allowed_warning");
+    // The reading itself still has to land, since this is the case where it matters most.
+    expect(out?.quota?.windows).toEqual({ five_hour: 0.91, seven_day: 0.2 });
+  });
+
+  it("still reads a plain allow as served", () => {
+    expect(decodeClaudeEvent(evt("allowed"))?.rateLimited).toBeUndefined();
+  });
+
+  /** A refusal is still a refusal — the bench depends on it. */
+  it("still reads a refusal as a rate limit", () => {
+    const out = decodeClaudeEvent(evt("rejected"));
+    expect(out?.rateLimited).toContain("rejected");
+    expect(out?.rateLimited).toContain("five_hour 91%");
   });
 });

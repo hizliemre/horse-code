@@ -151,7 +151,34 @@ export function providerOutage(reason: string): string | undefined {
      * The name is read from the parenthesis for that reason; the bracketed prefix is only whichever model
      * happened to ask.
      */
-    ?? /shared egress ip quota exhausted\s*\(([\w.-]+)\)/i.exec(reason)?.[1];
+    ?? /shared egress ip quota exhausted\s*\(([\w.-]+)\)/i.exec(reason)?.[1]
+    /**
+     * The CLI's own quota refusal — the fifth wording for one source-wide fact, and now the only one that
+     * still happens, because everything runs through the CLIs.
+     *
+     * A quota belongs to the SUBSCRIPTION, not to a model, so falling from one Claude model to another
+     * against a spent window buys nothing. Measured on a live board that ran ten hours: the five-hour window
+     * reached 100% and 161 further calls were made anyway, every one refused, as the chain worked its way
+     * down to `haiku` and kept asking. The run ended with tasks undelivered and a fifth of its calls spent
+     * on a subscription that had already said no.
+     *
+     * This function's own comments record the same lesson three times before — a wording it did not know,
+     * and a source-wide fact read as one model's problem. This is the fourth.
+     */
+    ?? /^\s*(claude|codex)\s+CLI:\s*rejected\b/i.exec(reason)?.[1]?.toLowerCase();
+}
+
+/**
+ * When a spent window reopens, read from the message the transport put there.
+ *
+ * Without it the only safe bench for a quota is "the rest of the run", which on a long board writes off a
+ * subscription for hours after it recovered — the five-hour window that ended one run had reopened well
+ * before that run did.
+ */
+export function quotaResetAt(reason: string): number | undefined {
+  const iso = /\(resets\s+([0-9T:.\-]+Z)\)/i.exec(reason)?.[1];
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) ? t : undefined;
 }
 
 export interface ResolvedRole {
@@ -288,7 +315,9 @@ export class RoleRegistry {
     // `canonicalSource`. Compared raw, the bench matched nothing and quietly fell back to one model.
     const want = canonicalSource(provider);
     const hit = this.knownModels().filter((m) => sourcePrefix(m) === want);
-    for (const m of hit) this.markExhausted(m, reason, now);
+    // Benched until the window says it reopens, when the message carries that — see `quotaResetAt`.
+    const until = quotaResetAt(reason);
+    for (const m of hit) this.markExhausted(m, reason, now, until);
     if (!hit.length) { this.markExhausted(model, reason, now); return [model]; }
     return hit;
   }

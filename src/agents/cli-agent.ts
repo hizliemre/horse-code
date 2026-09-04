@@ -147,10 +147,32 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
       status, windows,
       ...(typeof info.resetsAt === "number" ? { resetsAt: info.resetsAt } : {}),
     };
-    // "allowed" is the successful case and by far the common one; only a refusal is a rate limit.
-    return status === "allowed"
+    /**
+     * Anything in the ALLOWED family went through. Only a refusal is a rate limit.
+     *
+     * Compared for equality with `"allowed"`, which cost a live board nine calls: near its limit the CLI
+     * starts reporting `allowed_warning` — the call was served, and the word says so — and each one was read
+     * as a refusal, so a real answer was thrown away and the chain spent another call getting it again. At
+     * 91% and 93% of the five-hour window, which is precisely when spending calls twice is worst.
+     *
+     * The asymmetry decides the shape: reading an allow as a refusal discards finished work AND spends
+     * quota, while reading a refusal as an allow costs nothing extra — a refused call has no text, so the
+     * empty-answer guard downstream catches it anyway.
+     */
+    return status.startsWith("allowed")
       ? { quota }
-      : { quota, rateLimited: `${status} — ${describeWindows(windows)}` };
+      : {
+          quota,
+          /**
+           * The reset time rides along, as an ISO instant rather than prose.
+           *
+           * A spent five-hour window reopens; without saying when, the only safe bench is "the rest of the
+           * run", which on a ten-hour board writes off a subscription for hours after it recovered. The
+           * gateway's wordings said "reset after 4h" and nothing ever parsed them — see `quotaResetAt`.
+           */
+          rateLimited: `${status} — ${describeWindows(windows)}` +
+            (quota.resetsAt ? ` (resets ${new Date(quota.resetsAt * 1000).toISOString()})` : ""),
+        };
   }
   if (type === "assistant") {
     const msg = (e as { message?: { content?: unknown[]; model?: string } }).message;

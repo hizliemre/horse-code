@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { RoleRegistry, providerOutage, isSourceCapacity, sourcePrefix, canonicalSource } from "../../src/agent/roles.js";
+import { RoleRegistry, providerOutage, isSourceCapacity, sourcePrefix, canonicalSource, quotaResetAt } from "../../src/agent/roles.js";
 import { SkillRegistry } from "../../src/skills/registry.js";
 
 const reg = (): RoleRegistry => new RoleRegistry({
@@ -282,5 +282,57 @@ describe("naming the subscription behind a model", () => {
   /** Unknown stays undefined: an unrecognised name must bench itself, not a subscription it may not belong to. */
   it("says nothing about a name it does not recognise", () => {
     expect(sourcePrefix("weird")).toBeUndefined();
+  });
+});
+
+/**
+ * A quota belongs to the SUBSCRIPTION, not to a model.
+ *
+ * Measured on a board that ran ten hours: the five-hour window reached 100% and 161 further calls were made
+ * anyway, every one refused, as the chain worked its way down to `haiku` and kept asking. A fifth of the
+ * run's calls were spent on a subscription that had already said no, and it ended with tasks undelivered.
+ *
+ * `providerOutage` knew four wordings, all of them the gateway's. This is the one that still happens.
+ */
+describe("a CLI refusing on quota is the subscription's word, not the model's", () => {
+  const refusal = "claude CLI: rejected — five_hour 100%, seven_day 22% (resets 2026-09-04T05:30:00.000Z)";
+
+  it("names the subscription that refused", () => {
+    expect(providerOutage(refusal)).toBe("claude");
+    expect(providerOutage("codex CLI: rejected — five_hour 100%")).toBe("codex");
+  });
+
+  /** A warning is a call that WAS served — reading it as a refusal benches a working subscription. */
+  it("does not read a warning as a refusal", () => {
+    expect(providerOutage("claude CLI: allowed_warning — five_hour 91%, seven_day 20%")).toBeUndefined();
+  });
+
+  it("benches every model of that subscription at once, not one per call", () => {
+    const r = new RoleRegistry({
+      coder: { models: ["opus", "sonnet", "gpt-5.6-terra"] },
+      reviewer: { models: ["haiku", "gpt-5.6-sol"] },
+    } as never, {} as never);
+    const hit = r.markProviderExhausted("claude", "opus", refusal);
+    expect(hit.sort()).toEqual(["haiku", "opus", "sonnet"]);
+    // The other subscription can still serve, which is the whole point of benching this one.
+    expect(r.isQuarantined("gpt-5.6-terra")).toBe(false);
+    expect(r.isQuarantined("gpt-5.6-sol")).toBe(false);
+  });
+
+  /**
+   * A spent window reopens. Without a reset time the only safe bench is the rest of the run, which on a long
+   * board writes off a subscription for hours after it recovered.
+   */
+  it("benches until the window says it reopens", () => {
+    expect(quotaResetAt(refusal)).toBe(Date.parse("2026-09-04T05:30:00.000Z"));
+    const now = Date.parse("2026-09-04T04:00:00.000Z");
+    const r = new RoleRegistry({ coder: { models: ["opus"] } } as never, {} as never);
+    r.markProviderExhausted("claude", "opus", refusal, now);
+    expect(r.isQuarantined("opus", now + 60_000)).toBe(true);
+    expect(r.isQuarantined("opus", Date.parse("2026-09-04T05:31:00.000Z"))).toBe(false);
+  });
+
+  it("says nothing about a reset when the message carries none", () => {
+    expect(quotaResetAt("claude CLI: rejected — five_hour 100%")).toBeUndefined();
   });
 });
