@@ -343,10 +343,29 @@ export function tasksMessage(planRel: string, tasksRel: string, template: string
      * should have caught it and did not, because the phases are a stronger signal than a sentence about
      * files — which is why the unit has to be named in terms the phases cannot outrank.
      */
-    + `Size a task to a coherent piece of BEHAVIOUR someone can review as a whole, not to a file. An entity, `
-    + `its configuration, its migration and its tests are ONE task: nobody can review one without the others `
-    + `and none of them is deliverable alone. Every task carries a full implement-and-review round whatever `
-    + `it holds, so splitting finer does not divide that cost, it multiplies it.\n`
+    + `Size a task to a coherent piece of BEHAVIOUR someone can review as a whole, not to a file. ONE entity `
+    + `with its configuration, its migration and its tests is one task: nobody can review those apart and `
+    + `none of them is deliverable alone.\n`
+    /**
+     * The bound, and it was learned the expensive way.
+     *
+     * Without it "one entity and its configuration" was read as "the data model", and a 19-file card came
+     * back from review five times, costing 96 review calls on its own — against 35 for a 2-file card that
+     * merged first time and 45 for a 3-file card that merged on its second. Review cost tracks ATTEMPTS
+     * times the size of the team, and attempts climb with how much a reviewer has to hold at once. So the
+     * saving from fewer cards is given straight back by a card too big to pass.
+     *
+     * Both directions are expensive and the floor was the one measured first: a board split to one file per
+     * card paid a full round for cards that created a folder. The window between them is what this asks for.
+     */
+    + `But ONE entity, not the data model: a task spanning a dozen files comes back from review again and `
+    + `again, and each return costs another full round of the team. Measured on this board — a 2-file task `
+    + `merged first time for 35 review calls, a 3-file task on its second for 45, a 19-file task had failed `
+    + `five times and cost 96 without merging at all. Roughly two to six files is the window; past that, `
+    + `split along the seam a reviewer would look for anyway.\n`
+    + `Every task carries a full implement-and-review round whatever it holds, so splitting finer does not `
+    + `divide that cost — but a task nobody can review in one sitting does not avoid it either, it pays it `
+    + `repeatedly.\n`
     + `Never split one file across two tasks, and that includes across PHASES — creating a file empty in `
     + `Setup and filling it in later is one task, not two. Split only where the parts are genuinely `
     + `independent: they can be reviewed and merged on their own, or they must run at the same time in `

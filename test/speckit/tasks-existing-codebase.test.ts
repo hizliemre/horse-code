@@ -47,8 +47,8 @@ describe("the task list is for a codebase that already exists", () => {
     const m = msg();
     expect(m).toMatch(/coherent piece of BEHAVIOUR/);
     expect(m).toMatch(/not to a file/);
-    expect(m).toMatch(/entity, its configuration, its migration and its tests are ONE task/i);
-    expect(m).toMatch(/does not divide that cost, it multiplies it/);
+    expect(m).toMatch(/ONE entity with its configuration, its migration and its tests is one task/i);
+    expect(m).toContain("splitting finer does not");
   });
 
   /**
@@ -57,6 +57,19 @@ describe("the task list is for a codebase that already exists", () => {
    * more entities the same way. A sentence about files could not outrank a phase heading, so the rule has to
    * name the phases.
    */
+  /**
+   * Both directions cost. Without an upper bound "one entity and its configuration" was read as "the data
+   * model": a 19-file card came back from review five times for 96 review calls, against 35 for a 2-file
+   * card that merged first time. Review cost tracks attempts times team size, and attempts climb with how
+   * much a reviewer must hold at once.
+   */
+  it("bounds a task from above as well as below", () => {
+    const m = msg();
+    expect(m).toMatch(/ONE entity, not the data model/);
+    expect(m).toMatch(/two to six files is the window/i);
+    expect(m).toMatch(/pays it\s+repeatedly|it pays it repeatedly/);
+  });
+
   it("forbids splitting one file across the template's phases", () => {
     expect(msg()).toMatch(/includes across PHASES/);
     expect(msg()).toMatch(/creating a file empty in Setup and filling it in later is one task/i);
