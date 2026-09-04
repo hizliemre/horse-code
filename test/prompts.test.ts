@@ -120,3 +120,42 @@ describe("the tester's prompt", () => {
     expect(tester).toMatch(/the scenario is NOT EXECUTED, however convincing/i);
   });
 });
+
+/**
+ * The breakdown's granularity is where a run's cost is decided, and it was being set by a skill written for
+ * a different habitat.
+ *
+ * `writing-plans` says "bite-sized", "one action, 2-5 minutes", "the smallest unit worth a reviewer's gate" —
+ * sound where a gate is one reader glancing at a diff. Here a card is its own worktree, implementer, review
+ * TEAM, council, acceptance gate and merge, and that overhead is paid per card whatever its size. Measured
+ * across two runs of one board: 10.5 and then 43.4 review calls PER TASK, the second being 86% of everything
+ * the run spent. The plan had split 125 cards down to one class each.
+ */
+describe("how big a task card should be", () => {
+  const pm = DEFAULT_PROMPTS["project-manager"];
+
+  it("tells the planner what a card actually costs here", () => {
+    expect(pm).toContain("review TEAM");
+    expect(pm).toContain("per CARD");
+    // The load-bearing correction: finer does not mean cheaper.
+    expect(pm).toMatch(/does not divide the cost, it multiplies it/);
+  });
+
+  it("sizes a card by behaviour rather than by file", () => {
+    expect(pm).toMatch(/coherent piece of BEHAVIOUR/);
+    expect(pm).toMatch(/not to a file/);
+    // The exact split this board got wrong, named so it cannot be repeated by analogy.
+    expect(pm).toMatch(/entity, its .*configuration.*one card/i);
+  });
+
+  it("demands a reason for splitting that survives being said out loud", () => {
+    expect(pm).toMatch(/reviewed and merged independently|run in parallel/);
+    expect(pm).toContain('"They are different files" is not such a reason');
+  });
+
+  /** The auditor is the only check between the breakdown and hours of execution. */
+  it("has the auditor flag over-splitting, not just empty tasks", () => {
+    expect(DEFAULT_PROMPTS["task-auditor"]).toContain("OVER-SPLITTING");
+    expect(DEFAULT_PROMPTS["task-auditor"]).toMatch(/pays that overhead twice/);
+  });
+});

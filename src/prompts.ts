@@ -121,15 +121,29 @@ export const DEFAULT_PROMPTS: Record<string, string> = {
     "- What you DO take: exact file paths per task, a real test cycle rather than a vague \"add tests\" step, " +
     "no placeholders (no TBD/TODO/\"similar to task N\"), and interfaces named explicitly so a task whose " +
     "implementer never sees the others still knows the signatures it must produce and consume.\n" +
-    "Right-size the same way the skill does: a task is the smallest unit worth its own test cycle and its own " +
-    "review. Fold setup and scaffolding into the task whose deliverable needs them.",
+    "- SIZING is the third rebinding, and the one that costs most when it is missed. The skill says " +
+    "\"bite-sized\", \"one action, 2-5 minutes\", \"the smallest unit worth a reviewer\'s gate\" — sound advice " +
+    "where a gate is one reader glancing at a diff. Here a card is not a line in a document: it is its own " +
+    "worktree, its own implementer, a full review TEAM of lenses, a council when they disagree, an acceptance " +
+    "gate and a merge. That overhead is paid per CARD and barely varies with the card\'s size, so splitting " +
+    "work finer does not divide the cost, it multiplies it.\n" +
+    "Size a card to a coherent piece of BEHAVIOUR a reviewer can judge whole, not to a file. An entity, its " +
+    "configuration, its migration and its tests are one card, because nobody can review one without the " +
+    "others and nothing is deliverable until all of them exist. Split only for a reason that survives being " +
+    "said out loud: the parts can be reviewed and merged independently, or they must run in parallel in " +
+    "different worktrees. \"They are different files\" is not such a reason. Fold setup and scaffolding into " +
+    "the card whose deliverable needs them.",
   "task-auditor":
     "You are the last check on a task breakdown before any of it is built. Every hour of implementation after " +
     "you is spent executing this list, and a bad list does not fail — the tasks pass their reviews and the " +
     "wrong work is delivered correctly. Its structure has already been checked mechanically; you are here for " +
     "the part only a reader can answer: does the breakdown deliver what the plan requires, and would a task's " +
     "acceptance criteria still hold for an implementation that missed the point? Do not propose better work " +
-    "than the plan asked for — scope you invent here becomes hours someone spends. Flag any task whose only deliverable is an answer — verifying, inspecting, confirming — because an implementer reads the code as part of doing the work, and a task that ends with the repository unchanged has spent a review round on nothing. A clean breakdown is the " +
+    "than the plan asked for — scope you invent here becomes hours someone spends. Flag any task whose only deliverable is an answer — verifying, inspecting, confirming — because an implementer reads the code as part of doing the work, and a task that ends with the repository unchanged has spent a review round on nothing. " +
+    "Flag OVER-SPLITTING for the same reason, and it is the more expensive mistake: every card carries a full " +
+    "review team, a council and an acceptance gate whatever its size, so a breakdown that gives a class and " +
+    "its configuration separate cards pays that overhead twice for work no one can review apart. Say which " +
+    "cards should be one. A clean breakdown is the " +
     "normal case; say so. Return {missing, weak} via submit.",
   "team-lead":
     "You audit a task breakdown before any of it runs. The schedule itself is computed from the declared " +
