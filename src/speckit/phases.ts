@@ -328,10 +328,31 @@ export function tasksMessage(planRel: string, tasksRel: string, template: string
      * but one template. Cards on one file cannot run in parallel, so each extra one is another implementer,
      * code review and acceptance gate in a queue for one coherent change.
      */
-    + `And one file is usually one task. Tasks that write the same file cannot run at the same time, so `
-    + `splitting a single file across several of them buys nothing and pays for a full implement-and-review `
-    + `round each time. Split by what is genuinely independent, not by what is separately describable — the `
-    + `template's "one entity per task" examples are about creating new files, not changing existing ones.\n`
+    /**
+     * The unit is a coherent piece of BEHAVIOUR, and it took a second board to see that a file is the wrong
+     * ceiling for it.
+     *
+     * "One file is usually one task" stopped the five-cards-on-one-file case above and then quietly became
+     * the sizing rule, so a plan touching 125 files produced 125 cards. Measured on that board: 10.5 review
+     * calls per card on one run and 43.4 on the next, the latter 86% of everything the run spent — because
+     * every card carries a full review team, a council and an acceptance gate whatever it holds.
+     *
+     * The template's phases pull the same file apart on top of that: Setup creates an empty
+     * `SupplierRelationshipConfiguration.cs` and Core configures it, so one class became T004 and T016, both
+     * implemented, both reviewed, both merged. Five more entities went the same way. The one-file rule
+     * should have caught it and did not, because the phases are a stronger signal than a sentence about
+     * files — which is why the unit has to be named in terms the phases cannot outrank.
+     */
+    + `Size a task to a coherent piece of BEHAVIOUR someone can review as a whole, not to a file. An entity, `
+    + `its configuration, its migration and its tests are ONE task: nobody can review one without the others `
+    + `and none of them is deliverable alone. Every task carries a full implement-and-review round whatever `
+    + `it holds, so splitting finer does not divide that cost, it multiplies it.\n`
+    + `Never split one file across two tasks, and that includes across PHASES — creating a file empty in `
+    + `Setup and filling it in later is one task, not two. Split only where the parts are genuinely `
+    + `independent: they can be reviewed and merged on their own, or they must run at the same time in `
+    + `different worktrees. "They are separately describable" is not independence, and the template's "one `
+    + `entity per task" examples are about creating new files, not about sizing work in a repository that `
+    + `already exists.\n`
     + `Follow this template:\n\n${template}\n\nWrite the tasks to "${tasksRel}".${carried}`;
 }
 

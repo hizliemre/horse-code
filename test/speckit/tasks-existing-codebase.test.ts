@@ -34,7 +34,32 @@ describe("the task list is for a codebase that already exists", () => {
     const m = msg();
     expect(m).toMatch(/leave the repository DIFFERENT/i);   // no investigation tasks
     expect(m).toMatch(/lint|format|building/i);             // no command-only tasks
-    expect(m).toMatch(/same file/i);                        // no splitting one file
+    expect(m).toMatch(/Never split one file across two tasks/i);
+  });
+
+  /**
+   * "One file is usually one task" stopped five cards landing on one file, then quietly became the SIZING
+   * rule — so a plan touching 125 files produced 125 cards, each carrying a full review team, a council and
+   * an acceptance gate. Measured on that board: 10.5 review calls per card on one run and 43.4 on the next,
+   * the latter 86% of everything the run spent.
+   */
+  it("sizes a task by behaviour rather than by file", () => {
+    const m = msg();
+    expect(m).toMatch(/coherent piece of BEHAVIOUR/);
+    expect(m).toMatch(/not to a file/);
+    expect(m).toMatch(/entity, its configuration, its migration and its tests are ONE task/i);
+    expect(m).toMatch(/does not divide that cost, it multiplies it/);
+  });
+
+  /**
+   * The template's phases pull one file apart on their own: Setup creates the file empty and Core fills it,
+   * which turned one configuration class into T004 and T016 — both implemented, reviewed and merged, five
+   * more entities the same way. A sentence about files could not outrank a phase heading, so the rule has to
+   * name the phases.
+   */
+  it("forbids splitting one file across the template's phases", () => {
+    expect(msg()).toMatch(/includes across PHASES/);
+    expect(msg()).toMatch(/creating a file empty in Setup and filling it in later is one task/i);
   });
 
   it("carries deferred review notes through untouched", () => {
