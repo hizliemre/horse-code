@@ -358,11 +358,26 @@ export function tasksMessage(planRel: string, tasksRel: string, template: string
      * Both directions are expensive and the floor was the one measured first: a board split to one file per
      * card paid a full round for cards that created a folder. The window between them is what this asks for.
      */
-    + `But ONE entity, not the data model: a task spanning a dozen files comes back from review again and `
-    + `again, and each return costs another full round of the team. Measured on this board — a 2-file task `
-    + `merged first time for 35 review calls, a 3-file task on its second for 45, a 19-file task had failed `
-    + `five times and cost 96 without merging at all. Roughly two to six files is the window; past that, `
-    + `split along the seam a reviewer would look for anyway.\n`
+    + `But ONE entity, not the data model: a task nobody can hold in their head at once comes back from `
+    + `review again and again, and each return costs another full round of the team. Measured on one board, `
+    + `by review calls spent: 2 files 35, 3 files 45, 6 files 40, 19 files 116 across six attempts.\n`
+    /**
+     * What that measurement does NOT support is a file count, and the first version of this said one anyway.
+     *
+     * "Roughly two to six files" was drawn between a 3-file card that merged on its second attempt and a
+     * 19-file card that took six. The next reading broke it: a FOUR-file card, squarely inside the window,
+     * took four attempts and 80 review calls — as many as cards three times its size. File count is a proxy
+     * for the thing that matters and a loose one; what tracks cost is how much a reviewer has to hold at
+     * once, and a card can be broad across four files or narrow across ten.
+     *
+     * So the rule describes the quantity it actually measured — attempts, and what drives them — rather than
+     * a number that reads as measured and is not.
+     */
+    + `Do not count files. What costs is BREADTH: how many separate decisions a reviewer must hold at once. `
+    + `A card that adds one entity end to end is narrow even across several files; a card that touches four `
+    + `files belonging to four different concerns is broad, and it was a four-file card that cost the most `
+    + `per file on that board. Split along the seam a reviewer would look for anyway — a second concern, a `
+    + `second layer, a second story — not at a file boundary.\n`
     + `Every task carries a full implement-and-review round whatever it holds, so splitting finer does not `
     + `divide that cost — but a task nobody can review in one sitting does not avoid it either, it pays it `
     + `repeatedly.\n`

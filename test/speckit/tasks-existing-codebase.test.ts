@@ -66,8 +66,20 @@ describe("the task list is for a codebase that already exists", () => {
   it("bounds a task from above as well as below", () => {
     const m = msg();
     expect(m).toMatch(/ONE entity, not the data model/);
-    expect(m).toMatch(/two to six files is the window/i);
-    expect(m).toMatch(/pays it\s+repeatedly|it pays it repeatedly/);
+    expect(m).toContain("splitting finer does not");
+  });
+
+  /**
+   * The first ceiling named a file count — "roughly two to six files" — drawn between a 3-file card that
+   * merged on its second attempt and a 19-file card that took six. The next reading broke it: a FOUR-file
+   * card, inside that window, took four attempts and 80 review calls, as many as cards three times its size.
+   * A number that reads as measured and is not is worse than no number.
+   */
+  it("names breadth rather than a file count it cannot support", () => {
+    const m = msg();
+    expect(m).toContain("Do not count files");
+    expect(m).toMatch(/how many separate decisions a reviewer must hold at once/);
+    expect(m).not.toMatch(/two to six files/i);
   });
 
   it("forbids splitting one file across the template's phases", () => {
