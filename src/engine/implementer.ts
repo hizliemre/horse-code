@@ -11,6 +11,7 @@ import { memoryHints, reinforceTouched, reinforceUsed } from "./memory-inject.js
 import { routeSkills, filesForTask } from "../skills/route.js";
 import { adjudicateSkills } from "../skills/adjudicate.js";
 import { placedSkills } from "../prompts.js";
+import { groupNotes } from "./group-notes.js";
 import { loadGraphSync } from "./project-graph.js";
 import { constitutionNote } from "./constitution-store.js";
 import { applySkills } from "../skills/apply.js";
@@ -245,7 +246,7 @@ export async function runImplementer(
     `screen, start an environment, decide something. If a file you wrote is not in git yet, that is a fault ` +
     `to report, not an errand to hand over.`;
   const content = (returning
-    ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${task.reviewNotes.map((n) => `- ${n}`).join("\n")}`
+    ? `This is a RETURNING task: "${task.title}". Address the reviewer notes:\n${groupNotes(task.reviewNotes)}`
     : `This is a NEW task: "${task.title}". Implement it.`) + (brief ? `\n\n${brief}` : "")
     + `\n\n${hygiene}\n\n${handOver}`;
   // Conventions, gotchas and lessons earlier runs recorded about THIS codebase — the implementer used to be
