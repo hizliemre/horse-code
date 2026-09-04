@@ -1141,6 +1141,7 @@ export async function runCodeReview(
     const why = `${cover.unverified} of ${assessments.length} lens(es) never returned a verdict — too little of `
       + `the review ran to judge this change. Re-run it; if it keeps happening the lens's model chain is the fault.`;
     emit({ kind: "note", text: `⚠️ **Code review** — ${why}` });
+    // Deliberately no `approvedLenses`: too little of the review ran to call anything settled.
     return { verdict: "fail", notes: [why] };
   }
   /**
@@ -1216,10 +1217,21 @@ export async function runCodeReview(
   }
   if (tally === "revise") {
     emit({ kind: "note", text: `🔄 **Council** voted to revise (${votes.length - passVotes}/${votes.length}) → sending the code back.` });
-    return { verdict: "fail", notes: blocking.length ? blocking : votes.filter((v) => v.vote === "revise").map((v) => v.rationale) };
+    /**
+     * The approvals ride a FAIL too, and this is the case they exist for.
+     *
+     * They were attached only to the pass returns, which is where carrying them forward buys nothing — a
+     * passing task is not coming back. Measured on a live board: one card accumulated twelve cleared lenses
+     * and its next review had three to run; the card beside it, failing every round, carried none and paid
+     * the full fifteen each time. Sixty review calls for one attempt.
+     */
+    return {
+      verdict: "fail", approvedLenses,
+      notes: blocking.length ? blocking : votes.filter((v) => v.vote === "revise").map((v) => v.rationale),
+    };
   }
   emit({ kind: "note", text: `🔨 **Council** was split (${passVotes}/${votes.length} pass) → deferred the final decision to the **judge**.` });
   const d = await runJudge(deps, "code", workdir, taskTitle, assessments, votes, request, emit);
   if (d.decision === "pass") return { verdict: "pass", notes: [], approvedLenses };
-  return { verdict: "fail", notes: d.feedback.length ? d.feedback : blocking };
+  return { verdict: "fail", approvedLenses, notes: d.feedback.length ? d.feedback : blocking };
 }

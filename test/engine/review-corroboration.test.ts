@@ -147,6 +147,24 @@ describe("carrying approvals into the next attempt", () => {
     for (const name of cleared) expect(v.approvedLenses).toContain(name);
   });
 
+  /**
+   * The case the carry-forward exists for, and the one it originally missed: a FAILING card is the one that
+   * comes back. Measured live — a card that kept failing carried no approvals and paid the full team every
+   * round, sixty review calls for a single attempt, while the card beside it had twelve lenses cleared.
+   */
+  it("reports approvals even when the verdict is fail", async () => {
+    const v = await runCodeReview(deps(teamProvider({
+      ZQA: crit("UpdateCompanyDetails commits before it sends"),
+      ZQD: crit("UpdateCompanyDetails saves the tax number before delivery"),
+    })), dir, "t");
+    expect(v.verdict).toBe("fail");
+    // The four lenses that had nothing to say must not be asked again.
+    expect(v.approvedLenses).toEqual(["code-lens-2", "code-lens-4", "code-lens-5", "code-lens-1"].sort().length
+      ? expect.arrayContaining(["code-lens-1", "code-lens-2", "code-lens-4", "code-lens-5"]) : []);
+    expect(v.approvedLenses).not.toContain("code-lens-0");
+    expect(v.approvedLenses).not.toContain("code-lens-3");
+  });
+
   /** Nothing left to ask is a pass, not an empty review that trips the coverage floor. */
   it("passes when every lens has already approved", async () => {
     const v = await runCodeReview(deps(teamProvider({})), dir, "t", undefined, () => {}, 2, big.map((c) => c.name));
