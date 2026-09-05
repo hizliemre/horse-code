@@ -1081,11 +1081,29 @@ export async function runCodeReview(
   const diff = await changeUnderReview(deps, workdir);
   const scoped = lensesFor(deps.teams.code, diff);
   // Never strand: if every lens has already approved, there is nothing left to ask and the task passes.
-  const team = cleared.length ? scoped.filter((c) => !cleared.includes(c.name)) : scoped;
+  const remaining = cleared.length ? scoped.filter((c) => !cleared.includes(c.name)) : scoped;
+  /**
+   * No change reaches a merge unreviewed, however much has already been approved.
+   *
+   * `cleared` accumulates, and a card can reach the point where every lens has approved — which is exactly
+   * when the next attempt's code would go through with NO review at all. Seen live: a card had all fifteen
+   * cleared and was being sent back by the ACCEPTANCE GATE, so its next implementation would have merged
+   * without a lens reading a line of it.
+   *
+   * The floor is the core set, four lenses rather than fifteen, so almost all of the saving survives and the
+   * hole does not. Approvals are a reason to ask FEWER questions, never a reason to ask none.
+   */
+  const named = scoped.filter((c) => CORE_CODE_LENSES.includes(c.name));
+  /**
+   * The floor is a COUNT, not a guest list. A project that renames its lenses, or a team assembled from
+   * perspectives this file has never heard of, must still get a small review rather than the whole fifteen
+   * — falling back to "everyone" would put the saving entirely at the mercy of naming.
+   */
+  const core = named.length ? named : scoped.slice(0, CORE_CODE_LENSES.length);
+  const team = remaining.length ? remaining : core;
   const scaled = team.length < deps.teams.code.length;
-  if (!team.length) {
-    emit({ kind: "note", text: `✅ **Team** — every lens had already approved this change.` });
-    return { verdict: "pass", notes: [], approvedLenses: [...cleared] };
+  if (!remaining.length) {
+    emit({ kind: "note", text: `👥 **Team** — every lens had approved; re-running the ${team.length} core lens(es) on the new code.` });
   }
   if (cleared.length) {
     emit({ kind: "note", text: `👥 **Team** — ${team.length} lens(es) to re-run; ${cleared.length} approved on an earlier attempt.` });

@@ -165,9 +165,18 @@ describe("carrying approvals into the next attempt", () => {
     expect(v.approvedLenses).not.toContain("code-lens-3");
   });
 
-  /** Nothing left to ask is a pass, not an empty review that trips the coverage floor. */
-  it("passes when every lens has already approved", async () => {
-    const v = await runCodeReview(deps(teamProvider({})), dir, "t", undefined, () => {}, 2, big.map((c) => c.name));
+  /**
+   * Approvals are a reason to ask fewer questions, never a reason to ask none.
+   *
+   * Seen live: a card reached fifteen cleared lenses while the ACCEPTANCE GATE kept sending it back, so its
+   * next implementation would have merged without a lens reading a line of it.
+   */
+  it("still reviews the new code when every lens has approved", async () => {
+    const asked: string[] = [];
+    const p = teamProvider(Object.fromEntries(big.map((c) => [c.perspective, '{"findings":[],"recommendation":"approve"}'])), asked);
+    const v = await runCodeReview(deps(p), dir, "t", undefined, () => {}, 2, big.map((c) => c.name));
     expect(v.verdict).toBe("pass");
+    expect(asked.length).toBeGreaterThan(0);   // somebody read it
+    expect(asked.length).toBeLessThan(big.length); // but not everybody
   });
 });
