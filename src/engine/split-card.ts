@@ -22,7 +22,7 @@ import { subjectOf } from "./group-notes.js";
  * The card was not one task. No number of attempts finishes ten areas one review round at a time.
  */
 
-/** Attempts after which a failing card is cut up rather than escalated again. */
+/** Review failures after which a card is cut up rather than escalated again — see `reviewFailures`. */
 export const SPLIT_AFTER_ATTEMPTS = 5;
 
 /** How many pieces a split may produce. Fewer than two is not a split; more than four is a new breakdown. */
@@ -55,7 +55,23 @@ export function failureSubjects(card: Card): string[] {
  * and leaving the card alone.
  */
 export function shouldSplit(card: Card, after = SPLIT_AFTER_ATTEMPTS): boolean {
-  return card.attempts >= after;
+  return reviewFailures(card) >= after;
+}
+
+/**
+ * How many times this card has failed review — over its LIFE, not over this run.
+ *
+ * `attempts` is deliberately reset at the start of every run, so a task that has failed a lot comes back
+ * with a fresh ladder rather than born exhausted. That is right for choosing a tier and wrong for choosing
+ * to split: the card that ended a run had failed nineteen times across four runs and would have come back
+ * reading zero, needing five more failures before anyone noticed it was too big.
+ *
+ * The lifetime count is safe here in a way it would not be for a gate, and the difference is worth naming:
+ * a gate on lifetime history becomes permanent — `noChangeStreak` records exactly that bug — whereas a split
+ * happens once and retires the card that carried the history. The pieces start at zero.
+ */
+export function reviewFailures(card: Card): number {
+  return card.stageHistory.filter((h) => h.action === "reviewed:fail").length;
 }
 
 export const PiecesSchema = z.object({
@@ -75,7 +91,8 @@ export function splitRequest(card: Card): string {
   const subjects = failureSubjects(card);
   const notes = card.reviewNotes.slice(0, 12).map((n) => `- ${n}`).join("\n");
   return (
-    `This task has failed review ${card.attempts} times and is being CUT UP rather than attempted again.\n\n`
+    // `attempts` is reset each run; the lifetime count is the number that means anything to a reader.
+    `This task has failed review ${reviewFailures(card)} times and is being CUT UP rather than attempted again.\n\n`
     + `Task: ${card.title}\n`
     + (card.acceptance.length ? `\nIt must still deliver:\n${card.acceptance.map((a) => `- ${a}`).join("\n")}\n` : "")
     + (subjects.length ? `\nIts review failures have named these areas, which is the evidence of where the seams are:\n`

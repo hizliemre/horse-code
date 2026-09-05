@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Board } from "../../src/board/board.js";
 import {
-  shouldSplit, failureSubjects, applySplit, splitRequest, SPLIT_AFTER_ATTEMPTS, MIN_PIECES,
+  shouldSplit, failureSubjects, applySplit, splitRequest, reviewFailures, SPLIT_AFTER_ATTEMPTS, MIN_PIECES,
 } from "../../src/engine/split-card.js";
 import type { Card } from "../../src/board/board.js";
 
@@ -32,8 +32,23 @@ function card(over: Partial<Card> = {}): Card {
  */
 describe("deciding to cut a card up", () => {
   it("leaves a card alone until it has failed enough to mean something", () => {
-    expect(shouldSplit(card({ attempts: SPLIT_AFTER_ATTEMPTS - 1 }))).toBe(false);
-    expect(shouldSplit(card({ attempts: SPLIT_AFTER_ATTEMPTS }))).toBe(true);
+    const fails = (n: number) => card({
+      stageHistory: FAILURES.slice(0, 1).flatMap(() =>
+        Array.from({ length: n }, () => ({ role: "code-reviewer", action: "reviewed:fail", note: FAILURES[0] }))),
+    });
+    expect(shouldSplit(fails(SPLIT_AFTER_ATTEMPTS - 1))).toBe(false);
+    expect(shouldSplit(fails(SPLIT_AFTER_ATTEMPTS))).toBe(true);
+  });
+
+  /**
+   * `attempts` is reset at the start of every run, so a card that failed nineteen times across four runs
+   * comes back reading zero. Right for choosing a TIER, wrong for noticing a card is too big — it would need
+   * five fresh failures before anyone looked.
+   */
+  it("counts failures over the card's life, not over this run", () => {
+    const veteran = card({ attempts: 0 });   // reset by a new run, but its history is intact
+    expect(reviewFailures(veteran)).toBe(FAILURES.length);
+    expect(shouldSplit(veteran)).toBe(true);
   });
 
   /**
@@ -55,9 +70,10 @@ describe("deciding to cut a card up", () => {
   });
 
   it("asks for the cut along the seams the failures exposed", () => {
-    const req = splitRequest(card({ attempts: 6, reviewNotes: [FAILURES[0]] }));
+    const req = splitRequest(card({ attempts: 0, reviewNotes: [FAILURES[0]] }));
     expect(req).toContain("CreateSupplierRelation");
-    expect(req).toContain("failed review 6 times");
+    // The lifetime count, not the per-run counter a new run just zeroed.
+    expect(req).toContain(`failed review ${FAILURES.length} times`);
     // It must not quietly become a new breakdown of its own.
     expect(req).toContain("no more, no less");
     expect(req).toContain("Do not `invent work".replace("`", ""));
