@@ -186,3 +186,18 @@ function freeId(board: Board, parentId: string, index: number): string {
   }
   return `${parentId}-${index}`;
 }
+
+/**
+ * A card a PERSON retired, which a run must not quietly pick up again.
+ *
+ * Abandonment by exhaustion is deliberately reversible: measured over one day on one board, thirty tasks
+ * were abandoned and twenty-nine later passed review unchanged, so a new run gives them all another go. A
+ * human abandonment is the opposite kind of statement — it is a decision about the work, not a report about
+ * the ladder — and reviving it silently undoes the one thing manual intervention is for.
+ *
+ * Observed: two cards retired by hand as duplicates of already-merged work were back IN-PROGRESS one minute
+ * into the next run, re-implementing what had merged.
+ */
+export function humanAbandoned(card: Card): boolean {
+  return card.column === "ABANDONED" && card.stageHistory.some((h) => h.action === "human:abandon");
+}

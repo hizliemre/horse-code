@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { Board } from "../../src/board/board.js";
 import {
-  shouldSplit, failureSubjects, applySplit, splitRequest, reviewFailures, SPLIT_AFTER_ATTEMPTS, MIN_PIECES,
+  shouldSplit, failureSubjects, applySplit, splitRequest, reviewFailures, humanAbandoned,
+  SPLIT_AFTER_ATTEMPTS, MIN_PIECES,
 } from "../../src/engine/split-card.js";
 import type { Card } from "../../src/board/board.js";
 
@@ -210,7 +211,41 @@ describe("the pieces reach the scheduler", () => {
 describe("a replaced card never runs again", () => {
   it("the wave engine drops it from pending and from parking", async () => {
     const src = await (await import("node:fs/promises")).readFile("src/engine/wave-engine.ts", "utf8");
-    expect(src).toContain("if (wasSplit(c))");
+    expect(src).toContain("wasSplit(c)");
     expect(src).toMatch(/pending\.delete\(c\.id\); parked\.delete\(c\.id\)/);
+  });
+});
+
+/**
+ * Abandonment by exhaustion is deliberately reversible — thirty tasks were abandoned on one board and
+ * twenty-nine later passed unchanged. A human abandonment is the opposite kind of statement: a decision
+ * about the work, not a report about the ladder.
+ *
+ * Observed: two cards retired by hand as duplicates of already-merged work were back IN-PROGRESS one minute
+ * into the next run, re-implementing what had merged.
+ */
+describe("a card a person retired stays retired", () => {
+  const abandoned = (byHuman: boolean): Card => card({
+    column: "ABANDONED",
+    stageHistory: [
+      { role: "team-lead", action: byHuman ? "human:abandon" : "abandoned", note: "…" },
+      { role: "team-lead", action: "→ABANDONED" },
+    ],
+  });
+
+  it("tells a human decision from a used-up ladder", () => {
+    expect(humanAbandoned(abandoned(true))).toBe(true);
+    expect(humanAbandoned(abandoned(false))).toBe(false);
+  });
+
+  /** Still running is not abandoned, whatever the history says about earlier attempts. */
+  it("says nothing about a card that is not abandoned now", () => {
+    expect(humanAbandoned(card({ column: "TODO", stageHistory: abandoned(true).stageHistory }))).toBe(false);
+  });
+
+  it("the wave engine keeps it out of pending and out of parking", async () => {
+    const src = await (await import("node:fs/promises")).readFile("src/engine/wave-engine.ts", "utf8");
+    expect(src).toMatch(/!done\.has\(c\.id\) && !humanAbandoned\(c\)/);
+    expect(src).toContain("wasSplit(c) || humanAbandoned(c)");
   });
 });
