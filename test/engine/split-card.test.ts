@@ -41,6 +41,23 @@ describe("deciding to cut a card up", () => {
   });
 
   /**
+   * A split is not idempotent by nature, and the board makes that dangerous: the parent is retired but
+   * `exhausted` parking wakes on any merge, and the first thing to merge after a split is one of its own
+   * pieces. Its failure count never falls, so a second scheduling split it AGAIN — observed live, T004
+   * carrying two `split:into` events, its second pair re-implementing what the first had already merged.
+   */
+  it("never cuts up a card that has already been replaced", () => {
+    const once = card({
+      stageHistory: [
+        ...card().stageHistory,
+        { role: "team-lead", action: "split:into", note: "19 review failures over 11 areas → T004a, T004b" },
+      ],
+    });
+    expect(reviewFailures(once)).toBeGreaterThanOrEqual(SPLIT_AFTER_ATTEMPTS);
+    expect(shouldSplit(once)).toBe(false);
+  });
+
+  /**
    * `attempts` is reset at the start of every run, so a card that failed nineteen times across four runs
    * comes back reading zero. Right for choosing a TIER, wrong for noticing a card is too big — it would need
    * five fresh failures before anyone looked.
@@ -181,5 +198,19 @@ describe("the pieces reach the scheduler", () => {
   it("files an already-merged newcomer as done", async () => {
     const src = await (await import("node:fs/promises")).readFile("src/engine/wave-engine.ts", "utf8");
     expect(src).toMatch(/if \(c\.column === "MERGED"\) \{ done\.add\(c\.id\); continue; \}/);
+  });
+});
+
+/**
+ * A retired parent is not enough on its own. `exhausted` parking wakes on ANY merge, and the first thing to
+ * merge after a split is one of its own pieces — so the parent woke, was scheduled, and did its work a
+ * second time. Observed live: T004 with two `split:into` events, the second pair re-implementing behind the
+ * first pair that had already merged.
+ */
+describe("a replaced card never runs again", () => {
+  it("the wave engine drops it from pending and from parking", async () => {
+    const src = await (await import("node:fs/promises")).readFile("src/engine/wave-engine.ts", "utf8");
+    expect(src).toContain("if (wasSplit(c))");
+    expect(src).toMatch(/pending\.delete\(c\.id\); parked\.delete\(c\.id\)/);
   });
 });

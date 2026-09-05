@@ -55,7 +55,21 @@ export function failureSubjects(card: Card): string[] {
  * and leaving the card alone.
  */
 export function shouldSplit(card: Card, after = SPLIT_AFTER_ATTEMPTS): boolean {
-  return reviewFailures(card) >= after;
+  return !wasSplit(card) && reviewFailures(card) >= after;
+}
+
+/**
+ * Has this card already been replaced by pieces?
+ *
+ * A split is not idempotent by nature and the board makes that dangerous: the parent is retired, but
+ * `exhausted` parking wakes on any merge, and the very first thing that merges after a split is one of its
+ * own pieces. Its failure count never falls, so the second scheduling split it again.
+ *
+ * Observed live: T004 carries TWO `split:into` events. Its first pair delivered the work and merged; its
+ * second pair was re-implementing the same feature from scratch behind them.
+ */
+export function wasSplit(card: Card): boolean {
+  return card.stageHistory.some((h) => h.action === "split:into");
 }
 
 /**

@@ -12,6 +12,7 @@ import { describeTimings } from "./timings.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { telemetry } from "../obs/telemetry.js";
+import { wasSplit } from "./split-card.js";
 
 export interface WaveEngineDeps extends EscalationDeps {
   manager: WorktreeManager;
@@ -310,6 +311,15 @@ export async function runReady(
   const known = new Set([...pending, ...done]);
   const absorbNewCards = (): void => {
     for (const c of board.list()) {
+      /**
+       * A card that was replaced by pieces never runs again, however it is reached.
+       *
+       * Retiring it is not enough on its own: `exhausted` parking wakes on ANY merge, and the first thing to
+       * merge after a split is one of its own pieces — so the parent woke, was scheduled, and its work was
+       * done a second time. Observed live: T004 split twice, its second pair re-implementing behind the
+       * first pair that had already merged.
+       */
+      if (wasSplit(c)) { pending.delete(c.id); parked.delete(c.id); known.add(c.id); continue; }
       if (c.id === REVISION_CARD || known.has(c.id)) continue;
       known.add(c.id);
       if (c.column === "MERGED") { done.add(c.id); continue; }
