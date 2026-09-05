@@ -13,6 +13,7 @@ import { runUpstream } from "./upstream.js";
 import { syncMainBranch } from "./sync-main.js";
 import { defaultGitRunner } from "../worktree/git.js";
 import { runProjectManager } from "./project-manager.js";
+import { humanAbandoned } from "./split-card.js";
 import { auditBreakdown, repairRequest } from "./task-audit.js";
 import { runWaves } from "./wave-engine.js";
 import type { WaveEngineResult } from "./wave-engine.js";
@@ -481,8 +482,18 @@ export async function runJob(
        * `attempts: 0`. That counter is the whole distinction — a card that was tried and gave up has a
        * number there, and is left alone.
        */
+      /**
+       * …but never one a PERSON retired. That is a decision about the work, not a report about the ladder,
+       * and `attempts: 0` cannot tell them apart: a card abandoned by hand after a run reset its counter
+       * looks exactly like one that was never tried.
+       *
+       * Measured: two cards retired as duplicates of already-merged work were reopened here and were back in
+       * REVIEW nine minutes into the next run, re-implementing what had merged. Guarding the wave engine was
+       * not enough — this runs BEFORE it and moves the card out of ABANDONED, so by the time the engine
+       * looked, the mark it was checking for was gone.
+       */
       const neverTried = board.list().filter((c) => c.id !== REVISION_CARD
-        && c.column === "ABANDONED" && (c.attempts ?? 0) === 0);
+        && c.column === "ABANDONED" && (c.attempts ?? 0) === 0 && !humanAbandoned(c));
       /**
        * The revision row is left wherever the last run stopped, and it is not a task, so nothing will ever
        * move it again. Measured after the fix that stopped it being SCHEDULED: the board still reported

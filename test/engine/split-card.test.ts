@@ -249,3 +249,19 @@ describe("a card a person retired stays retired", () => {
     expect(src).toContain("wasSplit(c) || humanAbandoned(c)");
   });
 });
+
+/**
+ * Guarding the wave engine was not enough. `job.ts` reopens never-tried ABANDONED cards BEFORE the engine
+ * runs, and moving them out of ABANDONED erases the very mark the engine checks for — so a card retired by
+ * hand was in REVIEW nine minutes into the next run, re-implementing work that had already merged.
+ *
+ * `attempts: 0` cannot tell the two apart: a card abandoned by hand after a run reset its counter looks
+ * exactly like one that was never tried.
+ */
+describe("the earlier reopen respects a human decision too", () => {
+  it("job.ts excludes a human abandonment from the never-tried set", async () => {
+    const src = await (await import("node:fs/promises")).readFile("src/engine/job.ts", "utf8");
+    const line = src.split("\n").find((l) => l.includes('c.column === "ABANDONED" && (c.attempts ?? 0) === 0')) ?? "";
+    expect(line).toContain("!humanAbandoned(c)");
+  });
+});
