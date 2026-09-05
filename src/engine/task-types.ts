@@ -150,6 +150,13 @@ export type RunnableRole = ImplementerRole | "senior-coder" | "senior-designer";
 
 export interface Verdict {
   /**
+   * The card was CUT UP rather than attempted again — these are the pieces that replaced it.
+   *
+   * A fail with `split` is not a task that failed: it is a task that turned into several, and the wave
+   * engine has new work to schedule rather than a dead end to report.
+   */
+  split?: string[];
+  /**
    * Review lenses that approved this change and need not be asked again on the next attempt.
    *
    * Accumulated across attempts on the card, so a returning task re-runs only what actually objected.

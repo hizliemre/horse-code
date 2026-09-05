@@ -6,6 +6,8 @@ import type { Verdict, RunnableRole } from "./task-types.js";
 import type { ReviewDeps } from "./review.js";
 import { telemetry } from "../obs/telemetry.js";
 import { isCatalogRejection, isProviderOutage, isUnknownModelError } from "../core/failures.js";
+import { shouldSplit, applySplit, failureSubjects } from "./split-card.js";
+import type { Piece } from "./split-card.js";
 
 export type HumanDecision =
   | { action: "accept" }
@@ -33,6 +35,15 @@ export function autonomousAskHuman(maxRetries = 2): AskHuman {
 export interface EscalationDeps extends ReviewDeps {
   rounds: number; // turns per tier (config escalation.rounds; default 3)
   askHuman: AskHuman;
+  /**
+   * Cuts a card that keeps failing into pieces. Absent, the ladder behaves as it always did.
+   *
+   * Injected rather than built here because it makes a model call, and the ladder is otherwise pure
+   * bookkeeping over the board — a test drives it with no provider at all.
+   */
+  splitCard?: (card: Card) => Promise<Piece[]>;
+  /** Where a one-line notice goes, when the board does something a person would want to see. */
+  note?: (text: string) => void;
 }
 
 /**
@@ -190,6 +201,29 @@ export async function runTaskWithEscalation(
 ): Promise<Verdict> {
   const task = board.get(taskId);
   if (!task) throw new Error(`runTaskWithEscalation: unknown task: ${taskId}`);
+
+  /**
+   * A card that has failed this many times is CUT UP, not escalated again.
+   *
+   * The ladder's answer to repeated failure is a stronger model, which is right for a hard task and wrong
+   * for a broad one — a stronger model does not shrink the surface a reviewer has to hold. Measured on the
+   * card that ended a run: 19 review failures naming ten distinct areas, then abandonment, and seventeen
+   * cards abandoned behind it without ever being attempted. See `split-card.ts`.
+   *
+   * Placed ahead of the ladder rather than at its end so the decision is made while there is still work left
+   * to do with the answer. Waiting for exhaustion means splitting a card nobody has budget to build.
+   */
+  if (shouldSplit(task) && deps.splitCard) {
+    const pieces = await deps.splitCard(task);
+    const ids = applySplit(board, taskId, pieces);
+    if (ids.length) {
+      const note = `${task.attempts} attempts over ${failureSubjects(task).length} areas → split into ${ids.join(", ")}`;
+      deps.note?.(`✂️ **${taskId}** ${note}`);
+      return { verdict: "fail", notes: [note], split: ids };
+    }
+    // Nothing to cut — the failures are one thing, and the ladder is the right instrument after all.
+    board.appendStage(taskId, { role: "team-lead", action: "split:declined", note: "nothing separable found" });
+  }
 
   const noChangeCount = noChangeStreak(task);
   if (noChangeCount >= 3) {

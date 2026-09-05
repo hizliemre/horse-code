@@ -4,6 +4,9 @@ import type { PermissionRequest } from "./permission/engine.js";
 import { buildTeamRegistry, buildCouncilRegistry, type ReviewStage } from "./engine/review.js";
 import { InjectionLog } from "./engine/memory-retrieval.js";
 import { MAX_PARALLEL_TASKS } from "./engine/wave-engine.js";
+import { proposeSplit } from "./engine/split-card.js";
+import { SHORT_CALL_MS } from "./agent/deadline.js";
+import { ToolRegistry } from "./tools/registry.js";
 import { Timings } from "./engine/timings.js";
 import { ProposalQueue } from "./engine/memory-proposals.js";
 import { REQUIRED_ROLES, DEFAULT_PROMPTS, DEFAULT_ROLE_SKILLS, SPEC_TEAM, PLAN_TEAM, CODE_TEAM, DEFAULT_COUNCIL } from "./prompts.js";
@@ -190,6 +193,23 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
     rounds: 3,
     maxParallel: opts.config.maxParallel ?? MAX_PARALLEL_TASKS,
     askHuman: opts.askHuman,
+    /**
+     * Cutting a stuck card up, asked of the role that owns breakdowns in the first place.
+     *
+     * Read-only tools: this is a planning question about a card that already exists, and a splitter with a
+     * writer's toolset would be tempted to start doing the work it is describing.
+     */
+    splitCard: async (card: import("./board/board.js").Card) => {
+      const resolved = roleRegistry.resolve("project-manager");
+      return proposeSplit({
+        provider: opts.provider, ...resolved,
+        tools: new ToolRegistry(),   // a planning question about a card that exists; it needs no tools
+        messages: [], permission, approve: opts.approve, cwd: process.cwd(), signal: opts.signal,
+        // It reads a card and answers; anything longer is exploring, which is not what was asked.
+        maxTurns: 3,
+        perAttemptMs: SHORT_CALL_MS,
+      }, card);
+    },
   };
 }
 

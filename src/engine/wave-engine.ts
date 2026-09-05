@@ -296,7 +296,30 @@ export async function runReady(
     }
   };
 
+  /**
+   * Cards that appeared after the run started — the pieces a split cut a stuck card into.
+   *
+   * `pending` is built once, from a snapshot taken before the loop; `depsOf` and `filesOf` read the board
+   * live, so everything else already copes with the board changing under it. Without this the pieces are
+   * created, wired to their dependents, and never scheduled: the split would replace a card that at least
+   * ran with cards that never do, which is strictly worse than leaving it alone.
+   *
+   * Keyed on "not seen before" rather than on the split itself, so it also covers any other way a card can
+   * arrive mid-run.
+   */
+  const known = new Set([...pending, ...done]);
+  const absorbNewCards = (): void => {
+    for (const c of board.list()) {
+      if (c.id === REVISION_CARD || known.has(c.id)) continue;
+      known.add(c.id);
+      if (c.column === "MERGED") { done.add(c.id); continue; }
+      pending.add(c.id);
+      deps.note?.(`➕ **${c.id}** ${c.title}`);
+    }
+  };
+
   while (pending.size > 0 || running.size > 0 || parked.size > 0) {
+    absorbNewCards();
     parkUnreachable();
     const limit = ceiling();
     for (const id of [...pending]) {

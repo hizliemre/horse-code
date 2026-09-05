@@ -58,6 +58,8 @@ export interface JobDeps extends ReviewDeps {
   prAdapter: RevisionPRAdapter;
   rounds: number;
   askHuman: AskHuman;
+  /** Cuts a card that keeps failing into pieces — see `split-card.ts`. Absent, the ladder is unchanged. */
+  splitCard?: (card: import("../board/board.js").Card) => Promise<import("./split-card.js").Piece[]>;
   /** How many tasks of one wave may run at once (see MAX_PARALLEL_TASKS). */
   maxParallel?: number;
 }
