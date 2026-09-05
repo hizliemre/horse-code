@@ -130,6 +130,8 @@ describe("replacing a card with its pieces", () => {
     const note = b.get("T004")!.stageHistory.find((h) => h.action === "split:into")?.note ?? "";
     expect(note).toContain("T004a, T004b");
     expect(note).toContain("areas");
+    // The lifetime count. Live, this read "0 attempts" on the very run that cut the card up.
+    expect(note).toContain(`${FAILURES.length} review failures`);
   });
 
   it("records on each piece where it came from", () => {

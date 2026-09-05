@@ -156,7 +156,9 @@ export function applySplit(board: Board, parentId: string, pieces: readonly Piec
 
   board.appendStage(parentId, {
     role: "team-lead", action: "split:into",
-    note: `${parent.attempts} attempts over ${failureSubjects(parent).length} areas → ${ids.join(", ")}`,
+    // The LIFETIME count, for the same reason the brief uses it: `attempts` is reset each run, so the record
+    // of why this card was cut would have read "0 attempts" on the very run that cut it. It did.
+    note: `${reviewFailures(parent)} review failures over ${failureSubjects(parent).length} areas → ${ids.join(", ")}`,
   });
   board.move(parentId, "ABANDONED", "team-lead");
   return ids;

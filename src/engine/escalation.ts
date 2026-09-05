@@ -6,7 +6,7 @@ import type { Verdict, RunnableRole } from "./task-types.js";
 import type { ReviewDeps } from "./review.js";
 import { telemetry } from "../obs/telemetry.js";
 import { isCatalogRejection, isProviderOutage, isUnknownModelError } from "../core/failures.js";
-import { shouldSplit, applySplit, failureSubjects } from "./split-card.js";
+import { shouldSplit, applySplit, failureSubjects, reviewFailures } from "./split-card.js";
 import type { Piece } from "./split-card.js";
 
 export type HumanDecision =
@@ -217,7 +217,7 @@ export async function runTaskWithEscalation(
     const pieces = await deps.splitCard(task);
     const ids = applySplit(board, taskId, pieces);
     if (ids.length) {
-      const note = `${task.attempts} attempts over ${failureSubjects(task).length} areas → split into ${ids.join(", ")}`;
+      const note = `${reviewFailures(task)} review failures over ${failureSubjects(task).length} areas → split into ${ids.join(", ")}`;
       deps.note?.(`✂️ **${taskId}** ${note}`);
       return { verdict: "fail", notes: [note], split: ids };
     }
