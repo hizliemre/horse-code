@@ -29,6 +29,11 @@ import { readTelemetry, summarize, describeReport, type RunReport as MonitorRepo
 import { writeHeapSnapshot, estimateFreezeSeconds } from "../obs/telemetry.js";
 import { TelemetryTail } from "../obs/tail.js";
 import { WatchManager, type WatchStatus } from "../obs/watch.js";
+import {
+  loadGuide, renderStep, recordOutcome, progressLine, scenarioOutcome,
+  type StepResult, type SmokeStatus,
+} from "../engine/smoke-test.js";
+import { readFileSync, writeFileSync } from "node:fs";
 
 const COLUMNS: Column[] = ["TODO", "IN-PROGRESS", "REVIEW", "DONE", "MERGED", "PARKED", "ABANDONED"];
 
@@ -1688,6 +1693,73 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     );
   };
 
+  /**
+   * Walks the finished feature's manual verification, one step at a time, and records what was seen.
+   *
+   * A feature run writes this guide and cannot execute it: it read the code and could not start a database,
+   * a log stack or a browser, so every row of its table says `kod üzerinden doğrulandı`. The guide itself
+   * asks for what nobody was doing — "canlı doğrulama yapıldığında ilgili satır … `geçti` veya `başarısız`
+   * durumuna güncellenir". This is that pass, and it writes the answer back where the guide asked for it.
+   *
+   * One step at a time, waiting for each: handing over a scenario's whole paragraph is what makes a manual
+   * pass drift, and the guide writes four or five checks per paragraph.
+   */
+  const doSmokeTest = async (): Promise<void> => {
+    const guide = loadGuide(process.cwd());
+    if ("error" in guide) { controller.note(guide.error); return; }
+    controller.note(
+      `🧪 **${guide.title}**\n\n\`${guide.slug}\` · ${guide.steps.length} adım · ${guide.scenarios.length} senaryo`,
+    );
+    if (guide.preconditions.length) {
+      controller.note(`**Başlamadan önce**\n${guide.preconditions.map((p) => `- ${p}`).join("\n")}`);
+    }
+    /**
+     * Nothing here can reach the database or the log stack, and saying so once is the difference between a
+     * record and a guess: the project has no connection string in its settings and no Loki client on the
+     * machine. What goes into the guide is what the person pastes back.
+     */
+    controller.note(
+      "Her adımda ne gördüğünü yapıştır — API yanıtı, DB satırı, log kaydı. "
+      + "horse-code veritabanına ve Loki'ye kendisi bakmaz; kanıt senin gözlemin olarak kaydedilir.",
+    );
+    if ((await controller.ask("Ortam hazır mı?", { options: ["Başla", "İptal"] })) !== "Başla") {
+      controller.note("Bırakıldı — rehberde hiçbir şey değişmedi.");
+      return;
+    }
+
+    let markdown = readFileSync(guide.path, "utf8");
+    let batch: StepResult[] = [];
+    const flush = (index: number): void => {
+      if (!batch.length) return;
+      const { status, evidence } = scenarioOutcome(batch);
+      markdown = recordOutcome(markdown, index, status, evidence);
+      writeFileSync(guide.path, markdown);
+      controller.note(`📝 _${guide.scenarios[index]}_ → **${status}**`);
+      batch = [];
+    };
+
+    for (const [i, step] of guide.steps.entries()) {
+      // A scenario's row is written when its last step is done — per step, each would overwrite the last.
+      const previous = guide.steps[i - 1];
+      if (previous && previous.scenarioIndex !== step.scenarioIndex) flush(previous.scenarioIndex);
+
+      controller.note(renderStep(step, guide.steps.length));
+      const answer = await controller.ask("Sonuç?", { options: ["geçti", "başarısız", "atla", "durdur"] });
+      if (answer === "durdur") {
+        flush(step.scenarioIndex);
+        controller.note(`Durduruldu — ${step.n - 1}/${guide.steps.length} adım kaydedildi.`);
+        return;
+      }
+      const status: SmokeStatus = answer === "geçti" ? "geçti" : answer === "başarısız" ? "başarısız" : "çalıştırılmadı";
+      const evidence = status === "çalıştırılmadı" ? ""
+        : await controller.ask("Ne gözlemledin? (API yanıtı / DB satırı / log)");
+      batch.push({ step, status, evidence });
+      controller.note(progressLine(step.n, guide.steps.length));
+    }
+    flush(guide.steps[guide.steps.length - 1].scenarioIndex);
+    controller.note(`✅ Bitti — ${guide.path} güncellendi.`);
+  };
+
   const doGraph = (arg: string): void => {
     if (!graphStatus || !buildGraph) { controller.note("The project graph is not available."); return; }
     if (arg.trim().toLowerCase() === "build") {
@@ -1822,6 +1894,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/mcp") doMcp("");
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");
+    else if (c.name === "/start-smoke-test") void doSmokeTest();
     else if (c.name === "/graph") doGraph("");
     else if (c.name === "/clean-worktrees") doCleanWorktrees("");
     else if (c.name === "/paste") pasteImage();
@@ -2330,6 +2403,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
               if (cmd.startsWith("/monitor ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMonitor(trimmed.slice("/monitor".length).trim()); return; }
               if (cmd.startsWith("/parallel ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doParallel(trimmed.slice("/parallel".length).trim()); return; }
               if (cmd.startsWith("/mcp ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doMcp(trimmed.slice("/mcp".length).trim()); return; }
+              if (cmd === "/start-smoke-test") { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); void doSmokeTest(); return; }
               if (cmd.startsWith("/graph ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doGraph(trimmed.slice("/graph".length).trim()); return; }
               if (cmd.startsWith("/clean-worktrees ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doCleanWorktrees(trimmed.slice("/clean-worktrees".length).trim()); return; }
               if (cmd.startsWith("/continue-from-claude ")) { setScroll(0); setDraft(""); setDraftCursor(0); usedPastes(); controller.echoCommand(trimmed); doContinueFromClaude(trimmed.slice("/continue-from-claude".length).trim()); return; }

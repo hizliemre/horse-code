@@ -30,6 +30,7 @@ export const COMMANDS: SlashCommand[] = [
   { name: "/monitor", desc: "Where the run's time is going (/monitor enable shows the panel, disable hides it, log shows the file, heap writes a snapshot)" },
   { name: "/watch", desc: "Watch any command — each line it prints becomes an event (/watch <cmd>, /watch stop N)" },
   { name: "/paste", desc: "Put the clipboard's image into the input (same as Ctrl+V, for terminals that swallow it)" },
+  { name: "/start-smoke-test", desc: "Walk the finished feature's manual verification one step at a time, and record what you saw into its guide" },
   { name: "/help", desc: "List the available commands" },
   { name: "/clear", desc: "Clear the conversation" },
   { name: "/exit", desc: "Quit horse-code" },
