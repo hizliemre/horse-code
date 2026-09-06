@@ -75,6 +75,40 @@ describe("verifyAcceptance (the completion gate)", () => {
     expect(res.unmet[0]).toMatch(/not reported by the acceptance gate/);
   });
 
+  /**
+   * The gate asks a model to restate each criterion, then pairs the restatement back to the card by string.
+   * A criterion that opens with an inline-code span made that pairing depend on the model reproducing
+   * Markdown markup verbatim — so a real, satisfied criterion was reported as "not reported by the gate" and
+   * read like a missing implementation. These are card T008's actual strings.
+   */
+  it("pairs a criterion whose restatement dropped the Markdown markup", async () => {
+    const crit = [
+      "Oluşturma endpoint'i yalnız kabul edilmiş ve üyelik doğrulaması geçen ilişki için pozitif tedarik fiyatı ile geçerli para birimini kabul eder.",
+      "Listeleme, fiyat güncelleme ve pasifleştirme endpoint'leri tek aktif eşleşme kısıtını ve domain hata kodlarını uygular.",
+      "`DeactivateRelationProductMatches.cs`, sonlandırılan ilişkinin eşleşmelerini yalnız gelecekteki yönlendirmeler için pasifleştirir; mevcut atamaların fiyat anlık görüntülerini değiştirmez.",
+      "`dotnet build` başarıyla tamamlanır.",
+    ];
+    // What the model actually returns: backticks stripped, the trailing period dropped.
+    const restated = crit.map((c) => c.replace(/`/g, "").replace(/\.$/, ""));
+    const p = provider(restated.map((c) => ({ criterion: c, met: true, evidence: "read the file" })));
+    const res = await verifyAcceptance(gdeps(p), card(crit), dir);
+    expect(res.unmet).toEqual([]);
+    expect(res.passed).toBe(true);
+  });
+
+  /**
+   * The guard that keeps the loosened pairing honest: silence must stay non-evidence. Two criteria and one
+   * unrelated check is ambiguous, so nothing is paired by elimination.
+   */
+  it("still refuses to pair by elimination when more than one criterion is unaccounted for", async () => {
+    const crit = ["`Foo.cs` pasifleştirir", "`Bar.cs` doğrular"];
+    const p = provider([{ criterion: "something else entirely", met: true, evidence: "saw it" }]);
+    const res = await verifyAcceptance(gdeps(p), card(crit), dir);
+    expect(res.passed).toBe(false);
+    expect(res.unmet).toHaveLength(2);
+    for (const u of res.unmet) expect(u).toMatch(/not reported by the acceptance gate/);
+  });
+
   it("a gate that cannot run treats the criteria as UNMET (never waves the task through)", async () => {
     const broken: Provider = { async *chat() { yield { type: "text-delta", text: "I think it is fine" }; yield { type: "done", finishReason: "stop" }; } };
     const res = await verifyAcceptance(gdeps(broken), card(["src/models/todo.ts exports a Todo type"]), dir);
