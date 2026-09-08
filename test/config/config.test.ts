@@ -182,3 +182,60 @@ describe("loadConfig", () => {
     expect(cfg.specKit.version).toBe("v0.13.2");
   });
 });
+
+/**
+ * Connected accounts, and the two ways this schema silently threw them away.
+ *
+ * Both were found by connecting a real z.ai account and noticing it never appeared on the start-up line. The
+ * cause was not the panel: `loadConfig` had already dropped it, and dropped a great deal more with it.
+ */
+describe("the accounts a subscription writes here", () => {
+  const withAccounts = (accounts: unknown) => (p: string) =>
+    p === "/home/.horsecode/config.json"
+      ? JSON.stringify({ apiKey: "sk-global", roles: { coder: { models: ["opus"] } }, accounts })
+      : undefined;
+
+  /**
+   * The kinds were spelled out as `["claude", "codex"]` here while being declared in `CLI_KINDS`, so every
+   * account of a kind added since was rejected on the way in.
+   */
+  it("accepts every CLI horse-code can connect", () => {
+    const accounts = [
+      { kind: "claude", name: "a@x.com", configDir: "/p/c" },
+      { kind: "codex", name: "codex-2", configDir: "/p/x" },
+      { kind: "grok", name: "grok-2", configDir: "/p/g" },
+      { kind: "zai", name: "zai-2", configDir: "/p/z" },
+    ];
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: withAccounts(accounts) });
+    expect(cfg.accounts.map((a) => a.kind)).toEqual(["claude", "codex", "grok", "zai"]);
+  });
+
+  /**
+   * The signed-in default is exactly the entry with NO directory — `withAmbient` records it that way on
+   * purpose, because naming a directory switches Claude Code off its Keychain session. `configDir` was
+   * required, so the one entry written to stop a second account quietly retiring the first was unloadable.
+   */
+  it("keeps the signed-in default, which has no directory at all", () => {
+    const accounts = [{ kind: "claude", name: "a@x.com", email: "a@x.com", plan: "max" }];
+    const cfg = loadConfig({ cwd: "/proj", home: "/home", env: {}, readFile: withAccounts(accounts) });
+    expect(cfg.accounts).toHaveLength(1);
+    expect(cfg.accounts[0]).not.toHaveProperty("configDir");
+  });
+
+  /**
+   * What a bad row may cost, and it used to be everything.
+   *
+   * The loader reads `parsed.success ? parsed.data : {}`, so one rejected account discarded the WHOLE global
+   * config. Measured on a live one: 64 role chains and an API key, gone silently, for every session after a
+   * z.ai account was connected. The blast radius is now the accounts list.
+   */
+  it("does not let one malformed account discard the whole config", () => {
+    const cfg = loadConfig({
+      cwd: "/proj", home: "/home", env: {},
+      readFile: withAccounts([{ kind: "nonesuch", name: "x" }]),
+    });
+    expect(cfg.apiKey).toBe("sk-global");
+    expect(Object.keys(cfg.roles)).toEqual(["coder"]);
+    expect(cfg.accounts).toEqual([]);
+  });
+});

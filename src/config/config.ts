@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { PermissionMode } from "../core/types.js";
+import { CLI_KINDS, type CliKind } from "../agents/cli-agent.js";
 
 export interface RoleConfig {
   models: string[];
@@ -65,7 +66,7 @@ export interface ResolvedConfig {
    * login and nothing about this exists. Written by `hcode add-provider`; see `AccountPool` for why the
    * order matters.
    */
-  accounts: { kind: "claude" | "codex"; name: string; configDir: string; email?: string; plan?: string }[];
+  accounts: { kind: CliKind; name: string; configDir?: string; email?: string; plan?: string }[];
   /**
    * Where `/graph trace` writes, repo-relative. Empty = `.horsecode/traces`.
    *
@@ -172,14 +173,33 @@ const fileSchema = z
     council: z.object({ members: z.array(reviewerSchema) }).optional(),
     specKit: z.object({ version: z.string() }).optional(),
     modelSources: z.array(z.string()).optional(),
-    // Logged-in profile directories, in spill order. A path each, never a credential.
+    /**
+     * Logged-in profile directories, in spill order. A path each, never a credential.
+     *
+     * Two things here were wrong in a way that could not be seen from this file, and both were found by
+     * connecting a real account.
+     *
+     * The kinds were spelled out — `["claude", "codex"]` — and every entry of a kind added since was
+     * rejected. `CLI_KINDS` is where they are declared, so this reads them rather than repeating them, and a
+     * fifth subscription cannot be half-added again.
+     *
+     * `configDir` was REQUIRED, and the signed-in default is precisely the entry that has none: `withAmbient`
+     * records it without a directory, deliberately, because Claude Code keeps that session in the Keychain
+     * and naming a directory switches it to file credentials. So the one entry written to stop a second
+     * account quietly retiring the first was itself unloadable.
+     *
+     * `.catch([])` bounds what a bad row can cost. The loader reads `parsed.success ? parsed.data : {}`, so
+     * a single rejected entry did not merely drop that account — it discarded the WHOLE global config.
+     * Measured on a live one: the file held 64 role chains and an API key, and with one z.ai entry present
+     * `loadConfig` returned zero roles and no key, silently, for every session since it was connected.
+     */
     accounts: z.array(z.object({
-      kind: z.enum(["claude", "codex"]),
+      kind: z.enum(CLI_KINDS),
       name: z.string(),
-      configDir: z.string(),
+      configDir: z.string().optional(),
       email: z.string().optional(),
       plan: z.string().optional(),
-    })).optional(),
+    })).catch([]).optional(),
     traceDir: z.string().optional(), // where /graph trace writes; empty = .horsecode/traces
     mainBranch: z.string().optional(), // the branch a resumed session syncs from; asked once, then remembered
     // Bounded: below 1 nothing runs; above 32 the git merge lock, not the models, becomes the limit.
