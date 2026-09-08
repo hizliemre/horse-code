@@ -185,7 +185,7 @@ describe("a placeholder is deleted whole", () => {
  * absolute path, so a message that STARTS with a pasted screenshot begins with `/` after expansion — and the
  * whole thing was parsed as a slash command.
  *
- * Measured from a live run: "Unknown command: /Users/hizliemre/.horsecode/pastes/paste-86711-2.png A1
+ * Measured from a live run: "Unknown command: /Users/…/.horsecode/pastes/paste-86711-2.png A1
  * doldurdu ibaresi gelmiş ama…" — eighty minutes of verification, and the sentence carrying the evidence was
  * answered with "type / to see the available commands".
  *
