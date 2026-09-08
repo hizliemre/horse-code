@@ -1,5 +1,4 @@
-import { spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -84,40 +83,6 @@ export function hasZaiProfile(dir: string): boolean {
       && env.ANTHROPIC_AUTH_TOKEN.length > 0;
   } catch {
     return false;
-  }
-}
-
-/**
- * Reads a key the person types, without putting it on their screen.
- *
- * Read from `/dev/tty` rather than from stdin, so it still works when this process's stdin is a pipe, and
- * with the terminal's echo turned off around the read — a key pasted into a visible prompt survives in
- * scrollback, in a screen share, and in whatever recorded the session. It is never passed as an argument
- * either, which would put it in the process table and in shell history.
- *
- * `undefined` when there is no terminal to ask: a non-interactive caller gets a clean refusal instead of a
- * process that blocks forever waiting for a person who is not there.
- */
-export function promptSecret(): string | undefined {
-  let fd: number;
-  try { fd = openSync("/dev/tty", "r"); } catch { return undefined; }
-  const hushed = spawnSync("stty", ["-echo"], { stdio: ["inherit", "ignore", "ignore"] }).status === 0;
-  try {
-    const buf = Buffer.alloc(1);
-    let out = "";
-    for (;;) {
-      let n = 0;
-      try { n = readSync(fd, buf, 0, 1, null); } catch { break; }
-      if (n === 0) break;
-      const ch = buf.toString("utf8");
-      if (ch === "\n" || ch === "\r") break;
-      out += ch;
-    }
-    return out.trim() || undefined;
-  } finally {
-    // Restored even when the read threw: leaving a terminal with echo off makes the shell look broken.
-    if (hushed) spawnSync("stty", ["echo"], { stdio: ["inherit", "ignore", "ignore"] });
-    closeSync(fd);
   }
 }
 

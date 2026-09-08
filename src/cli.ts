@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { sessionBase } from "./engine/session-scope.js";
-import { readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
 import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,33 +11,11 @@ import { addProvider } from "./agents/add-provider.js";
 import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
 import { CLI_KINDS, type CliKind } from "./agents/cli-agent.js";
-import { promptSecret, writeZaiProfile, verifyZaiKey } from "./agents/zai-profile.js";
+import { writeZaiProfile, verifyZaiKey } from "./agents/zai-profile.js";
+import { promptSecret, confirm } from "./agents/prompt.js";
+import { removeProvider, removeUsage } from "./agents/remove-provider.js";
 import { ZAI_MODELS } from "./agents/cli-models.js";
 
-/**
- * Connects a z.ai account: take the key, confirm it against the real endpoint, and only then write it.
- *
- * The confirmation cannot be skipped. z.ai issues an ordinary bearer token, and Claude Code calls a profile
- * connected the moment one is present — measured, with the token "totally-bogus". So the only thing that can
- * tell a live key from a dead one is a call, and one is made here so the failure lands on the person who can
- * fix it rather than on the first task of the next run.
- *
- * Checked BEFORE writing, which is the order a live key corrected. The first version wrote the profile and
- * then verified, so a key the endpoint refused was left sitting on disk anyway — a credential stored for an
- * account that was never connected.
- */
-async function connectZai(dir: string): Promise<{ ok: boolean; error?: string }> {
-  process.stdout.write("z.ai API key (not shown as you type): ");
-  const token = promptSecret();
-  process.stdout.write("\n");
-  if (!token) return { ok: false, error: "no key was entered" };
-  console.log(`Asking ${ZAI_MODELS[0]} one question, to see whether the key works…`);
-  const v = await verifyZaiKey(token, ZAI_MODELS[0]);
-  if (!v.ok) return { ok: false, error: v.error };
-  writeZaiProfile(dir, token);
-  console.log(`  answered by ${v.served ?? "the endpoint (which named no model)"}.`);
-  return { ok: true };
-}
 import { cliCatalog } from "./agents/cli-models.js";
 import { stripThinking } from "./tui/format.js";
 import { SkillRegistry } from "./skills/registry.js";
@@ -73,6 +51,31 @@ import { describeTally } from "./engine/tally.js";
 
 /** Heap ceiling for a session. Generous, because the alternative has been losing hours of finished work. */
 const HEAP_MB = 12_288;
+
+/**
+ * Connects a z.ai account: take the key, confirm it against the real endpoint, and only then write it.
+ *
+ * The confirmation cannot be skipped. z.ai issues an ordinary bearer token, and Claude Code calls a profile
+ * connected the moment one is present — measured, with the token "totally-bogus". So the only thing that can
+ * tell a live key from a dead one is a call, and one is made here so the failure lands on the person who can
+ * fix it rather than on the first task of the next run.
+ *
+ * Checked BEFORE writing, which is the order a live key corrected. The first version wrote the profile and
+ * then verified, so a key the endpoint refused was left sitting on disk anyway — a credential stored for an
+ * account that was never connected.
+ */
+async function connectZai(dir: string): Promise<{ ok: boolean; error?: string }> {
+  process.stdout.write("z.ai API key (not shown as you type): ");
+  const token = promptSecret();
+  process.stdout.write("\n");
+  if (!token) return { ok: false, error: "no key was entered" };
+  console.log(`Asking ${ZAI_MODELS[0]} one question, to see whether the key works…`);
+  const v = await verifyZaiKey(token, ZAI_MODELS[0]);
+  if (!v.ok) return { ok: false, error: v.error };
+  writeZaiProfile(dir, token);
+  console.log(`  answered by ${v.served ?? "the endpoint (which named no model)"}.`);
+  return { ok: true };
+}
 
 export interface CliArgs {
   prompt: string;
@@ -370,6 +373,35 @@ export async function main(argv: string[]): Promise<void> {
       check: checkProfile,
       log: (line) => console.log(line),
     });
+    return;
+  }
+  /**
+   * Answered here for the same reason `add-provider` is: it is setup, not work, and it must not need a
+   * project, a worktree, a provider or a network. Somebody runs this BECAUSE an account is wrong.
+   */
+  if (argv[0] === "remove-provider") {
+    const kind = argv[1] as CliKind | undefined;
+    if (!kind || !CLI_KINDS.includes(kind)) {
+      console.error(removeUsage(argv[1]));
+      process.exitCode = 1;
+      return;
+    }
+    const path = `${process.env.HOME ?? ""}/.horsecode/config.json`;
+    const home = process.env.HOME ?? "";
+    process.exitCode = removeProvider(kind, argv[2], {
+      home,
+      readConfig: () => {
+        try {
+          const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+          return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+        } catch { return {}; }
+      },
+      writeConfig: (c) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(c, null, 2) + "\n"); },
+      removeDir: (dir) => { rmSync(dir, { recursive: true, force: true }); },
+      confirm,
+      usage: fileUsageStore(home),
+      log: (line) => console.log(line),
+    }).code;
     return;
   }
   const cwd = process.cwd();
