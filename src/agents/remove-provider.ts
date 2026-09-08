@@ -32,6 +32,11 @@ export interface RemoveProviderIO {
   removeDir: (dir: string) => void;
   /** Asks before deleting a sign-in. Answering anything but yes leaves the directory alone. */
   confirm: (question: string) => boolean;
+  /**
+   * Asks which of several accounts to remove, as an index into the list. `undefined` cancels — and cancelling
+   * is also the answer when there is no terminal to ask at, so a script removes nothing rather than guessing.
+   */
+  choose: (question: string, options: readonly string[]) => number | undefined;
   /** Where quota readings live — a file of its own, beside the config rather than inside it. */
   usage?: UsageStore;
   log: (line: string) => void;
@@ -57,25 +62,27 @@ export function describeAccount(a: AccountEntry): string {
   return `${a.kind} ${who}${a.plan ? ` (${a.plan})` : ""}${a.configDir ? "" : " — the signed-in default"}`;
 }
 
+/** Either the account meant, a set to choose between, or a reason no choice is possible. */
+export type Picked =
+  | { account: AccountEntry }
+  | { choices: readonly AccountEntry[] }
+  | { error: string };
+
 /**
- * Finds the one account meant, or explains why it cannot be certain.
+ * Finds the one account meant, or hands back the set to choose from.
  *
  * A name is optional when a kind has exactly one account, because that is the ordinary case and making
- * someone type a generated name like `zai-2` to remove their only z.ai account is friction for nothing. With
- * several, guessing would disconnect the wrong subscription, so it asks.
+ * someone type a generated name like `zai-2` to remove their only z.ai account is friction for nothing.
+ *
+ * With several it neither guesses nor gives up. Guessing would disconnect the wrong subscription; giving up
+ * — printing the list and exiting, which this did at first — makes a person read the names, re-type one, and
+ * run the command again to reach the question the program was already in a position to ask. So the set comes
+ * back and the caller asks.
  */
-export function pickAccount(
-  accounts: readonly AccountEntry[], kind: CliKind, name?: string,
-): { account: AccountEntry } | { error: string } {
+export function pickAccount(accounts: readonly AccountEntry[], kind: CliKind, name?: string): Picked {
   const mine = accounts.filter((a) => a.kind === kind);
   if (!mine.length) return { error: `no ${kind} account is connected` };
-  if (!name) {
-    if (mine.length === 1) return { account: mine[0] };
-    return {
-      error: `${mine.length} ${kind} accounts are connected — name the one to remove:\n`
-        + mine.map((a) => `  ${a.name}${a.email && a.email !== a.name ? ` (${a.email})` : ""}`).join("\n"),
-    };
-  }
+  if (!name) return mine.length === 1 ? { account: mine[0] } : { choices: mine };
   // Either the name it is filed under or the address it reports — a person reads the address off the
   // start-up line and has no reason to know the other one exists.
   const found = mine.filter((a) => a.name === name || a.email === name);
@@ -102,7 +109,22 @@ export function removeProvider(kind: CliKind, name: string | undefined, io: Remo
     }
     return { code: 1 };
   }
-  const account = picked.account;
+  let account: AccountEntry;
+  if ("account" in picked) {
+    account = picked.account;
+  } else {
+    /**
+     * Several, and no name: ask which. Cancelling — an unreadable answer, or no terminal to ask at — removes
+     * NOTHING. The alternative reading, "they meant the first one", would disconnect a subscription nobody
+     * named, which is the whole failure this question exists to prevent.
+     */
+    const chosen = io.choose(`Which ${kind} account should be removed?`, picked.choices.map(describeAccount));
+    if (chosen === undefined) {
+      io.log("Nothing was removed.");
+      return { code: 1 };
+    }
+    account = picked.choices[chosen];
+  }
 
   const kept = accounts.filter((a) => a !== account);
   /**

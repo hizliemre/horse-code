@@ -41,6 +41,23 @@ export function confirm(question: string): boolean {
   return /^y(es)?$/i.test((answer ?? "").trim());
 }
 
+/**
+ * One of several, chosen by number.
+ *
+ * Cancelling is the answer to everything that is not a number in range — a stray keystroke, a bare Enter, a
+ * name typed instead of an index, or no terminal at all. The caller removes an account on the strength of
+ * this, so an unreadable answer must mean "do nothing", never "the first one".
+ */
+export function chooseFrom(question: string, options: readonly string[]): number | undefined {
+  process.stdout.write(`${question}\n`);
+  options.forEach((o, i) => process.stdout.write(`  ${i + 1}) ${o}\n`));
+  process.stdout.write(`Number (anything else cancels): `);
+  const line = promptLine();
+  process.stdout.write("\n");
+  const n = Number((line ?? "").trim());
+  return Number.isInteger(n) && n >= 1 && n <= options.length ? n - 1 : undefined;
+}
+
 function readTty(hidden: boolean): string | undefined {
   let fd: number;
   try { fd = openSync("/dev/tty", "r"); } catch { return undefined; }

@@ -14,6 +14,8 @@ interface Fake extends RemoveProviderIO {
   removedDirs: string[];
   lines: string[];
   readings: Record<string, Reading>;
+  /** What the chooser was offered, so a test can assert the person saw the right accounts. */
+  offered: string[];
 }
 
 function fake(config: Record<string, unknown>, over: Partial<RemoveProviderIO> & { readings?: Record<string, Reading> } = {}): Fake {
@@ -21,11 +23,14 @@ function fake(config: Record<string, unknown>, over: Partial<RemoveProviderIO> &
     home: HOME,
     removedDirs: [],
     lines: [],
+    offered: [],
     readings: over.readings ?? {},
     readConfig: () => config,
     writeConfig: (c) => { io.written = c; },
     removeDir: (d) => { io.removedDirs.push(d); },
     confirm: () => true,
+    // No terminal is the default, so a test that does not opt in cannot silently remove an unnamed account.
+    choose: (_q, options) => { io.offered = [...options]; return undefined; },
     log: (l) => { io.lines.push(l); },
     ...over,
   };
@@ -48,12 +53,13 @@ describe("naming the account to disconnect", () => {
     expect(pickAccount(accounts, "claude")).toEqual({ account: accounts[0] });
   });
 
-  /** With several, guessing would disconnect the wrong subscription. */
-  it("asks which, and lists them, when a kind has several", () => {
-    const r = pickAccount(accounts, "zai");
-    expect(r).toHaveProperty("error");
-    expect((r as { error: string }).error).toContain("zai-2");
-    expect((r as { error: string }).error).toContain("zai-3");
+  /**
+   * With several it neither guesses nor gives up: the set comes back for the caller to ask about. Giving up
+   * — printing the list and exiting, which this did at first — made a person read the names, re-type one and
+   * run the command again to reach a question the program was already able to ask.
+   */
+  it("hands back the set to choose from when a kind has several", () => {
+    expect(pickAccount(accounts, "zai")).toEqual({ choices: [accounts[1], accounts[2]] });
   });
 
   it("takes the name it is filed under", () => {
@@ -175,6 +181,44 @@ describe("disconnecting one", () => {
     expect(removeProvider("codex", undefined, io).code).toBe(0);
     expect(io.removedDirs).toEqual([]);
     expect(said(io)).toContain("still signed in");
+  });
+
+  /** One account of that kind: nothing to ask about, so it goes without a question. */
+  it("removes the only account of its kind without asking which", () => {
+    const io = fake({ accounts: [zai] });
+    expect(removeProvider("zai", undefined, io).code).toBe(0);
+    expect(io.offered).toEqual([]);
+    expect(io.written?.accounts).toEqual([]);
+  });
+
+  describe("when a kind has more than one", () => {
+    const second: AccountEntry = { kind: "zai", name: "zai-3", configDir: profile("zai-3") };
+
+    it("asks which one, showing both", () => {
+      const io = fake({ accounts: [zai, second] }, { choose: (_q, o) => { io.offered = [...o]; return 1; } });
+      expect(removeProvider("zai", undefined, io).code).toBe(0);
+      expect(io.offered).toEqual(["zai zai-2", "zai zai-3"]);
+      expect(io.written?.accounts).toEqual([zai]);
+    });
+
+    /**
+     * Cancelling removes NOTHING. Reading an unreadable answer as "they meant the first one" would
+     * disconnect a subscription nobody named — the whole failure the question exists to prevent.
+     */
+    it("removes nothing when the question is cancelled", () => {
+      const io = fake({ accounts: [zai, second] }, { choose: () => undefined });
+      expect(removeProvider("zai", undefined, io).code).toBe(1);
+      expect(io.written).toBeUndefined();
+      expect(io.removedDirs).toEqual([]);
+    });
+
+    /** Naming one skips the question entirely — which is what a script does. */
+    it("does not ask when the account was named", () => {
+      const io = fake({ accounts: [zai, second] }, { choose: (_q, o) => { io.offered = [...o]; return 0; } });
+      removeProvider("zai", "zai-3", io);
+      expect(io.offered).toEqual([]);
+      expect(io.written?.accounts).toEqual([zai]);
+    });
   });
 
   it("changes nothing when there is no such account", () => {

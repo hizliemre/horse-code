@@ -12,7 +12,7 @@ import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
 import { CLI_KINDS, type CliKind } from "./agents/cli-agent.js";
 import { writeZaiProfile, verifyZaiKey } from "./agents/zai-profile.js";
-import { promptSecret, confirm } from "./agents/prompt.js";
+import { promptSecret, confirm, chooseFrom } from "./agents/prompt.js";
 import { removeProvider, removeUsage } from "./agents/remove-provider.js";
 import { ZAI_MODELS } from "./agents/cli-models.js";
 
@@ -399,6 +399,7 @@ export async function main(argv: string[]): Promise<void> {
       writeConfig: (c) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(c, null, 2) + "\n"); },
       removeDir: (dir) => { rmSync(dir, { recursive: true, force: true }); },
       confirm,
+      choose: chooseFrom,
       usage: fileUsageStore(home),
       log: (line) => console.log(line),
     }).code;
