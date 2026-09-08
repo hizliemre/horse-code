@@ -140,6 +140,40 @@ describe("ModelHealth.handleChainFailure", () => {
     expect(healthy).not.toContain("alive-3");
   });
 
+  /**
+   * A model an official CLI serves is trustworthy WITHOUT having been configured, and leaving that out shut
+   * every newly connected subscription out of the board permanently.
+   *
+   * The rule above answers "the catalog lists things it will not route" — true of a gateway's 726 entries,
+   * false of `cliCatalog()`, whose eleven names this project maintains and has each asked for and answered.
+   * Filtering those by `configured` only asks whether they are already in use, which is a closed loop: a
+   * model cannot be assigned until it has been assigned.
+   *
+   * Measured the day two subscriptions were connected. `/roles adjust` draws its catalog from here, and the
+   * telemetry recorded the whole failure in one line — `decision.pool catalog: 11 live: 11 configured: 5
+   * curated: 5`. The tuner was shown five models; Grok and GLM, both freshly paid for, never reached it.
+   */
+  it("offers a model an official CLI serves, even before any role has used it", async () => {
+    const { health } = setup({ models: ["dead-a", "alive-1", "grok-4.6", "glm-5.3", "alive-2"] });
+    const healthy = await health.healthyModels();
+    expect(healthy).toContain("grok-4.6");
+    expect(healthy).toContain("glm-5.3");
+    expect(healthy).toContain("alive-1");     // still offered: it is configured
+    expect(healthy).not.toContain("alive-2"); // still withheld: nothing serves it and nobody uses it
+  });
+
+  /**
+   * And the door the herd came through stays shut. A PREFIXED id names a model some gateway proxies, not one
+   * these binaries serve — `cliFor` returns undefined for it, so the curation applies exactly as before.
+   */
+  it("does not mistake a proxied id for a model a CLI serves", async () => {
+    const { health } = setup({
+      models: ["alive-1", "opencode-go/muse-spark-1.2-contributor-xhigh", "oc/glm-5.2", "grok/grok-4.6"],
+    });
+    const healthy = await health.healthyModels();
+    expect(healthy).toEqual(["alive-1"]);
+  });
+
   /** Breadth is still there for the only case that ever needed it: nothing curated left standing. */
   it("falls back to the whole catalog when every configured model is spent", async () => {
     const { health, main, lenses } = setup();

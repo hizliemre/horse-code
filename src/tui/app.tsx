@@ -80,6 +80,8 @@ export interface RunTuiReplOpts {
   listSkills?: () => { name: string; description: string; roles: string[] }[]; // /skills
   /** The subscriptions a run will spend, already rendered — read on each repaint so a reading updates it. */
   accountsNote?: () => string | undefined;
+  /** /models → what each connected subscription serves; given the models any role is running. */
+  modelsPanel?: (inUse: string[]) => string;
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   /** Re-reads `.horsecode/skills` — migration writes there mid-session and nothing else would notice. */
@@ -958,7 +960,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
   // Call awaitTask BEFORE render → the first render is input-mode (Prompt + useInput active) → Ink holds stdin.
   let taskPromise = controller.awaitTask();
   const instance = render(
-    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} cleanWorktrees={opts.cleanWorktrees} planTraces={opts.planTraces} runTraces={opts.runTraces ? (onProgress) => opts.runTraces!(onProgress, deps.provider) : undefined} migrate={migrate} continueFromClaude={continueFromClaude} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
+    <App controller={controller} fullscreen model={opts.model} coachModel={coachModel} refinerModel={refinerModel} listModels={opts.listModels} setModel={setModel} setRoleModel={applyChainPersisted} listRoles={listRoles} adjustRoles={adjustRoles} modelsPanel={opts.modelsPanel} listSkills={opts.listSkills} updateSkills={opts.updateSkills} addSkill={opts.addSkill} graphStatus={opts.graphStatus} buildGraph={opts.buildGraph} cleanWorktrees={opts.cleanWorktrees} planTraces={opts.planTraces} runTraces={opts.runTraces ? (onProgress) => opts.runTraces!(onProgress, deps.provider) : undefined} migrate={migrate} continueFromClaude={continueFromClaude} addMcp={addMcp} answerByTheWay={answerByTheWay} parallel={() => parallelRef.current} setParallel={setParallel} telemetryPath={opts.telemetryPath}
       listSessions={listSessions} resumeSession={resumeSession}
       listPins={listPins} addPin={addPin} removePin={removePin}
       listMemories={listMemories} addMemory={addMemory} removeMemory={removeMemory}

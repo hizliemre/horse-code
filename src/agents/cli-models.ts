@@ -1,4 +1,4 @@
-import type { CliKind } from "./cli-agent.js";
+import { CLI_KINDS, type CliKind } from "./cli-agent.js";
 
 /**
  * What the CLIs can be asked for — families, not versions, and no source prefix.
@@ -101,9 +101,17 @@ export function grokEffort(effort: string): string | undefined {
  */
 export const ZAI_MODELS = ["glm-5.3", "glm-5.3-flash"] as const;
 
+/** What one subscription serves. The inverse of `cliFor`, and the only place the mapping is written out. */
+export function modelsFor(kind: CliKind): readonly string[] {
+  if (kind === "claude") return CLAUDE_MODELS;
+  if (kind === "codex") return CODEX_MODELS;
+  if (kind === "grok") return GROK_MODELS;
+  return ZAI_MODELS;
+}
+
 /** The whole assignable catalog. `adjustRoleModels` does its own ranking, so this order decides nothing. */
 export function cliCatalog(): string[] {
-  return [...CLAUDE_MODELS, ...CODEX_MODELS, ...GROK_MODELS, ...ZAI_MODELS];
+  return CLI_KINDS.flatMap((k) => [...modelsFor(k)]);
 }
 
 /**

@@ -13,6 +13,7 @@ import type { RoleRegistry } from "../agent/roles.js";
 import { isUnknownModelError } from "../core/failures.js";
 import { adjustRoleModels } from "../tui/role-models.js";
 import { telemetry } from "../obs/telemetry.js";
+import { cliFor } from "../agents/cli-models.js";
 
 /** The role↔registry map, supplied by the composition root (roles live in several separate registries). */
 export interface RoleModelPort {
@@ -226,7 +227,29 @@ export class ModelHealth {
     try { all = await this.listModels(); } catch { return []; }
     const live = all.filter((m) => !dead.has(m));
     const configured = new Set(this.port.registries().flatMap((r) => r.knownModels()));
-    const curated = live.filter((m) => configured.has(m));
+    /**
+     * A model an official CLI serves is trustworthy WITHOUT having been configured, and leaving that out shut
+     * every new subscription out of the board permanently.
+     *
+     * The curation above answers "the catalog lists things it will not route", which was true of a gateway's
+     * 726 entries and is false of `cliCatalog()` — eleven names this project maintains, each one asked for and
+     * answered by the binary that serves it. Filtering those by `configured` only asks whether they are
+     * already in use, and that is a closed loop: a model cannot be assigned until it has been assigned.
+     *
+     * Measured on a live board the day two subscriptions were connected. `/roles adjust` draws its catalog
+     * from here, and its own telemetry recorded the whole failure in one line:
+     *
+     *   decision.pool  catalog: 11  live: 11  configured: 5  curated: 5  source: "curated"
+     *
+     * The tuner was shown five models. Grok and GLM — both freshly connected, both paid for — never reached
+     * it, and neither did `fable` or `haiku`, which had simply fallen out of every chain. Sixty-four roles
+     * were re-assigned across two subscriptions while four sat idle.
+     *
+     * `cliFor` is the test because it answers exactly the right question: which binary serves this name. It
+     * returns undefined for a gateway id — including a PREFIXED Grok or GLM one, which names a proxied model
+     * this route cannot serve — so a gateway catalog is curated precisely as before.
+     */
+    const curated = live.filter((m) => configured.has(m) || cliFor(m) !== undefined);
     /**
      * Which pool an assignment came from, in the record.
      *

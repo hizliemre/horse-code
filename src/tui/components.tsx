@@ -1173,7 +1173,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, cleanWorktrees, migrate, continueFromClaude, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, modelsPanel, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, cleanWorktrees, migrate, continueFromClaude, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -1184,6 +1184,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   setRoleModel?: (role: string, models: string[]) => void; // per-role fallback chain (/roles setmodel, adjust)
   listRoles?: () => { name: string; model: string; models: string[]; council?: boolean; decider?: boolean }[]; // /roles → role → chain table
   adjustRoles?: () => Promise<void>; // /roles adjust → LLM-tuned assignment (streams rationale + applies chains)
+  /** /models → what each connected subscription serves. Takes the models any role is currently running. */
+  modelsPanel?: (inUse: string[]) => string;
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
   listPins?: () => string[]; // /pins
@@ -1642,6 +1644,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     controller.note(`**MCP servers:**\n${rows.join("\n")}\n\n_\`/mcp add <url|command>\` to install another._`);
   };
   // /sources [refresh] → show the connected model sources; refresh re-probes omniroute.
+  /**
+   * /models → the subscriptions and what each one serves, marking the models a role is actually running.
+   *
+   * The chains come from `listRoles()` rather than from the config, because `/roles adjust` and every bench
+   * change them during a session: read from disk this would answer for the run that started, not the one
+   * happening.
+   */
+  const doModels = (): void => {
+    if (!modelsPanel) { controller.note("Models are not available."); return; }
+    const inUse = [...new Set((listRoles?.() ?? []).flatMap((r) => r.models))];
+    controller.note(modelsPanel(inUse));
+  };
   const doSources = (arg: string): void => {
     const info = sourcesInfo?.();
     if (arg.trim().toLowerCase() === "refresh") {
@@ -1892,6 +1906,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/remember") doRemember("");
     else if (c.name === "/forget") doForget("");
     else if (c.name === "/mcp") doMcp("");
+    else if (c.name === "/models") doModels();
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");
     else if (c.name === "/start-smoke-test") void doSmokeTest();

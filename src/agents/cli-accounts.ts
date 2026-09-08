@@ -177,6 +177,47 @@ export class AccountPool {
   }
 }
 
+/**
+ * `/models` — which models each connected subscription serves, and which of them any role is actually using.
+ *
+ * The "actually using" column is the point, and it comes from a real failure. Two subscriptions were
+ * connected, `/roles adjust` was run, and every one of 192 chain links still named the older two — because
+ * the pool handed the tuner only models already in a chain, which no new subscription's are. Nothing in the
+ * interface could show that: the start-up line proved the accounts were connected, and the roles table
+ * proved the chains were full, and neither answered "is the thing I just paid for doing any work".
+ *
+ * A subscription with nothing connected is listed too, as an absence rather than an omission — its models
+ * are real names that will simply fail, and knowing that before a run beats discovering it during one.
+ */
+export function modelsPanel(
+  usage: { account: CliAccount; reading?: Reading }[],
+  models: (kind: CliKind) => readonly string[],
+  kinds: readonly CliKind[],
+  inUse: readonly string[] = [],
+  now = Date.now(),
+): string {
+  const used = new Set(inUse);
+  const rows: string[] = [];
+  for (const kind of kinds) {
+    const mine = usage.filter((u) => u.account.kind === kind);
+    const who = mine.length
+      ? mine.map(({ account, reading }) => {
+        const name = account.email ?? account.plan ?? account.name;
+        return `${name}${reading ? ` · ${Math.round(reading.spent * 100)}% used ${ageOf(reading.at, now)} ago` : ""}`;
+      }).join(" · ")
+      : "_not connected — these will fail every call_";
+    rows.push(`**${kind}** — ${who}`);
+    // `●` for a model some role is running, `·` for one that is available and idle.
+    rows.push(`  ${models(kind).map((m) => `${used.has(m) ? "●" : "·"} ${m}`).join("   ")}`);
+  }
+  const idle = kinds.filter((k) => usage.some((u) => u.account.kind === k))
+    .filter((k) => !models(k).some((m) => used.has(m)));
+  const note = idle.length
+    ? `\n\n_● = a role is running it. ${idle.join(" and ")} ${idle.length > 1 ? "are" : "is"} connected but in no chain — \`/roles adjust\` assigns them._`
+    : "\n\n_● = a role is running it._";
+  return `**Models** — what your connected subscriptions serve\n\n${rows.join("\n")}${note}`;
+}
+
 /** "12m", "3h", "2d" — a reading's age is most of what it is worth. */
 export function ageOf(at: number, now: number): string {
   const mins = Math.max(0, Math.round((now - at) / 60_000));

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { AccountPool, SPENT, readingKey } from "../../src/agents/cli-accounts.js";
+import { AccountPool, SPENT, readingKey, modelsPanel } from "../../src/agents/cli-accounts.js";
 import type { Reading, UsageStore } from "../../src/agents/cli-accounts.js";
+import type { CliKind } from "../../src/agents/cli-agent.js";
 
 const pool = (): AccountPool =>
   new AccountPool([
@@ -164,5 +165,57 @@ describe("readings that survive between sessions", () => {
       { account: { kind: "claude", name: "main", configDir: "/p/main" }, reading: { spent: 0.3, at: 7_000 } },
       { account: { kind: "codex", name: "oai", configDir: "/p/oai" } },
     ]);
+  });
+});
+
+/**
+ * `/models` — what each subscription serves, and which of those a role is actually running.
+ *
+ * The second half is the point, and it comes from a real failure: two subscriptions were connected, roles
+ * were re-assigned, and all 192 chain links still named the older two. Nothing in the interface could show
+ * that — the start-up line proved the accounts were connected and the roles table proved the chains were
+ * full, and neither answered "is the thing I just paid for doing any work".
+ */
+describe("the models panel", () => {
+  const models = (kind: string): readonly string[] =>
+    ({ claude: ["opus", "sonnet"], grok: ["grok-4.6"], zai: ["glm-5.3"] } as Record<string, string[]>)[kind] ?? [];
+  const kinds = ["claude", "grok", "zai"] as unknown as CliKind[];
+  const connected = [
+    { account: { kind: "claude" as CliKind, name: "a@x.com", email: "a@x.com", plan: "max" }, reading: { spent: 0.8, at: 0 } },
+    { account: { kind: "grok" as CliKind, name: "grok-default", plan: "grok.com" } },
+    { account: { kind: "zai" as CliKind, name: "zai-2" } },
+  ];
+  const panel = (inUse: string[]) =>
+    modelsPanel(connected, models as (k: CliKind) => readonly string[], kinds, inUse, 0);
+
+  it("marks the models a role is running, and leaves the idle ones unmarked", () => {
+    const out = panel(["opus"]);
+    expect(out).toContain("● opus");
+    expect(out).toContain("· sonnet");
+    expect(out).toContain("· grok-4.6");
+  });
+
+  /** The whole reason it exists: a subscription that is connected and doing nothing has to be visible. */
+  it("names the subscriptions that are connected but in no chain", () => {
+    const out = panel(["opus", "sonnet"]);
+    expect(out).toContain("grok and zai are connected but in no chain");
+  });
+
+  it("says nothing about idle ones when every subscription is in use", () => {
+    const out = panel(["opus", "grok-4.6", "glm-5.3"]);
+    expect(out).not.toContain("in no chain");
+  });
+
+  /**
+   * An absence is stated rather than omitted, the same rule the start-up line follows: these are real model
+   * names that will fail every call, and learning that before a run beats learning it during one.
+   */
+  it("reports a CLI nobody is connected to", () => {
+    const out = modelsPanel([], models as (k: CliKind) => readonly string[], kinds, [], 0);
+    expect(out).toContain("not connected");
+  });
+
+  it("dates a quota figure, because none of them is current", () => {
+    expect(panel([])).toContain("80% used");
   });
 });

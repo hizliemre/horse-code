@@ -6,7 +6,7 @@ import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config/config.js";
-import { AccountPool, fileUsageStore, accountsLine } from "./agents/cli-accounts.js";
+import { AccountPool, fileUsageStore, accountsLine, modelsPanel } from "./agents/cli-accounts.js";
 import { addProvider } from "./agents/add-provider.js";
 import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
@@ -14,7 +14,7 @@ import { CLI_KINDS, type CliKind } from "./agents/cli-agent.js";
 import { writeZaiProfile, verifyZaiKey } from "./agents/zai-profile.js";
 import { promptSecret, confirm, chooseFrom } from "./agents/prompt.js";
 import { removeProvider, removeUsage } from "./agents/remove-provider.js";
-import { ZAI_MODELS } from "./agents/cli-models.js";
+import { ZAI_MODELS, modelsFor } from "./agents/cli-models.js";
 
 import { cliCatalog } from "./agents/cli-models.js";
 import { stripThinking } from "./tui/format.js";
@@ -580,6 +580,9 @@ export async function main(argv: string[]): Promise<void> {
    */
   /** Read on every repaint, so a reading taken during the run replaces the one it started with. */
   const accountsNote = (): string | undefined => accountsLine(accounts.usage(), notSignedIn);
+  /** /models → the same pool the calls come from, with what each subscription serves. */
+  const modelsPanelNote = (inUse: string[]): string =>
+    modelsPanel(accounts.usage(), modelsFor, CLI_KINDS, inUse);
   const raw = new CliProvider({ readOnly: false, accounts });
   const provider = config.telemetry ? telemetryProvider(raw, telemetry()) : raw;
   const skillRegistry = new SkillRegistry();
@@ -863,6 +866,7 @@ export async function main(argv: string[]): Promise<void> {
         buildDeps,
         memStore,
         accountsNote,
+        modelsPanel: modelsPanelNote,
         listSkills,
         updateSkills,
         addSkill,

@@ -15,9 +15,13 @@ describe("slash commands", () => {
   /**
    * Declaration order put `/model` above `/mode` for the query "/mod": the exact word the user had finished
    * typing sat under a longer command that merely extends it.
+   *
+   * Three names share that prefix now, which is the case the rule was written for: `/models` extends
+   * `/model` exactly as `/model` extends `/mode`, and each finished word stays above the one that merely
+   * continues it.
    */
   it("puts the shorter name first, then orders alphabetically", () => {
-    expect(matchCommands("/mod").map((c) => c.name)).toEqual(["/mode", "/model"]);
+    expect(matchCommands("/mod").map((c) => c.name)).toEqual(["/mode", "/model", "/models"]);
     const names = matchCommands("/").map((c) => c.name);
     const lengths = names.map((n) => n.length);
     expect(lengths).toEqual([...lengths].sort((a, b) => a - b)); // never a longer name above a shorter one
@@ -31,7 +35,7 @@ describe("slash commands", () => {
   it("filters by prefix (case-insensitive) and trims", () => {
     // Both match; the name the user has already finished typing comes first — see matchCommands.
     expect(matchCommands("/clea").map((c) => c.name)).toEqual(["/clear", "/clean-worktrees"]);
-    expect(matchCommands("  /MOD  ").map((c) => c.name).sort()).toEqual(["/mode", "/model"]); // both match /mod
+    expect(matchCommands("  /MOD  ").map((c) => c.name).sort()).toEqual(["/mode", "/model", "/models"]);
     expect(matchCommands("/xyz")).toEqual([]);
   });
 
