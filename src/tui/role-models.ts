@@ -183,6 +183,21 @@ export function capabilityScore(model: string): number {
   // without disturbing how this family calibrates against opus/sonnet.
   if (/codex|gpt-5|\bo3\b/.test(s)) return 82 + effortBump(s) + versionBump(s, "gpt") / 100; // effort- AND version-aware
   if (/sonnet/.test(s)) return 78 + versionBump(s, "sonnet");
+  /**
+   * Grok, placed with the mid tier — and this number is a STARTING POSITION, not a measurement.
+   *
+   * Nothing on this board has run a Grok model yet, so there is no fitness record to rank it by, and every
+   * placement is a claim made without one. Leaving it unranked was also a claim, and a worse one: the
+   * unranked floor is 50, which bands it "fast" and reserves it for routing and classification — that would
+   * have decided, silently and permanently, that a flagship subscription is not worth a reasoning role.
+   *
+   * Mid says the least. `grok-4.6` lands at 82.6, next to `gpt-5.6-terra` (82.1) and `claude-sonnet-5`
+   * (83.0), so it competes for the bulk work that produces the fitness record this line should eventually be
+   * rewritten from — and it stays below `opus` (93.0), which keeps the strong roles where they have been
+   * earned. No effort bump, unlike the codex family: a Grok id names only the model, its level travels as
+   * `--reasoning-effort` beside it, exactly as Claude's does.
+   */
+  if (/grok/.test(s)) return 78 + versionBump(s, "grok");
   // Gemini Pro was pinned at a flat 65: every generation scored the same and the -high/-low effort
   // suffix was ignored, so a current Gemini Pro was ranked as if it were the first one. Version- and
   // effort-aware now, like every other family we actually rank.

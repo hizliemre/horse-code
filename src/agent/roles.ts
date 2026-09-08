@@ -165,7 +165,7 @@ export function providerOutage(reason: string): string | undefined {
      * This function's own comments record the same lesson three times before — a wording it did not know,
      * and a source-wide fact read as one model's problem. This is the fourth.
      */
-    ?? /^\s*(claude|codex)\s+CLI:\s*rejected\b/i.exec(reason)?.[1]?.toLowerCase();
+    ?? /^\s*(claude|codex|grok)\s+CLI:\s*rejected\b/i.exec(reason)?.[1]?.toLowerCase();
 }
 
 /**

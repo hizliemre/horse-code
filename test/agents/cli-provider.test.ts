@@ -2,7 +2,7 @@ import { isCallerAbort, isDeadline } from "../../src/agent/deadline.js";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { promptFor, CliProvider, streamWhileRunning, isLoggedOut } from "../../src/agents/cli-provider.js";
-import { cliFor, cliInvocation, cliCatalog } from "../../src/agents/cli-models.js";
+import { cliFor, cliInvocation, cliCatalog, grokEffort } from "../../src/agents/cli-models.js";
 import type { ChatRequest } from "../../src/core/types.js";
 import { makeStreamReader, decodeClaudeEvent } from "../../src/agents/cli-agent.js";
 
@@ -58,6 +58,7 @@ describe("choosing a CLI from the model name", () => {
   it("routes each family to its binary", () => {
     for (const m of ["fable", "opus", "sonnet", "haiku"]) expect(cliFor(m), m).toBe("claude");
     for (const m of ["codex", "gpt-5.6-terra", "gpt-5.6-sol"]) expect(cliFor(m), m).toBe("codex");
+    for (const m of ["grok-4.6", "grok-4.5"]) expect(cliFor(m), m).toBe("grok");
   });
 
   it("still routes an id left over from the prefixed era", () => {
@@ -71,6 +72,17 @@ describe("choosing a CLI from the model name", () => {
   });
 
   /**
+   * A gateway catalog carried Grok too — `opencode-go/grok-4.5` is on this project's own record — and that
+   * id names a PROXIED model this binary cannot serve. Grok arrived after the prefixes went away, so no
+   * chain has ever legitimately written one, and matching loosely here would route a gateway id at the
+   * local CLI and attribute the answer to a subscription that never ran it.
+   */
+  it("does not claim a prefixed Grok id, which belongs to a gateway", () => {
+    expect(cliFor("opencode-go/grok-4.5")).toBeUndefined();
+    expect(cliFor("grok/grok-4.6")).toBeUndefined();
+  });
+
+  /**
    * The catalog holds no dates and no version numbers, which is what stops it going stale.
    *
    * Measured, and the reason families won: `fable` served `claude-fable-5-1` — the model that returned 404
@@ -81,6 +93,42 @@ describe("choosing a CLI from the model name", () => {
       expect(m, m).not.toMatch(/\d{6,}/);
       expect(m, m).not.toMatch(/-\d+-\d+$/);
     }
+  });
+
+  /**
+   * Grok is the exception, and it is the CLI's rather than a choice: `grok models` lists `grok-4.6` and
+   * `grok-4.5` and offers no alias to ask for instead. So this half of the catalog CAN go stale — and it
+   * goes stale loudly, because Grok refuses an unknown name outright ("unknown model id") where Claude Code
+   * answers anyway. A wrong name there fails honestly rather than inventing a turn.
+   */
+  it("carries Grok's versions, because Grok offers nothing else to name", () => {
+    expect(cliCatalog()).toEqual(expect.arrayContaining(["grok-4.6", "grok-4.5"]));
+  });
+});
+
+/**
+ * Grok takes an effort, but not this system's vocabulary, and the mismatch is not harmless: an unknown level
+ * ENDS the call before a model is reached. Measured by handing it a bad one — "--effort/--reasoning-effort:
+ * unknown effort level 'banana'; use one of: xhigh, high, medium, low".
+ */
+describe("translating an effort Grok can take", () => {
+  it("passes through the four levels it knows", () => {
+    for (const e of ["xhigh", "high", "medium", "low"]) expect(grokEffort(e), e).toBe(e);
+  });
+
+  /**
+   * `Effort` here reaches `max`, and `cliInvocation` reads a wider set of suffixes still. Left untranslated,
+   * a role assigned `grok-4.6-max` would fail every call — not fall back to a default.
+   */
+  it("brings a level above its ceiling down, and one below its floor up", () => {
+    expect(grokEffort("max")).toBe("xhigh");
+    expect(grokEffort("ultra")).toBe("xhigh");
+    expect(grokEffort("minimal")).toBe("low");
+  });
+
+  /** Dropped rather than guessed at: no flag means Grok's own default, which is a working call. */
+  it("drops a level it cannot place", () => {
+    expect(grokEffort("banana")).toBeUndefined();
   });
 });
 
@@ -242,9 +290,21 @@ describe("what a delegated agent may do", () => {
     expect(src).toContain('this.readOnly && kind === "codex") args.push("--sandbox", "read-only")');
   });
 
+  /**
+   * Grok's `--disallowed-tools` takes ONE comma-separated value where Claude's takes separate arguments —
+   * passed Claude's way, the second name would become a stray argument rather than a tool removed. The names
+   * are Grok's own, read from its `system/init` tool list, and the flag was verified both ways on a real
+   * call: with it the file was not created while the agent still announced it would, without it the file
+   * appeared.
+   */
+  it("keeps a reader out of Grok's editor, in Grok's own spelling", () => {
+    expect(src).toContain('this.readOnly && kind === "grok") args.push("--disallowed-tools", "write,search_replace")');
+  });
+
   it("lets a writer write, without asking anyone", () => {
     expect(src).toContain('!this.readOnly && kind === "claude") args.push("--permission-mode", "acceptEdits")');
     expect(src).toContain('!this.readOnly && kind === "codex") args.push("--sandbox", "workspace-write")');
+    expect(src).toContain('!this.readOnly && kind === "grok") args.push("--permission-mode", "acceptEdits")');
   });
 
   /** Neither CLI's fully permissive mode: an implementer edits its worktree, it does not reach outside it. */
@@ -285,9 +345,20 @@ describe("telling a logged-out profile from a model that does not exist", () => 
     expect(isLoggedOut("Not logged in \u00b7 Please run /login")).toBe(true);
   });
 
+  /**
+   * Grok phrases it differently AND delivers it differently: Claude answers "Not logged in" as its reply and
+   * exits 0, while Grok exits 1 with no reply at all and says this on stderr. Missed, the one failure a
+   * person can fix arrives as a generic CLI fault.
+   */
+  it("recognises Grok's wording too, which arrives as a failure rather than a reply", () => {
+    expect(isLoggedOut("Error: Not signed in. To authenticate without a browser, run:\n  grok login --device-code"))
+      .toBe(true);
+  });
+
   it("does not claim a logged-out profile from an ordinary answer", () => {
     expect(isLoggedOut("ok")).toBe(false);
     expect(isLoggedOut("I logged the request and moved on")).toBe(false);
+    expect(isLoggedOut("the request was signed in the header")).toBe(false);
   });
 });
 

@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { cliArgs, decodeClaudeEvent, decodeCodexEvent, makeStreamReader, SYNTHETIC } from "../../src/agents/cli-agent.js";
+import {
+  cliArgs, decodeClaudeEvent, decodeCodexEvent, makeStreamReader, reportedError,
+  CLI_ERROR_UNSPOKEN, CLI_KINDS, SYNTHETIC,
+} from "../../src/agents/cli-agent.js";
 import type { CliEvent } from "../../src/agents/cli-agent.js";
 
 /**
@@ -60,6 +63,103 @@ describe("the headless argv for each CLI", () => {
       expect(a.at(-1)).toBe("---\ntitle: x\n---\ndo the thing");
       expect(a.at(-2)).toBe("--");
     }
+  });
+
+  /** The Anthropic Messages wire format, which is why one decoder reads both this and Claude's stream. */
+  it("asks Grok for the stream Claude's decoder already understands", () => {
+    expect(cliArgs("grok", "do the thing"))
+      .toEqual(["--output-format", "streaming-messages-json", "--single=do the thing"]);
+  });
+
+  /**
+   * Grok needs the OPPOSITE of what the other two need, and a `--` makes it worse rather than better.
+   *
+   * Its prompt is a flag's VALUE (`-p/--single <PROMPT>`), not a positional argument, so clap rejects a
+   * value beginning with a dash before the prompt is read — and a `--` ends option parsing before the flag
+   * has taken one. Both measured against the binary, on the same front-matter prompt:
+   *
+   *   grok -p "---…"     → error: a value is required for '--single <PROMPT>' but none was supplied
+   *   grok -p -- "---…"  → error: a value is required for '--single <PROMPT>' but none was supplied
+   *
+   * Attached with `=`, the text is never parsed as an option at all.
+   */
+  it("attaches Grok's prompt to its flag, because a separator cannot save it", () => {
+    const a = cliArgs("grok", "---\ntitle: x\n---\ndo the thing");
+    expect(a.at(-1)).toBe("--single=---\ntitle: x\n---\ndo the thing");
+    expect(a).not.toContain("--");
+  });
+
+  it("passes Grok the caller's extra arguments ahead of the prompt", () => {
+    const a = cliArgs("grok", "p", ["--permission-mode", "acceptEdits"]);
+    expect(a.indexOf("--permission-mode")).toBeLessThan(a.length - 1);
+    expect(a.at(-1)).toBe("--single=p");
+  });
+
+  /**
+   * Every CLI carries the prompt, in whichever shape it takes one. A kind added to the type without a branch
+   * here would fall through to whichever branch happens to be last and be run as another binary's argv.
+   */
+  it("carries the prompt for every CLI it knows", () => {
+    for (const kind of CLI_KINDS) {
+      expect(cliArgs(kind, "carry me").some((a) => a.includes("carry me")), kind).toBe(true);
+    }
+  });
+});
+
+/**
+ * Real output from `grok --single=… --output-format streaming-messages-json`, captured from the installed
+ * binary. Trimmed only where a value is long and says nothing — the thinking block's `signature`, the tool
+ * list on `init` — never reshaped.
+ */
+const GROK = {
+  init: '{"type":"system","subtype":"init","session_id":"01a08111","apiKeySource":"oauth",'
+    + '"model":"grok-4.6","cwd":"/w","permissionMode":"default","tools":["read_file","write"]}',
+  // A thinking block sits BEFORE the text, and its `thinking` field must not be mistaken for the answer.
+  assistant: '{"type":"assistant","message":{"id":"msg_0","type":"message","role":"assistant",'
+    + '"model":"grok-4.6","content":[{"type":"thinking","thinking":"The user wants me to say exactly ok.",'
+    + '"signature":"K5I8Dxo69YTCfDYVpKjjVco7"},{"type":"text","text":"ok"}],"stop_reason":"end_turn",'
+    + '"usage":{"input_tokens":32377,"output_tokens":34}}}',
+  tool: '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use",'
+    + '"id":"call-37b2a13a-0","name":"list_dir","input":{"target_directory":"."}}]}}',
+  result: '{"type":"result","subtype":"success","is_error":false,"duration_ms":4527,"num_turns":1,'
+    + '"result":"ok","stop_reason":"end_turn","total_cost_usd":0.01104286,'
+    + '"usage":{"input_tokens":32377,"output_tokens":34,"cache_read_input_tokens":0,'
+    + '"cache_creation_input_tokens":0},"session_id":"01a0811b"}',
+};
+
+/**
+ * Grok's stream is Claude's, so the contract worth testing is that ONE decoder reads both — a second
+ * decoder would be a copy that drifts.
+ */
+describe("decoding Grok's stream with Claude's decoder", () => {
+  it("reads the assistant's prose, and not its thinking", () => {
+    const ev = decodeClaudeEvent(GROK.assistant);
+    expect(ev?.text).toBe("ok");
+    expect(ev?.served).toBe("grok-4.6");
+  });
+
+  it("reads a tool its own agent ran", () => {
+    expect(decodeClaudeEvent(GROK.tool)?.tool).toEqual({ name: "list_dir" });
+  });
+
+  it("reads the usage and the cost", () => {
+    expect(decodeClaudeEvent(GROK.result)?.usage).toEqual({
+      freshTokens: 32377, cachedTokens: 0, cacheWriteTokens: 0, outputTokens: 34, costUsd: 0.01104286,
+    });
+  });
+
+  it("ignores the framing", () => {
+    expect(decodeClaudeEvent(GROK.init)).toBeUndefined();
+  });
+
+  /**
+   * Grok reports what a call COST and never how much of a window is left — there is no `rate_limit_event`
+   * anywhere in its stream. So the pool learns nothing from a Grok call, and a start-up line can only ever
+   * report the account, not its remaining quota. Stated here so the absence is a known fact rather than a
+   * decoder that quietly stopped working.
+   */
+  it("carries no quota reading, because Grok reports none", () => {
+    for (const line of Object.values(GROK)) expect(decodeClaudeEvent(line)?.quota).toBeUndefined();
   });
 });
 
@@ -207,6 +307,37 @@ describe("reading a chunked stream", () => {
     const seen = collect([`${CLAUDE.hook}\n`, "\n", "not json\n", `${CLAUDE.quotaRefused}\n`]);
     expect(seen).toHaveLength(1);
     expect(seen[0].rateLimited).toMatch(/rejected/);
+  });
+});
+
+/**
+ * Which account of a failure reaches the caller.
+ *
+ * A `result` event can say `error_during_execution` and carry no text whatsoever, and then the only account
+ * of what went wrong is on stderr. Measured on a signed-out Grok: the stream said that much and no more,
+ * while stderr held the whole remedy — "Not signed in. To authenticate without a browser, run: grok login
+ * --device-code". Preferring the stream unconditionally turns the one failure a person can fix into a
+ * generic CLI fault.
+ */
+describe("choosing which failure to report", () => {
+  const SIGNED_OUT = "Error: Not signed in. To authenticate without a browser, run:\n  grok login --device-code";
+
+  it("prefers what the stream named", () => {
+    expect(reportedError("model overloaded", "some noise", 1)).toBe("model overloaded");
+  });
+
+  it("falls to stderr when the stream only said that something failed", () => {
+    expect(reportedError(CLI_ERROR_UNSPOKEN, SIGNED_OUT, 1)).toBe(SIGNED_OUT);
+  });
+
+  /** A CLI that warns on stderr and SUCCEEDS must not be read as having failed. */
+  it("ignores stderr on a run that exited cleanly", () => {
+    expect(reportedError(undefined, "warning: deprecated flag", 0)).toBeUndefined();
+  });
+
+  /** Still reported, even when neither side had anything specific — a known failure must not vanish. */
+  it("keeps the bare report when stderr had nothing to add", () => {
+    expect(reportedError(CLI_ERROR_UNSPOKEN, "", 1)).toBe(CLI_ERROR_UNSPOKEN);
   });
 });
 

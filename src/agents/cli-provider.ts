@@ -2,7 +2,7 @@ import type { ChatEvent, ChatRequest, Provider } from "../core/types.js";
 import { runCliAgent, SYNTHETIC, type CliKind, type CliUsage } from "./cli-agent.js";
 import { isCallerAbort, isDeadline } from "../agent/deadline.js";
 import { AccountPool } from "./cli-accounts.js";
-import { cliFor, cliInvocation } from "./cli-models.js";
+import { cliFor, cliInvocation, grokEffort } from "./cli-models.js";
 
 /**
  * The official CLIs behind the `Provider` seam, for every role that wants an ANSWER rather than an agent.
@@ -59,11 +59,18 @@ export function promptFor(req: ChatRequest): string {
 /**
  * The answer of a CLI whose profile has no session.
  *
- * Measured against the real binary: a call under a `CLAUDE_CONFIG_DIR` never logged into exits 0, reports
- * `<synthetic>` for the model, and says exactly "Not logged in · Please run /login".
+ * Measured against the real binaries, and they say it differently enough that one wording would miss:
+ *
+ *   claude  a call under a `CLAUDE_CONFIG_DIR` never logged into exits 0, reports `<synthetic>` for the
+ *           model, and says exactly "Not logged in · Please run /login" as its ANSWER.
+ *   grok    a call under a fresh `GROK_HOME` exits 1 with an empty answer and says it on STDERR:
+ *           "Error: Not signed in. To authenticate without a browser, run: grok login --device-code".
+ *
+ * Which is why this reads a string rather than a stream: on one CLI the sentence arrives as the reply, on
+ * the other as the failure.
  */
 export function isLoggedOut(text: string): boolean {
-  return /not logged in|please run \/login/i.test(text);
+  return /not logged in|not signed in|please run \/login/i.test(text);
 }
 
 export interface CliProviderOptions {
@@ -162,6 +169,15 @@ export class CliProvider implements Provider {
     const effort = req.effort ?? named;
     if (effort && kind === "claude") args.push("--effort", effort);
     /**
+     * Grok takes an effort too, but not this system's vocabulary — see `grokEffort`. A level it does not
+     * know is an ERROR that ends the call before a model is reached, so it is translated rather than passed,
+     * and dropped rather than guessed at when nothing corresponds.
+     */
+    if (effort && kind === "grok") {
+      const level = grokEffort(effort);
+      if (level) args.push("--reasoning-effort", level);
+    }
+    /**
      * A role that was asked for a verdict must not be able to edit the tree.
      *
      * The API path enforced this by handing the role a read-only registry; here the tools belong to the CLI,
@@ -170,6 +186,23 @@ export class CliProvider implements Provider {
      */
     if (this.readOnly && kind === "claude") args.push("--disallowed-tools", "Write", "Edit", "NotebookEdit");
     if (this.readOnly && kind === "codex") args.push("--sandbox", "read-only");
+    /**
+     * Grok's is the same idea in its own spelling, and the spelling is the trap: its `--disallowed-tools`
+     * takes ONE comma-separated value, where Claude's takes a list of separate arguments. Passed Claude's
+     * way, the second name becomes the prompt's neighbour rather than a tool to remove.
+     *
+     * The names are Grok's own, read from the `system/init` event's tool list rather than assumed:
+     * `write` creates a file and `search_replace` edits one. Verified both ways on a real call — with the
+     * flag no file was created (while the agent still announced it would), without it the file appeared.
+     *
+     * `run_terminal_command` is deliberately left available, matching the Claude side, where Bash is not
+     * among the disallowed tools either: a lens that cannot read the tree cannot review it. Asked to write
+     * anyway, Grok DOES reach for it — "I don't have a dedicated write tool in this session, so I'll create
+     * blocked.txt with the terminal" — and still produced no file, because a read-only call passes no
+     * `--permission-mode` and its default refuses the write. Measured, not assumed; and it is the shell, not
+     * the flag, doing the refusing there.
+     */
+    if (this.readOnly && kind === "grok") args.push("--disallowed-tools", "write,search_replace");
     /**
      * A writing agent has to be allowed to write, and nobody is there to be asked.
      *
@@ -183,6 +216,9 @@ export class CliProvider implements Provider {
      */
     if (!this.readOnly && kind === "claude") args.push("--permission-mode", "acceptEdits");
     if (!this.readOnly && kind === "codex") args.push("--sandbox", "workspace-write");
+    // Grok spells this exactly as Claude does, and its `--permission-mode` list offers a fully permissive
+    // setting too — deliberately not taken here, for the reason above.
+    if (!this.readOnly && kind === "grok") args.push("--permission-mode", "acceptEdits");
 
     /**
      * Streamed as it happens, not replayed at the end.
@@ -285,6 +321,21 @@ export class CliProvider implements Provider {
       return;
     }
     if (res.error && !res.text.trim()) {
+      /**
+       * A missing session is worth naming as one, whichever way the CLI phrased it.
+       *
+       * The `<synthetic>` branch above catches it on Claude, where a signed-out profile still ANSWERS. Grok
+       * fails instead — exit 1, no answer, the sentence on stderr — so it arrives here, and passed through
+       * raw it reads as some transient CLI fault. It is not transient: nothing about this call will work
+       * until somebody signs in, and the remedy is one command.
+       */
+      if (isLoggedOut(res.error)) {
+        yield {
+          type: "error", retryable: true,
+          message: `${kind} CLI is not logged in${account ? ` under profile "${account.name}"` : ""} — run \`hcode add-provider ${kind}\` to sign it in again`,
+        };
+        return;
+      }
       yield { type: "error", message: `${kind} CLI: ${res.error}`, retryable: res.exitCode !== 0 };
       return;
     }

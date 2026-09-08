@@ -1,9 +1,9 @@
 import { join } from "node:path";
-import type { CliKind } from "./cli-agent.js";
+import { CLI_KINDS, type CliKind } from "./cli-agent.js";
 import type { AuthStatus } from "./cli-auth.js";
 
 /**
- * `hcode add-provider claude|codex` — connecting one more subscription.
+ * `hcode add-provider claude|codex|grok` — connecting one more subscription.
  *
  * horse-code does not authenticate anything and never sees a credential. It picks a directory the CLI has
  * not been pointed at before, hands the terminal to that CLI's own sign-in, and afterwards asks the CLI
@@ -85,7 +85,7 @@ export function accountsIn(config: Record<string, unknown>): AccountEntry[] {
   return raw.filter((a): a is AccountEntry => {
     const e = a as AccountEntry;
     if (typeof a !== "object" || a === null) return false;
-    if (e.kind !== "claude" && e.kind !== "codex") return false;
+    if (!CLI_KINDS.includes(e.kind)) return false;
     // A missing directory is meaningful (the ambient login); a non-string one is malformed.
     return e.configDir === undefined || typeof e.configDir === "string";
   });

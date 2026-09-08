@@ -59,6 +59,19 @@ describe("capabilityScore", () => {
   it("codex effort suffix nudges the score (ultra > low)", () => {
     expect(capabilityScore("cx/gpt-5.6-sol-ultra")).toBeGreaterThan(capabilityScore("cx/gpt-5.6-sol-low"));
   });
+
+  /**
+   * Grok's placement is a starting position, not a measurement — nothing on this board has run one yet. What
+   * the test pins is the pair of boundaries that placement has to respect: it must not sit at the unranked
+   * floor, which would band it "fast" and permanently reserve it for routing; and it must not outrank opus,
+   * which would hand it the strong roles before it has earned any of them.
+   */
+  it("ranks Grok with the mid tier — above the unranked floor, below opus", () => {
+    expect(capabilityScore("grok-4.6")).toBeGreaterThan(capabilityScore("oc/qwen3.6-plus"));
+    expect(capabilityScore("grok-4.6")).toBeLessThan(capabilityScore("cc/claude-opus-5"));
+    expect(capabilityScore("grok-4.6")).toBeGreaterThan(capabilityScore("grok-4.5"));
+    expect(modelBand("grok-4.6")).toBe("mid");
+  });
 });
 
 describe("baseModel", () => {

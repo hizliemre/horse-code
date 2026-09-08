@@ -10,6 +10,7 @@ import { AccountPool, fileUsageStore, accountsLine } from "./agents/cli-accounts
 import { addProvider } from "./agents/add-provider.js";
 import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
+import { CLI_KINDS, type CliKind } from "./agents/cli-agent.js";
 import { cliCatalog } from "./agents/cli-models.js";
 import { stripThinking } from "./tui/format.js";
 import { SkillRegistry } from "./skills/registry.js";
@@ -313,9 +314,9 @@ export async function main(argv: string[]): Promise<void> {
    * subscription is exhausted, which is exactly when the ordinary startup path is least likely to get far.
    */
   if (argv[0] === "add-provider") {
-    const kind = argv[1];
-    if (kind !== "claude" && kind !== "codex") {
-      console.error(`add-provider needs a CLI to connect: \`hcode add-provider claude\` or \`hcode add-provider codex\`${kind ? ` (got "${kind}")` : ""}`);
+    const kind = argv[1] as CliKind | undefined;
+    if (!kind || !CLI_KINDS.includes(kind)) {
+      console.error(`add-provider needs a CLI to connect: ${CLI_KINDS.map((k) => `\`hcode add-provider ${k}\``).join(", ")}${argv[1] ? ` (got "${argv[1]}")` : ""}`);
       process.exitCode = 1;
       return;
     }
@@ -470,7 +471,7 @@ export async function main(argv: string[]): Promise<void> {
    * Asked once and remembered: a sign-in does not change mid-session, and the panel repaints often enough
    * that spawning both CLIs on every repaint would be paid for repeatedly and silently.
    */
-  const ambientLogins = (["claude", "codex"] as const)
+  const ambientLogins = CLI_KINDS
     .filter((k) => !config.accounts.some((a) => a.kind === k))
     .map((kind) => ({ kind, status: checkProfile(kind) }));
   /**

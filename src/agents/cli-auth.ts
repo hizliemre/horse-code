@@ -16,14 +16,22 @@ import type { CliKind } from "./cli-agent.js";
 /**
  * The environment that points a CLI at one profile.
  *
- * Two different variables for two different binaries, each verified against the real thing: an empty
- * directory makes `claude auth status` report `loggedIn: false` and `codex login status` print
- * "Not logged in", while the ambient login answers normally in both. Nothing is shared between them — a
- * Claude profile says nothing about Codex, which is why an account carries the kind it belongs to.
+ * A different variable per binary, each verified against the real thing: pointed at an empty directory,
+ * `claude auth status` reports `loggedIn: false`, `codex login status` prints "Not logged in", and
+ * `grok models` prints "You are not authenticated." — while the ambient login answers normally in all
+ * three. Nothing is shared between them: a Claude profile says nothing about Codex or Grok, which is why an
+ * account carries the kind it belongs to.
+ *
+ * `GROK_HOME` was found by trying it, not by reading it in the help — Grok's `--help` names only
+ * `GROK_SANDBOX`. Under a fresh directory it built its own tree there (`config.toml`, `sessions/`, `logs/`,
+ * `agent_id`) and reported itself signed out, which is the same behaviour the other two show and the whole
+ * requirement for a second subscription.
  */
 export function profileEnv(kind: CliKind, configDir?: string): Record<string, string> {
   if (!configDir) return {}; // the ambient login: say nothing, and the CLI finds the session it always uses
-  return kind === "claude" ? { CLAUDE_CONFIG_DIR: configDir } : { CODEX_HOME: configDir };
+  if (kind === "claude") return { CLAUDE_CONFIG_DIR: configDir };
+  if (kind === "codex") return { CODEX_HOME: configDir };
+  return { GROK_HOME: configDir };
 }
 
 /** Who a profile is logged in as, in the terms its own CLI uses. */
@@ -40,9 +48,26 @@ export interface AuthStatus {
  *
  * Claude answers `auth status` with JSON carrying `loggedIn`, `email` and `subscriptionType`. Codex answers
  * `login status` with one line of prose — "Logged in using ChatGPT" or "Not logged in" — so its plan is
- * whatever it says it used, and it offers no address to report. Both were run to see, rather than assumed.
+ * whatever it says it used, and it offers no address to report. All three were run to see, rather than
+ * assumed.
+ *
+ * Grok has no status command at all: `grok login --help` offers only `--oauth` and `--device-auth`, and
+ * `grok doctor` reports the terminal, the clipboard and the microphone without ever mentioning an account.
+ * What does say is `grok models`, whose first line is "You are logged in with grok.com." or "You are not
+ * authenticated." — so that is what is asked. The exit code is 0 EITHER WAY, measured, which is why the text
+ * is read rather than the status: a check on the exit code would call every signed-out profile connected.
  */
 export function readAuthStatus(kind: CliKind, out: string): AuthStatus {
+  if (kind === "grok") {
+    // Grok names the identity provider it signed in through and no address, so — as with Codex — the plan is
+    // the only identity there is.
+    const m = /you are logged in with\s+(.+)/i.exec(out);
+    if (!m) return { loggedIn: false };
+    // The trailing period is the sentence's, not the name's — and the name has periods of its own
+    // ("grok.com"), so it cannot simply be read up to the first one.
+    const plan = m[1].trim().replace(/\.$/, "");
+    return { loggedIn: true, ...(plan ? { plan } : {}) };
+  }
   if (kind === "codex") {
     const m = /logged in(?: using (.+))?/i.exec(out);
     // "Not logged in" contains "logged in" — the negation has to be checked first, or every profile
@@ -66,9 +91,11 @@ export function readAuthStatus(kind: CliKind, out: string): AuthStatus {
   }
 }
 
-/** The status command each CLI answers. */
+/** The status command each CLI answers. Grok has none, so its model list is asked instead — see above. */
 export function statusArgs(kind: CliKind): string[] {
-  return kind === "claude" ? ["auth", "status"] : ["login", "status"];
+  if (kind === "claude") return ["auth", "status"];
+  if (kind === "codex") return ["login", "status"];
+  return ["models"];
 }
 
 /** The login command each CLI runs. Interactive by nature: it opens a browser and waits for a person. */

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { addProvider, withAmbient, freshDir, accountsIn } from "../../src/agents/add-provider.js";
 import type { AddProviderIO, AccountEntry } from "../../src/agents/add-provider.js";
 import type { AuthStatus } from "../../src/agents/cli-auth.js";
-import { readAuthStatus } from "../../src/agents/cli-auth.js";
+import { readAuthStatus, profileEnv, statusArgs } from "../../src/agents/cli-auth.js";
 import { accountsLine, ageOf } from "../../src/agents/cli-accounts.js";
 
 const HOME = "/home/u";
@@ -188,6 +188,54 @@ describe("reading what a CLI says about its session", () => {
 
   it("treats an unparseable answer as no session rather than guessing", () => {
     expect(readAuthStatus("claude", "<html>gateway error</html>")).toEqual({ loggedIn: false });
+  });
+
+  /**
+   * Grok has no status command at all — `grok login --help` offers only `--oauth` and `--device-auth`, and
+   * `grok doctor` reports the terminal and the microphone without ever mentioning an account. `grok models`
+   * is what answers, and this is its real first line.
+   */
+  it("reads Grok's model listing, which is the only thing that names its session", () => {
+    const out = readAuthStatus("grok", "You are logged in with grok.com.\n\nDefault model: grok-4.6\n");
+    expect(out).toEqual({ loggedIn: true, plan: "grok.com" });
+  });
+
+  /**
+   * The exit code is 0 EITHER WAY, measured on both a signed-in and a signed-out profile. So the text is the
+   * only signal there is: checked on the status instead, every signed-out profile would report itself
+   * connected and be handed real work.
+   */
+  it("reads Grok's refusal, which exits successfully all the same", () => {
+    expect(readAuthStatus("grok", "You are not authenticated.\n\nDefault model: grok-4.6\n"))
+      .toEqual({ loggedIn: false });
+  });
+});
+
+/**
+ * Each CLI keeps its session under a directory of its own, and the variable that names it differs per
+ * binary. `GROK_HOME` was found by trying it — Grok's `--help` names only `GROK_SANDBOX` — and under a fresh
+ * directory it built its own tree there and reported itself signed out, exactly as the other two do.
+ */
+describe("pointing a CLI at one profile", () => {
+  it("asks each CLI the question it can actually answer", () => {
+    expect(statusArgs("claude")).toEqual(["auth", "status"]);
+    expect(statusArgs("codex")).toEqual(["login", "status"]);
+    expect(statusArgs("grok")).toEqual(["models"]);
+  });
+
+  it("names each CLI's own variable", () => {
+    expect(profileEnv("claude", "/p/c")).toEqual({ CLAUDE_CONFIG_DIR: "/p/c" });
+    expect(profileEnv("codex", "/p/x")).toEqual({ CODEX_HOME: "/p/x" });
+    expect(profileEnv("grok", "/p/g")).toEqual({ GROK_HOME: "/p/g" });
+  });
+
+  /**
+   * The ambient login is expressed as ABSENCE, for every kind. Claude's is in the macOS Keychain and setting
+   * `CLAUDE_CONFIG_DIR` at all switches it to file credentials — so naming the default directory reports
+   * logged out for someone who plainly is not.
+   */
+  it("says nothing at all for the login already in use", () => {
+    for (const kind of ["claude", "codex", "grok"] as const) expect(profileEnv(kind)).toEqual({});
   });
 });
 

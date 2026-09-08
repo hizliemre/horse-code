@@ -18,6 +18,13 @@ import { profileEnv } from "./cli-auth.js";
  *   codex exec --json
  *     the same shape in Codex's own vocabulary.
  *
+ *   grok --single=… --output-format streaming-messages-json
+ *     system/init · assistant · user (tool_result) · result/success
+ *     → byte-for-byte the shape Claude Code emits, which its own `--help` states outright ("Anthropic
+ *       Messages API wire format") and a live call confirms. So `decodeClaudeEvent` reads it unchanged, and
+ *       the one thing it does NOT carry is `rate_limit_event`: Grok reports cost and token usage but never
+ *       says how much of a window is spent. See `CliQuota` — the pool simply learns nothing from these calls.
+ *
  * The fixed cost of one delegated conversation is ~18.5k cache-write tokens (~$0.19 API-equivalent) — the
  * project's CLAUDE.md, hooks and skills being loaded. Measured across every arrangement of the prompt:
  * appending to the system prompt, replacing it, putting everything in the user message, and turning the
@@ -31,7 +38,10 @@ import { profileEnv } from "./cli-auth.js";
  */
 
 /** Which official CLI runs the agent. */
-export type CliKind = "claude" | "codex";
+export type CliKind = "claude" | "codex" | "grok";
+
+/** Every CLI this system knows, for the places that have to ask all of them something. */
+export const CLI_KINDS: readonly CliKind[] = ["claude", "codex", "grok"];
 
 export interface CliEvent {
   /** Assistant prose as it arrives — the live row and the transcript read this. */
@@ -105,6 +115,16 @@ export interface CliRun {
   onEvent?: (ev: CliEvent) => void;
 }
 
+/**
+ * What the stream says when it reports a failure and names none.
+ *
+ * A `result` event can be `error_during_execution` and carry no `result` text whatsoever, and then the only
+ * account of what went wrong is on stderr. Measured on a signed-out Grok: the stream said this much and
+ * nothing more, while stderr held the entire remedy — "Not signed in. To authenticate without a browser,
+ * run: grok login --device-code". `runCliAgent` prefers the spoken one for exactly that reason.
+ */
+export const CLI_ERROR_UNSPOKEN = "the CLI reported an error";
+
 export interface CliResult {
   text: string;
   usage?: CliUsage;
@@ -116,34 +136,63 @@ export interface CliResult {
   exitCode: number;
 }
 
-/** The argv for a headless run, per CLI. Kept in one place so the two shapes can be read side by side. */
+/** The argv for a headless run, per CLI. Kept in one place so the three shapes can be read side by side. */
 export function cliArgs(kind: CliKind, prompt: string, extra: string[] = []): string[] {
   /**
-   * The prompt goes LAST, behind a `--`, because a prompt is text and text can start with a dash.
+   * A prompt is text, and text can start with a dash. Every CLI here gets that wrong by default, and each
+   * needs a different answer.
    *
-   * Both CLIs parse a leading `-` as an option and refuse the call outright — measured on each:
+   * Claude and Codex parse a leading `-` as an option and refuse the call outright — measured on each:
    * `error: unknown option '---` from Claude, `error: unexpected argument '---` from Codex. It is not a
    * corner case: every spec-kit command document opens with YAML front matter, so `---` is the first thing
    * on the line, and delegating any spec-kit phase failed before a model was reached. A `--` ends option
-   * parsing, and both accept it.
+   * parsing, and both accept it, so on those two the prompt goes LAST, behind a `--`.
    *
    * Flags therefore have to come before it, which is why `extra` is spliced in ahead of the prompt rather
    * than appended as it was.
    */
-  return kind === "claude"
+  if (kind === "claude") {
     // `--verbose` is required for stream-json to emit the per-turn events rather than only the result.
-    ? ["--output-format", "stream-json", "--verbose", ...extra, "-p", "--", prompt]
+    return ["--output-format", "stream-json", "--verbose", ...extra, "-p", "--", prompt];
+  }
+  if (kind === "codex") {
     // `--skip-git-repo-check`: a task worktree IS a repo, but the base and the scratch cases are not, and
     // Codex refuses outright rather than degrading — measured: "Not inside a trusted directory".
-    : ["exec", "--json", "--skip-git-repo-check", ...extra, "--", prompt];
+    return ["exec", "--json", "--skip-git-repo-check", ...extra, "--", prompt];
+  }
+  /**
+   * Grok takes the prompt as a flag's VALUE, and a `--` cannot rescue that.
+   *
+   * Its headless mode is `-p/--single <PROMPT>`, so the prompt is not a positional argument the way it is on
+   * the other two — and clap refuses a value that begins with a dash before the prompt is ever read.
+   * Measured, both spellings, on the same `---`-leading text that broke the others:
+   *
+   *   grok -p "---…"     → error: a value is required for '--single <PROMPT>' but none was supplied
+   *   grok -p -- "---…"  → error: a value is required for '--single <PROMPT>' but none was supplied
+   *
+   * The `--` makes it worse rather than better: it ends option parsing before the flag has taken its value.
+   * `--single=<prompt>` attaches the value to the flag, so nothing about the text is ever parsed as an
+   * option, and it was verified against the same front-matter prompt the other two needed `--` for.
+   *
+   * `streaming-messages-json` is the Anthropic Messages wire format, which is why `decodeClaudeEvent` reads
+   * this stream. `--verbose` has no counterpart and is not needed: the per-turn assistant events arrive
+   * without it.
+   */
+  return ["--output-format", "streaming-messages-json", ...extra, `--single=${prompt}`];
 }
 
 /**
- * Claude Code's stream-json, decoded into this system's vocabulary.
+ * Claude Code's stream-json, decoded into this system's vocabulary. Grok's too — it emits the same format.
  *
  * Only the fields that carry meaning here: the assistant's text, the tools its agent ran (for the activity
  * strip), the terminal usage, and the rate-limit signal — which is the one the whole bench/park machinery is
  * built around, so it must not be swallowed as an unknown event type.
+ *
+ * Shared with Grok because Grok's `--output-format streaming-messages-json` IS this format — its own help
+ * says so and a live call proved it, down to `system/init`, `assistant` with a `content` array of
+ * thinking/text/tool_use blocks, the `user` turn carrying `tool_result`, and `result` with `usage` and
+ * `total_cost_usd`. The one branch below that Grok never exercises is `rate_limit_event`: it reports what a
+ * call cost but never how much of a window is left.
  */
 export function decodeClaudeEvent(line: string): CliEvent | undefined {
   let e: Record<string, unknown>;
@@ -227,7 +276,7 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
         ...(cost !== undefined ? { costUsd: cost } : {}),
       },
       ...((e as { subtype?: string }).subtype === "error_during_execution"
-        ? { error: String((e as { result?: unknown }).result ?? "the CLI reported an error") } : {}),
+        ? { error: String((e as { result?: unknown }).result ?? CLI_ERROR_UNSPOKEN) } : {}),
     };
   }
   return undefined;
@@ -309,6 +358,11 @@ function describeWindows(windows: Record<string, number>): string {
  * Unchecked, a typo in one chain link becomes an invented answer that horse-code records as that model's
  * work: the fitness store learns from it, the review counts it, and a role is judged on a turn that never
  * happened. It is treated as a model failure so the chain slides and the bench takes the bad name out.
+ *
+ * Claude Code is alone in needing this. Codex refuses an unknown name with an error, and so does Grok —
+ * measured: `-m definitely-not-a-model` ends in `result/subtype: "error_during_execution"` with
+ * `Couldn't set model 'definitely-not-a-model': Invalid params: "unknown model id"` on stderr and exit 1.
+ * Both fail honestly, so on those two a wrong name cannot be mistaken for an answer.
  */
 export const SYNTHETIC = "<synthetic>";
 
@@ -355,8 +409,27 @@ export function makeStreamReader(
   };
 }
 
+/**
+ * Which account of a failure to report: the stream's, or the one shouted on stderr.
+ *
+ * stderr only speaks for a FAILED run — a CLI that warns on stderr and succeeds must not be read as having
+ * failed — but when it does speak it often says more than the stream managed to.
+ *
+ * The stream wins whenever it named something. It loses when all it said was that something went wrong:
+ * measured on a signed-out Grok, the `result` event was `error_during_execution` carrying no text at all,
+ * while stderr held the entire remedy — "Not signed in. To authenticate without a browser, run: grok login
+ * --device-code". Preferring the stream unconditionally turns the one failure a person can actually fix into
+ * "the CLI reported an error".
+ */
+export function reportedError(decoded: string | undefined, stderr: string, exitCode: number): string | undefined {
+  if (decoded && decoded !== CLI_ERROR_UNSPOKEN) return decoded;
+  const spoken = exitCode !== 0 ? stderr.trim().slice(0, 500) : "";
+  return spoken || decoded || undefined;
+}
+
 export async function runCliAgent(run: CliRun): Promise<CliResult> {
-  const decode = run.kind === "claude" ? decodeClaudeEvent : decodeCodexEvent;
+  // Codex is the odd one out: Claude and Grok speak the same wire format — see `decodeClaudeEvent`.
+  const decode = run.kind === "codex" ? decodeCodexEvent : decodeClaudeEvent;
   const args = cliArgs(run.kind, run.prompt, run.args ?? []);
   return new Promise<CliResult>((resolve) => {
     let child;
@@ -398,15 +471,14 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
     child.on("error", (e) => resolve({ text, ...(usage ? { usage } : {}), error: e.message, exitCode: -1 }));
     child.on("close", (code) => {
       reader.end();
+      const reported = reportedError(error, stderr, code ?? -1);
       resolve({
         text,
         ...(usage ? { usage } : {}),
         ...(rateLimited ? { rateLimited } : {}),
         ...(quota ? { quota } : {}),
         ...(served ? { served } : {}),
-        // stderr only becomes the error when nothing better was said — a CLI that warns on stderr and
-        // succeeds must not be read as having failed.
-        ...(error ?? (code !== 0 && stderr.trim()) ? { error: error ?? stderr.trim().slice(0, 500) } : {}),
+        ...(reported ? { error: reported } : {}),
         exitCode: code ?? -1,
       });
     });
