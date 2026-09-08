@@ -11,26 +11,30 @@ import { addProvider } from "./agents/add-provider.js";
 import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
 import { CLI_KINDS, type CliKind } from "./agents/cli-agent.js";
-import { promptSecret, writeZaiProfile, verifyZaiProfile } from "./agents/zai-profile.js";
+import { promptSecret, writeZaiProfile, verifyZaiKey } from "./agents/zai-profile.js";
 import { ZAI_MODELS } from "./agents/cli-models.js";
 
 /**
- * Connects a z.ai account: take the key, write the profile, and confirm it against the real endpoint.
+ * Connects a z.ai account: take the key, confirm it against the real endpoint, and only then write it.
  *
- * The confirmation is the part that cannot be skipped. z.ai issues an ordinary bearer token, and Claude Code
- * calls a profile connected the moment one is present — measured, with the token "totally-bogus". So the
- * only thing that can tell a live key from a dead one is a call, and one is made here so the failure lands
- * on the person who can fix it rather than on the first task of the next run.
+ * The confirmation cannot be skipped. z.ai issues an ordinary bearer token, and Claude Code calls a profile
+ * connected the moment one is present — measured, with the token "totally-bogus". So the only thing that can
+ * tell a live key from a dead one is a call, and one is made here so the failure lands on the person who can
+ * fix it rather than on the first task of the next run.
+ *
+ * Checked BEFORE writing, which is the order a live key corrected. The first version wrote the profile and
+ * then verified, so a key the endpoint refused was left sitting on disk anyway — a credential stored for an
+ * account that was never connected.
  */
-function connectZai(dir: string): { ok: boolean; error?: string } {
+async function connectZai(dir: string): Promise<{ ok: boolean; error?: string }> {
   process.stdout.write("z.ai API key (not shown as you type): ");
   const token = promptSecret();
   process.stdout.write("\n");
   if (!token) return { ok: false, error: "no key was entered" };
-  writeZaiProfile(dir, token);
-  console.log(`Checking it with one real call to ${ZAI_MODELS[0]}…`);
-  const v = verifyZaiProfile(dir, ZAI_MODELS[0]);
+  console.log(`Asking ${ZAI_MODELS[0]} one question, to see whether the key works…`);
+  const v = await verifyZaiKey(token, ZAI_MODELS[0]);
   if (!v.ok) return { ok: false, error: v.error };
+  writeZaiProfile(dir, token);
   console.log(`  answered by ${v.served ?? "the endpoint (which named no model)"}.`);
   return { ok: true };
 }
@@ -344,7 +348,7 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     const path = `${process.env.HOME ?? ""}/.horsecode/config.json`;
-    process.exitCode = addProvider(kind, {
+    process.exitCode = await addProvider(kind, {
       home: process.env.HOME ?? "",
       readConfig: () => {
         try {

@@ -81,14 +81,24 @@ export function withAmbient(
   ];
 }
 
-/** Everything the command needs from the outside world, so the flow itself can be tested without either CLI. */
+/** Whether a profile became real, and what to tell the person when it did not. */
+export interface LoginResult { ok: boolean; error?: string }
+
+/** Everything the command needs from the outside world, so the flow itself can be tested without any CLI. */
 export interface AddProviderIO {
   home: string;
   /** The global config as it stands. Merged back, never rewritten — `apiKey` and the rest must survive. */
   readConfig: () => Record<string, unknown>;
   writeConfig: (config: Record<string, unknown>) => void;
-  /** Hands the terminal to the CLI's own login, pointed at one profile. */
-  login: (kind: CliKind, configDir?: string) => { ok: boolean; error?: string };
+  /**
+   * Makes one profile real, and the two shapes of that are why this may be awaited.
+   *
+   * For the CLIs with a sign-in it hands over the terminal and returns when they are done — synchronous, and
+   * blocking on a person. For z.ai there is no sign-in: it asks for a key and puts one real request to the
+   * endpoint, which is a network call and therefore a promise. Callers that supply the synchronous kind are
+   * unaffected; awaiting a plain value is a plain value.
+   */
+  login: (kind: CliKind, configDir?: string) => LoginResult | Promise<LoginResult>;
   /** Asks a CLI who it is logged in as — under one profile, or under the ambient login when none is given. */
   check: (kind: CliKind, configDir?: string) => AuthStatus;
   log: (line: string) => void;
@@ -113,7 +123,7 @@ export function accountsIn(config: Record<string, unknown>): AccountEntry[] {
  * The config is only written after the CLI confirms a real session. A failed or abandoned login leaves
  * nothing behind — a profile recorded on optimism would be picked for real work and fail every call.
  */
-export function addProvider(kind: CliKind, io: AddProviderIO): number {
+export async function addProvider(kind: CliKind, io: AddProviderIO): Promise<number> {
   const config = io.readConfig();
   const existing = accountsIn(config);
 
@@ -143,7 +153,7 @@ export function addProvider(kind: CliKind, io: AddProviderIO): number {
     io.log(`Sign in with the account you want to add — not the one already connected.\n`);
   }
 
-  const r = io.login(kind, dir);
+  const r = await io.login(kind, dir);
   if (!r.ok) {
     if (kind === "zai") {
       io.log(`\nz.ai did not accept that key${r.error ? `: ${r.error}` : ""}. Nothing was changed.`);

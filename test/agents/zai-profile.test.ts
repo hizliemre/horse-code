@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, statSync, mkdirSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  ZAI_BASE_URL, zaiSettings, settingsPath, writeZaiProfile, hasZaiProfile,
+  ZAI_BASE_URL, zaiSettings, settingsPath, writeZaiProfile, hasZaiProfile, zaiErrorText,
 } from "../../src/agents/zai-profile.js";
 import { cliBinary, cliArgs, CLI_KINDS } from "../../src/agents/cli-agent.js";
 import { profileEnv, statusArgs, runLogin, checkProfile } from "../../src/agents/cli-auth.js";
@@ -126,6 +126,32 @@ describe("z.ai has no ambient login to inherit", () => {
    */
   it("reports no ambient z.ai session rather than the Anthropic one behind it", () => {
     expect(checkProfile("zai")).toEqual({ loggedIn: false });
+  });
+});
+
+/**
+ * What a refused key is told to the person, and why it is read out of the body rather than the status.
+ *
+ * Measured against a live key: z.ai answers a refusal in the Anthropic error shape, and the sentence inside
+ * is the whole value of asking. "[1113][Insufficient balance or no resource package. Please recharge.]"
+ * names something a person can go and fix; HTTP 429 on its own reads as "try again later", which for this
+ * cause is advice that will never come true.
+ */
+describe("reading a refusal in the endpoint's own words", () => {
+  it("takes the sentence z.ai put in the body", () => {
+    expect(zaiErrorText({
+      type: "error",
+      error: { type: "rate_limit_error", code: "1113",
+        message: "[1113][Insufficient balance or no resource package. Please recharge.]" },
+    })).toContain("Insufficient balance");
+  });
+
+  /** Nothing recognisable means the caller falls back to the status code rather than inventing a diagnosis. */
+  it("says nothing when the body carries no message", () => {
+    expect(zaiErrorText(undefined)).toBeUndefined();
+    expect(zaiErrorText({ error: {} })).toBeUndefined();
+    expect(zaiErrorText("<html>gateway</html>")).toBeUndefined();
+    expect(zaiErrorText({ error: { message: "   " } })).toBeUndefined();
   });
 });
 

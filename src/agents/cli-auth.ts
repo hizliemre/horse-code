@@ -114,7 +114,7 @@ export function loginArgs(kind: CliKind): string[] {
  * Worth knowing what this CANNOT answer, because the words it returns overstate it: for a z.ai profile
  * `auth status` reports `loggedIn: true` whenever a token is present, valid or not — measured against a
  * control with the token "totally-bogus". Connecting one is confirmed by a real call instead; see
- * `verifyZaiProfile`.
+ * `verifyZaiKey`.
  */
 export function checkProfile(kind: CliKind, configDir?: string): AuthStatus {
   /**

@@ -85,14 +85,14 @@ describe("choosing a directory for the new profile", () => {
 describe("connecting a subscription", () => {
   const newDir = `${HOME}/.horsecode/profiles/claude-2`;
 
-  it("writes the account only after the CLI confirms a real session", () => {
+  it("writes the account only after the CLI confirms a real session", async () => {
     const io = fake({
       status: {
         "(ambient)": { loggedIn: true, email: "first@x.com", plan: "max" },
         [newDir]: { loggedIn: true, email: "second@x.com", plan: "max" },
       },
     });
-    expect(addProvider("claude", io)).toBe(0);
+    expect(await addProvider("claude", io)).toBe(0);
     expect(io.loggedInto).toEqual([newDir]);
     expect(io.written?.accounts).toEqual([
       { kind: "claude", name: "first@x.com", email: "first@x.com", plan: "max" },
@@ -104,12 +104,12 @@ describe("connecting a subscription", () => {
    * Everything else in that file has to survive, `apiKey` above all: this command is setup, and setup that
    * silently drops a credential someone else put there is worse than no command.
    */
-  it("leaves the rest of the config untouched", () => {
+  it("leaves the rest of the config untouched", async () => {
     const io = fake({
       config: { apiKey: "sk-keep-me", model: "opus", mcp: { x: { url: "http://y" } } },
       status: { [newDir]: { loggedIn: true, email: "s@x.com" } },
     });
-    addProvider("claude", io);
+    await addProvider("claude", io);
     expect(io.written?.apiKey).toBe("sk-keep-me");
     expect(io.written?.model).toBe("opus");
     expect(io.written?.mcp).toEqual({ x: { url: "http://y" } });
@@ -119,9 +119,9 @@ describe("connecting a subscription", () => {
    * A profile written on optimism gets PICKED for real work and fails every call it is given. Nothing is
    * recorded unless the CLI itself says there is a session.
    */
-  it("changes nothing when the sign-in is abandoned", () => {
+  it("changes nothing when the sign-in is abandoned", async () => {
     const io = fake({ login: () => ({ ok: false, error: "cancelled" }) });
-    expect(addProvider("claude", io)).toBe(1);
+    expect(await addProvider("claude", io)).toBe(1);
     expect(io.written).toBeUndefined();
   });
 
@@ -130,17 +130,17 @@ describe("connecting a subscription", () => {
    * callback — visible only in the browser. The CLI reported just that no code arrived, and horse-code sees
    * even less. Without this line someone debugs the command while the answer sits in the address bar.
    */
-  it("says where the reason for a refused sign-in actually is", () => {
+  it("says where the reason for a refused sign-in actually is", async () => {
     const io = fake({ login: () => ({ ok: false }) });
-    addProvider("claude", io);
+    await addProvider("claude", io);
     const said = io.lines.join("\n");
     expect(said).toContain("address holds the reason");
     expect(said).toContain("Nothing needs cleaning up");
   });
 
-  it("changes nothing when the CLI still reports no session afterwards", () => {
+  it("changes nothing when the CLI still reports no session afterwards", async () => {
     const io = fake({ status: {} });
-    expect(addProvider("claude", io)).toBe(1);
+    expect(await addProvider("claude", io)).toBe(1);
     expect(io.written).toBeUndefined();
   });
 
@@ -148,12 +148,12 @@ describe("connecting a subscription", () => {
    * Two entries for one account would look like added capacity while both draw down a single limit — a run
    * would believe it had somewhere to spill to and find the same exhausted subscription waiting.
    */
-  it("refuses to file the same account twice", () => {
+  it("refuses to file the same account twice", async () => {
     const io = fake({
       config: { accounts: [{ kind: "claude", name: "same@x.com", email: "same@x.com" }] },
       status: { [newDir]: { loggedIn: true, email: "same@x.com" } },
     });
-    expect(addProvider("claude", io)).toBe(1);
+    expect(await addProvider("claude", io)).toBe(1);
     expect(io.written).toBeUndefined();
     expect(io.lines.join("\n")).toContain("already connected");
   });

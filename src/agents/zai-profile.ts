@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { decodeClaudeEvent, makeStreamReader, SYNTHETIC } from "./cli-agent.js";
 
 /**
  * z.ai as a subscription, through the Claude Code binary it is designed to be used with.
@@ -33,7 +32,7 @@ import { decodeClaudeEvent, makeStreamReader, SYNTHETIC } from "./cli-agent.js";
  *      Measured against a control — an empty profile and a profile carrying the base URL but no token both
  *      report `loggedIn: false`, and adding the string "totally-bogus" as the token flips it to true. It is
  *      a presence check wearing the words of a validity check. So connecting a z.ai account is confirmed by
- *      a real call and never by that answer — see `verifyZaiProfile`.
+ *      a real call and never by that answer — see `verifyZaiKey`.
  */
 
 /** z.ai's Anthropic-compatible endpoint, from its own Claude Code guide. */
@@ -126,58 +125,75 @@ export interface ZaiCheck {
   ok: boolean;
   /** The model that actually answered, as the endpoint named it. The point of asking. */
   served?: string;
+  /** What went wrong, in the endpoint's OWN words wherever it supplied any. */
   error?: string;
 }
 
 /**
- * Asks the endpoint a real question, because it is the only thing that can answer this one.
+ * Asks the endpoint a real question, directly, and hands back whatever it says.
  *
- * A key that is expired, mistyped, or out of quota is indistinguishable from a good one until something is
- * spent against it — and `claude auth status` will call all four of them connected (measurement 4). One
- * cheap call settles it, and it settles a second thing at the same time: WHICH model served. Claude Code
- * prints `[claude-code:unrecognized_model]` for a GLM id, because the name is not in its own catalog, and
- * that warning is harmless — the request went out with the name intact. What would not be harmless is the
- * `<synthetic>` answer it produces when no model ran at all, so that is checked for by name.
+ * The first version of this asked THROUGH Claude Code, and a live key proved that wrong twice over. What a
+ * verification needs is one round trip; what it got was a whole agent session — the project's CLAUDE.md,
+ * hooks and skills loaded into a system prompt, a trust dialog for a config directory that had never seen
+ * the workspace, a `generate_session_title` side call to the same endpoint, and Claude Code's own retry
+ * policy on top. Measured against a real z.ai key: no answer in 90 seconds from an EMPTY directory with
+ * stdin closed, so none of that context was even the cause.
+ *
+ * And the cause was a sentence the endpoint had said immediately, which all of that machinery swallowed:
+ *
+ *   HTTP 429  {"type":"error","error":{"type":"rate_limit_error","code":"1113",
+ *              "message":"[1113][Insufficient balance or no resource package. Please recharge.]"}}
+ *
+ * A person told "Insufficient balance" goes and looks at their plan. A person told "did not answer within
+ * 120s" has no idea whether to blame the key, the network, the model name or this program. One HTTPS request
+ * gets the first answer in under a second, so that is what this does.
+ *
+ * The key is checked BEFORE the profile is written, which is why this takes a token rather than a directory:
+ * a key the endpoint refuses should leave nothing on disk at all.
  */
-export function verifyZaiProfile(dir: string, model: string, timeoutMs = 120_000): ZaiCheck {
-  const r = spawnSync(
-    "claude",
-    ["--output-format", "stream-json", "--verbose", "--model", model, "-p", "--", "Reply with the single word: ok"],
-    { env: { ...process.env, CLAUDE_CONFIG_DIR: dir }, encoding: "utf8", timeout: timeoutMs },
-  );
-  if (r.error) {
-    /**
-     * A timeout here is the endpoint not answering, not a slow model — the question asked is two words
-     * long. Measured against an address with nothing listening: Claude Code retries internally and this
-     * waits out the whole budget, then reports `spawnSync claude ETIMEDOUT`, which tells a person nothing
-     * about what to check.
-     */
-    const timedOut = (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+export async function verifyZaiKey(token: string, model: string, timeoutMs = 30_000): Promise<ZaiCheck> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${ZAI_BASE_URL}/v1/messages`, {
+      method: "POST",
+      signal: ctl.signal,
+      headers: {
+        "content-type": "application/json",
+        // Both spellings: z.ai accepts the bearer form, and `x-api-key` is what the Anthropic wire format
+        // names. Sending each costs nothing and removes a guess about which one this endpoint reads.
+        authorization: `Bearer ${token}`,
+        "x-api-key": token,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({ model, max_tokens: 16, messages: [{ role: "user", content: "Reply with: ok" }] }),
+    });
+    const body: unknown = await res.json().catch(() => undefined);
+    if (!res.ok) return { ok: false, error: zaiErrorText(body) ?? `the endpoint answered HTTP ${res.status}` };
+    const served = (body as { model?: string } | undefined)?.model;
+    return { ok: true, ...(served ? { served } : {}) };
+  } catch (e) {
+    const aborted = e instanceof Error && e.name === "AbortError";
     return {
       ok: false,
-      error: timedOut
+      error: aborted
         ? `${ZAI_BASE_URL} did not answer within ${Math.round(timeoutMs / 1000)}s`
-        : r.error.message,
+        : e instanceof Error ? e.message : String(e),
     };
+  } finally {
+    clearTimeout(timer);
   }
+}
 
-  let served: string | undefined;
-  let text = "";
-  let error: string | undefined;
-  const reader = makeStreamReader(decodeClaudeEvent, (ev) => {
-    if (ev.served) served = ev.served;
-    if (ev.text) text += ev.text;
-    if (ev.error) error = ev.error;
-  });
-  reader.push(r.stdout ?? "");
-  reader.end();
-
-  if (served === SYNTHETIC) {
-    // No model ran: the CLI produced the text itself. Its own answer usually says why.
-    return { ok: false, error: text.trim().slice(0, 300) || "the CLI answered without reaching a model" };
-  }
-  if (error) return { ok: false, error };
-  if (r.status !== 0) return { ok: false, error: (r.stderr ?? "").trim().slice(0, 300) || `claude exited ${r.status}` };
-  if (!text.trim()) return { ok: false, error: "the endpoint returned an empty answer" };
-  return { ok: true, ...(served ? { served } : {}) };
+/**
+ * The endpoint's own account of a refusal.
+ *
+ * z.ai answers in the Anthropic error shape, and the sentence inside is the whole value of asking — "[1113]
+ * [Insufficient balance or no resource package. Please recharge.]" names a thing a person can go and fix.
+ * Anything unrecognisable returns undefined so the caller falls back to the status code rather than
+ * inventing a diagnosis.
+ */
+export function zaiErrorText(body: unknown): string | undefined {
+  const msg = (body as { error?: { message?: unknown } } | undefined)?.error?.message;
+  return typeof msg === "string" && msg.trim() ? msg.trim() : undefined;
 }
