@@ -72,6 +72,14 @@ describe("capabilityScore", () => {
     expect(capabilityScore("grok-4.6")).toBeGreaterThan(capabilityScore("grok-4.5"));
     expect(modelBand("grok-4.6")).toBe("mid");
   });
+
+  /** GLM on the same terms — and its flash tier is claimed by WEAK_RE before any of this, as it should be. */
+  it("ranks GLM with the mid tier, and its flash tier as fast", () => {
+    expect(capabilityScore("glm-5.3")).toBeGreaterThan(capabilityScore("oc/qwen3.6-plus"));
+    expect(capabilityScore("glm-5.3")).toBeLessThan(capabilityScore("cc/claude-opus-5"));
+    expect(modelBand("glm-5.3")).toBe("mid");
+    expect(modelBand("glm-5.3-flash")).toBe("fast");
+  });
 });
 
 describe("baseModel", () => {
@@ -517,17 +525,35 @@ describe("which subscription serves a model", () => {
   });
 });
 
-describe("spreading a board across both subscriptions", () => {
+describe("spreading a board across the subscriptions", () => {
+  const roles = ["coder", "senior-coder", "designer", "code-reviewer", "principal-coder", "judge", "coach"];
+
   /**
-   * The regression itself: a chain confined to one CLI leaves the other subscription unspent, and has no
+   * The regression itself: a chain confined to one CLI leaves the other subscriptions unspent, and has no
    * live link anywhere in it when that CLI is rate-limited — the exact failure a fallback chain exists for.
+   *
+   * Stated as "reaches more than one" rather than "reaches claude AND codex", which is what it said while
+   * there were exactly two. With four subscriptions and three links a chain CANNOT hold them all, so the old
+   * wording would have failed for a board that is spread perfectly well — `coder` came out
+   * `grok-4.6 → glm-5.3 → gpt-5.6-terra`, three subscriptions deep and confined to none. The guarantee was
+   * never about those two names; it was that no role sits on a single subscription end to end.
    */
-  it("gives every role a chain that reaches both CLIs", () => {
-    const roles = ["coder", "senior-coder", "designer", "code-reviewer", "principal-coder", "judge", "coach"];
+  it("gives every role a chain that reaches more than one subscription", () => {
     for (const { role, models } of adjustRoleModels(roles, cliCatalog())) {
       const sources = new Set(models.map(sourceOf));
-      expect(sources, `${role}: ${models.join(" → ")}`).toContain("claude");
-      expect(sources, `${role}: ${models.join(" → ")}`).toContain("codex");
+      expect(sources.size, `${role}: ${models.join(" → ")}`).toBeGreaterThan(1);
+    }
+  });
+
+  /**
+   * The other half of what the old test held, and the half that would otherwise have been lost: no
+   * subscription goes UNSPENT. Per-role it can no longer be asked; across the board it still can, and this
+   * is the stronger question anyway — a plan nobody's chain reaches is a plan being paid for and not used.
+   */
+  it("leaves no subscription unreached across the board", () => {
+    const reached = new Set(adjustRoleModels(roles, cliCatalog()).flatMap((r) => r.models.map(sourceOf)));
+    for (const source of new Set(cliCatalog().map(sourceOf))) {
+      expect(reached, `nothing on the board reaches ${source}`).toContain(source);
     }
   });
 

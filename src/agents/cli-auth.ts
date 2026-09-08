@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import type { CliKind } from "./cli-agent.js";
+import { cliBinary, type CliKind } from "./cli-agent.js";
 
 /**
  * Asking a CLI who it is logged in as, and sending a person through its own login.
@@ -29,7 +29,12 @@ import type { CliKind } from "./cli-agent.js";
  */
 export function profileEnv(kind: CliKind, configDir?: string): Record<string, string> {
   if (!configDir) return {}; // the ambient login: say nothing, and the CLI finds the session it always uses
-  if (kind === "claude") return { CLAUDE_CONFIG_DIR: configDir };
+  /**
+   * z.ai uses Claude Code's own variable, because it IS Claude Code. What makes the profile a z.ai one is
+   * the `settings.json` inside it, whose `env` block names z.ai's endpoint and carries the token — measured
+   * to be honoured, and the reason no credential passes through this function. See `zai-profile.ts`.
+   */
+  if (kind === "claude" || kind === "zai") return { CLAUDE_CONFIG_DIR: configDir };
   if (kind === "codex") return { CODEX_HOME: configDir };
   return { GROK_HOME: configDir };
 }
@@ -93,7 +98,7 @@ export function readAuthStatus(kind: CliKind, out: string): AuthStatus {
 
 /** The status command each CLI answers. Grok has none, so its model list is asked instead — see above. */
 export function statusArgs(kind: CliKind): string[] {
-  if (kind === "claude") return ["auth", "status"];
+  if (kind === "claude" || kind === "zai") return ["auth", "status"];
   if (kind === "codex") return ["login", "status"];
   return ["models"];
 }
@@ -103,9 +108,30 @@ export function loginArgs(kind: CliKind): string[] {
   return kind === "claude" ? ["auth", "login"] : ["login"];
 }
 
-/** Runs a CLI's status command under one profile and reads the answer. */
+/**
+ * Runs a CLI's status command under one profile and reads the answer.
+ *
+ * Worth knowing what this CANNOT answer, because the words it returns overstate it: for a z.ai profile
+ * `auth status` reports `loggedIn: true` whenever a token is present, valid or not — measured against a
+ * control with the token "totally-bogus". Connecting one is confirmed by a real call instead; see
+ * `verifyZaiProfile`.
+ */
 export function checkProfile(kind: CliKind, configDir?: string): AuthStatus {
-  const r = spawnSync(kind, statusArgs(kind), {
+  /**
+   * There is no ambient z.ai, and asking anyway returns SOMEBODY ELSE'S ACCOUNT.
+   *
+   * A z.ai profile is a Claude Code directory pointed at another endpoint, so with no directory named this
+   * runs plain `claude auth status` — which answers with the person's own Anthropic session, address, plan
+   * and all. Observed exactly that while wiring this up: a probe that asked every kind ambiently printed the
+   * signed-in Anthropic address and its plan on the `zai` row, that subscription wearing z.ai's name.
+   * Pooled, it would send z.ai's turn to Anthropic and file the spend there.
+   *
+   * The caller that builds the start-up summary also skips z.ai, so no process is spawned for it at all.
+   * This is the guard underneath that one: a future caller which forgets gets a truthful "not connected"
+   * rather than a confident wrong answer.
+   */
+  if (kind === "zai" && !configDir) return { loggedIn: false };
+  const r = spawnSync(cliBinary(kind), statusArgs(kind), {
     env: { ...process.env, ...profileEnv(kind, configDir) },
     encoding: "utf8",
     // A status check that hangs must not hang the startup summary with it.
@@ -123,7 +149,16 @@ export function checkProfile(kind: CliKind, configDir?: string): AuthStatus {
  * passes through it — it set a directory beforehand and asks the CLI afterwards whether it worked.
  */
 export function runLogin(kind: CliKind, configDir?: string): { ok: boolean; error?: string } {
-  const r = spawnSync(kind, loginArgs(kind), {
+  /**
+   * z.ai has no sign-in to hand the terminal to, and running Claude Code's would be actively wrong: it would
+   * open ANTHROPIC's OAuth and write an Anthropic session into a directory meant to hold a z.ai token.
+   * Measured: a z.ai profile needs no login at all — a directory containing only the settings file produced
+   * an authenticated request. Connecting one writes that file; see `writeZaiProfile`.
+   */
+  if (kind === "zai") {
+    return { ok: false, error: "z.ai has no sign-in — a profile is connected by writing its settings file" };
+  }
+  const r = spawnSync(cliBinary(kind), loginArgs(kind), {
     env: { ...process.env, ...profileEnv(kind, configDir) },
     stdio: "inherit",
   });

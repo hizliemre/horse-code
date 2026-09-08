@@ -11,6 +11,29 @@ import { addProvider } from "./agents/add-provider.js";
 import { runLogin, checkProfile } from "./agents/cli-auth.js";
 import { CliProvider } from "./agents/cli-provider.js";
 import { CLI_KINDS, type CliKind } from "./agents/cli-agent.js";
+import { promptSecret, writeZaiProfile, verifyZaiProfile } from "./agents/zai-profile.js";
+import { ZAI_MODELS } from "./agents/cli-models.js";
+
+/**
+ * Connects a z.ai account: take the key, write the profile, and confirm it against the real endpoint.
+ *
+ * The confirmation is the part that cannot be skipped. z.ai issues an ordinary bearer token, and Claude Code
+ * calls a profile connected the moment one is present — measured, with the token "totally-bogus". So the
+ * only thing that can tell a live key from a dead one is a call, and one is made here so the failure lands
+ * on the person who can fix it rather than on the first task of the next run.
+ */
+function connectZai(dir: string): { ok: boolean; error?: string } {
+  process.stdout.write("z.ai API key (not shown as you type): ");
+  const token = promptSecret();
+  process.stdout.write("\n");
+  if (!token) return { ok: false, error: "no key was entered" };
+  writeZaiProfile(dir, token);
+  console.log(`Checking it with one real call to ${ZAI_MODELS[0]}…`);
+  const v = verifyZaiProfile(dir, ZAI_MODELS[0]);
+  if (!v.ok) return { ok: false, error: v.error };
+  console.log(`  answered by ${v.served ?? "the endpoint (which named no model)"}.`);
+  return { ok: true };
+}
 import { cliCatalog } from "./agents/cli-models.js";
 import { stripThinking } from "./tui/format.js";
 import { SkillRegistry } from "./skills/registry.js";
@@ -330,7 +353,16 @@ export async function main(argv: string[]): Promise<void> {
         } catch { return {}; }
       },
       writeConfig: (c) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(c, null, 2) + "\n"); },
-      login: runLogin,
+      /**
+       * "Make this profile real" means two different things, and z.ai is the one that is not a sign-in.
+       *
+       * The other three hand the terminal to their own OAuth. z.ai has none — a profile is a settings file
+       * holding an endpoint and a key — so here the step is: ask for the key, write it, and then SPEND one
+       * call proving it works. That last part is not ceremony: `claude auth status` reports any token as
+       * connected, valid or not, so without a real call a mistyped key would be filed as a working account
+       * and fail every call of the next run.
+       */
+      login: (k, dir) => (k === "zai" ? connectZai(dir ?? "") : runLogin(k, dir)),
       check: checkProfile,
       log: (line) => console.log(line),
     });
@@ -471,8 +503,16 @@ export async function main(argv: string[]): Promise<void> {
    * Asked once and remembered: a sign-in does not change mid-session, and the panel repaints often enough
    * that spawning both CLIs on every repaint would be paid for repeatedly and silently.
    */
+  /**
+   * z.ai is excluded, and asking would not merely be useless — it would be WRONG.
+   *
+   * A z.ai account is a Claude Code profile pointed at another endpoint, so "what would a call with no
+   * profile do" is answered by Claude Code's own session: the person's ANTHROPIC account, reported with
+   * their real address. Pooled as a z.ai default it would hand z.ai's turn to an Anthropic subscription and
+   * file the spend against it. z.ai has no ambient login at all — it is connected explicitly or not present.
+   */
   const ambientLogins = CLI_KINDS
-    .filter((k) => !config.accounts.some((a) => a.kind === k))
+    .filter((k) => k !== "zai" && !config.accounts.some((a) => a.kind === k))
     .map((kind) => ({ kind, status: checkProfile(kind) }));
   /**
    * A signed-in default goes INTO the pool, as a profile with no directory.

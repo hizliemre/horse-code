@@ -90,9 +90,20 @@ export function grokEffort(effort: string): string | undefined {
   return undefined;
 }
 
+/**
+ * What a z.ai subscription serves, from its own Claude Code guide and its quick-start.
+ *
+ * Versions again, for the same reason Grok's are: the endpoint takes the id it is given. Measured against a
+ * local stand-in for that endpoint, `--model glm-5.3` arrived in the request body verbatim, so these are
+ * named directly rather than through the `ANTHROPIC_DEFAULT_*_MODEL` mapping z.ai's guide suggests — that
+ * mapping exists for someone typing `/model sonnet`, and it would silently serve a different model than the
+ * one a role was assigned.
+ */
+export const ZAI_MODELS = ["glm-5.3", "glm-5.3-flash"] as const;
+
 /** The whole assignable catalog. `adjustRoleModels` does its own ranking, so this order decides nothing. */
 export function cliCatalog(): string[] {
-  return [...CLAUDE_MODELS, ...CODEX_MODELS, ...GROK_MODELS];
+  return [...CLAUDE_MODELS, ...CODEX_MODELS, ...GROK_MODELS, ...ZAI_MODELS];
 }
 
 /**
@@ -114,6 +125,12 @@ export function cliFor(model: string): CliKind | undefined {
    * this binary cannot serve. Left prefixed, it falls through to `undefined`, which is the right answer.
    */
   if (/^grok(-|$)/.test(m)) return "grok";
+  /**
+   * GLM means the z.ai subscription, and — like Grok — only unprefixed. A gateway catalog carried GLM too
+   * (`glm-5`, `glm-5.1`, `glm-5.2` are on this project's own record of one), and those ids name a proxied
+   * model this route cannot serve.
+   */
+  if (/^glm(-|$)/.test(m)) return "zai";
   return undefined;
 }
 

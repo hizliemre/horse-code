@@ -90,7 +90,8 @@ export async function buildJobDeps(opts: BuildJobDepsOpts): Promise<JobDeps> {
   if (opts.accounts) {
     const pool = opts.accounts;
     roleRegistry.setSourceWeights(() => ({
-      claude: pool.count("claude"), codex: pool.count("codex"), grok: pool.count("grok"),
+      claude: pool.count("claude"), codex: pool.count("codex"),
+      grok: pool.count("grok"), zai: pool.count("zai"),
     }));
   }
 

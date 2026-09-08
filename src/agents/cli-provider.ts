@@ -167,7 +167,13 @@ export class CliProvider implements Provider {
      * effort — the exact loss the native transport was built to stop.
      */
     const effort = req.effort ?? named;
-    if (effort && kind === "claude") args.push("--effort", effort);
+    /**
+     * z.ai takes Claude Code's flag because it IS Claude Code. Measured against a stand-in endpoint,
+     * `--effort high` produced no visible difference in the request body — both with and without it the
+     * body carried `thinking: {type: "adaptive"}` — so this is passed for consistency with the Claude path
+     * and not because it was seen to change anything on the wire.
+     */
+    if (effort && (kind === "claude" || kind === "zai")) args.push("--effort", effort);
     /**
      * Grok takes an effort too, but not this system's vocabulary — see `grokEffort`. A level it does not
      * know is an ERROR that ends the call before a model is reached, so it is translated rather than passed,
@@ -184,7 +190,7 @@ export class CliProvider implements Provider {
      * so the same limit has to be stated as a flag. Without it a review lens has a full editor in a worktree
      * it was only meant to read.
      */
-    if (this.readOnly && kind === "claude") args.push("--disallowed-tools", "Write", "Edit", "NotebookEdit");
+    if (this.readOnly && (kind === "claude" || kind === "zai")) args.push("--disallowed-tools", "Write", "Edit", "NotebookEdit");
     if (this.readOnly && kind === "codex") args.push("--sandbox", "read-only");
     /**
      * Grok's is the same idea in its own spelling, and the spelling is the trap: its `--disallowed-tools`
@@ -214,7 +220,7 @@ export class CliProvider implements Provider {
      * Deliberately NOT the fully permissive settings either CLI offers. An implementer needs to edit its
      * worktree, not to reach outside it.
      */
-    if (!this.readOnly && kind === "claude") args.push("--permission-mode", "acceptEdits");
+    if (!this.readOnly && (kind === "claude" || kind === "zai")) args.push("--permission-mode", "acceptEdits");
     if (!this.readOnly && kind === "codex") args.push("--sandbox", "workspace-write");
     // Grok spells this exactly as Claude does, and its `--permission-mode` list offers a fully permissive
     // setting too — deliberately not taken here, for the reason above.

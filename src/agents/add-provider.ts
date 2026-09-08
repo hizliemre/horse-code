@@ -33,9 +33,16 @@ export function freshDir(kind: CliKind, home: string, taken: readonly AccountEnt
   }
 }
 
-/** A name for a profile: the account it belongs to when the CLI names one, else the directory it lives in. */
+/**
+ * A name for a profile: the account it belongs to when the CLI names one, else the directory it lives in.
+ *
+ * The directory is already named after its kind — `freshDir` builds `profiles/claude-2` — so prefixing it
+ * again produced `claude-claude-2`. Invisible while every CLI reported either an address or a plan, and
+ * plainly visible now that z.ai reports neither.
+ */
 export function nameFor(kind: CliKind, status: AuthStatus, dir: string): string {
-  return status.email ?? `${kind}-${dir.split("/").pop() ?? "profile"}`;
+  const base = dir.split("/").pop() ?? "profile";
+  return status.email ?? (base.startsWith(`${kind}-`) ? base : `${kind}-${base}`);
 }
 
 /**
@@ -52,6 +59,15 @@ export function withAmbient(
   existing: readonly AccountEntry[],
   ambient: AuthStatus,
 ): AccountEntry[] {
+  /**
+   * z.ai HAS no ambient login, and asking after one returns somebody else's.
+   *
+   * A z.ai account is a Claude Code profile directory whose settings point elsewhere, so the question "what
+   * would a call with no profile do" is answered by Claude Code's own session — the person's ANTHROPIC
+   * account, reported with their real address. Recorded as a z.ai account it would be worse than wrong: the
+   * pool would hand z.ai's turn to an Anthropic subscription and file the spend against it.
+   */
+  if (kind === "zai") return [...existing];
   if (existing.some((a) => a.kind === kind)) return [...existing];
   if (!ambient.loggedIn) return [...existing];
   return [
@@ -114,11 +130,27 @@ export function addProvider(kind: CliKind, io: AddProviderIO): number {
   }
 
   const dir = freshDir(kind, io.home, accounts);
-  io.log(`\nOpening ${kind}'s own sign-in, for a NEW profile at ${dir}.`);
-  io.log(`Sign in with the account you want to add — not the one already connected.\n`);
+  if (kind === "zai") {
+    /**
+     * There is nothing to open. Measured: a z.ai profile is a directory containing one settings file, and a
+     * directory containing only that file already produces an authenticated request — no browser, no OAuth.
+     * Saying "opening z.ai's own sign-in" would send someone looking for a window that never appears.
+     */
+    io.log(`\nz.ai has no sign-in — an account is an API key, and the profile at ${dir} will hold it.`);
+    io.log(`Take the key from your z.ai dashboard; it is written to that profile alone and nowhere else.\n`);
+  } else {
+    io.log(`\nOpening ${kind}'s own sign-in, for a NEW profile at ${dir}.`);
+    io.log(`Sign in with the account you want to add — not the one already connected.\n`);
+  }
 
   const r = io.login(kind, dir);
   if (!r.ok) {
+    if (kind === "zai") {
+      io.log(`\nz.ai did not accept that key${r.error ? `: ${r.error}` : ""}. Nothing was changed.`);
+      io.log(`The key is checked by making one real call, because \`claude auth status\` reports any token as connected — valid or not.`);
+      io.log(`Nothing needs cleaning up: running this again reuses ${dir}.`);
+      return 1;
+    }
     io.log(`\n${kind} sign-in did not complete${r.error ? `: ${r.error}` : ""}. Nothing was changed.`);
     /**
      * The reason is in the BROWSER, not here, and saying so is the difference between a useful failure and a
@@ -161,6 +193,23 @@ export function addProvider(kind: CliKind, io: AddProviderIO): number {
 
   const mine = [...accounts, entry].filter((a) => a.kind === kind);
   io.log(`\nConnected ${entry.email ?? entry.name}${entry.plan ? ` (${entry.plan})` : ""}.`);
-  io.log(`${mine.length} ${kind} account${mine.length === 1 ? "" : "s"} now connected. Runs use them in order, spilling to the next when one is nearly out.`);
+  io.log(`${mine.length} ${kind} account${mine.length === 1 ? "" : "s"} now connected. Runs take turns between them.`);
+  /**
+   * Spillover is claimed only where it can actually happen.
+   *
+   * Stepping off a nearly-spent subscription needs a quota READING, and a reading only arrives if the CLI
+   * reports one. Claude Code sends `rate_limit_event` on every call; Codex, Grok and z.ai send nothing of
+   * the kind — checked across each stream. So for those the pool round-robins and learns nothing, and
+   * saying it "spills to the next when one is nearly out" would promise a behaviour that cannot occur.
+   */
+  if (kind === "claude") io.log(`One nearly out of quota steps aside for the others.`);
+  else io.log(`${kind} reports no quota figures, so a spent account is discovered by being refused, not before.`);
+  /**
+   * z.ai names nobody, so the same key can be added twice — and two entries drawing on one subscription look
+   * like added capacity while being none. Every other CLI reports an address or a method and is caught above.
+   */
+  if (kind === "zai" && mine.length > 1) {
+    io.log(`z.ai reports no account identity, so this cannot be checked: if that key is one already connected, remove the duplicate from ~/.horsecode/config.json.`);
+  }
   return 0;
 }

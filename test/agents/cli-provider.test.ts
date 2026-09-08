@@ -82,6 +82,13 @@ describe("choosing a CLI from the model name", () => {
     expect(cliFor("grok/grok-4.6")).toBeUndefined();
   });
 
+  /** GLM means the z.ai subscription — and, like Grok, only unprefixed: a gateway carried GLM ids too. */
+  it("routes GLM to z.ai, and only when nothing has proxied it", () => {
+    expect(cliFor("glm-5.3")).toBe("zai");
+    expect(cliFor("glm-5.3-flash")).toBe("zai");
+    expect(cliFor("oc/glm-5.2")).toBeUndefined();
+  });
+
   /**
    * The catalog holds no dates and no version numbers, which is what stops it going stale.
    *
@@ -286,7 +293,8 @@ describe("what a delegated agent may do", () => {
   const src = readFileSync("src/agents/cli-provider.ts", "utf8");
 
   it("keeps a reader out of the editor", () => {
-    expect(src).toContain('this.readOnly && kind === "claude") args.push("--disallowed-tools"');
+    // z.ai rides the Claude branch, because it is the Claude binary with a different endpoint behind it.
+    expect(src).toContain('this.readOnly && (kind === "claude" || kind === "zai")) args.push("--disallowed-tools"');
     expect(src).toContain('this.readOnly && kind === "codex") args.push("--sandbox", "read-only")');
   });
 
@@ -302,7 +310,7 @@ describe("what a delegated agent may do", () => {
   });
 
   it("lets a writer write, without asking anyone", () => {
-    expect(src).toContain('!this.readOnly && kind === "claude") args.push("--permission-mode", "acceptEdits")');
+    expect(src).toContain('!this.readOnly && (kind === "claude" || kind === "zai")) args.push("--permission-mode", "acceptEdits")');
     expect(src).toContain('!this.readOnly && kind === "codex") args.push("--sandbox", "workspace-write")');
     expect(src).toContain('!this.readOnly && kind === "grok") args.push("--permission-mode", "acceptEdits")');
   });

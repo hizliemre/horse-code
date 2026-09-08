@@ -198,6 +198,14 @@ export function capabilityScore(model: string): number {
    * `--reasoning-effort` beside it, exactly as Claude's does.
    */
   if (/grok/.test(s)) return 78 + versionBump(s, "grok");
+  /**
+   * GLM, on the same terms and for the same reason as Grok above: a starting position, not a measurement.
+   *
+   * Nothing here has run one yet. Mid tier keeps it competing for the bulk work that would produce a fitness
+   * record to rewrite this from, without handing it the strong roles first. `glm-5.3-flash` never reaches
+   * this line — `WEAK_RE` claims it above and bands it "fast", which is what a flash tier is for.
+   */
+  if (/glm/.test(s)) return 78 + versionBump(s, "glm");
   // Gemini Pro was pinned at a flat 65: every generation scored the same and the -high/-low effort
   // suffix was ignored, so a current Gemini Pro was ranked as if it were the first one. Version- and
   // effort-aware now, like every other family we actually rank.

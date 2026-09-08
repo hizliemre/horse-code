@@ -18,6 +18,11 @@ import { profileEnv } from "./cli-auth.js";
  *   codex exec --json
  *     the same shape in Codex's own vocabulary.
  *
+ *   claude, pointed at z.ai
+ *     the identical stream, because it is the identical binary. z.ai ships no CLI; its own documentation
+ *     describes the integration as pointing Claude Code at an Anthropic-compatible endpoint of theirs, so a
+ *     z.ai account is a Claude Code PROFILE whose settings name that endpoint — see `zai-profile.ts`.
+ *
  *   grok --single=… --output-format streaming-messages-json
  *     system/init · assistant · user (tool_result) · result/success
  *     → byte-for-byte the shape Claude Code emits, which its own `--help` states outright ("Anthropic
@@ -37,11 +42,30 @@ import { profileEnv } from "./cli-auth.js";
  * about recall or crediting changes with the transport.
  */
 
-/** Which official CLI runs the agent. */
-export type CliKind = "claude" | "codex" | "grok";
+/**
+ * Which SUBSCRIPTION runs the agent — which is no longer the same thing as which binary.
+ *
+ * For three of these the two coincide, and `zai` is why the distinction now has to be written down. z.ai
+ * ships no CLI of its own; its documented integration is the `claude` binary pointed at an
+ * Anthropic-compatible endpoint of theirs. So a kind names an account to spend, and `cliBinary` names the
+ * program that spends it. Conflating them — as `spawn(run.kind, …)` used to — would have looked for a
+ * binary called `zai` that does not exist anywhere.
+ */
+export type CliKind = "claude" | "codex" | "grok" | "zai";
 
-/** Every CLI this system knows, for the places that have to ask all of them something. */
-export const CLI_KINDS: readonly CliKind[] = ["claude", "codex", "grok"];
+/** Every subscription this system knows, for the places that have to ask all of them something. */
+export const CLI_KINDS: readonly CliKind[] = ["claude", "codex", "grok", "zai"];
+
+/**
+ * The program to run for a kind.
+ *
+ * z.ai is served by Claude Code itself: same binary, same flags, same stream — the whole difference is the
+ * endpoint and the token, and both of those live in the profile directory rather than in an argument. See
+ * `zai-profile.ts`, where that was measured rather than assumed.
+ */
+export function cliBinary(kind: CliKind): string {
+  return kind === "zai" ? "claude" : kind;
+}
 
 export interface CliEvent {
   /** Assistant prose as it arrives — the live row and the transcript read this. */
@@ -151,7 +175,8 @@ export function cliArgs(kind: CliKind, prompt: string, extra: string[] = []): st
    * Flags therefore have to come before it, which is why `extra` is spliced in ahead of the prompt rather
    * than appended as it was.
    */
-  if (kind === "claude") {
+  // z.ai IS Claude Code — same binary, same flags; only the endpoint behind it differs.
+  if (kind === "claude" || kind === "zai") {
     // `--verbose` is required for stream-json to emit the per-turn events rather than only the result.
     return ["--output-format", "stream-json", "--verbose", ...extra, "-p", "--", prompt];
   }
@@ -442,7 +467,7 @@ export async function runCliAgent(run: CliRun): Promise<CliResult> {
        * coming. Measured: a four-minute timeout on a call that should take seconds. `ignore` gives the
        * child no stdin at all, which is the honest description of a headless run.
        */
-      child = spawn(run.kind, args, {
+      child = spawn(cliBinary(run.kind), args, {
         cwd: run.cwd, signal: run.signal, stdio: ["ignore", "pipe", "pipe"],
         ...(run.configDir ? { env: { ...process.env, ...profileEnv(run.kind, run.configDir) } } : {}),
       });
