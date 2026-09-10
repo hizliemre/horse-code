@@ -823,16 +823,24 @@ export async function main(argv: string[]): Promise<void> {
        * Until the role has been assigned, it borrows from the strongest roles already configured rather than
        * falling back to the session default, which may be anything.
        */
-      const tracerModel = (): string => {
+      /**
+       * The tracer's whole CHAIN, not its head.
+       *
+       * This returned `models[0]` and dropped the fallbacks — which are the whole point of a chain: a
+       * primary plus two models on OTHER subscriptions, assigned so one being rate-limited drops cleanly.
+       * Measured on a 3,664-file run: Claude's five-hour window filled and every remaining file failed,
+       * against a chain whose second link was a different subscription that was answering fine.
+       */
+      const tracerChain = (): string[] => {
         for (const role of ["tracer", "architect", "senior-coder", "judge"]) {
-          const m = config.roles[role]?.models[0];
-          if (m && m !== "default") return m;
+          const chain = (config.roles[role]?.models ?? []).filter((m) => m && m !== "default");
+          if (chain.length) return chain;
         }
-        return config.model;
+        return [config.model];
       };
       const planTracesFn = async (): Promise<{ summary: string; jobs: number }> => {
         const plan = await planFor(cwd, await traceableFiles());
-        return { summary: describePlan(plan, tracerModel()), jobs: plan.jobs.length };
+        return { summary: describePlan(plan, tracerChain()), jobs: plan.jobs.length };
       };
       /**
        * `metered` comes from the TUI, which wraps the provider so every call lands in the status line.
@@ -846,10 +854,10 @@ export async function main(argv: string[]): Promise<void> {
         const files = await traceableFiles();
         // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
         // the whole run again.
-        const brief = await buildBrief({ cwd, provider: metered ?? provider, model: tracerModel(), files: await traceableDocs() });
+        const brief = await buildBrief({ cwd, provider: metered ?? provider, models: tracerChain(), files: await traceableDocs() });
         const plan = await planFor(cwd, files);
         const res = await runTraces({
-          cwd, provider: metered ?? provider, model: tracerModel(), plan, liveFiles: new Set(files),
+          cwd, provider: metered ?? provider, models: tracerChain(), plan, liveFiles: new Set(files),
           ...(onProgress ? { onProgress } : {}),
         });
         const bits = [`${brief.message}\n\n**Traces written: ${res.written}**`];

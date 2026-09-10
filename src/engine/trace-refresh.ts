@@ -136,8 +136,12 @@ export async function refreshTraces(opts: {
   const targets = candidates.filter((f) => !gone.includes(f));
   if (!targets.length) return out;
 
-  const model = opts.models.find(Boolean);
-  if (!model) return out;
+  /**
+   * The whole chain, not its first link. `find(Boolean)` took the head and dropped the fallbacks — the same
+   * shape that made one subscription's rate limit end a 3,664-file run. See `runTraces`.
+   */
+  const chain = opts.models.filter(Boolean);
+  if (!chain.length) return out;
 
   try {
     // First, so a file that did not exist a minute ago has symbols and relationships to be described BY.
@@ -163,7 +167,7 @@ export async function refreshTraces(opts: {
     const res = await runTraces({
       cwd: opts.cwd,
       provider: opts.provider,
-      model,
+      models: chain,
       plan,
       // No liveFiles: this run knows only the files one task changed, and a pruner given that list would
       // read every OTHER trace in the project as orphaned and delete it.

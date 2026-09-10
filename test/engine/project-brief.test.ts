@@ -135,7 +135,7 @@ const failing = (): Provider => ({
 describe("buildBrief", () => {
   it("writes the brief and records what it was built from", async () => {
     await write("README.md", "we sell widgets");
-    const r = await buildBrief({ cwd, provider: canned("**What it is** widgets"), model: "m", files: ["README.md"] });
+    const r = await buildBrief({ cwd, provider: canned("**What it is** widgets"), models: ["m"], files: ["README.md"] });
     expect(r.ok).toBe(true);
     expect(readBriefSync(cwd)).toContain("widgets");
     expect((await loadBriefMeta(cwd))!.sources).toEqual(["README.md"]);
@@ -144,21 +144,21 @@ describe("buildBrief", () => {
   // Tracing without a brief still produces useful notes; failing the whole run would not.
   it("a project with no documentation is reported, not fatal", async () => {
     await write("src/a.ts", "code");
-    const r = await buildBrief({ cwd, provider: canned("x"), model: "m", files: ["src/a.ts"] });
+    const r = await buildBrief({ cwd, provider: canned("x"), models: ["m"], files: ["src/a.ts"] });
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/No documentation found/);
   });
 
   it("a failed call is reported, not fatal", async () => {
     await write("README.md", "docs");
-    const r = await buildBrief({ cwd, provider: failing(), model: "m", files: ["README.md"] });
+    const r = await buildBrief({ cwd, provider: failing(), models: ["m"], files: ["README.md"] });
     expect(r.ok).toBe(false);
     expect(r.message).toMatch(/can still run without it/);
   });
 
   it("an empty response does not overwrite with nothing", async () => {
     await write("README.md", "docs");
-    const r = await buildBrief({ cwd, provider: canned("  "), model: "m", files: ["README.md"] });
+    const r = await buildBrief({ cwd, provider: canned("  "), models: ["m"], files: ["README.md"] });
     expect(r.ok).toBe(false);
     expect(readBriefSync(cwd)).toBeUndefined();
   });
@@ -171,7 +171,7 @@ describe("buildBrief", () => {
 describe("briefStatus — the brief must not rot silently", () => {
   const build = async () => {
     await write("README.md", "we sell widgets");
-    await buildBrief({ cwd, provider: canned("**What it is** widgets"), model: "m", files: ["README.md"] });
+    await buildBrief({ cwd, provider: canned("**What it is** widgets"), models: ["m"], files: ["README.md"] });
   };
 
   it("reports not-built before anything is written", async () => {
@@ -202,7 +202,7 @@ describe("briefStatus — the brief must not rot silently", () => {
   it("names a document that disappeared", async () => {
     await write("README.md", "widgets");
     await write("docs/domain.md", "definitions");
-    await buildBrief({ cwd, provider: canned("b"), model: "m", files: ["README.md", "docs/domain.md"] });
+    await buildBrief({ cwd, provider: canned("b"), models: ["m"], files: ["README.md", "docs/domain.md"] });
     await rm(join(cwd, "docs/domain.md"));
     const st = await briefStatus(cwd, ["README.md"]);
     expect(st.changed.some((c) => c.includes("docs/domain.md"))).toBe(true);
@@ -222,8 +222,8 @@ describe("buildBrief does not re-buy an unchanged brief", () => {
     await write("README.md", "widgets");
     let calls = 0;
     const counting = { chat: async function* () { calls++; yield { type: "text-delta" as const, text: "b" }; } } as unknown as Provider;
-    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
-    const second = await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    await buildBrief({ cwd, provider: counting, models: ["m"], files: ["README.md"] });
+    const second = await buildBrief({ cwd, provider: counting, models: ["m"], files: ["README.md"] });
     expect(calls).toBe(1);
     expect(second.skipped).toBe(true);
     expect(second.ok).toBe(true);
@@ -233,9 +233,9 @@ describe("buildBrief does not re-buy an unchanged brief", () => {
     await write("README.md", "widgets");
     let calls = 0;
     const counting = { chat: async function* () { calls++; yield { type: "text-delta" as const, text: "b" }; } } as unknown as Provider;
-    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    await buildBrief({ cwd, provider: counting, models: ["m"], files: ["README.md"] });
     await write("README.md", "widgets and gadgets");
-    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
+    await buildBrief({ cwd, provider: counting, models: ["m"], files: ["README.md"] });
     expect(calls).toBe(2);
   });
 
@@ -243,8 +243,8 @@ describe("buildBrief does not re-buy an unchanged brief", () => {
     await write("README.md", "widgets");
     let calls = 0;
     const counting = { chat: async function* () { calls++; yield { type: "text-delta" as const, text: "b" }; } } as unknown as Provider;
-    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"] });
-    await buildBrief({ cwd, provider: counting, model: "m", files: ["README.md"], force: true });
+    await buildBrief({ cwd, provider: counting, models: ["m"], files: ["README.md"] });
+    await buildBrief({ cwd, provider: counting, models: ["m"], files: ["README.md"], force: true });
     expect(calls).toBe(2);
   });
 });

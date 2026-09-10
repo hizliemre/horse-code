@@ -9,7 +9,8 @@ import {
   traceCoverage, setTraceRoot,
 } from "../../src/engine/trace.js";
 import type { TraceIndex } from "../../src/engine/trace.js";
-import { describePlan, runTraces } from "../../src/engine/trace-run.js";
+import { describePlan, runTraces, TRACE_CONCURRENCY } from "../../src/engine/trace-run.js";
+import { cliFor } from "../../src/agents/cli-models.js";
 import { parseGraph } from "../../src/engine/project-graph.js";
 import type { Provider } from "../../src/core/types.js";
 
@@ -101,7 +102,7 @@ describe("the consent text", () => {
   it("states the file count, the model and both token figures", async () => {
     await write("src/a.ts", "x".repeat(4000));
     const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
-    const text = describePlan(plan, "cheap-model");
+    const text = describePlan(plan, ["cheap-model"]);
     expect(text).toContain("cheap-model");
     expect(text).toMatch(/Tracing 1 file/);
     expect(text).toMatch(/input/);
@@ -110,7 +111,7 @@ describe("the consent text", () => {
 
   // The user must not be asked to approve a run that would do nothing.
   it("says there is nothing to do rather than asking", async () => {
-    const text = describePlan({ jobs: [], upToDate: 7, estimatedInputTokens: 0, estimatedOutputTokens: 0, skipped: [] }, "m");
+    const text = describePlan({ jobs: [], upToDate: 7, estimatedInputTokens: 0, estimatedOutputTokens: 0, skipped: [] }, ["m"]);
     expect(text).toMatch(/All 7 traces are current/);
   });
 });
@@ -180,7 +181,7 @@ describe("runTraces", () => {
   it("writes a trace per file and records the hash", async () => {
     await write("src/a.ts", "export const a = 1;");
     const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
-    const res = await runTraces({ cwd, provider: canned("**Purpose** does a thing"), model: "m", plan, liveFiles: new Set(["src/a.ts"]) });
+    const res = await runTraces({ cwd, provider: canned("**Purpose** does a thing"), models: ["m"], plan, liveFiles: new Set(["src/a.ts"]) });
     expect(res.written).toBe(1);
     expect(await readFile(tracePath(cwd, "src/a.ts"), "utf8")).toContain("does a thing");
     expect((await loadTraceIndex(cwd)).traces["src/a.ts"].hash).toBe(hashContent("export const a = 1;"));
@@ -191,7 +192,7 @@ describe("runTraces", () => {
     await write("src/good.ts", "good code");
     await write("src/bad.ts", "POISON");
     const plan = await planTraces(cwd, ["src/good.ts", "src/bad.ts"], GRAPH, empty());
-    const res = await runTraces({ cwd, provider: flaky("POISON"), model: "m", plan, liveFiles: new Set(["src/good.ts", "src/bad.ts"]) });
+    const res = await runTraces({ cwd, provider: flaky("POISON"), models: ["m"], plan, liveFiles: new Set(["src/good.ts", "src/bad.ts"]) });
     expect(res.written).toBe(1);
     expect(res.failed.map((f) => f.file)).toEqual(["src/bad.ts"]);
     expect(existsSync(tracePath(cwd, "src/good.ts"))).toBe(true);
@@ -200,7 +201,7 @@ describe("runTraces", () => {
   it("an empty response is a failure, not an empty trace", async () => {
     await write("src/a.ts", "code");
     const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
-    const res = await runTraces({ cwd, provider: canned("   "), model: "m", plan, liveFiles: new Set(["src/a.ts"]) });
+    const res = await runTraces({ cwd, provider: canned("   "), models: ["m"], plan, liveFiles: new Set(["src/a.ts"]) });
     expect(res.written).toBe(0);
     expect(res.failed[0].error).toMatch(/empty/);
   });
@@ -210,7 +211,7 @@ describe("runTraces", () => {
     const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
     const ac = new AbortController();
     ac.abort();
-    const res = await runTraces({ cwd, provider: canned("x"), model: "m", plan, liveFiles: new Set(), signal: ac.signal });
+    const res = await runTraces({ cwd, provider: canned("x"), models: ["m"], plan, liveFiles: new Set(), signal: ac.signal });
     expect(res.written).toBe(0);
     expect(res.cancelled).toBe(true);
   });
@@ -221,7 +222,7 @@ describe("runTraces", () => {
     const plan = await planTraces(cwd, ["src/a.ts", "src/b.ts"], GRAPH, empty());
     const seen: string[] = [];
     await runTraces({
-      cwd, provider: canned("x"), model: "m", plan, liveFiles: new Set(["src/a.ts", "src/b.ts"]),
+      cwd, provider: canned("x"), models: ["m"], plan, liveFiles: new Set(["src/a.ts", "src/b.ts"]),
       onProgress: (ev) => seen.push(ev.file),
     });
     expect(seen.sort()).toEqual(["src/a.ts", "src/b.ts"]);
@@ -232,7 +233,7 @@ describe("runTraces", () => {
     const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
     const events: { file: string; wroteTo?: string; words?: number; error?: string }[] = [];
     await runTraces({
-      cwd, provider: canned("one two three"), model: "m", plan, liveFiles: new Set(["src/a.ts"]),
+      cwd, provider: canned("one two three"), models: ["m"], plan, liveFiles: new Set(["src/a.ts"]),
       onProgress: (ev) => events.push(ev),
     });
     expect(events[0]?.wroteTo).toBe(".horsecode/traces/src/a.ts.md");
@@ -245,7 +246,7 @@ describe("runTraces", () => {
     const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
     const events: { error?: string }[] = [];
     await runTraces({
-      cwd, provider: canned("   "), model: "m", plan, liveFiles: new Set(["src/a.ts"]),
+      cwd, provider: canned("   "), models: ["m"], plan, liveFiles: new Set(["src/a.ts"]),
       onProgress: (ev) => events.push(ev),
     });
     expect(events[0]?.error).toMatch(/empty/);
@@ -261,7 +262,7 @@ describe("runTraces", () => {
     const plan = await planTraces(cwd, files, GRAPH, empty());
     const ac = new AbortController();
     await runTraces({
-      cwd, provider: canned("x"), model: "m", plan, liveFiles: new Set(files), signal: ac.signal,
+      cwd, provider: canned("x"), models: ["m"], plan, liveFiles: new Set(files), signal: ac.signal,
       // Killed mid-run, exactly as a Ctrl+C would: the final save never happens.
       onProgress: (ev) => { if (ev.done === 27) ac.abort(); },
     });
@@ -425,7 +426,7 @@ describe("ensureGitignore — the repo/local split, written for the user", () =>
   it("is not written when a run produced no traces", async () => {
     await write("src/a.ts", "code");
     const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
-    const res = await runTraces({ cwd, provider: canned("  "), model: "m", plan, liveFiles: new Set(["src/a.ts"]) });
+    const res = await runTraces({ cwd, provider: canned("  "), models: ["m"], plan, liveFiles: new Set(["src/a.ts"]) });
     expect(res.wroteGitignore).toBeFalsy();
     expect(existsSync(join(cwd, ".gitignore"))).toBe(false);
   });
@@ -696,5 +697,131 @@ describe("what a trace run is estimated to cost", () => {
     expect(plan.estimatedInputTokens).toBeGreaterThan(10_000);
     // …and comfortably above what 4.0 would have claimed (7,825 + overhead), which is the whole point.
     expect(plan.estimatedInputTokens).toBeGreaterThan(31_300 / 4 + 500);
+  });
+});
+
+/**
+ * The failure this was built from: one subscription's rate limit ended a whole run.
+ *
+ * A 3,664-file trace run filled Claude's five-hour window partway through, and every remaining file failed
+ * with the same sentence — `claude CLI: rejected — fivehour 100%, sevenday 11% (resets …)` — while the
+ * tracer's chain held two models on other subscriptions that were answering fine. Two separate faults: the
+ * chain's fallbacks were never reached, and each file started another `claude` process to be told no again.
+ */
+describe("a subscription running out mid-run", () => {
+  const REJECTED = "claude CLI: rejected — fivehour 100%, sevenday 11% (resets 2099-01-01T00:00:00.000Z)";
+
+  /** Counts what each model was actually asked, so "did it slide" and "how often" are both answerable. */
+  const perModel = (dead: string): { provider: Provider; asked: Record<string, number> } => {
+    const asked: Record<string, number> = {};
+    const provider = {
+      chat: async function* (req: { model: string }) {
+        asked[req.model] = (asked[req.model] ?? 0) + 1;
+        if (req.model === dead) yield { type: "error" as const, message: REJECTED, retryable: true };
+        else yield { type: "text-delta" as const, text: "OK" };
+      },
+    } as unknown as Provider;
+    return { provider, asked };
+  };
+
+  it("slides to the next subscription instead of failing the file", async () => {
+    await write("src/a.ts", "code");
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
+    const { provider, asked } = perModel("opus");
+    const res = await runTraces({ cwd, provider, models: ["opus", "glm-5.3"], plan });
+    expect(res.written).toBe(1);
+    expect(res.failed).toEqual([]);
+    expect(asked).toEqual({ opus: 1, "glm-5.3": 1 });
+  });
+
+  /** And the trace records the model that ANSWERED — after a slide, not the one at the head of the chain. */
+  it("records the model that actually wrote it", async () => {
+    await write("src/a.ts", "code");
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
+    const { provider } = perModel("opus");
+    await runTraces({ cwd, provider, models: ["opus", "glm-5.3"], plan });
+    expect((await loadTraceIndex(cwd)).traces["src/a.ts"].model).toBe("glm-5.3");
+  });
+
+  /**
+   * The expensive half, and the guarantee is bounded rather than absolute.
+   *
+   * A spent subscription is learned once and then skipped — but `TRACE_CONCURRENCY` workers run at a time, so
+   * whichever are already in flight when the first refusal lands will each be refused too. The bound is the
+   * concurrency, not the file count: on the 3,664-file run that is six wasted calls instead of 3,664, and
+   * every file after them goes straight to a subscription that answers.
+   */
+  it("asks a spent subscription at most once per worker, not once per file", async () => {
+    const files = Array.from({ length: 20 }, (_, i) => `src/f${i}.ts`);
+    for (const f of files) await write(f, `code ${f}`);
+    const plan = await planTraces(cwd, files, GRAPH, empty());
+    const { provider, asked } = perModel("opus");
+    const res = await runTraces({ cwd, provider, models: ["opus", "glm-5.3"], plan });
+    expect(res.written).toBe(20);
+    expect(res.failed).toEqual([]);
+    expect(asked.opus).toBeLessThanOrEqual(TRACE_CONCURRENCY);
+    expect(asked["glm-5.3"]).toBe(20);
+  });
+
+  /**
+   * When every subscription in the chain has said no, the run stops asking rather than spawning a process per
+   * file to be refused. That is the difference between 3,664 wasted calls and none.
+   */
+  it("stops spawning once the whole chain is spent", async () => {
+    const files = Array.from({ length: 20 }, (_, i) => `src/g${i}.ts`);
+    for (const f of files) await write(f, `code ${f}`);
+    const plan = await planTraces(cwd, files, GRAPH, empty());
+    const asked: string[] = [];
+    const provider = {
+      chat: async function* (req: { model: string }) {
+        asked.push(req.model);
+        yield { type: "error" as const, message: REJECTED, retryable: true };
+      },
+    } as unknown as Provider;
+    const res = await runTraces({ cwd, provider, models: ["opus"], plan });
+    expect(res.written).toBe(0);
+    // Bounded by the workers in flight when the refusal landed — never one per remaining file.
+    expect(asked.length).toBeLessThanOrEqual(TRACE_CONCURRENCY);
+    expect(res.failed).toHaveLength(20);
+    expect(res.failed.at(-1)?.error).toMatch(/out of quota/);
+  });
+
+  /**
+   * A bench is on the SUBSCRIPTION, not the model — which is what makes the real chain work.
+   *
+   * The tracer chain measured on the project this came from is `opus → haiku → glm-5.3-flash`: two Claude
+   * models and one z.ai. A quota limit belongs to the subscription, so falling from `opus` to `haiku` buys
+   * nothing — it is the same spent window, and asking is one more refusal per file. The slide has to skip
+   * every model of a spent source and land on the one that can actually answer.
+   */
+  it("skips the rest of a spent subscription rather than trying each of its models", async () => {
+    await write("src/a.ts", "code");
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
+    const asked: string[] = [];
+    const provider = {
+      chat: async function* (req: { model: string }) {
+        asked.push(req.model);
+        if (cliFor(req.model) === "claude") yield { type: "error" as const, message: REJECTED, retryable: true };
+        else yield { type: "text-delta" as const, text: "OK" };
+      },
+    } as unknown as Provider;
+    const res = await runTraces({ cwd, provider, models: ["opus", "haiku", "glm-5.3-flash"], plan });
+    expect(res.written).toBe(1);
+    expect(asked).toEqual(["opus", "glm-5.3-flash"]); // haiku is the same spent subscription
+  });
+
+  /** A cancellation is not a model failing: sliding on one would start a CLI per link for a stopped run. */
+  it("does not walk the chain after the person cancels", async () => {
+    await write("src/a.ts", "code");
+    const plan = await planTraces(cwd, ["src/a.ts"], GRAPH, empty());
+    const asked: string[] = [];
+    const provider = {
+      chat: async function* (req: { model: string }) {
+        asked.push(req.model);
+        yield { type: "error" as const, message: "cancelled", retryable: false };
+      },
+    } as unknown as Provider;
+    await runTraces({ cwd, provider, models: ["opus", "glm-5.3", "grok-4.6"], plan });
+    expect(asked).toEqual(["opus"]);
   });
 });

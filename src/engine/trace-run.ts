@@ -7,6 +7,8 @@ import type { TraceJob, TracePlan, TraceCoverage } from "./trace.js";
 import { loadGraph } from "./project-graph.js";
 import { defaultGitRunner } from "../worktree/git.js";
 import { briefForPrompt, gatherBriefInput, briefPrompt, saveBrief, briefStatus } from "./project-brief.js";
+import { providerOutage, quotaResetAt } from "../agent/roles.js";
+import { cliFor } from "../agents/cli-models.js";
 
 /**
  * The files a trace run considers — tracked or newly added source, never generated, vendored or tooling.
@@ -47,7 +49,7 @@ export interface TraceRunResult {
 const INDEX_CHECKPOINT = 25;
 
 /** Renders the estimate a user is asked to approve. Deliberately blunt about what it will cost. */
-export function describePlan(plan: TracePlan, model: string): string {
+export function describePlan(plan: TracePlan, models: readonly string[]): string {
   if (!plan.jobs.length) {
     return plan.upToDate
       ? `All ${plan.upToDate} traces are current — nothing to write, nothing to spend.`
@@ -68,14 +70,120 @@ export function describePlan(plan: TracePlan, model: string): string {
       + ` (e.g. ${plan.skipped.slice(0, 3).map((s) => `\`${s.file}\``).join(", ")}${plan.skipped.length > 3 ? ", …" : ""}).`
     : "";
   const cached = plan.upToDate ? `\n${plan.upToDate} file(s) already have a current trace and will be left alone.` : "";
-  return `**Tracing ${plan.jobs.length} file(s)** with \`${model}\`.\n\n` +
+  /**
+   * The fallbacks are named, not just the primary. A person approving a long run is being asked what it will
+   * cost, and "and if that subscription runs out, these" is part of the answer — the run where it silently
+   * was not is what put a chain here at all.
+   */
+  const [head, ...rest] = models;
+  const chain = `\`${head}\`${rest.length ? `, falling back to ${rest.map((m) => `\`${m}\``).join(" then ")}` : ""}`;
+  return `**Tracing ${plan.jobs.length} file(s)** with ${chain}.\n\n` +
     `This is the part of understanding your project that costs tokens — the graph was free, this is not. ` +
     `Each file is read once and described in ~150 words.\n\n` +
     `Rough cost: **~${kIn}k input + ~${kOut}k output tokens**.${cached}${skipped}`;
 }
 
-/** Runs one tracer. Returns the written body, or throws with a reason the caller reports. */
-async function traceOne(provider: Provider, model: string, job: TraceJob, signal: AbortSignal, brief?: string): Promise<string> {
+/** A model's refusal, carrying whether anything else is worth trying. */
+class ChatFailure extends Error {
+  constructor(message: string, readonly retryable: boolean) { super(message); }
+}
+
+/** How long a source is stood down when it refuses for quota without saying when it reopens. */
+const BLIND_BENCH_MS = 60 * 60 * 1000;
+
+/**
+ * The subscriptions that have refused for quota, and when each said it would reopen.
+ *
+ * A trace run is thousands of independent calls, so a spent subscription is not a fact each file should have
+ * to rediscover. Measured on a 3,664-file run: Claude's five-hour window filled partway through and every
+ * remaining file failed with the same sentence — `claude CLI: rejected — fivehour 100%, sevenday 11%` —
+ * because each file dutifully started another `claude` process to be told so again. Thousands of processes
+ * spawned to learn something the first one had already reported, and not one trace written after that point.
+ *
+ * Held for the run rather than forever, and released at the instant the CLI names: a five-hour window
+ * reopens, and a long run outlives it. `(resets <ISO>)` is in the message — see `quotaResetAt`.
+ */
+export class SpentSources {
+  private readonly until = new Map<string, number>();
+
+  /** Files a refusal against its subscription. Returns the source, when the message named one. */
+  record(reason: string, now = Date.now()): string | undefined {
+    const source = providerOutage(reason);
+    if (!source) return undefined;
+    /**
+     * A quota refusal that names no reset still stands the source down. Left in service on the grounds that
+     * nothing said otherwise, it is asked again by every remaining file — which is the exact failure this
+     * exists to stop, arriving through the one door left open.
+     */
+    this.until.set(source, quotaResetAt(reason) ?? now + BLIND_BENCH_MS);
+    return source;
+  }
+
+  /** Whether a source is still standing down. A lapsed bench is forgotten as it is read. */
+  spent(source: string, now = Date.now()): boolean {
+    const t = this.until.get(source);
+    if (t === undefined) return false;
+    if (now >= t) { this.until.delete(source); return false; }
+    return true;
+  }
+
+  /** The links of a chain still worth trying. A model no CLI serves is nobody's subscription, so it stays. */
+  live(chain: readonly string[], now = Date.now()): string[] {
+    return chain.filter((m) => { const s = cliFor(m); return !s || !this.spent(s, now); });
+  }
+}
+
+/**
+ * Runs one tracer over the whole chain, not just its head.
+ *
+ * The chain was always there — a role's models are a primary plus two fallbacks on other subscriptions,
+ * chosen so one being rate-limited drops cleanly. Tracing took `models[0]` and threw the rest away, so a
+ * mechanism built precisely for this moment was never reached: when Claude's window filled, 3,664 files
+ * failed against a chain whose second link was a different subscription entirely.
+ *
+ * Returns the model that actually wrote it, because that is what belongs in the trace's record — the head of
+ * the chain is what was ASKED, and after a slide they are not the same thing.
+ */
+async function traceOne(
+  provider: Provider, chain: readonly string[], job: TraceJob, signal: AbortSignal,
+  spent: SpentSources, brief?: string,
+): Promise<{ body: string; model: string }> {
+  if (!spent.live(chain).length) {
+    // Every subscription in the chain has said no. Spawning anyway is what turned one refusal into 3,664.
+    throw new Error(`every subscription in the chain is out of quota (${chain.join(", ")})`);
+  }
+  let last: ChatFailure | undefined;
+  for (const model of chain) {
+    /**
+     * Re-read on EVERY link, not filtered once before the loop.
+     *
+     * A bench belongs to the subscription, and the refusal that creates one usually arrives mid-chain. The
+     * real chain here is `opus → haiku → glm-5.3-flash`: read once up front, `haiku` was already on the list
+     * when `opus` filled Claude's window, so the slide asked the same spent subscription a second time
+     * before reaching the one that could answer. Two refusals per file instead of one.
+     */
+    const source = cliFor(model);
+    if (source && spent.spent(source)) continue;
+    try {
+      return { body: await askOne(provider, model, job, signal, brief), model };
+    } catch (e) {
+      if (!(e instanceof ChatFailure)) throw e;
+      /**
+       * A cancellation is not a model failing, and sliding on one would work through the chain starting a
+       * fresh CLI per link for a run the person has already stopped.
+       */
+      if (!e.retryable) throw e;
+      last = e;
+      spent.record(e.message);
+    }
+  }
+  throw last ?? new Error("no model could write this trace");
+}
+
+/** One model, one call. */
+async function askOne(
+  provider: Provider, model: string, job: TraceJob, signal: AbortSignal, brief?: string,
+): Promise<string> {
   const req: ChatRequest = {
     model,
     messages: [
@@ -87,10 +195,12 @@ async function traceOne(provider: Provider, model: string, job: TraceJob, signal
   let out = "";
   for await (const ev of provider.chat(req, signal)) {
     if (ev.type === "text-delta") out += ev.text;
-    else if (ev.type === "error") throw new Error(ev.message);
+    // The flag travels with the message: a quota refusal is retryable on another subscription, a
+    // cancellation is not retryable anywhere, and `traceOne` cannot tell them apart from the text.
+    else if (ev.type === "error") throw new ChatFailure(ev.message, ev.retryable === true);
   }
   const body = out.replace(/<\/?think>/gi, "").trim();
-  if (!body) throw new Error("empty response");
+  if (!body) throw new ChatFailure("empty response", true);
   return body;
 }
 
@@ -104,7 +214,12 @@ async function traceOne(provider: Provider, model: string, job: TraceJob, signal
 export async function runTraces(opts: {
   cwd: string;
   provider: Provider;
-  model: string;
+  /**
+   * The tracer's whole chain — primary plus the fallbacks on other subscriptions, tried in order.
+   *
+   * A single model was what made one subscription's rate limit end a whole run. See `traceOne`.
+   */
+  models: readonly string[];
   plan: TracePlan;
   /**
    * Every file that should still HAVE a trace — traces for anything else are deleted.
@@ -131,6 +246,8 @@ export async function runTraces(opts: {
   const index = await loadTraceIndex(cwd);
   const brief = briefForPrompt(cwd); // read once, not per file
   const failed: { file: string; error: string }[] = [];
+  // Shared by every worker: a spent subscription is discovered once, not once per file.
+  const spent = new SpentSources();
   let written = 0;
   let done = 0;
 
@@ -143,8 +260,9 @@ export async function runTraces(opts: {
       let words: number | undefined;
       let error: string | undefined;
       try {
-        const body = await traceOne(opts.provider, opts.model, job, signal, brief);
-        const rec = await saveTrace(cwd, job, body, opts.model);
+        const { body, model } = await traceOne(opts.provider, opts.models, job, signal, spent, brief);
+        // The model that ANSWERED, not the one at the head of the chain — after a slide they differ.
+        const rec = await saveTrace(cwd, job, body, model);
         index.traces[job.file] = rec;
         wroteTo = `${traceRootRel()}/${job.file}.md`;
         words = body.split(/\s+/).filter(Boolean).length;
@@ -187,7 +305,8 @@ export async function planFor(cwd: string, files: string[]): Promise<TracePlan> 
 export async function buildBrief(opts: {
   cwd: string;
   provider: Provider;
-  model: string;
+  /** The same chain the tracers use — the brief is one call, and it fails for the same reasons they do. */
+  models: readonly string[];
   files: string[];
   signal?: AbortSignal;
   /** Rewrite even when the documents have not changed. */
@@ -206,25 +325,41 @@ export async function buildBrief(opts: {
     return { ok: false, message: "No documentation found (README, docs/, specs/) — traces will describe the code without product context." };
   }
   const signal = opts.signal ?? new AbortController().signal;
-  const req: ChatRequest = {
-    model: opts.model,
-    messages: [
-      { role: "system", content: "You write factual project briefings from documentation. You never invent facts the documents do not state." },
-      { role: "user", content: briefPrompt(input) },
-    ],
-    tools: [],
-  };
-  let out = "";
-  try {
-    for await (const ev of opts.provider.chat(req, signal)) {
-      if (ev.type === "text-delta") out += ev.text;
-      else if (ev.type === "error") throw new Error(ev.message);
+  const spent = new SpentSources();
+  let body = "";
+  let wroteWith = "";
+  let last = "";
+  /**
+   * The brief walks the chain for the same reason the tracers do, and it matters more here: everything after
+   * it depends on it, so a rate limit on the head of the chain would otherwise cost the whole run its
+   * product context before a single file was read.
+   */
+  for (const model of spent.live(opts.models)) {
+    const req: ChatRequest = {
+      model,
+      messages: [
+        { role: "system", content: "You write factual project briefings from documentation. You never invent facts the documents do not state." },
+        { role: "user", content: briefPrompt(input) },
+      ],
+      tools: [],
+    };
+    let out = "";
+    try {
+      for await (const ev of opts.provider.chat(req, signal)) {
+        if (ev.type === "text-delta") out += ev.text;
+        else if (ev.type === "error") throw new ChatFailure(ev.message, ev.retryable === true);
+      }
+    } catch (e) {
+      if (e instanceof ChatFailure && !e.retryable) return { ok: false, message: `Project brief failed (${e.message}) — tracing can still run without it.` };
+      last = e instanceof Error ? e.message : String(e);
+      if (e instanceof ChatFailure) spent.record(e.message);
+      continue;
     }
-  } catch (e) {
-    return { ok: false, message: `Project brief failed (${e instanceof Error ? e.message : String(e)}) — tracing can still run without it.` };
+    const text = out.replace(/<\/?think>/gi, "").trim();
+    if (text) { body = text; wroteWith = model; break; }
+    last = "the brief came back empty";
   }
-  const body = out.replace(/<\/?think>/gi, "").trim();
-  if (!body) return { ok: false, message: "The brief came back empty — tracing can still run without it." };
-  await saveBrief(opts.cwd, body, { hash: input.hash, sources: input.sources.map((s) => s.file), writtenAt: Date.now(), model: opts.model });
+  if (!body) return { ok: false, message: `Project brief failed (${last || "no model answered"}) — tracing can still run without it.` };
+  await saveBrief(opts.cwd, body, { hash: input.hash, sources: input.sources.map((s) => s.file), writtenAt: Date.now(), model: wroteWith });
   return { ok: true, message: `**Project brief** written from ${input.sources.length} document(s): ${input.sources.slice(0, 6).map((s) => `\`${s.file}\``).join(", ")}` };
 }

@@ -52,7 +52,7 @@ describe("refreshTraces — only what changed, and never at the cost of what did
     await saveTraceIndex(cwd, { version: 1, traces: { "src/kept.ts": { hash: hashContent("untouched code"), file: "src/kept.ts", writtenAt: 1 } } });
 
     const plan = await planTraces(cwd, ["src/a.ts"], undefined, await loadTraceIndex(cwd));
-    await runTraces({ cwd, provider: canned("A note about a."), model: "m", plan }); // no liveFiles → no pruning
+    await runTraces({ cwd, provider: canned("A note about a."), models: ["m"], plan }); // no liveFiles → no pruning
 
     const after = await loadTraceIndex(cwd);
     expect(Object.keys(after.traces).sort()).toEqual(["src/a.ts", "src/kept.ts"]);
