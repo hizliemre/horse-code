@@ -89,6 +89,13 @@ export interface RunTuiReplOpts {
   reloadProjectSkills?: () => Promise<void>;
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
+  /**
+   * Where horse-code writes its derived state — a worktree, not the checkout the person is standing in.
+   *
+   * The start-up refresh below builds the graph too, so leaving it on `process.cwd()` would put 38 MB back
+   * in the working tree that `/graph build` was just moved out of.
+   */
+  derivedDir?: () => Promise<string>;
   cleanWorktrees?: (apply: boolean, branch?: string) => Promise<string>; // /clean-worktrees
   migrate?: () => Promise<string>; // /migrate
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
@@ -502,7 +509,8 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
    */
   const refreshGraphIfStale = async (): Promise<void> => {
     try {
-      const before = await graphStatus(process.cwd());
+      const dir = await (opts.derivedDir?.() ?? Promise.resolve(process.cwd()));
+      const before = await graphStatus(dir);
       if (before.built && !before.stale) return;
       const first = !before.built;
       controller.note(first
@@ -517,7 +525,7 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
        * typed meanwhile is queued and runs the moment it is ready.
        */
       controller.startBusy(first ? "building the code graph" : "updating the code graph");
-      const r = await buildProjectGraph(process.cwd());
+      const r = await buildProjectGraph(dir);
       controller.endBusy();
       controller.note(r.ok
         ? `✅ Code graph ready — ${(r.nodes ?? 0).toLocaleString("en-US")} symbols, ${(r.edges ?? 0).toLocaleString("en-US")} relationships.`

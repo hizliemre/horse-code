@@ -788,7 +788,7 @@ export async function main(argv: string[]): Promise<void> {
       // /graph — the project's code graph. Reported with its FRESHNESS, because a stale graph that looks
       // authoritative is worse than none: an agent would trust callers that have since moved.
       const graphStatusText = async (): Promise<string> => {
-        const st = await graphStatus(cwd);
+        const st = await graphStatus((await derivedWorkdir(false)).dir);
         if (!st.built) {
           const py = await graphifyPython();
           return py
@@ -809,7 +809,16 @@ export async function main(argv: string[]): Promise<void> {
             : `\n\n**Project brief:** ✓ current, from ${bs.sources.length} document(s).`;
         return `**Project graph** — ${st.nodes} symbols, ${st.edges} relationships, built ${age}.${fresh}${briefLine}\n\n_Every agent can query it: \`graph_impact\` (blast radius), \`graph_trace\`, \`graph_find\`, \`graph_context\`, \`graph_overview\`._`;
       };
-      const buildGraphText = async (): Promise<string> => (await buildProjectGraph(cwd)).message;
+      /**
+       * The graph is built where the traces are, for the same reason and with one extra consequence.
+       *
+       * It is 38 MB of derived output on the project this came from, and `graph.json` is gitignored BY
+       * DESIGN — rebuilt per checkout, passed to sessions by copy rather than through git. Building it in the
+       * checkout a person is standing in put all of that in their working tree; building it here keeps the
+       * root untouched, and `assetSource` teaches session inheritance where to find it now.
+       */
+      const buildGraphText = async (): Promise<string> =>
+        (await buildProjectGraph((await derivedWorkdir(true)).dir)).message;
       /**
        * `/clean-worktrees` — the sessions whose work has already landed.
        *
@@ -827,7 +836,7 @@ export async function main(argv: string[]): Promise<void> {
       /** Everything git tracks or would track — the pool the brief's documents are chosen from. */
       const gitFiles = async (): Promise<string[]> =>
         (await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd)).stdout.split("\n").filter(Boolean);
-      // Asked of the directory the run WORKS in, which is a worktree rather than the root — see traceWorkdir.
+      // Asked of the directory the run WORKS in, which is a worktree rather than the root — see derivedWorkdir.
       const traceableDocs = async (dir = cwd): Promise<string[]> => traceableSource(dir, { code: false });
       // Which files are worth a trace — the same set the start-up summary reports coverage over.
       const traceableFiles = async (dir = cwd): Promise<string[]> => traceableSource(dir);
@@ -858,7 +867,7 @@ export async function main(argv: string[]): Promise<void> {
         return [config.model];
       };
       /**
-       * Where a trace run does its writing — a worktree, never the checkout the person is standing in.
+       * Where horse-code's DERIVED work is written — a worktree, never the checkout you are standing in.
        *
        * Measured on a real project: `/graph trace` ran at `process.cwd()` and left `master` holding 3,662
        * new files, 15 MB, and a modified TRACKED `.gitignore` that nobody had asked for. It committed
@@ -868,7 +877,7 @@ export async function main(argv: string[]): Promise<void> {
        * `traces` worktree is opened, re-entered on every later run so the checkpointed index resumes instead
        * of a fresh checkout piling up beside the last one.
        */
-      const traceWorkdir = async (create: boolean): Promise<{ dir: string; session?: WorktreeSession }> => {
+      const derivedWorkdir = async (create: boolean): Promise<{ dir: string; session?: WorktreeSession }> => {
         const inSession = sessionBase(cwd);
         if (inSession) return { dir: inSession };
         /**
@@ -883,7 +892,7 @@ export async function main(argv: string[]): Promise<void> {
         return { dir: session.baseWorktree, session };
       };
       const planTracesFn = async (): Promise<{ summary: string; jobs: number }> => {
-        const { dir } = await traceWorkdir(false);
+        const { dir } = await derivedWorkdir(false);
         const plan = await planFor(dir, await traceableFiles(dir));
         return { summary: describePlan(plan, tracerChain()), jobs: plan.jobs.length };
       };
@@ -896,7 +905,7 @@ export async function main(argv: string[]): Promise<void> {
         onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void,
         metered?: Provider,
       ): Promise<string> => {
-        const { dir, session } = await traceWorkdir(true);
+        const { dir, session } = await derivedWorkdir(true);
         const files = await traceableFiles(dir);
         // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
         // the whole run again.
@@ -937,6 +946,7 @@ export async function main(argv: string[]): Promise<void> {
         addSkill,
         reloadProjectSkills,
         graphStatus: graphStatusText,
+        derivedDir: async () => (await derivedWorkdir(true)).dir,
         buildGraph: buildGraphText,
         cleanWorktrees: cleanWorktreesText,
         planTraces: planTracesFn,

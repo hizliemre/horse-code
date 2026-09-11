@@ -134,8 +134,8 @@ export async function inheritFromRoot(git: Git, repoRoot: string, baseWorktree: 
 
   // …and the state git is not carrying at all.
   for (const rel of INHERITED_ASSETS) {
-    const from = join(repoRoot, rel);
-    if (!existsSync(from)) continue;
+    const from = assetSource(repoRoot, rel);
+    if (!from) continue;
     try {
       await stat(from);
       await copyPath(from, join(baseWorktree, rel));
@@ -143,6 +143,25 @@ export async function inheritFromRoot(git: Git, repoRoot: string, baseWorktree: 
     } catch { /* same */ }
   }
   return out;
+}
+
+/**
+ * Where the newest copy of an inherited asset actually is.
+ *
+ * The root used to be the only answer, and that held while `/graph build` wrote there. It no longer does:
+ * building in the checkout a person is standing in left 38 MB of derived output in their working tree, so
+ * the graph is now built in the standing `traces` worktree like the traces themselves.
+ *
+ * These assets are precisely the state git does not carry — `graph.json` is gitignored by design, rebuilt per
+ * checkout and passed on by copy. So a session that inherited only from the root would now inherit NOTHING,
+ * and every agent's graph tool would fall back to having no graph at all. The root is still preferred when it
+ * has one, because a project that has never moved to a worktree must keep working exactly as before.
+ */
+export function assetSource(repoRoot: string, rel: string): string | undefined {
+  const atRoot = join(repoRoot, rel);
+  if (existsSync(atRoot)) return atRoot;
+  const standing = join(repoRoot, ".horsecode", "worktrees", "traces", "base", rel);
+  return existsSync(standing) ? standing : undefined;
 }
 
 /** One line for the user: what the session started with that the branch alone would not have given it. */

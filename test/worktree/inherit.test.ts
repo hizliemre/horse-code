@@ -1,8 +1,9 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { rm, mkdir, writeFile, readFile, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { inheritFromRoot, describeInherited, topUpInherited, describeTopUp, INHERITED_ASSETS } from "../../src/worktree/inherit.js";
+import { join, dirname } from "node:path";
+import { inheritFromRoot, describeInherited, topUpInherited, describeTopUp, INHERITED_ASSETS, assetSource } from "../../src/worktree/inherit.js";
 import { WorktreeManager } from "../../src/worktree/manager.js";
 import { defaultGitRunner } from "../../src/worktree/git.js";
 import { initTmpRepo } from "./helpers.js";
@@ -159,5 +160,40 @@ describe("a resumed session picks up what did not exist when it was opened", () 
 
   it("says nothing when the session was already complete", () => {
     expect(describeTopUp([])).toBeUndefined();
+  });
+});
+
+/**
+ * Where an inherited asset comes from, now that the graph is no longer built in the root.
+ *
+ * These are precisely the state git does not carry: `graph.json` is gitignored by design, rebuilt per
+ * checkout and passed to sessions by copy. While `/graph build` wrote to the root, the root was the only
+ * possible source. It now writes to the standing `traces` worktree — so a session that looked only at the
+ * root would inherit NOTHING, and every agent's graph tool would fall back to having no graph at all.
+ */
+describe("finding an inherited asset once the graph moved", () => {
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "hc-src-")); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  const GRAPH = join("graphify-out", "graph.json");
+  const standing = (): string => join(dir, ".horsecode", "worktrees", "traces", "base", GRAPH);
+
+  it("prefers the root, so a project that never moved keeps working exactly as before", async () => {
+    await mkdir(join(dir, "graphify-out"), { recursive: true });
+    await writeFile(join(dir, GRAPH), "{}", "utf8");
+    await mkdir(dirname(standing()), { recursive: true });
+    await writeFile(standing(), "{}", "utf8");
+    expect(assetSource(dir, GRAPH)).toBe(join(dir, GRAPH));
+  });
+
+  it("falls back to the standing worktree, which is where it is built now", async () => {
+    await mkdir(dirname(standing()), { recursive: true });
+    await writeFile(standing(), "{}", "utf8");
+    expect(assetSource(dir, GRAPH)).toBe(standing());
+  });
+
+  it("finds nothing when the graph has never been built", () => {
+    expect(assetSource(dir, GRAPH)).toBeUndefined();
   });
 });

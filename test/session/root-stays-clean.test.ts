@@ -158,6 +158,23 @@ describe("the graph the project checkout holds", () => {
 
   it("is still rebuildable on request", async () => {
     const { readFile: rf } = await import("node:fs/promises");
-    expect(await rf("src/cli.ts", "utf8")).toContain("buildProjectGraph(cwd)");
+    expect(await rf("src/cli.ts", "utf8")).toContain("buildProjectGraph(");
+  });
+
+  /**
+   * …and it is not rebuilt into the checkout the person is standing in, which is this file's whole subject.
+   *
+   * Measured on a real project: a graph build left 38 MB of derived output in the working tree, and the
+   * trace run beside it left 3,662 files and a modified TRACKED `.gitignore`. Both now write to the standing
+   * worktree. Asserted on the source because the alternative is a test that builds a real graph.
+   */
+  it("does not build the graph in the root", async () => {
+    const { readFile: rf } = await import("node:fs/promises");
+    const src = await rf("src/cli.ts", "utf8");
+    expect(src).not.toContain("buildProjectGraph(cwd)");
+    expect(src).toContain("derivedWorkdir");
+    // The start-up refresh builds too — left on process.cwd() it would put everything straight back.
+    const app = await rf("src/tui/app.tsx", "utf8");
+    expect(app).not.toContain("buildProjectGraph(process.cwd())");
   });
 });
