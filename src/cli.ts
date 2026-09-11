@@ -24,6 +24,7 @@ import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl 
 import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
 import { briefStatus } from "./engine/project-brief.js";
+import { initProject as initProjectFor, describeInit } from "./engine/init-project.js";
 import { setTraceRoot, discoverTraceRoot } from "./engine/trace.js";
 import { planFor, runTraces, describePlan, buildBrief, traceableFiles as traceableSource } from "./engine/trace-run.js";
 import { traceable } from "./engine/trace.js";
@@ -581,6 +582,22 @@ export async function main(argv: string[]): Promise<void> {
   /** Read on every repaint, so a reading taken during the run replaces the one it started with. */
   const accountsNote = (): string | undefined => accountsLine(accounts.usage(), notSignedIn);
   /** /models → the same pool the calls come from, with what each subscription serves. */
+  /**
+   * `/init` asks git two questions only it can answer — what is untracked, and what is already ignored — and
+   * hands both to the planner. Through the same runner every other git call here uses, so a repository that
+   * answers oddly (a submodule, a worktree) answers the same way everywhere.
+   */
+  const initProjectFn = async (): Promise<string> => {
+    // `--directory` collapses an untracked tree into one entry: the interesting unit is `graphify-out/`,
+    // not each of the 711 files inside it.
+    const r = await defaultGitRunner(["ls-files", "--others", "--exclude-standard", "--directory"], cwd);
+    const list = r.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    const ignored = new Set<string>();
+    for (const path of list) {
+      if ((await defaultGitRunner(["check-ignore", "-q", path], cwd)).code === 0) ignored.add(path);
+    }
+    return describeInit(await initProjectFor(cwd, (path) => ignored.has(path), () => list));
+  };
   const modelsPanelNote = (inUse: string[]): string =>
     modelsPanel(accounts.usage(), modelsFor, CLI_KINDS, inUse);
   const raw = new CliProvider({ readOnly: false, accounts });
@@ -875,6 +892,7 @@ export async function main(argv: string[]): Promise<void> {
         memStore,
         accountsNote,
         modelsPanel: modelsPanelNote,
+        initProject: initProjectFn,
         listSkills,
         updateSkills,
         addSkill,

@@ -574,6 +574,15 @@ const LOCAL_ONLY = [
   "graphify-out/graph.json",
   // …and the commit it was built at, which describes that local copy and travels with it.
   "graphify-out/.graph-commit.json",
+  /**
+   * The AST cache — which this list's own heading has always described and never actually excluded.
+   *
+   * "an AST cache keyed by local mtimes" is the sentence written above these rules, and no rule matched it.
+   * Measured on a real project: 711 files and 7.8 MB sitting untracked and un-ignored, so `git add -A` after
+   * a `/graph build` swept the whole cache into the commit. Keyed by this checkout's mtimes, it is worthless
+   * to anyone else and rebuilt whenever it is missing.
+   */
+  "graphify-out/cache/",
 ];
 
 /**

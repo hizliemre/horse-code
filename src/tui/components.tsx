@@ -1173,7 +1173,7 @@ function ViewportLines({ lines, height }: { lines: StyledLine[]; height: number 
   );
 }
 
-export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, modelsPanel, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, cleanWorktrees, migrate, continueFromClaude, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
+export function App({ controller, fullscreen = false, model, coachModel, refinerModel, listModels, setModel, setRoleModel, listRoles, adjustRoles, modelsPanel, initProject, listSessions, resumeSession, listPins, addPin, removePin, listMemories, addMemory, removeMemory, listMcp, sourcesInfo, refreshSources, listSkills, updateSkills, addSkill, graphStatus, buildGraph, planTraces, runTraces, cleanWorktrees, migrate, continueFromClaude, addMcp, answerByTheWay, telemetryPath, parallel, setParallel, permMode, setPermMode, cancelJob, onExit }: {
   controller: TuiController;
   fullscreen?: boolean;
   model?: string;
@@ -1186,6 +1186,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   adjustRoles?: () => Promise<void>; // /roles adjust → LLM-tuned assignment (streams rationale + applies chains)
   /** /models → what each connected subscription serves. Takes the models any role is currently running. */
   modelsPanel?: (inUse: string[]) => string;
+  /** /init → make the repository's rules match what horse-code writes. */
+  initProject?: () => Promise<string>;
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
   listPins?: () => string[]; // /pins
@@ -1651,6 +1653,18 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
    * change them during a session: read from disk this would answer for the run that started, not the one
    * happening.
    */
+  /**
+   * /init → put the repository's ignore rules right, and say what changed.
+   *
+   * Its own command rather than a side effect of the first `/graph trace`, which is how somebody ends up
+   * looking at a modified `.gitignore` they never asked for.
+   */
+  const doInit = (): void => {
+    if (!initProject) { controller.note("Project setup is not available."); return; }
+    controller.note("Setting the project up…");
+    initProject().then((text) => controller.note(text),
+      (e) => controller.note(`init error: ${e instanceof Error ? e.message : String(e)}`));
+  };
   const doModels = (): void => {
     if (!modelsPanel) { controller.note("Models are not available."); return; }
     const inUse = [...new Set((listRoles?.() ?? []).flatMap((r) => r.models))];
@@ -1906,6 +1920,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/remember") doRemember("");
     else if (c.name === "/forget") doForget("");
     else if (c.name === "/mcp") doMcp("");
+    else if (c.name === "/init") doInit();
     else if (c.name === "/models") doModels();
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");
