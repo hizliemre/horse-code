@@ -343,3 +343,63 @@ describe("findResumable is keyed on the request that OPENED the worktree", () =>
     expect(found?.resumed).toBe(true);
   });
 });
+
+/**
+ * A standing worktree, for work that is one long-lived artefact rather than one job.
+ *
+ * `openSession` mints a fresh dated slug every call, which is right for a job — two runs of "add login" are
+ * two pieces of work. Tracing is the opposite: its index is checkpointed so an interrupted run resumes, and a
+ * new checkout per invocation would lose that and pile up full copies of the repository beside each other.
+ */
+describe("WorktreeManager.openFixed", () => {
+  it("creates the worktree and its branch under the name it was given", async () => {
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const s = await wm.openFixed("main", "traces");
+    expect(s.jobSlug).toBe("traces");
+    expect(s.baseBranch).toBe("hc/traces/base");
+    expect(existsSync(s.baseWorktree)).toBe(true);
+    expect(await branchExists(repo, "hc/traces/base")).toBe(true);
+  });
+
+  /** Running it again is re-entry, not a second checkout — and it says so. */
+  it("re-enters the same worktree on a later run", async () => {
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const first = await wm.openFixed("main", "traces");
+    await writeFile(join(first.baseWorktree, "kept.txt"), "written by the first run", "utf8");
+    const second = await wm.openFixed("main", "traces");
+    expect(second.baseWorktree).toBe(first.baseWorktree);
+    expect(second.resumed).toBe(true);
+    // The whole point: what the first run wrote is still there for the second to build on.
+    expect(existsSync(join(second.baseWorktree, "kept.txt"))).toBe(true);
+  });
+
+  /**
+   * The branch outlives the directory when a worktree is removed by hand, and `worktree add -b` on a branch
+   * that exists fails outright. Re-attaching is the correct reading: it is the same standing session, and
+   * what it committed last time is what a resumed run builds on.
+   */
+  it("re-attaches to a branch whose worktree was removed", async () => {
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const first = await wm.openFixed("main", "traces");
+    await defaultGitRunner(["worktree", "remove", "--force", first.baseWorktree], repo);
+    expect(existsSync(first.baseWorktree)).toBe(false);
+    expect(await branchExists(repo, "hc/traces/base")).toBe(true);
+
+    const again = await wm.openFixed("main", "traces");
+    expect(again.baseWorktree).toBe(first.baseWorktree);
+    expect(existsSync(again.baseWorktree)).toBe(true);
+  });
+
+  /** Two different names are two different places — this is not one global worktree. */
+  it("keeps separate names apart", async () => {
+    repo = await initTmpRepo();
+    const wm = new WorktreeManager({ repoRoot: repo });
+    const a = await wm.openFixed("main", "traces");
+    const b = await wm.openFixed("main", "notes");
+    expect(a.baseWorktree).not.toBe(b.baseWorktree);
+    expect(await branchExists(repo, "hc/notes/base")).toBe(true);
+  });
+});

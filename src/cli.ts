@@ -29,6 +29,7 @@ import { setTraceRoot, discoverTraceRoot } from "./engine/trace.js";
 import { planFor, runTraces, describePlan, buildBrief, traceableFiles as traceableSource } from "./engine/trace-run.js";
 import { traceable } from "./engine/trace.js";
 import { WorktreeManager, mainWorktreeRoot } from "./worktree/manager.js";
+import type { WorktreeSession } from "./worktree/manager.js";
 import { defaultGitRunner } from "./worktree/git.js";
 import { toSlug } from "./worktree/slug.js";
 import { buildJobDeps } from "./wiring.js";
@@ -826,9 +827,10 @@ export async function main(argv: string[]): Promise<void> {
       /** Everything git tracks or would track — the pool the brief's documents are chosen from. */
       const gitFiles = async (): Promise<string[]> =>
         (await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd)).stdout.split("\n").filter(Boolean);
-      const traceableDocs = async (): Promise<string[]> => traceableSource(cwd, { code: false });
+      // Asked of the directory the run WORKS in, which is a worktree rather than the root — see traceWorkdir.
+      const traceableDocs = async (dir = cwd): Promise<string[]> => traceableSource(dir, { code: false });
       // Which files are worth a trace — the same set the start-up summary reports coverage over.
-      const traceableFiles = async (): Promise<string[]> => traceableSource(cwd);
+      const traceableFiles = async (dir = cwd): Promise<string[]> => traceableSource(dir);
       /**
        * The model that writes the traces.
        *
@@ -855,8 +857,34 @@ export async function main(argv: string[]): Promise<void> {
         }
         return [config.model];
       };
+      /**
+       * Where a trace run does its writing — a worktree, never the checkout the person is standing in.
+       *
+       * Measured on a real project: `/graph trace` ran at `process.cwd()` and left `master` holding 3,662
+       * new files, 15 MB, and a modified TRACKED `.gitignore` that nobody had asked for. It committed
+       * nothing, which was the only reason it was survivable.
+       *
+       * Already inside a session? Use it — a job's traces belong to that job's branch. Otherwise a standing
+       * `traces` worktree is opened, re-entered on every later run so the checkpointed index resumes instead
+       * of a fresh checkout piling up beside the last one.
+       */
+      const traceWorkdir = async (create: boolean): Promise<{ dir: string; session?: WorktreeSession }> => {
+        const inSession = sessionBase(cwd);
+        if (inSession) return { dir: inSession };
+        /**
+         * Planning must not CREATE one. "What would this cost" is a read-only question, and answering it by
+         * checking out the repository is a side effect nobody asked for. An existing worktree is still used,
+         * because that is where the already-written traces are and a plan blind to them over-counts every
+         * file a resumed run would skip.
+         */
+        const standing = join(cwd, ".horsecode", "worktrees", "traces", "base");
+        if (!create) return { dir: existsSync(standing) ? standing : cwd };
+        const session = await manager.openFixed(fromBranch, "traces");
+        return { dir: session.baseWorktree, session };
+      };
       const planTracesFn = async (): Promise<{ summary: string; jobs: number }> => {
-        const plan = await planFor(cwd, await traceableFiles());
+        const { dir } = await traceWorkdir(false);
+        const plan = await planFor(dir, await traceableFiles(dir));
         return { summary: describePlan(plan, tracerChain()), jobs: plan.jobs.length };
       };
       /**
@@ -868,15 +896,22 @@ export async function main(argv: string[]): Promise<void> {
         onProgress?: (ev: { done: number; total: number; file: string; wroteTo?: string; words?: number; error?: string }) => void,
         metered?: Provider,
       ): Promise<string> => {
-        const files = await traceableFiles();
+        const { dir, session } = await traceWorkdir(true);
+        const files = await traceableFiles(dir);
         // The brief first: a trace written without it describes mechanics, and rewriting them all later costs
         // the whole run again.
-        const brief = await buildBrief({ cwd, provider: metered ?? provider, models: tracerChain(), files: await traceableDocs() });
-        const plan = await planFor(cwd, files);
+        const brief = await buildBrief({ cwd: dir, provider: metered ?? provider, models: tracerChain(), files: await traceableDocs(dir) });
+        const plan = await planFor(dir, files);
         const res = await runTraces({
-          cwd, provider: metered ?? provider, models: tracerChain(), plan, liveFiles: new Set(files),
+          cwd: dir, provider: metered ?? provider, models: tracerChain(), plan, liveFiles: new Set(files),
           ...(onProgress ? { onProgress } : {}),
         });
+        /**
+         * Committed here, on the branch, rather than left as thousands of untracked files for someone to
+         * find. A run this long is interrupted sooner or later, and an uncommitted worktree full of traces
+         * is indistinguishable from one that failed.
+         */
+        if (session) await manager.preserveSession(session, `docs(traces): ${res.written} file(s) described`);
         const bits = [`${brief.message}\n\n**Traces written: ${res.written}**`];
         if (res.upToDate) bits.push(`${res.upToDate} already current`);
         if (res.pruned.length) bits.push(`${res.pruned.length} removed for deleted files`);
@@ -884,7 +919,11 @@ export async function main(argv: string[]): Promise<void> {
         // The failures are their own paragraph, not another `·` item: appending one that began with a
         // newline left the list ending in a dangling separator — "0 · 2308 already current ·".
         const failures = describeTraceFailures(res.failed);
-        return `${bits.join(" · ")}${failures ? `\n\n${failures}` : ""}`
+        const landed = session
+          ? `\n\n_Written and committed on \`${session.baseBranch}\`, so your working tree is untouched._`
+            + `\n_Bring them in with \`git merge ${session.baseBranch}\`, or browse them at \`${session.baseWorktree}\`._`
+          : "\n\n_Written in this session's worktree, on its own branch._";
+        return `${bits.join(" · ")}${failures ? `\n\n${failures}` : ""}${landed}`
           + "\n\n_Committed with the repo, so every clone starts with them. Agents read one with `graph_trace`._";
       };
       await runTuiRepl({

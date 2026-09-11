@@ -273,6 +273,50 @@ export class WorktreeManager {
     return { jobSlug, root, baseWorktree, baseBranch, inherited };
   }
 
+  /**
+   * Opens — or re-enters — a worktree with a FIXED name, for the standing work that is not one job.
+   *
+   * `openSession` mints a fresh dated slug every call, which is right for a job: two runs of "add login" are
+   * two pieces of work and must not share a branch. Tracing is the opposite. It is one long-lived artefact
+   * the project keeps, its index is checkpointed so an interrupted run resumes, and a new worktree per
+   * invocation would both lose that resumption and pile up full checkouts — measured on the project this was
+   * written for, a checkout is not small.
+   *
+   * So the slug is the caller's, and running it twice re-enters the same place. Re-entry is decided by git
+   * rather than by the directory existing: a leftover directory git no longer tracks is not a worktree, and
+   * treating one as resumable is how a run ends up writing into a checkout that no longer has a branch.
+   */
+  async openFixed(fromBranch: string, slug: string): Promise<WorktreeSession> {
+    await this.ensureBaseCommit();
+    const worktreesDir = join(this.worktreeHome, ".horsecode", "worktrees");
+    await mkdir(worktreesDir, { recursive: true });
+    await writeFile(join(worktreesDir, ".gitignore"), "*\n", "utf8");
+    const root = join(worktreesDir, slug);
+    const baseWorktree = join(root, "base");
+    const baseBranch = `hc/${slug}/base`;
+
+    let real: string | undefined;
+    try { real = realpathSync(baseWorktree); } catch { /* never created, or removed since */ }
+    if (real && (await this.registeredWorktrees()).has(real)) {
+      return { jobSlug: slug, root, baseWorktree, baseBranch, resumed: true };
+    }
+
+    const base = await this.resolveBase(fromBranch);
+    await mkdir(join(root, "tasks"), { recursive: true });
+    /**
+     * The branch may outlive the directory — a worktree removed by hand leaves `hc/<slug>/base` behind, and
+     * `worktree add -b` on an existing branch fails outright. Re-attaching to it is the correct reading:
+     * this is the same standing session, and whatever it committed last time is what a resumed run builds on.
+     */
+    const listed = await this.git(["for-each-ref", "--format=%(refname:short)", `refs/heads/${baseBranch}`], this.repoRoot);
+    const exists = listed.stdout.trim() === baseBranch;
+    await this.run(exists
+      ? ["worktree", "add", baseWorktree, baseBranch]
+      : ["worktree", "add", "-b", baseBranch, baseWorktree, base], this.repoRoot);
+    const inherited = await inheritFromRoot((args, cwd) => this.git(args, cwd), this.repoRoot, baseWorktree);
+    return { jobSlug: slug, root, baseWorktree, baseBranch, inherited };
+  }
+
   /** Absolute paths of the worktrees git currently tracks (from `git worktree list --porcelain`). */
   private async registeredWorktrees(): Promise<Set<string>> {
     const r = await this.git(["worktree", "list", "--porcelain"], this.repoRoot);
