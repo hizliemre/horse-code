@@ -28,7 +28,9 @@ export type UpstreamResult =
   | { intent: Intent; refinedPrompt: string; kind: "governed"; path: string; written: boolean }
   | { intent: Intent; refinedPrompt: string; kind: "undone"; report: string }
   | { intent: Intent; refinedPrompt: string; kind: "verified"; report: string; reportPath: string; written: boolean }
-  | { intent: Intent; refinedPrompt: string; kind: "tweaked"; report: string; done: boolean };
+  | { intent: Intent; refinedPrompt: string; kind: "tweaked"; report: string; done: boolean }
+  // Same shape as a verification: a lane whose product is one committed document.
+  | { intent: Intent; refinedPrompt: string; kind: "researched"; report: string; reportPath: string; written: boolean };
 
 /**
  * Upstream pipeline: refiner → route; chat→coach response; feature/bugfix→spec-kit phases
@@ -68,13 +70,13 @@ async function documentWorkdir(
 /**
  * Leaves a resumable marker for a lane that never reaches the pipeline.
  *
- * `verify` and `govern` open a worktree and return long before `writeCheckpoint` is called, so a run stopped
+ * `verify`, `govern` and `research` open a worktree and return long before `writeCheckpoint` is called, so a run stopped
  * halfway had nothing to come back to: "devam" answered "no resumable worktree with a checkpoint was found
  * in this project" while the worktree stood there holding the work. Nothing is written when the lane worked
  * in place — there is no session to reopen, and a checkpoint in the project root would claim otherwise.
  */
 function laneCheckpoint(
-  cwd: string, lane: "verify" | "govern", resume: Checkpoint | undefined, prompt: string,
+  cwd: string, lane: "verify" | "govern" | "research", resume: Checkpoint | undefined, prompt: string,
   r: { refinedPrompt: string; title: string; language: string; intent: Intent },
 ): void {
   const root = sessionBase(cwd);
@@ -231,6 +233,27 @@ export async function runUpstream(
     return {
       intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "verified",
       report: describeVerify(res, branch, cwd), reportPath: res.reportPath, written: res.reportWritten,
+    };
+  }
+
+  if (laneFor(r, prompt, resume) === "research") {
+    emitPhase("research");
+    // A report is a committed document, so it is written on a branch — like the constitution, like a test
+    // report. `documentWorkdir` opens one unless the session is already inside a worktree.
+    const cwd = await documentWorkdir(process.cwd(), prompt, ensureWorktree, r.title);
+    laneCheckpoint(cwd, "research", resume, prompt, r);
+    const { runResearch, describeResearch } = await import("./research.js");
+    const { currentBranchOf } = await import("./verify.js");
+    const branch = await currentBranchOf(cwd);
+    const res = await runResearch({
+      deps, workdir: cwd, prompt: r.refinedPrompt, title: r.title,
+      // The report is read by a person, so it is written in theirs — see src/engine/language.ts.
+      ...(r.language ? { language: r.language } : {}),
+      note: (text) => emit({ kind: "note", text }),
+    });
+    return {
+      intent: r.intent, refinedPrompt: r.refinedPrompt, kind: "researched",
+      report: describeResearch(res, branch), reportPath: res.reportPath, written: res.written,
     };
   }
 

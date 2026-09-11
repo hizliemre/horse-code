@@ -25,7 +25,7 @@ import type { TaskCycleDeps } from "./task-types.js";
  * what they did is not a feature — nothing is built, the output is a report, and the developer is present
  * throughout because the environment is theirs to start and stop.
  */
-export type Intent = "chat" | "feature" | "bugfix" | "govern" | "undo" | "verify";
+export type Intent = "chat" | "feature" | "bugfix" | "govern" | "undo" | "verify" | "research";
 export interface RefinerOutput {
   refinedPrompt: string;
   intent: Intent;
@@ -45,7 +45,7 @@ export const RefinerSchema = z.object({
    * needs no specification. The prompt's own words for `verify` describe that request exactly; they were just
    * nowhere near the field being filled in.
    */
-  intent: z.enum(["chat", "feature", "bugfix", "govern", "undo", "verify"]).describe(
+  intent: z.enum(["chat", "feature", "bugfix", "govern", "undo", "verify", "research"]).describe(
     "What the request PRODUCES, not what it mentions. "
     + "`verify`: a record of what EXISTING software DID — running scenarios, querying the database or logs "
     + "for evidence, writing or extending a test report. Anything whose output is findings rather than "
@@ -90,9 +90,15 @@ export async function runRefiner(deps: TaskCycleDeps, prompt: string, history: M
  * Deterministic on purpose. The model decides WHAT the request is; what that costs is not a judgement call,
  * and a run that opens a worktree because a classifier hedged is a run nobody can explain.
  */
-export function routeIntent(intent: Intent): "chat" | "govern" | "undo" | "verify" | "pipeline" {
+export function routeIntent(intent: Intent): "chat" | "govern" | "undo" | "verify" | "research" | "pipeline" {
   if (intent === "chat") return "chat";
   if (intent === "undo") return "undo";
   if (intent === "verify") return "verify";
+  /**
+   * Research is its own lane rather than a kind of chat, because its product is a COMMITTED document.
+   * Answered in the conversation it scrolls away; answered on a branch it is something the team can read,
+   * argue with, and point at six months later.
+   */
+  if (intent === "research") return "research";
   return intent === "govern" ? "govern" : "pipeline";
 }

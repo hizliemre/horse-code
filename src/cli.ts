@@ -271,6 +271,8 @@ export function renderResult(res: JobResult): string {
   if (res.kind === "undone") return res.report;
   // Same shape as governance: written where the user is standing, so there is no branch to point them at.
   if (res.kind === "verified") return res.report;
+  // …and research, whose whole product is that one document. `describeResearch` names the branch.
+  if (res.kind === "researched") return res.report;
   if (res.kind === "tweaked") return res.report;
   if (res.kind === "governed") {
     return res.written ? `**Constitution written** — \`${res.path}\`\n\n_${whereItLanded(res.path)}_`

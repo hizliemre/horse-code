@@ -43,7 +43,7 @@ export interface Checkpoint {
    * its work in it. Recorded so a resume goes back to the lane it came from rather than falling through to
    * a pipeline that was never started.
    */
-  lane?: "verify" | "govern";
+  lane?: "verify" | "govern" | "research";
 }
 
 function checkpointPath(worktreeRoot: string): string {

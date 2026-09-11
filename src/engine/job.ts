@@ -75,6 +75,8 @@ export type JobResult =
   | { kind: "undone"; report: string; refinedPrompt?: string }
   /** A verification of work that already exists: a report in the user's tree, no worktree, nothing to merge. */
   | { kind: "verified"; report: string; reportPath: string; written: boolean; refinedPrompt?: string }
+  // The research lane: one committed document, no source touched.
+  | { kind: "researched"; report: string; reportPath: string; written: boolean; refinedPrompt?: string }
   /** A small change, done in the working tree: no worktree, no branch, nothing to merge. */
   | { kind: "tweaked"; report: string; done: boolean; refinedPrompt?: string };
 
@@ -430,6 +432,9 @@ export async function runJob(
       return { kind: "tweaked", report: up.report, done: up.done, refinedPrompt: up.refinedPrompt };
     }
     // Verification writes its report in place, for the same reason govern does — no session was ever opened.
+    if (up.kind === "researched") {
+      return { kind: "researched", report: up.report, reportPath: up.reportPath, written: up.written, refinedPrompt: up.refinedPrompt };
+    }
     if (up.kind === "verified") {
       return { kind: "verified", report: up.report, reportPath: up.reportPath, written: up.written, refinedPrompt: up.refinedPrompt };
     }
