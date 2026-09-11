@@ -1187,7 +1187,8 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   /** /models → what each connected subscription serves. Takes the models any role is currently running. */
   modelsPanel?: (inUse: string[]) => string;
   /** /init → make the repository's rules match what horse-code writes. */
-  initProject?: () => Promise<string>;
+  /** /init → the gitignore report, plus whether the project has documents worth importing. */
+  initProject?: () => Promise<{ text: string; canImport: boolean; extra?: import("../migrate/discover.js").Finding[] }>;
   listSessions?: () => Promise<{ id: string; title: string; updatedAt: number; count: number }[]>; // /sessions (excludes the current one)
   resumeSession?: (id: string) => Promise<{ messages: { role: "user" | "assistant"; text: string }[] } | undefined>; // /resume
   listPins?: () => string[]; // /pins
@@ -1205,7 +1206,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
   graphStatus?: () => Promise<string>; // /graph
   buildGraph?: () => Promise<string>; // /graph build
   cleanWorktrees?: (apply: boolean, branch?: string) => Promise<string>; // /clean-worktrees
-  migrate?: () => Promise<string>; // /migrate
+  migrate?: (extra?: import("../migrate/discover.js").Finding[]) => Promise<string>; // /migrate
   continueFromClaude?: (arg: string) => Promise<void>; // /continue-from-claude <worktree name>
   addMcp?: (input: string) => Promise<string>; // /mcp add <url|command>
   answerByTheWay?: (question: string) => void; // a question asked while work is running
@@ -1659,11 +1660,24 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
    * Its own command rather than a side effect of the first `/graph trace`, which is how somebody ends up
    * looking at a modified `.gitignore` they never asked for.
    */
-  const doInit = (): void => {
+  const doInit = async (): Promise<void> => {
     if (!initProject) { controller.note("Project setup is not available."); return; }
     controller.note("Setting the project up…");
-    initProject().then((text) => controller.note(text),
-      (e) => controller.note(`init error: ${e instanceof Error ? e.message : String(e)}`));
+    let report: { text: string; canImport: boolean; extra?: import("../migrate/discover.js").Finding[] };
+    try { report = await initProject(); }
+    catch (e) { controller.note(`init error: ${e instanceof Error ? e.message : String(e)}`); return; }
+    controller.note(report.text);
+    if (!report.canImport || !migrate) return;
+    /**
+     * Asked, never assumed. Reading a project's documents is a model pass costing hundreds of calls on a
+     * real repository, and the size of that is in the note above — so the question comes after the number,
+     * not before it.
+     */
+    if ((await controller.ask("Read these and import what they say?", { options: ["Import", "Skip"] })) !== "Import") {
+      controller.note("Left alone. Run `/init` again, or `/migrate`, whenever you want them read.");
+      return;
+    }
+    controller.note(await migrate(report.extra));
   };
   const doModels = (): void => {
     if (!modelsPanel) { controller.note("Models are not available."); return; }
@@ -1920,7 +1934,7 @@ export function App({ controller, fullscreen = false, model, coachModel, refiner
     else if (c.name === "/remember") doRemember("");
     else if (c.name === "/forget") doForget("");
     else if (c.name === "/mcp") doMcp("");
-    else if (c.name === "/init") doInit();
+    else if (c.name === "/init") void doInit();
     else if (c.name === "/models") doModels();
     else if (c.name === "/sources") doSources("");
     else if (c.name === "/skills") doSkills("");

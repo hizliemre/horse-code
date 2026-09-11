@@ -86,7 +86,7 @@ export function claudeProjectSlug(cwd: string): string {
   return cwd.replace(/\//g, "-");
 }
 
-async function read(path: string): Promise<{ bytes: number; text?: string } | undefined> {
+export async function readFinding(path: string): Promise<{ bytes: number; text?: string } | undefined> {
   try {
     const s = await stat(path);
     if (!s.isFile() || s.size === 0) return undefined;
@@ -120,7 +120,7 @@ export async function discover(opts: DiscoverOptions): Promise<Finding[]> {
   const { cwd, home } = opts;
   const out: Finding[] = [];
   const push = async (kind: SourceKind, tool: string, path: string, label: string, own = false): Promise<void> => {
-    const r = await read(path);
+    const r = await readFinding(path);
     if (r) out.push({ kind, tool, path, label, bytes: r.bytes, ...(own ? { own } : {}), ...(r.text ? { text: r.text } : {}) });
   };
 

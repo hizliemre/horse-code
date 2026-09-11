@@ -38,6 +38,14 @@ export interface MigrateDeps {
   /** The model CHAIN, not one model: migration is the one path that used to skip fallbacks entirely. */
   models: string[];
   memStore: MemoryStore;
+  /**
+   * Findings the CALLER discovered, merged with what `discover` finds on its own.
+   *
+   * `/init` sorts the project's own markdown into what is worth reading for rules and what is a record of
+   * what happened — a judgement it shows the person before asking. Re-deriving that here would either
+   * duplicate the sorting or quietly disagree with the list they approved.
+   */
+  extra?: Finding[];
   ask: Ask;
   note: Note;
   /** Live progress line per phase — see Progress. */
@@ -95,7 +103,7 @@ function sample(items: Candidate[]): string {
  */
 export async function runMigration(deps: MigrateDeps): Promise<MigrateResult> {
   const result: MigrateResult = { rules: 0, facts: 0, skills: 0, skipped: 0, declined: [], failedBatches: 0, removed: 0 };
-  const findings = await discover({ cwd: deps.cwd, home: deps.home });
+  const findings = [...await discover({ cwd: deps.cwd, home: deps.home }), ...(deps.extra ?? [])];
 
   if (!hasAnything(findings)) {
     deps.note("No configuration from another coding tool was found here — nothing to migrate.");

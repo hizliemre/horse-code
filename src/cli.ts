@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { sessionBase } from "./engine/session-scope.js";
-import { readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import type { Provider } from "./core/types.js";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,7 +24,10 @@ import { externalSkillsDir, syncSkillSources, installSkillSource, parseSkillUrl 
 import { saveSkillSource } from "./config/save-skills.js";
 import { graphStatus, buildProjectGraph, graphifyPython } from "./engine/project-graph.js";
 import { briefStatus } from "./engine/project-brief.js";
-import { initProject as initProjectFor, describeInit } from "./engine/init-project.js";
+import { initProject as initProjectFor, describeInit, describeKnowledge, hasKnowledge } from "./engine/init-project.js";
+import { sortProjectDocs } from "./migrate/project-docs.js";
+import { discover, readFinding } from "./migrate/discover.js";
+import type { Finding } from "./migrate/discover.js";
 import { setTraceRoot, discoverTraceRoot } from "./engine/trace.js";
 import { planFor, runTraces, describePlan, buildBrief, traceableFiles as traceableSource } from "./engine/trace-run.js";
 import { traceable } from "./engine/trace.js";
@@ -588,7 +591,7 @@ export async function main(argv: string[]): Promise<void> {
    * hands both to the planner. Through the same runner every other git call here uses, so a repository that
    * answers oddly (a submodule, a worktree) answers the same way everywhere.
    */
-  const initProjectFn = async (): Promise<string> => {
+  const initProjectFn = async (): Promise<{ text: string; canImport: boolean; extra?: Finding[] }> => {
     // `--directory` collapses an untracked tree into one entry: the interesting unit is `graphify-out/`,
     // not each of the 711 files inside it.
     const r = await defaultGitRunner(["ls-files", "--others", "--exclude-standard", "--directory"], cwd);
@@ -597,7 +600,33 @@ export async function main(argv: string[]): Promise<void> {
     for (const path of list) {
       if ((await defaultGitRunner(["check-ignore", "-q", path], cwd)).code === 0) ignored.add(path);
     }
-    return describeInit(await initProjectFor(cwd, (path) => ignored.has(path), () => list));
+    /**
+     * Every markdown file git can see — tracked or newly added, never ignored — sorted into what is worth
+     * reading for rules and what is a record of what happened. Asked of GIT rather than walked, so
+     * `node_modules` and every build output are excluded by the repository's own answer.
+     */
+    const all = await defaultGitRunner(["ls-files", "--cached", "--others", "--exclude-standard"], cwd);
+    const md = all.stdout.split("\n").map((l) => l.trim()).filter((l) => /\.mdx?$/i.test(l));
+    const withSize = md.map((path) => {
+      try { return { path, bytes: statSync(join(cwd, path)).size }; } catch { return { path, bytes: 0 }; }
+    });
+    const found = await discover({ cwd, home });
+    const named = found.filter((f) => f.kind === "rules" || f.kind === "mcp").map((f) => ({ label: f.label, bytes: f.bytes }));
+    const { candidates, skipped } = sortProjectDocs(withSize, found.map((f) => f.label));
+    const knowledge = { named, docs: candidates, skipped };
+    const report = await initProjectFor(cwd, (path) => ignored.has(path), () => list, knowledge);
+    const canImport = hasKnowledge(knowledge);
+    /**
+     * The docs are handed on as findings with their text already read, so the extractor sees exactly the
+     * list the person approved. `readFinding` applies the same size cap every other source gets — a file too
+     * large to act on is reported and not sent.
+     */
+    const extra: Finding[] = [];
+    for (const d of candidates) {
+      const r = await readFinding(join(cwd, d.path));
+      if (r?.text) extra.push({ kind: "rules", tool: "project document", path: join(cwd, d.path), label: d.path, bytes: r.bytes, own: true, text: r.text });
+    }
+    return { text: describeInit(report) + (canImport ? describeKnowledge(knowledge) : ""), canImport, extra };
   };
   const modelsPanelNote = (inUse: string[]): string =>
     modelsPanel(accounts.usage(), modelsFor, CLI_KINDS, inUse);

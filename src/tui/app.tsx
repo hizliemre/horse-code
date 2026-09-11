@@ -82,7 +82,7 @@ export interface RunTuiReplOpts {
   accountsNote?: () => string | undefined;
   /** /models → what each connected subscription serves; given the models any role is running. */
   modelsPanel?: (inUse: string[]) => string;
-  initProject?: () => Promise<string>;
+  initProject?: () => Promise<{ text: string; canImport: boolean; extra?: import("../migrate/discover.js").Finding[] }>;
   updateSkills?: () => Promise<string>; // /skills update → re-install externally-sourced skills
   addSkill?: (url: string) => Promise<string>; // /skills add <url> → install from a repo
   /** Re-reads `.horsecode/skills` — migration writes there mid-session and nothing else would notice. */
@@ -402,13 +402,14 @@ export async function runTuiRepl(opts: RunTuiReplOpts): Promise<void> {
     }
   };
 
-  const migrate = async (): Promise<string> => {
+  const migrate = async (extra?: import("../migrate/discover.js").Finding[]): Promise<string> => {
     if (!opts.memStore) return "Migration needs the memory store, which is not available in this session.";
     // Per-phase live lines, kept for the length of this migration so each phase rewrites its own.
     const progressLines = new Map<string, (text: string) => void>();
     const { runMigration, describeResult } = await import("../migrate/run.js");
     const r = await runMigration({
       cwd: process.cwd(), home: homedir(), provider: deps.provider,
+      ...(extra?.length ? { extra } : {}),
       /**
        * The architect's whole CHAIN, not just its head.
        *

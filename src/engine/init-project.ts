@@ -1,6 +1,8 @@
 import { existsSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { ensureGitignore, localOnly, sharedDerived, traceRootRel } from "./trace.js";
+import { sortProjectDocs, totalBytes, classifyCalls, type DocCandidate } from "../migrate/project-docs.js";
+import { MAX_CHUNK_CHARS } from "../migrate/extract.js";
 
 /**
  * `/init` — making a project fit to be worked on, which for git means one thing: the right things committed.
@@ -27,6 +29,16 @@ export interface Unclaimed {
   files: number;
 }
 
+/** What a project already says about itself, waiting to be read. */
+export interface Knowledge {
+  /** Files a tool is known to write — `CLAUDE.md` and its siblings. Their path proves their purpose. */
+  named: { label: string; bytes: number }[];
+  /** The project's other markdown, worth reading for rules. */
+  docs: DocCandidate[];
+  /** Set aside, each with the reason — shown so the judgement can be argued with. */
+  skipped: DocCandidate[];
+}
+
 export interface InitReport {
   /** True when `.gitignore` was actually edited — a project already set up gets no diff and is told so. */
   changed: boolean;
@@ -36,6 +48,8 @@ export interface InitReport {
   excluded: string[];
   /** Big untracked directories no rule claims — reported, never acted on. */
   unclaimed: Unclaimed[];
+  /** What the project already says about itself. Never imported without being asked — see `describeInit`. */
+  knowledge?: Knowledge;
 }
 
 /**
@@ -79,6 +93,14 @@ export async function initProject(
   cwd: string,
   isIgnored: (path: string) => boolean,
   untracked: () => string[],
+  /**
+   * What the project already says about itself, if the caller looked.
+   *
+   * Passed in rather than gathered here: finding it means asking git for every file and another module for
+   * which of them a tool is known to write, and this function's own job — the ignore rules — must keep
+   * working in a directory that is not a repository at all.
+   */
+  knowledge?: Knowledge,
 ): Promise<InitReport> {
   const changed = await ensureGitignore(cwd);
   const unclaimed: Unclaimed[] = [];
@@ -95,7 +117,52 @@ export async function initProject(
     kept: [`${traceRootRel().replace(/\\/g, "/")}/`, ...sharedDerived()].filter((p) => existsSync(join(cwd, p)) || p.endsWith("/")),
     excluded: localOnly(),
     unclaimed: unclaimed.sort((a, b) => b.files - a.files),
+    ...(knowledge ? { knowledge } : {}),
   };
+}
+
+/** Whether there is anything to import at all — the question is not worth asking otherwise. */
+export function hasKnowledge(k?: Knowledge): boolean {
+  return !!k && (k.named.length > 0 || k.docs.length > 0);
+}
+
+/** "109 KB", "6.8 MB" — sizes a person can weigh a decision with. */
+export function size(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * The question `/init` asks before spending anything.
+ *
+ * Costed in the extractor's own unit, because the number IS the argument for asking. Measured on a real
+ * project: the named files came to 109 KB, and the rest of its markdown to 6.8 MB — roughly 850
+ * classification calls to produce the 25 rules the consolidation keeps. Nobody should discover that
+ * afterwards.
+ */
+export function describeKnowledge(k: Knowledge, chunk = MAX_CHUNK_CHARS): string {
+  const lines: string[] = ["", "**This project already says things about itself.**", ""];
+  if (k.named.length) {
+    lines.push(`Files a tool is known to write — ${size(totalBytes(k.named.map((n) => ({ path: n.label, bytes: n.bytes }))))}:`);
+    lines.push(...k.named.map((n) => `  · \`${n.label}\` (${size(n.bytes)})`));
+  }
+  if (k.docs.length) {
+    const bytes = totalBytes(k.docs);
+    lines.push("", `The project's other markdown — ${k.docs.length} file(s), ${size(bytes)}, about ${classifyCalls(bytes, chunk)} classification call(s):`);
+    lines.push(...k.docs.slice(0, 8).map((d) => `  · \`${d.path}\` (${size(d.bytes)})`));
+    if (k.docs.length > 8) lines.push(`  · …and ${k.docs.length - 8} more`);
+  }
+  if (k.skipped.length) {
+    /**
+     * Shown, with the reason, because setting a file aside by its NAME is a judgement. A project that keeps
+     * its standards in `docs/archive` gets the wrong answer here, and the only way to argue with a judgement
+     * is to see it.
+     */
+    const reasons = new Map<string, number>();
+    for (const sk of k.skipped) reasons.set(sk.skipped ?? "", (reasons.get(sk.skipped ?? "") ?? 0) + 1);
+    lines.push("", `Set aside — ${k.skipped.length} file(s), ${size(totalBytes(k.skipped))}:`);
+    for (const [why, n] of [...reasons].sort((a, b) => b[1] - a[1])) lines.push(`  · ${n} × ${why}`);
+  }
+  return lines.join("\n");
 }
 
 /** What the person is shown. States the reasons, because the rules are only defensible with them. */
