@@ -434,23 +434,83 @@ function bandDistance(primary: string, candidate: string): number {
  * best-first, so taking the first match used to jump a whole band (a mid primary falling onto an Opus-tier
  * fallback) even when an exact peer sat further down the same list.
  */
+/**
+ * How far below the primary a fallback may sit.
+ *
+ * One band. A substitute has to be able to do the work, and `opus → haiku` — which a real board produced —
+ * is not a substitution: it is the difference between a flagship-tier answer and the cheapest model in the
+ * catalogue, arriving silently at the moment the primary is unavailable. The role was put on a strong model
+ * for a reason, and a fallback that abandons that reason answers a different question than the one asked.
+ */
+export const MAX_BAND_DROP = 1;
+
+/** Whether a candidate is close enough in heft to stand in for the primary at all. */
+export function isPeer(primary: string, candidate: string): boolean {
+  return BAND_ORDER[modelBand(primary)] - BAND_ORDER[modelBand(candidate)] <= MAX_BAND_DROP;
+}
+
+/**
+ * Picks up to `n` fallback models for a primary.
+ *
+ * Two rules, and both are refusals rather than preferences.
+ *
+ * A fallback is on a DIFFERENT SUBSCRIPTION, always. The failure it exists to survive is a rate-limited or
+ * exhausted account, and a same-source fallback is dead weight against exactly that — measured on a live
+ * board, `opus → haiku` slid from a spent Claude window onto the same spent Claude window.
+ *
+ * And it is a PEER. Among the cross-source candidates the closest heft wins rather than the strongest, and
+ * anything more than `MAX_BAND_DROP` below the primary is not offered at all.
+ *
+ * What used to be here instead was a second pass taking "any distinct model" once the sources ran out, and
+ * that pass is gone. With one subscription connected there is no substitute to be had: a second model on the
+ * same spent account cannot answer, and writing one into the chain only hides that. A shorter chain says the
+ * true thing — see `adjustRoleModels`, where a single-source catalogue produces single-model chains.
+ */
 function pickFallbacks(primary: string, pool: string[], n: number): string[] {
   const chosen: string[] = [];
   const usedModels = new Set([baseModel(primary)]);
   const usedSources = new Set([sourceOf(primary)]);
   // Stable: equal band distance keeps the pool's own (capability) order.
   const byHeft = pool.map((m, i) => ({ m, i })).sort((a, b) => bandDistance(primary, a.m) - bandDistance(primary, b.m) || a.i - b.i).map((x) => x.m);
-  for (const m of byHeft) { // pass 1: distinct source, closest heft
+  for (const m of byHeft) {
     if (chosen.length >= n) break;
     if (usedModels.has(baseModel(m)) || usedSources.has(sourceOf(m))) continue;
+    if (!isPeer(primary, m)) continue;
     chosen.push(m); usedModels.add(baseModel(m)); usedSources.add(sourceOf(m));
   }
-  for (const m of byHeft) { // pass 2: any distinct model (when there aren't enough sources)
-    if (chosen.length >= n) break;
-    if (usedModels.has(baseModel(m))) continue;
-    chosen.push(m); usedModels.add(baseModel(m));
-  }
   return chosen;
+}
+
+/**
+ * The best model each subscription can offer, one per source.
+ *
+ * What a tier rotation needs is something to rotate, and an absolute score threshold does not provide it.
+ * Measured on a live board with four subscriptions connected: `strongPool` — everything scoring in the strong
+ * band — held exactly ONE model, `opus`. Every other source's best sat a point or two below the line, so all
+ * forty strong roles took the same primary and 48 of 64 chains led with Claude. The round-robin was working
+ * perfectly over a list of length one.
+ *
+ * Comparing vendors by an absolute number is the part that does not hold. The scores for Grok and GLM in this
+ * file say in their own comments that they are starting positions rather than measurements — so treating 83.3
+ * and 82.6 as "not strong enough" while 93 is, and concluding that three paid subscriptions have nothing to
+ * contribute to serious work, reads far more into those numbers than they carry. What each subscription's own
+ * best model is, is a fact.
+ *
+ * `exclude` is how the tier below gets a different answer: a source with two candidates gives its second to
+ * the mid tier (`sonnet` under `opus`, `gpt-5.6-sol` under `terra`), and a source with only one gives the
+ * same model to both, which is the honest answer for a subscription that has only one.
+ */
+export function bestPerSource(pool: readonly string[], exclude: readonly string[] = []): string[] {
+  const skip = new Set(exclude.map(baseModel));
+  const best = new Map<string, string>();
+  for (const m of pool) {
+    if (skip.has(baseModel(m))) continue;
+    const src = sourceOf(m);
+    const held = best.get(src);
+    if (!held || capabilityScore(m) > capabilityScore(held)) best.set(src, m);
+  }
+  // Ordered best-first so a rotation that runs short still takes the strongest, then interleaved by source.
+  return interleaveBySource([...best.values()].sort((a, b) => capabilityScore(b) - capabilityScore(a)));
 }
 
 /** Chain length: every role gets a primary + this many fallbacks (3 models total) when enough exist. */
@@ -514,14 +574,28 @@ export function adjustRoleModels(
     primary.set(r, src[i % src.length]);
   });
   // Strong roles (+ any unknown role): Opus-tier, source-spread so they don't pile on one subscription.
-  const strongSrc = interleaveBySource(strongPool.length ? strongPool : nonFlagship.length ? nonFlagship : primaryPool);
+  /**
+   * One primary per SUBSCRIPTION rather than everything above a score line — see `bestPerSource` for the
+   * board where that line left a four-source catalogue rotating over a list of one.
+   */
+  const strongSrc = bestPerSource(nonFlagship.length ? nonFlagship : primaryPool);
   STRONG_ROLES.filter((r) => wanted.has(r)).concat(roles.filter((r) => !known.has(r)))
     .forEach((r, i) => {
       const src = forRole(r, strongSrc);
       primary.set(r, src[i % src.length]);
     });
   // Mid roles: capable-but-NOT-flagship, source-spread (coach/coder must not get the flagship).
-  const midSrc = interleaveBySource(midPool.length ? midPool : nonFlagship.length ? nonFlagship : primaryPool);
+  // The tier below: each source's SECOND best where it has one, so `senior-coder` stays above `coder` on the
+  // same subscription. A source with a single model offers it to both, which is what it actually has.
+  /**
+   * Built from the MID band itself, not from whatever each source has that is not a flagship.
+   *
+   * The strong tier has to widen past its band, because on a four-subscription catalogue only one model
+   * scored into it. The mid tier must not: widening it puts a strong model on `coach` and `coder`, which are
+   * the highest-volume roles there are and were put on this tier precisely so they would not carry that cost.
+   * Caught by the test that watches a mid primary's fallback — the primary itself had quietly become strong.
+   */
+  const midSrc = bestPerSource(midPool.length ? midPool : nonFlagship.length ? nonFlagship : primaryPool);
   MID_ROLES.filter((r) => wanted.has(r)).forEach((r, i) => {
     const src = forRole(r, midSrc);
     primary.set(r, src[i % src.length]);

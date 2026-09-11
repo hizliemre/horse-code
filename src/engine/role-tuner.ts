@@ -1,5 +1,5 @@
 import type { ChatRequest, Provider } from "../core/types.js";
-import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable, isKnownModel, newestPrimary, strongestPrimary, DURABLE_ROLES } from "../tui/role-models.js";
+import { ROLE_PROFILES, adjustRoleModels, modelBand, sourceOf, capabilityScore, mostCapable, isKnownModel, newestPrimary, strongestPrimary, isPeer, DURABLE_ROLES } from "../tui/role-models.js";
 
 export interface TunedRoles {
   reasoning: string;
@@ -121,9 +121,35 @@ function validateChains(
     const chain: string[] = [];
     const seen = new Set<string>();
     const add = (m: string) => { if (m && valid.has(m) && !seen.has(m)) { seen.add(m); chain.push(m); } };
-    for (const m of byRole.get(role) ?? []) { if (chain.length >= 3) break; add(m); } // the LLM's picks (validated)
-    for (const m of heuMap.get(role) ?? []) { if (chain.length >= 3) break; add(m); } // pad from the heuristic
-    for (const m of models) { if (chain.length >= 3) break; add(m); } // last resort: any model
+    /**
+     * The LLM's picks, validated against the CHAIN RULES and not merely against the catalogue.
+     *
+     * Checking that an id exists was never enough. Measured on a live board, the tuner assigned the tracer
+     * `opus → haiku → glm-5.3-flash`: two of the three links on one subscription, and the first fallback the
+     * cheapest model in the catalogue. Both are real ids, so every check here passed — and the run that
+     * followed slid from a spent Claude window onto the same spent Claude window.
+     *
+     * A fallback must be on a different subscription (that is the failure it exists to survive) and a peer
+     * in heft (a substitute has to be able to do the work). The primary is the tuner's to choose; the shape
+     * of the chain behind it is not a judgement call.
+     */
+    const primaryOf = (byRole.get(role) ?? [])[0];
+    const admissible = (m: string): boolean => {
+      const head = chain[0] ?? primaryOf;
+      if (!head || m === head) return true;
+      return sourceOf(m) !== sourceOf(head) && isPeer(head, m) && !chain.some((c) => sourceOf(c) === sourceOf(m));
+    };
+    const addIf = (m: string): void => { if (admissible(m)) add(m); };
+    for (const m of byRole.get(role) ?? []) { if (chain.length >= 3) break; addIf(m); }
+    for (const m of heuMap.get(role) ?? []) { if (chain.length >= 3) break; addIf(m); } // pad from the heuristic
+    /**
+     * Last resort, under the same rules. It used to take ANY model, which is how a chain could end up with
+     * two links on one subscription even when the tuner had not asked for that — and a chain that cannot be
+     * completed under the rules is left SHORT on purpose. With one subscription connected there is no
+     * substitute to be had, and a second model on the same spent account cannot answer; writing one in only
+     * hides that.
+     */
+    for (const m of models) { if (chain.length >= 3) break; addIf(m); }
     // The tuner reasons about capability, not release numbers: it will happily name `claude-opus-4-6` while
     // `claude-opus-5` sits in the same catalog. Upgrading the primary is deterministic, so it does not depend
     // on the tuner noticing.

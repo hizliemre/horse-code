@@ -1,6 +1,6 @@
 import { cliCatalog } from "../../src/agents/cli-models.js";
 import { describe, it, expect } from "vitest";
-import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily, versionlessId, newestPrimary, strongestPrimary, DURABLE_ROLES, sourceOf } from "../../src/tui/role-models.js";
+import { filterModelsForRole, capabilityScore, baseModel, adjustRoleModels, modelBand, isKnownModel, modelFamily, versionlessId, newestPrimary, strongestPrimary, DURABLE_ROLES, sourceOf, ROLE_PROFILES } from "../../src/tui/role-models.js";
 
 const ALL = [
   "cc/claude-opus-4-8",
@@ -115,11 +115,20 @@ describe("adjustRoleModels", () => {
     expect(map.judge).toMatch(/fable/); // most capable stays on judge
   });
 
-  it("assigns a 3-model chain (primary + 2 fallbacks) to every role", () => {
+  /**
+   * Three models where three subscriptions can supply a peer — and fewer where they cannot.
+   *
+   * A chain used to be padded to three from whatever was left, which put two links on one subscription. That
+   * is dead weight against the failure a fallback exists for: a spent account cannot answer twice. So the
+   * length is a CONSEQUENCE of how many sources hold a peer, never a target.
+   */
+  it("gives every role one link per subscription that can supply a peer", () => {
     const out = adjustRoleModels(["judge", "analyst", "coder", "refiner"], models);
     for (const r of out) {
-      expect(r.models.length).toBe(3);
-      expect(new Set(r.models).size).toBe(3); // no model repeats within a chain
+      expect(r.models.length).toBeGreaterThan(0);
+      expect(r.models.length).toBeLessThanOrEqual(3);
+      expect(new Set(r.models).size).toBe(r.models.length);       // no model repeats
+      expect(new Set(r.models.map(sourceOf)).size).toBe(r.models.length); // …and no SUBSCRIPTION repeats
     }
   });
 
@@ -538,11 +547,41 @@ describe("spreading a board across the subscriptions", () => {
    * `grok-4.6 → glm-5.3 → gpt-5.6-terra`, three subscriptions deep and confined to none. The guarantee was
    * never about those two names; it was that no role sits on a single subscription end to end.
    */
-  it("gives every role a chain that reaches more than one subscription", () => {
+  /**
+   * Reaching more than one subscription, unless there is genuinely nowhere else to go.
+   *
+   * `judge` is the case that made this precise: it leads with the one flagship in the catalogue, and no other
+   * subscription has a flagship peer. Its honest chain is one model. Padding it with a weaker model from
+   * another source would answer the judge's question with something that cannot do the judge's work, and
+   * padding it from Claude would put both links on the same spent window.
+   */
+  it("reaches more than one subscription, or is a single model because nothing else could stand in", () => {
     for (const { role, models } of adjustRoleModels(roles, cliCatalog())) {
       const sources = new Set(models.map(sourceOf));
+      expect(sources.size, `${role}: ${models.join(" → ")}`).toBe(models.length);
+      if (models.length === 1) continue; // no peer on any other subscription — see above
       expect(sources.size, `${role}: ${models.join(" → ")}`).toBeGreaterThan(1);
     }
+  });
+
+  /**
+   * Every subscription leads for a share of the board — the rotation is over SOURCES, not over models.
+   *
+   * Measured over the WHOLE role set rather than a handful, because the handful is misleading: two of seven
+   * roles being flagship-tier makes Claude's share look like a pile-up when it is the only subscription with
+   * a flagship. The board is where the question is real.
+   */
+  it("spreads the chain heads across every connected subscription", () => {
+    const everyRole = Object.keys(ROLE_PROFILES);
+    const heads = adjustRoleModels(everyRole, cliCatalog()).map((r) => sourceOf(r.models[0]));
+    const share = new Map<string, number>();
+    for (const h of heads) share.set(h, (share.get(h) ?? 0) + 1);
+    expect([...share.keys()].sort()).toEqual(["claude", "codex", "grok", "zai"]);
+    /**
+     * No subscription carries more than half the board. Measured before this rule: `strongPool` held exactly
+     * one model, so forty strong roles took the same primary and Claude led 48 of 64 chains.
+     */
+    for (const [src, n] of share) expect(n, `${src} leads ${n}/${heads.length}`).toBeLessThan(heads.length / 2);
   });
 
   /**
