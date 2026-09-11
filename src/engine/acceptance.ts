@@ -80,6 +80,18 @@ const PROMPT =
  */
 export async function verifyAcceptance(
   deps: ReviewDeps, card: Card, cwd: string, emit: (ev: ProgressEvent) => void = () => {},
+  /**
+   * How the criteria's commands get run — injected so a test does not depend on the machine running it.
+   *
+   * The gate SPAWNS by design: a criterion naming `dotnet build` is settled by running it, which is the whole
+   * point of `runCriterionCommands`. That made every test carrying such a criterion reach for the local
+   * toolchain, and the behaviour then differed by machine. Measured: the pairing test took 250ms on a laptop
+   * with the .NET SDK installed, and on CI — where the runner image also has it, and a cold first run is far
+   * slower — it passed the 5-second timeout and failed a release whose code was fine.
+   *
+   * Real runs keep the real runner; tests hand in one that spawns nothing.
+   */
+  runCommands: typeof runCriterionCommands = runCriterionCommands,
 ): Promise<AcceptanceResult> {
   /**
    * The suite runs FIRST, and it runs even when the card promised nothing.
@@ -140,7 +152,7 @@ export async function verifyAcceptance(
    * observably verified") and the card came back for a build that was fine.
    */
   const commandRuns = await telemetry().span("stage.criterion_commands", { "hc.stage": "criterion commands" },
-    () => runCriterionCommands(cwd, card.acceptance));
+    () => runCommands(cwd, card.acceptance));
   for (const r of commandRuns) {
     emit({ kind: "note", text: r.passed
       ? `✅ \`${r.argv.join(" ")}\` — exit 0`

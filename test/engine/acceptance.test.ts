@@ -38,9 +38,18 @@ const provider = (checks: unknown): Provider => ({
   },
 });
 
+/**
+ * The gate runs the commands a criterion names, for real. These tests must not: a criterion saying
+ * `dotnet build` otherwise reaches for whatever toolchain the machine has, and the same test then behaves
+ * differently on a laptop and on CI. Measured — that is exactly how a release failed with its code fine.
+ *
+ * Command execution has its own tests, against the real runner, in criterion-commands.test.ts.
+ */
+const noCommands = async (): Promise<[]> => [];
+
 describe("verifyAcceptance (the completion gate)", () => {
   it("passes trivially when the task promised nothing (plans that predate the gate still run)", async () => {
-    const res = await verifyAcceptance(gdeps(provider([])), card([]), dir);
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), dir, undefined, noCommands);
     expect(res.passed).toBe(true);
     expect(res.unmet).toEqual([]);
     // A directory with no manifest has no suite to run, and that is not a failure.
@@ -51,7 +60,7 @@ describe("verifyAcceptance (the completion gate)", () => {
     const crit = ["src/models/todo.ts exports a Todo type", "a test covers toggling done"];
     const p = provider(crit.map((c) => ({ criterion: c, met: true, evidence: "saw it in src/models/todo.ts" })));
     const notes: string[] = [];
-    const res = await verifyAcceptance(gdeps(p), card(crit), dir, (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); });
+    const res = await verifyAcceptance(gdeps(p), card(crit), dir, (ev) => { if (ev.kind === "note") notes.push((ev as { text: string }).text); }, noCommands);
     expect(res.passed).toBe(true);
     expect(notes.join("\n")).toMatch(/all 2 criteria verified/i);
   });
@@ -62,7 +71,7 @@ describe("verifyAcceptance (the completion gate)", () => {
       { criterion: crit[0], met: true, evidence: "found the export" },
       { criterion: crit[1], met: false, evidence: "no test file references toggle" },
     ]);
-    const res = await verifyAcceptance(gdeps(p), card(crit), dir);
+    const res = await verifyAcceptance(gdeps(p), card(crit), dir, undefined, noCommands);
     expect(res.passed).toBe(false);
     expect(res.unmet).toEqual(["a test covers toggling done — no test file references toggle"]);
   });
@@ -70,7 +79,7 @@ describe("verifyAcceptance (the completion gate)", () => {
   it("a criterion the gate stayed SILENT about is not satisfied", async () => {
     const crit = ["src/models/todo.ts exports a Todo type", "a test covers toggling done"];
     const p = provider([{ criterion: crit[0], met: true, evidence: "found it" }]); // second one never reported
-    const res = await verifyAcceptance(gdeps(p), card(crit), dir);
+    const res = await verifyAcceptance(gdeps(p), card(crit), dir, undefined, noCommands);
     expect(res.passed).toBe(false);
     expect(res.unmet[0]).toMatch(/not reported by the acceptance gate/);
   });
@@ -91,7 +100,7 @@ describe("verifyAcceptance (the completion gate)", () => {
     // What the model actually returns: backticks stripped, the trailing period dropped.
     const restated = crit.map((c) => c.replace(/`/g, "").replace(/\.$/, ""));
     const p = provider(restated.map((c) => ({ criterion: c, met: true, evidence: "read the file" })));
-    const res = await verifyAcceptance(gdeps(p), card(crit), dir);
+    const res = await verifyAcceptance(gdeps(p), card(crit), dir, undefined, noCommands);
     expect(res.unmet).toEqual([]);
     expect(res.passed).toBe(true);
   });
@@ -103,7 +112,7 @@ describe("verifyAcceptance (the completion gate)", () => {
   it("still refuses to pair by elimination when more than one criterion is unaccounted for", async () => {
     const crit = ["`Foo.cs` pasifleştirir", "`Bar.cs` doğrular"];
     const p = provider([{ criterion: "something else entirely", met: true, evidence: "saw it" }]);
-    const res = await verifyAcceptance(gdeps(p), card(crit), dir);
+    const res = await verifyAcceptance(gdeps(p), card(crit), dir, undefined, noCommands);
     expect(res.passed).toBe(false);
     expect(res.unmet).toHaveLength(2);
     for (const u of res.unmet) expect(u).toMatch(/not reported by the acceptance gate/);
@@ -111,7 +120,7 @@ describe("verifyAcceptance (the completion gate)", () => {
 
   it("a gate that cannot run treats the criteria as UNMET (never waves the task through)", async () => {
     const broken: Provider = { async *chat() { yield { type: "text-delta", text: "I think it is fine" }; yield { type: "done", finishReason: "stop" }; } };
-    const res = await verifyAcceptance(gdeps(broken), card(["src/models/todo.ts exports a Todo type"]), dir);
+    const res = await verifyAcceptance(gdeps(broken), card(["src/models/todo.ts exports a Todo type"]), dir, undefined, noCommands);
     expect(res.passed).toBe(false);
     expect(res.unmet[0]).toMatch(/not verified/);
   });
@@ -133,7 +142,7 @@ describe("the gate runs the project's own tests", () => {
     const d = await withPkg("node -e \"process.exit(1)\"");
     // The provider would happily report every criterion met; the suite overrules it.
     const p = provider([{ criterion: "c", met: true, evidence: "looks fine" }]);
-    const res = await verifyAcceptance(gdeps(p), card(["c"]), d);
+    const res = await verifyAcceptance(gdeps(p), card(["c"]), d, undefined, noCommands);
     expect(res.passed).toBe(false);
     expect(res.tests).toMatchObject({ ran: true, passed: false });
     await rm(d, { recursive: true, force: true });
@@ -145,21 +154,21 @@ describe("the gate runs the project's own tests", () => {
    */
   it("blocks a task with NO criteria when the suite is red", async () => {
     const d = await withPkg("node -e \"process.exit(1)\"");
-    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d, undefined, noCommands);
     expect(res.passed).toBe(false);
     await rm(d, { recursive: true, force: true });
   });
 
   it("reports the failure output, so a pre-existing red suite can be told apart from a new one", async () => {
     const d = await withPkg("node -e \"console.log('FAILED: unrelated_test'); process.exit(1)\"");
-    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d, undefined, noCommands);
     expect(res.unmet[0]).toContain("FAILED: unrelated_test");
     await rm(d, { recursive: true, force: true });
   });
 
   it("lets a green suite through and records that it ran", async () => {
     const d = await withPkg("node -e \"process.exit(0)\"");
-    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d, undefined, noCommands);
     expect(res.passed).toBe(true);
     expect(res.tests).toMatchObject({ ran: true, passed: true });
     await rm(d, { recursive: true, force: true });
@@ -167,14 +176,14 @@ describe("the gate runs the project's own tests", () => {
 
   // A project that does not test has not broken anything by not testing.
   it("skips a project with no suite rather than failing it", async () => {
-    const res = await verifyAcceptance(gdeps(provider([])), card([]), dir);
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), dir, undefined, noCommands);
     expect(res.passed).toBe(true);
     expect(res.tests?.ran).toBe(false);
   });
 
   it("ignores npm's placeholder script", async () => {
     const d = await withPkg('echo "Error: no test specified" && exit 1');
-    const res = await verifyAcceptance(gdeps(provider([])), card([]), d);
+    const res = await verifyAcceptance(gdeps(provider([])), card([]), d, undefined, noCommands);
     expect(res.passed).toBe(true);
     expect(res.tests?.ran).toBe(false);
     await rm(d, { recursive: true, force: true });
