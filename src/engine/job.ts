@@ -16,6 +16,7 @@ import { runProjectManager } from "./project-manager.js";
 import { humanAbandoned } from "./split-card.js";
 import { auditBreakdown, repairRequest } from "./task-audit.js";
 import { runWaves } from "./wave-engine.js";
+import { FactBus } from "./fact-bus.js";
 import type { WaveEngineResult } from "./wave-engine.js";
 import { REVISION_CARD, runRevision, closeRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
@@ -528,7 +529,15 @@ export async function runJob(
      * why an agent that hit a real decision could only write it into the chat. Folded into `deps` it reaches
      * every stage that runs a task, and stays absent in a headless run, where the tool is not offered at all.
      */
-    const wave = await runWaves({ ...deps, askUser: opts.askUser }, session, board,
+    /**
+     * One bus for the whole wave, because the sharing IS between the agents inside it.
+     *
+     * Created here rather than in `wiring` so its life is a JOB's: facts an agent found while building this
+     * board are about this board, and carrying them into the next job would hand a fresh wave observations
+     * about work that has already merged. What deserves to outlive the job goes to durable memory, which is
+     * the same write — see the remember tool in `implementer.ts`.
+     */
+    const wave = await runWaves({ ...deps, askUser: opts.askUser, facts: new FactBus() }, session, board,
       { base: opts.fromBranch, prTitle: opts.prTitle, request: opts.prompt });
     emit({ kind: "phase", phase: "waves-done", detail: wave.status });
 

@@ -68,6 +68,13 @@ export interface TaskCycleDeps {
   /** remember_fact tool sink: persist a durable fact the model learned from a tool result. */
   rememberFact?: (fact: string) => void;
   /**
+   * What the agents running right now have told each other.
+   *
+   * One per job, shared by every agent in it — that sharing IS the point. Absent outside a wave, where there
+   * are no siblings to hear from. See `fact-bus.ts`.
+   */
+  facts?: import("./fact-bus.js").FactBus;
+  /**
    * The channel an agent uses to ASK, when a decision is genuinely the user's.
    *
    * The implementer had none, and it showed. On T017 an agent traced a real conflict to its root — the

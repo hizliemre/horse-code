@@ -3,6 +3,7 @@ import { runToCompletion, type RoleAgentOptions } from "../agent/loop.js";
 import { withDeadline } from "../agent/deadline.js";
 import { createDefaultRegistry } from "../tools/index.js";
 import { buildRememberTool } from "../tools/remember.js";
+import { renderFor } from "./fact-bus.js";
 import { buildAskUserTool } from "./writer-registry.js";
 import { buildSkillTool } from "../skills/apply.js";
 import { commitFile } from "./operational.js";
@@ -142,7 +143,17 @@ export async function runImplementer(
   // the implementer edits a file with no idea what depends on it.
   for (const t of contextTools(deps)) tools.register(t);
   // …and what it learns on the way, kept for the next agent that opens this area.
-  tools.register(buildRememberTool(deps.rememberFact));
+  /**
+   * A fact this agent writes goes to durable memory AND to the siblings running beside it.
+   *
+   * Memory alone reaches whoever starts LATER: hints are read once, at task start. The seven agents already
+   * in flight — the ones most likely to be touching the same code right now — hear nothing. Publishing here
+   * costs nothing extra: the agent is already writing the fact down.
+   */
+  tools.register(buildRememberTool((fact) => {
+    deps.rememberFact?.(fact);
+    deps.facts?.publish(task.id, fact);
+  }));
   /**
    * A way to ASK, for the decisions that are genuinely the user's.
    *
@@ -394,6 +405,14 @@ export async function runImplementer(
    * The loop already drains `inbox` at the top of each turn, so this needs no new machinery: the note is
    * handed over once, when most of the budget is gone.
    */
+  /**
+   * What the other agents have found since this one last looked. Bounded by the bus, not here — see
+   * `PER_TURN` and `PER_READER` for why a channel that drops what it cannot afford beats one that floods.
+   */
+  const siblingNote = (): string | undefined => {
+    const bus = deps.facts;
+    return bus ? renderFor(bus.drain(task.id)) : undefined;
+  };
   let warned = false;
   const startedAt = Date.now();
   const deadlineNote = (): string | undefined => {
@@ -433,8 +452,14 @@ export async function runImplementer(
     permission: deps.permission,
     approve: deps.approve,
     cwd,
-    // The agent's own inbox first (a by-the-way note), then the deadline warning when it is due.
-    inbox: () => deps.inbox?.() ?? deadlineNote(),
+    /**
+     * Three sources, in the order their claim on the turn's attention runs.
+     *
+     * A person's by-the-way note first: they are watching and they said something now. Then what a sibling
+     * agent found, which is information rather than an instruction — see `renderFor`. The deadline warning
+     * last, because it is about this agent's budget and it only ever fires once.
+     */
+    inbox: () => deps.inbox?.() ?? siblingNote() ?? deadlineNote(),
     signal: AbortSignal.any([deps.signal, budget]),
     // Stamped with the card id: the agent panel is keyed by it, and unattributed activity goes to the chat.
     onActivity: deps.onActivity ? (a) => deps.onActivity?.({ ...a, agent: task.id }) : undefined,
