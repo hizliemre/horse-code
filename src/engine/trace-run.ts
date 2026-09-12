@@ -134,6 +134,49 @@ export class SpentSources {
 }
 
 /**
+ * One call at a time to a model nobody has called yet.
+ *
+ * The prompt cache is warmed by a call and read by the ones after it, so a fan-out that starts N calls at
+ * once has N misses: none of them can read what none of them has written. Measured on the real thing, six
+ * identical calls to `opus`:
+ *
+ *   6 at once     every one read 12,816 and WROTE 19,261  →  115,566 written
+ *   6 in sequence the first wrote 19,261, the next five read 32,077 and wrote NOTHING
+ *
+ * A cache write costs 1.25× base input and a read 0.1×, so the stampede is not a rounding error: on a trace
+ * run of 223 calls at concurrency six, writes came to 15.3M tokens against 2.8M read — 68,636 written per
+ * call for a prompt of about 2,500. Nearly all of it was the same session preamble, paid for again and again.
+ *
+ * So the FIRST call to a model is alone, and everything after it fans out. The cost is one call's latency,
+ * once per model. It is per MODEL rather than per run because a chain slides: when a subscription is spent
+ * the run moves to another model, and that model's preamble is cold in exactly the same way.
+ *
+ * A failed warm-up does not hold the door. It wrote no cache, so whoever comes next should warm it instead —
+ * blocking on a model that cannot answer would serialise the whole run behind a subscription that is out.
+ */
+export class ColdStartGate {
+  private readonly warm = new Set<string>();
+  private readonly warming = new Map<string, Promise<void>>();
+
+  async run<T>(model: string, fn: () => Promise<T>): Promise<T> {
+    if (this.warm.has(model)) return fn();
+    const inflight = this.warming.get(model);
+    // Someone else is warming this model: wait for them, then go — by which time the cache is readable.
+    if (inflight) { await inflight; return this.run(model, fn); }
+    let release = (): void => {};
+    this.warming.set(model, new Promise<void>((r) => { release = r; }));
+    try {
+      const out = await fn();
+      this.warm.add(model);
+      return out;
+    } finally {
+      this.warming.delete(model);
+      release();
+    }
+  }
+}
+
+/**
  * Runs one tracer over the whole chain, not just its head.
  *
  * The chain was always there — a role's models are a primary plus two fallbacks on other subscriptions,
@@ -146,7 +189,7 @@ export class SpentSources {
  */
 async function traceOne(
   provider: Provider, chain: readonly string[], job: TraceJob, signal: AbortSignal,
-  spent: SpentSources, brief?: string,
+  spent: SpentSources, cold: ColdStartGate, brief?: string,
 ): Promise<{ body: string; model: string }> {
   if (!spent.live(chain).length) {
     // Every subscription in the chain has said no. Spawning anyway is what turned one refusal into 3,664.
@@ -165,7 +208,19 @@ async function traceOne(
     const source = cliFor(model);
     if (source && spent.spent(source)) continue;
     try {
-      return { body: await askOne(provider, model, job, signal, brief), model };
+      return {
+        body: await cold.run(model, async () => {
+          /**
+           * Re-checked on the far side of the gate, because waiting takes time and the call we were queued
+           * behind may have been refused in it. Without this, every worker held at a cold start goes on to
+           * ask a subscription that has just said no — bounded by the concurrency, but avoidable and exactly
+           * the waste the bench exists to remove.
+           */
+          if (source && spent.spent(source)) throw new ChatFailure(`${source} is out of quota`, true);
+          return askOne(provider, model, job, signal, brief);
+        }),
+        model,
+      };
     } catch (e) {
       if (!(e instanceof ChatFailure)) throw e;
       /**
@@ -248,6 +303,8 @@ export async function runTraces(opts: {
   const failed: { file: string; error: string }[] = [];
   // Shared by every worker: a spent subscription is discovered once, not once per file.
   const spent = new SpentSources();
+  // Shared by every worker: the point is that they do NOT all cold-start the same model at once.
+  const cold = new ColdStartGate();
   let written = 0;
   let done = 0;
 
@@ -260,7 +317,7 @@ export async function runTraces(opts: {
       let words: number | undefined;
       let error: string | undefined;
       try {
-        const { body, model } = await traceOne(opts.provider, opts.models, job, signal, spent, brief);
+        const { body, model } = await traceOne(opts.provider, opts.models, job, signal, spent, cold, brief);
         // The model that ANSWERED, not the one at the head of the chain — after a slide they differ.
         const rec = await saveTrace(cwd, job, body, model);
         index.traces[job.file] = rec;

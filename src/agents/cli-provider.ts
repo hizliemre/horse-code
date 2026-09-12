@@ -3,6 +3,8 @@ import { runCliAgent, SYNTHETIC, type CliKind, type CliUsage } from "./cli-agent
 import { isCallerAbort, isDeadline } from "../agent/deadline.js";
 import { AccountPool } from "./cli-accounts.js";
 import { cliFor, cliInvocation, grokEffort } from "./cli-models.js";
+import { RepeatWatch, describeRepeats } from "./tool-repeats.js";
+import { telemetry } from "../obs/telemetry.js";
 
 /**
  * The official CLIs behind the `Provider` seam, for every role that wants an ANSWER rather than an agent.
@@ -244,6 +246,14 @@ export class CliProvider implements Provider {
      * limit it had already been told about.
      */
     const account = this.accounts?.pick(kind);
+    /**
+     * What this delegated agent asked twice.
+     *
+     * `recall` cannot see a loop that belongs to the CLI, and the waste it was built for — one in six reads
+     * being a literal repeat inside one conversation — has no reason to have stopped. Counted here because
+     * the number is what decides whether anything should be done about it; see `tool-repeats.ts`.
+     */
+    const repeats = new RepeatWatch();
 
     let res!: Awaited<ReturnType<typeof runCliAgent>>;
     yield* streamWhileRunning<ChatEvent>((push) =>
@@ -251,8 +261,15 @@ export class CliProvider implements Provider {
         kind, cwd: this.cwd ?? process.cwd(), prompt: promptFor(req), signal, args,
         ...(account ? { configDir: account.configDir } : {}),
         onEvent: (ev) => {
+          if (ev.tool) repeats.add({ name: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}) });
           if (ev.tool) push({ type: "activity", tool: ev.tool.name, ...(ev.tool.target ? { target: ev.tool.target } : {}), ...(ev.tool.ok === false ? { ok: false } : {}) });
           if (ev.text) push({ type: "text-delta", text: ev.text });
+          /**
+           * Surfaced on the row, because it changes what the agent is working from and the row is the only
+           * record of what a delegated call did. Reported as activity rather than swallowed: the alternative
+           * is a task that silently started reasoning from a summary.
+           */
+          if (ev.compacted) push({ type: "activity", tool: "context compacted", target: ev.compacted });
           // Every call carries one of these, so the pool learns what this profile has left at no extra cost.
           if (ev.quota && account) this.accounts?.record(kind, account.name, ev.quota.windows);
         },
@@ -264,6 +281,20 @@ export class CliProvider implements Provider {
      * bench the API path uses. Swallowed as text, a throttled subscription would read as a model that
      * answered with nonsense.
      */
+    /**
+     * Recorded whatever else happened to the call, because a run that failed is exactly when the question
+     * "was it going round in circles" is worth answering.
+     */
+    const repeated = repeats.report();
+    if (repeated.repeats) {
+      telemetry().event("decision.tool_repeats", {
+        "hc.decision": "tool_repeats", "hc.repeats": repeated.repeats, "hc.tool_calls": repeated.calls,
+        "hc.model": req.model, "hc.worst": repeated.worst.map((w) => `${w.key} x${w.times}`).join(", "),
+      });
+      // …and on the row, because telemetry is read afterwards by whoever remembers to look.
+      const line = describeRepeats(repeated);
+      if (line) yield { type: "activity", tool: "repeated work", target: line };
+    }
     if (res.rateLimited) {
       yield { type: "error", message: `${kind} CLI: ${res.rateLimited}`, retryable: true };
       return;

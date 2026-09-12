@@ -85,6 +85,21 @@ export interface CliEvent {
   rateLimited?: string;
   /** How much of each usage window is spent. Reported on every call, refused or not — see `decodeClaudeEvent`. */
   quota?: CliQuota;
+  /**
+   * The CLI put the conversation away and carried on with a summary of it.
+   *
+   * Only the delegated implementer can reach this: an answer role is one turn, so there is no history to
+   * compact. It matters because a task whose context was compacted mid-flight is doing different work
+   * afterwards — it is reasoning from a summary of what it read rather than from what it read — and nothing
+   * recorded that it happened. Asked why a card failed on its sixth attempt, this was not even a possibility
+   * anybody could check.
+   *
+   * The SHAPE here is not measured, and that is worth stating rather than hiding. Provoking a real
+   * compaction needs a long multi-turn session, which is expensive to buy for a probe; every other field in
+   * this file was read off a live stream first. So it matches on the subtype rather than on an observed
+   * payload, and the first time it fires the record will tell us what it actually looks like.
+   */
+  compacted?: string;
   /** A failure the CLI reported, verbatim. */
   error?: string;
   /** The model that ACTUALLY served the turn, as the CLI names it — see `SYNTHETIC`. */
@@ -259,6 +274,15 @@ export function decodeClaudeEvent(line: string): CliEvent | undefined {
           rateLimited: `${status} — ${describeWindows(windows)}` +
             (quota.resetsAt ? ` (resets ${new Date(quota.resetsAt * 1000).toISOString()})` : ""),
         };
+  }
+  /**
+   * `system` events are framing and are ignored — except the one that says the conversation was rewritten.
+   * Matched on the subtype containing "compact" rather than on an exact name, because the exact name is the
+   * part that has not been seen. A false positive here costs one note; a miss costs the diagnosis.
+   */
+  if (type === "system") {
+    const subtype = String((e as { subtype?: unknown }).subtype ?? "");
+    return /compact/i.test(subtype) ? { compacted: subtype } : undefined;
   }
   if (type === "assistant") {
     const msg = (e as { message?: { content?: unknown[]; model?: string } }).message;

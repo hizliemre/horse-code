@@ -9,7 +9,7 @@ import {
   traceCoverage, setTraceRoot,
 } from "../../src/engine/trace.js";
 import type { TraceIndex } from "../../src/engine/trace.js";
-import { describePlan, runTraces, TRACE_CONCURRENCY } from "../../src/engine/trace-run.js";
+import { describePlan, runTraces, TRACE_CONCURRENCY, ColdStartGate } from "../../src/engine/trace-run.js";
 import { cliFor } from "../../src/agents/cli-models.js";
 import { parseGraph } from "../../src/engine/project-graph.js";
 import type { Provider } from "../../src/core/types.js";
@@ -823,5 +823,75 @@ describe("a subscription running out mid-run", () => {
     } as unknown as Provider;
     await runTraces({ cwd, provider, models: ["opus", "glm-5.3", "grok-4.6"], plan });
     expect(asked).toEqual(["opus"]);
+  });
+});
+
+/**
+ * The prompt cache is warmed by one call and read by the ones after it, so a fan-out that starts N calls at
+ * once has N misses: none can read what none has written. Measured on the real binary, six identical calls:
+ *
+ *   6 at once      every one read 12,816 and WROTE 19,261  →  115,566 written
+ *   6 in sequence  the first wrote 19,261; the next five read 32,077 and wrote NOTHING
+ *
+ * A write costs 1.25× base input and a read 0.1×, and on a 223-call run at concurrency six the writes came to
+ * 15.3M tokens against 2.8M read — the same session preamble bought again and again.
+ */
+describe("the first call to a model goes alone", () => {
+  const gate = () => new ColdStartGate();
+
+  /** The whole mechanism: while one call is warming a model, the others wait rather than all missing. */
+  it("holds the second caller until the first has answered", async () => {
+    const g = gate();
+    const order: string[] = [];
+    let releaseFirst = (): void => {};
+    const first = g.run("opus", async () => {
+      order.push("first:start");
+      await new Promise<void>((r) => { releaseFirst = r; });
+      order.push("first:done");
+      return 1;
+    });
+    // Started after, and must not get through while the first is still in flight.
+    const second = g.run("opus", async () => { order.push("second:start"); return 2; });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(order).toEqual(["first:start"]);
+    releaseFirst();
+    expect(await Promise.all([first, second])).toEqual([1, 2]);
+    expect(order).toEqual(["first:start", "first:done", "second:start"]);
+  });
+
+  /** Once a model is warm the gate is out of the way — the cost is one call's latency, not every call's. */
+  it("lets everything through in parallel after the first", async () => {
+    const g = gate();
+    await g.run("opus", async () => 0);
+    const started: number[] = [];
+    await Promise.all([1, 2, 3, 4, 5].map((i) => g.run("opus", async () => {
+      started.push(i);
+      await new Promise((r) => setTimeout(r, 5));
+      return i;
+    })));
+    expect(started).toHaveLength(5); // all five were in flight together
+  });
+
+  /** Per MODEL, because a chain slides: the model a spent subscription hands over to is cold in its own right. */
+  it("warms each model separately", async () => {
+    const g = gate();
+    const inflight: string[] = [];
+    await Promise.all(["opus", "glm-5.3"].map((m) => g.run(m, async () => {
+      inflight.push(m);
+      await new Promise((r) => setTimeout(r, 5));
+      return m;
+    })));
+    // Neither waited for the other: they are different preambles on different subscriptions.
+    expect(inflight.sort()).toEqual(["glm-5.3", "opus"]);
+  });
+
+  /**
+   * A failed warm-up must not hold the door. It wrote no cache, so the next caller should warm it instead —
+   * blocking on a model that cannot answer would serialise a whole run behind a spent subscription.
+   */
+  it("does not leave the gate shut when the first call fails", async () => {
+    const g = gate();
+    await expect(g.run("opus", async () => { throw new Error("rejected"); })).rejects.toThrow("rejected");
+    expect(await g.run("opus", async () => "through")).toBe("through");
   });
 });
