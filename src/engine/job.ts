@@ -17,6 +17,7 @@ import { humanAbandoned } from "./split-card.js";
 import { auditBreakdown, repairRequest } from "./task-audit.js";
 import { runWaves } from "./wave-engine.js";
 import { FactBus } from "./fact-bus.js";
+import { telemetry } from "../obs/telemetry.js";
 import type { WaveEngineResult } from "./wave-engine.js";
 import { REVISION_CARD, runRevision, closeRevision, type RevisionResult } from "./revision.js";
 import { clearCheckpoint, readCheckpoint, isContinuePrompt, type Checkpoint } from "./checkpoint.js";
@@ -537,9 +538,28 @@ export async function runJob(
      * about work that has already merged. What deserves to outlive the job goes to durable memory, which is
      * the same write — see the remember tool in `implementer.ts`.
      */
-    const wave = await runWaves({ ...deps, askUser: opts.askUser, facts: new FactBus() }, session, board,
+    const facts = new FactBus();
+    const wave = await runWaves({ ...deps, askUser: opts.askUser, facts }, session, board,
       { base: opts.fromBranch, prTitle: opts.prTitle, request: opts.prompt });
     emit({ kind: "phase", phase: "waves-done", detail: wave.status });
+    /**
+     * What the sibling channel actually did, recorded so the decision to keep it has evidence behind it.
+     *
+     * The size of the problem it addresses was never measured — nobody could say how often two agents in one
+     * wave rediscover the same thing, only that nothing could have told them. This is the measurement, taken
+     * from the one place that knows: `dropped` says what the bound cost, `refused` whether the length cap is
+     * set right, and `published` against `readers` whether agents are finding anything worth passing on.
+     *
+     * Written even when it is all zeros. "Nobody published anything" is the most useful single result this
+     * can have, and a silent absence is indistinguishable from telemetry that was never wired up.
+     */
+    const factStats = facts.stats();
+    telemetry().event("decision.shared_facts", {
+      "hc.decision": "shared_facts",
+      "hc.facts.published": factStats.published, "hc.facts.refused": factStats.refused,
+      "hc.facts.delivered": factStats.delivered, "hc.facts.dropped": factStats.dropped,
+      "hc.facts.readers": factStats.readers, "hc.facts.cards": board.list().length,
+    });
 
     let revision: RevisionResult | undefined;
     let deferredAll: string[] = [];

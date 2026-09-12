@@ -136,6 +136,63 @@ describe("both ends are actually connected", () => {
    */
   it("gives each job its own bus", async () => {
     const src = await read("src/engine/job.ts");
-    expect(src).toContain("facts: new FactBus()");
+    // Constructed inside the job's own scope and handed to the wave — not shared from the composition root.
+    expect(src).toContain("const facts = new FactBus()");
+    expect(src).toMatch(/runWaves\(\{ \.\.\.deps[^)]*facts \}/);
+  });
+});
+
+/**
+ * The measurement, because the decision to keep this channel needs evidence and the size of the problem it
+ * addresses was never measured. `dropped` is the one to read first: the cursor advances past everything a
+ * drain considered, so a fact a reader was too full to take is GONE for that reader rather than deferred.
+ * That number is what the bound costs.
+ */
+describe("what the channel actually did", () => {
+  it("counts publishes, handovers and readers", () => {
+    const bus = new FactBus();
+    bus.publish("T001", "a");
+    bus.drain("T002");
+    bus.drain("T003");
+    expect(bus.stats()).toEqual({ published: 1, refused: 0, delivered: 2, dropped: 0, readers: 2 });
+  });
+
+  /** One fact reaching three siblings is three handovers — the cost is per reader, so the count is too. */
+  it("counts a handover per reader, not per fact", () => {
+    const bus = new FactBus();
+    bus.publish("T001", "a");
+    for (const r of ["T002", "T003", "T004"]) bus.drain(r);
+    expect(bus.stats().delivered).toBe(3);
+    expect(bus.stats().published).toBe(1);
+  });
+
+  /** What the per-turn bound cost: considered, not taken, and the cursor has moved past it. */
+  it("counts what the bound threw away", () => {
+    const bus = new FactBus();
+    for (let i = 0; i < 5; i++) bus.publish("T001", `fact ${i}`);
+    bus.drain("T002"); // takes PER_TURN, loses the rest
+    expect(bus.stats().delivered).toBe(PER_TURN);
+    expect(bus.stats().dropped).toBe(5 - PER_TURN);
+  });
+
+  /** Whether `MAX_FACT_CHARS` is set right shows up here rather than as a silent absence. */
+  it("counts what was too long to be a fact", () => {
+    const bus = new FactBus();
+    bus.publish("T001", "x".repeat(MAX_FACT_CHARS + 1));
+    expect(bus.stats()).toMatchObject({ published: 0, refused: 1 });
+  });
+
+  /**
+   * Zeros are a result. "Nobody published anything" is the most useful single answer this can give, and a
+   * silent absence is indistinguishable from telemetry that was never wired up.
+   */
+  it("reports an untouched channel as zeros rather than nothing", () => {
+    expect(new FactBus().stats()).toEqual({ published: 0, refused: 0, delivered: 0, dropped: 0, readers: 0 });
+  });
+
+  it("is recorded at the end of a job, zeros included", async () => {
+    const src = await (await import("node:fs/promises")).readFile("src/engine/job.ts", "utf8");
+    expect(src).toContain('telemetry().event("decision.shared_facts"');
+    expect(src).toContain("facts.stats()");
   });
 });

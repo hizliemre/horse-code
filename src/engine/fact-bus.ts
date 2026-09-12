@@ -54,16 +54,42 @@ export const PER_READER = 6;
 /** Longer than this and it is not a fact, it is a document — and a document belongs in a trace. */
 export const MAX_FACT_CHARS = 400;
 
+/**
+ * What the channel actually did, so the question "was this worth building" has an answer.
+ *
+ * `dropped` is the one to read first. The cursor advances past everything a drain considered, so a fact a
+ * reader was too full to take is gone for that reader — not deferred. That number IS the cost of the bound,
+ * and it is the knob to turn if it is large while the facts are useful, or the evidence to turn the whole
+ * thing off if it is large because the facts are noise.
+ *
+ * `refused` says whether `MAX_FACT_CHARS` is set right: agents writing documents where facts were wanted
+ * would show up here rather than as a silent absence.
+ */
+export interface FactStats {
+  /** Facts accepted onto the bus. */
+  published: number;
+  /** Publishes rejected as too long or empty — see `MAX_FACT_CHARS`. */
+  refused: number;
+  /** Fact-to-reader handovers. One fact reaching three siblings is three. */
+  delivered: number;
+  /** Handovers the budget refused, and therefore lost — see the note above. */
+  dropped: number;
+  /** Distinct agents that received at least one fact. */
+  readers: number;
+}
+
 export class FactBus {
   private readonly facts: SharedFact[] = [];
   private readonly cursor = new Map<string, number>();
   private readonly delivered = new Map<string, number>();
   private seq = 0;
+  private refused = 0;
+  private dropped = 0;
 
   /** Records a fact. Silently ignores what is too long to belong here — see `MAX_FACT_CHARS`. */
   publish(from: string, text: string): void {
     const t = text.trim();
-    if (!t || t.length > MAX_FACT_CHARS) return;
+    if (!t || t.length > MAX_FACT_CHARS) { this.refused++; return; }
     this.facts.push({ from, text: t, seq: ++this.seq });
   }
 
@@ -82,12 +108,26 @@ export class FactBus {
     const room = Math.max(0, PER_READER - already);
     const take = fresh.slice(0, Math.min(PER_TURN, room));
     if (take.length) this.delivered.set(reader, already + take.length);
+    // Everything considered and not taken is lost to this reader: the cursor has already moved past it.
+    this.dropped += fresh.length - take.length;
     return take;
   }
 
   /** Everything published, for a run's record. Nothing here reads it back into a prompt. */
   all(): readonly SharedFact[] {
     return this.facts;
+  }
+
+  stats(): FactStats {
+    let delivered = 0;
+    for (const n of this.delivered.values()) delivered += n;
+    return {
+      published: this.facts.length,
+      refused: this.refused,
+      delivered,
+      dropped: this.dropped,
+      readers: this.delivered.size,
+    };
   }
 }
 
